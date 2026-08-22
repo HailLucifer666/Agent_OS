@@ -434,7 +434,10 @@ async function main() {
       var hub = createEffectorHub({ bus: bus, config: config });
 
       var riskClassifier = createRiskClassifier();
-      var evidenceValidator = createEvidenceValidator();
+      // BUG-304: the gate needs the vault to confirm an artifact file exists
+      // rather than trusting that its path is a non-empty string. memory.fs is
+      // the same handle the two lines below already use.
+      var evidenceValidator = createEvidenceValidator({ fs: memory.fs });
       var pipelineEffector = createPipelineEffector({ fs: memory.fs, classifier: riskClassifier });
       var kanbanEffector = createKanbanEffector({ fs: memory.fs, bus: bus });
       // Integration 3: build verifier (needs brain)

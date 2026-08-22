@@ -212,6 +212,37 @@ public page still returns readable text.
 *Four items. This is the phase that matters most to trusting what MYTHOS tells
 you.*
 
+**STATUS: DONE — BUG-304, BUG-305, BUG-306.** All four items fixed, each
+reproduced before being fixed and each mutation-tested. 26 new tests; 12
+mutations run, 12 caught.
+
+Three things the plan did not anticipate, all found by measuring rather than
+reading:
+
+1. **A fifth item inside item 2.** `quick-win`'s gate path required a phase
+   called `'verify'` that the validator had no code for — no producer, no
+   check, the same defect as the `'adr'` note already recorded in the same
+   table. Removed on that precedent, and the validator now *throws* on a phase
+   in neither its checked nor its deliberately-unchecked list, so this cannot
+   recur quietly.
+2. **The timeout never killed the engine.** `treeKill`'s signature is
+   `(child, pid)` and the adapter called it with one argument, so Windows ran
+   `taskkill /PID undefined` and killed nothing. Measured: after a timeout the
+   engine kept writing, 26 bytes at resolve and 51 bytes 1.5s later. A build
+   that timed out did not stop the engine, it only stopped waiting for it.
+3. **BUG-301's write-up was half right about the crash shape.** The plan says
+   the engine "said so on its error output within two seconds"; measured, that
+   is true of the shape that EXITS on its own at 1,978ms, and the shape that
+   actually hangs for ten minutes writes its first stderr byte at 1,892ms and
+   then stays alive indefinitely. Fail-fast is aimed at the second one.
+
+Also worth recording because it nearly cost the phase: my own mutation harness
+keyed its file backups by basename, and
+`adapters/dsh-agent/index.js` collides with `server/index.js`. It restored
+the server module over the adapter and destroyed the work in place. Recovered
+because every edit was a scripted patch replayable against HEAD. Key backups by
+full path.
+
 ### Item 2 — the ship gate checks a filename, not a file
 
 **Plain English.** Before a build is marked "shipped", a gate checks that the

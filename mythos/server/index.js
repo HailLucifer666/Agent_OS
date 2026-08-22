@@ -2756,7 +2756,27 @@ function createServer(deps) {
     history.push({ role, content: String(content).slice(0, 2000) });
     historyTrim();
     historyAt = Date.now();
-    try { memory.fs.writeJSON(SESSION_PATH, { turns: history, savedAt: historyAt }); } catch (_) {}
+    // BUG-306: still best-effort, no longer silent.
+    //
+    // This was `catch (_) {}`. A vault that had stopped accepting writes lost
+    // every conversation and said nothing — the next launch simply began with no
+    // history, which reads as a fresh session rather than as a failure. Best-
+    // effort and invisible are separate decisions and only the first one was
+    // ever made here.
+    //
+    // The catch stays, deliberately: the operator is mid-sentence and a disk
+    // problem must not end the turn. Note this also fires for a test fake whose
+    // fs exposes only vaultPath, which is a true statement about that fake —
+    // history is not being persisted — and those fakes inject a silent logger.
+    try {
+      memory.fs.writeJSON(SESSION_PATH, { turns: history, savedAt: historyAt });
+    } catch (err) {
+      logger.warn('session-history-write-failed', {
+        path: SESSION_PATH,
+        turns: history.length,
+        error: (err && err.message) || String(err),
+      });
+    }
   }
 
   wss.on('connection', (ws) => {
@@ -4647,6 +4667,12 @@ function createServer(deps) {
       // proximity telemetry several times a second must never become that
       // target. There is no other observable for it from outside.
       getLastActiveWs: () => lastActiveWs,
+      // BUG-306. historyAppend is a closure and the only production route to it
+      // is a full websocket voice turn — model call, dispatch, TTS. The thing
+      // under test is one line of error handling inside it, so the turn is not
+      // the subject and standing one up would test everything except the fix.
+      historyAppend: (role, content) => historyAppend(role, content),
+      historyGet: () => historyGet(),
     },
   };
 }

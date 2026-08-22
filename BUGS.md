@@ -41,6 +41,133 @@ it is committed.
 
 ---
 
+## BUG-306 — a failed save of your conversation history was completely silent (✅ RESOLVED 2026-08-22)
+
+Audit item 4, Phase 2 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. One line in
+`server/index.js`:
+
+    try { memory.fs.writeJSON(SESSION_PATH, { turns: history, savedAt: historyAt }); } catch (_) {}
+
+Every turn of every conversation is written to the vault so the conversation survives a restart. If
+that write failed the error was caught and dropped — no log, no warning, no counter. The next launch
+began with a missing or stale history, which is indistinguishable from a fresh session, so a vault
+that had stopped accepting writes would never be noticed.
+
+**Best-effort was the right disposition and is kept**: the operator is mid-sentence and a disk
+problem must not end the turn. Best-effort and silent are separate decisions, and only the first one
+had ever been made. The catch now logs `session-history-write-failed` with the path, the turn count
+and the underlying error.
+
+Regression test `mythos/test/bug-306-session-write-failure-is-logged.test.js` (4 tests), driving
+`historyAppend` through a new `_internal` seam — the only production route to it is a full
+websocket voice turn, and the subject is one line of error handling inside it. The logger is
+**injected**, not captured from stdout: this repo's logger is silent under test, so grepping output
+for a log line passes whether or not the line is emitted.
+
+**The first version of this test was itself vacuous, and mutation testing is what caught it.** The
+fixture's error string was `'EACCES: permission denied, open ...session.json'` and the assertion
+matched `/session\.json/` against the whole serialised log line — so it was satisfied by the
+fixture's own text appearing anywhere, and the test passed with the log statement disabled. The
+assertions now read the named fields (`fields.path`, `fields.error`) instead of a JSON blob.
+
+---
+
+## BUG-305 — the build engine's ten-minute failure was misdiagnosed, unlogged, and left running (✅ RESOLVED 2026-08-22)
+
+Audit items 5 and 6, Phase 2. These are the two secondary faults BUG-301 recorded as **still open**;
+both are about the same ten minutes, and fixing them turned up a third.
+
+**1. The adapter waited out the clock on a crash that announced itself.** Three real builds sat in
+`stage: generating` for 600,000ms and then failed having written nothing. stderr was read only
+*after* the timeout fired, and the message then explained the failure as an unanswerable approval
+prompt — a guess, printed next to the evidence that contradicted it.
+
+MEASURED 2026-08-22 against the real installed engine, reproducing the incident shape exactly (dsh
+launched by `electron.exe` as an **application**, which is what BUG-301's first layer produced):
+
+| | |
+| --- | --- |
+| first stdout byte | 47ms |
+| first stderr byte | **1,892ms** — `App threw an error during load` / `failed to apply loader entry … --expose-internals is required for HMR service` |
+| still alive at cap | **yes, at 45,028ms** — and it would have run to 600,000ms |
+
+The companion shape (`ELECTRON_RUN_AS_NODE=1`, no `--expose-internals`) exits 1 on its own at
+1,978ms, matching the 1,858ms in BUG-301. **That shape never needed fail-fast, because it exits. The
+one that hangs is the one that needed it** — a distinction the original write-up did not draw.
+
+`spawnDsh` now watches stderr as it arrives and resolves `kind:'fatal-stderr'` on a measured fatal
+signature, killing the child. The signature list is deliberately two entries long; the risk in
+fail-fast is the opposite of the bug — a pattern that is too eager kills runs that would have
+succeeded — so every entry was observed rather than imagined and carries the reason it means "this
+process cannot recover". A test pins that ordinary stderr chatter does not match.
+
+**2. The same ten minutes left no line in `mythos-server.log`.** The only trace was in the vault
+audit trail. The adapter has built a logger at module load since it was written and already used it
+twice; the failure path simply never called it. `noteTaskFailure` now records the model, the
+elapsed time, the error and the engine's stderr — and still keeps the `lastTaskFailure` bookkeeping
+`getStatus()` depends on, so ONLINE-beside-a-recent-failure stays readable as itself.
+
+The timeout message was rewritten to lead with the evidence. The old wording asserted a cause and was
+wrong three times in one day; the approval-prompt explanation is now offered only when there is no
+output at all to point at.
+
+**3. A THIRD FAULT, found by writing the test: the timeout never killed anything.**
+`treeKill`'s signature is `treeKill(child, pid)` and `dsh-agent` called it as
+`treeKill(child.pid)` — one argument. The pid landed in the `child` parameter, `pid` was
+`undefined`, and Windows ran `taskkill /PID undefined /T /F`, which kills nothing.
+`command-runner` itself calls it correctly; only this adapter had it wrong, since it was written.
+
+Measured on the pre-existing timeout path: after the timeout resolved, the engine kept writing — 26
+bytes at resolve, 51 bytes 1.5 seconds later, still climbing. **So a build that timed out did not
+stop the engine, it only stopped waiting for it.** With the arity fixed the same probe holds flat
+(28 bytes across a 3.2-second sampling window). Both kill paths are now asserted.
+
+Regression test `mythos/test/bug-305-fail-fast-on-fatal-stderr.test.js` (13 tests). It needs no API
+key and no dsh installation: `spawnDsh` runs `process.execPath` with whatever arguments it is
+handed, so a tiny node script is a valid engine for the spawn contract — it crashes on cue and hangs
+on cue, and the code path exercised is the real one. Mutation-tested: removing the stderr watch,
+broadening the signature to anything error-ish, reverting the treeKill arity, dropping the log call,
+restoring the old timeout wording, and making `runTask` ignore the fatal result each fail a named
+test.
+
+---
+
+## BUG-304 — the ship gate checked a filename, not a file (✅ RESOLVED 2026-08-22)
+
+Audit item 2, Phase 2. Before a job is marked shipped, an evidence gate checks that the required
+phases produced something. The artifact check was `if (!artifact || !artifact.path)` — a check on a
+piece of **text**. Nothing looked at the disk. For the smallest risk class that is the **only** check
+the gate performs, so a card could be marked done with nothing written anywhere.
+
+**Measured at HEAD before the fix**, with an artifact naming a file that was never created:
+
+    tiny-fix  gate=["artifact"]           -> {"pass":true,"missing":[]}
+    quick-win gate=["artifact","verify"]  -> {"pass":true,"missing":[]}
+
+The gate now requires the file to exist and to be non-empty, checked separately because they have
+different causes — nothing ran, versus a write that started and failed. With no vault handle it
+**refuses** rather than skipping the check: `if (vault) { …check… }` would turn a wiring mistake
+into a gate that passes everything, which is worse than no gate because it looks like one.
+
+**A second fault, the same one wearing a different hat.** `quick-win`'s gate path required a phase
+called `'verify'` that the validator had no code for. Grepping `src/` for it as a phase name
+returned exactly two hits: the gate-path table demanding it, and the validator's comment listing it.
+No producer, no check — quick-win advertised a two-phase gate and ran a one-phase one. This is
+precisely what the `'adr'` note already in `risk-classifier.js` warns about, in the same table,
+about a different phase. Removed on that precedent.
+
+**And the class, not just the instance.** The validator now carries two explicit lists —
+`CHECKED_PHASES` and `UNCHECKED_PHASES` (each exemption with its reason; `'research'` is there
+because the network may be down and an offline research step must not block delivery) — and
+**throws** on a phase in neither. A phase cannot be added to a gate path and quietly ignored again.
+
+Regression test `mythos/test/bug-304-ship-gate-requires-a-real-file.test.js` (9 tests, against a
+real temp directory). Mutation-tested 5/5. Three pre-existing tests constructed the validator with no
+vault handle; their subject is the visual and review phases, so the artifact is stubbed
+present-and-non-empty there with a comment saying why, and the real-file proof lives in one place.
+
+---
+
 ## BUG-303 — the SSRF guard checked one address and connected to another (✅ RESOLVED 2026-08-22)
 
 Found by the 2026-08-22 defect-class audit (`mythos/docs/AUDIT-2026-08-22-defect-classes.md`,
@@ -157,7 +284,9 @@ the pinned version and matched *even under Electron*, so the adapter reported `O
 `version-printed-and-matched-pin` while no build could succeed. A probe that spawns a trivial
 subcommand proves the interpreter can print a string, not that the harness can run.
 
-**Two secondary faults this exposed, both still open:**
+**Two secondary faults this exposed. BOTH CLOSED 2026-08-22 as BUG-305**, which also found a third
+(the timeout never killed the engine — `treeKill` was called with one argument and its signature
+takes two, so `taskkill /PID undefined` ran instead):
 
 1. A ten-minute engine failure appears **nowhere in `mythos-server.log`** — it surfaced only in the
    vault audit, via the healer's `build-engine-reprobe` detail. `grep -c dsh` over the whole server
