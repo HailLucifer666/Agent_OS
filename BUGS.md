@@ -41,6 +41,105 @@ it is committed.
 
 ---
 
+## BUG-308 — an escaped error killed MYTHOS and wrote nothing anywhere (✅ RESOLVED 2026-08-22)
+
+Audit item 8, Phase 4 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. MYTHOS's brain runs as a
+separate Node process launched by the desktop app. Since Node 15 an escaped promise rejection
+terminates the process exactly like an uncaught throw. `electron/main.js` handles both and writes a
+line; `src/main.js` — the process that actually does everything — handled neither. A single escaped
+error therefore killed MYTHOS outright and left nothing behind: no log line, no stack, just a process
+that was there and then was not.
+
+**A missing net, not a known leak.** The two likeliest sources were checked when this was written and
+both are safe today. Stated plainly because the opposite claim — "this fixes a live crash" — would be
+false.
+
+**Why it exits rather than carrying on**, which is the only real decision here. Node already
+terminates on both events; that is today's behaviour. A handler that merely logged would *change* it,
+keeping a process alive in a state it has already failed to reason about, and the desktop app
+supervises this child and can restart it. Logging then exiting adds the missing evidence without
+altering what happens. Note `electron/main.js` makes the opposite call for the opposite reason — it
+owns the window, so a missing log line beats a dead desktop app. Same two events, different
+processes, different right answers; the contrast is documented in both files rather than one being
+treated as house style.
+
+Three details the tests pin, each of which is a way this kind of handler goes wrong:
+
+- **It refuses to install without a logger.** A handler with nowhere to write is worse than none: it
+  suppresses the stack trace Node would otherwise print and replaces it with silence.
+- **A logger that throws must not stop the exit.** The failure mode of a crash handler is that it
+  crashes.
+- **The exit is scheduled, not immediate.** stderr to a pipe is asynchronous, and calling
+  `process.exit()` on the same tick as the write produces the truncated line the handler exists to
+  prevent.
+
+Handlers live in `src/core/crash-handlers.js` and are armed in `src/main.js` immediately after the
+logger exists and **before any subsystem is built** — a net strung up at the end of boot catches
+nothing thrown during boot, which is when a young process is most likely to throw. A test asserts
+that ordering by source position.
+
+Regression test `mythos/test/bug-308-server-logs-before-it-dies.test.js` (8 tests), including a real
+child process with the real logger and a real rejection, asserting the message reaches stderr and the
+exit code is 1.
+
+---
+
+## Audit items 9 and 10 — two guards, no production change (✅ DONE 2026-08-22)
+
+Phase 4, recorded here rather than as bugs because neither changed shipping code.
+
+**Item 9 — the same startup mistake has now been made twice, and nothing was watching for a third.**
+`process.execPath` is the Electron binary inside the packaged app, and Electron only behaves as a
+Node interpreter when `ELECTRON_RUN_AS_NODE` is set. Forgetting it does not fail loudly — it
+launches a second copy of MYTHOS. That caused the web-search daemon bug and then BUG-301, three real
+ten-minute build failures. Each got its own test pinning its own call site; the rule itself was
+written nowhere.
+
+`mythos/test/spawn-runs-as-node-guard.test.js` scans `mythos/src`, `mythos/adapters`,
+`mythos/server` and `electron/` for spawns of our own executable. It accepts inheritance as well as
+assignment — two of the four real sites are correct because they pass `process.env` through, and a
+guard demanding an explicit assignment would have failed on day one and been muted rather than
+trusted. It rejects exactly one shape: an environment built from scratch that neither derives from
+`process.env` nor sets the flag.
+
+The hard case was BUG-301's actual shape, where the spawn sits in a helper that receives the
+environment as a parameter and the object is built one call up. Following that statically is more
+machinery than it is worth, so the check drops to file level there — the module must set the flag
+somewhere in its own **code**, not in a comment — and that is stated in the file rather than left as
+a silent weakness. It would still have failed on BUG-301, which never mentioned the flag at all.
+
+**Proven by breaking something**, per the plan: the flag was deleted from `websearch-child.js` and
+the guard was confirmed to fail, naming that file and line 134, before the file was restored
+byte-identical. `mythos/scripts/` is deliberately out of scope — operator-run developer tools
+invoked with a real `node` — and the one script the app itself launches lives behind a call in
+`electron/main.js`, which is scanned.
+
+**Item 10 — a test asserted something that is not always true, for the second time.**
+`immune.test.js`'s build-engine-reprobe test allowed two outcomes where the action produces **four**:
+
+| return | outcome | reported state |
+| --- | --- | --- |
+| `ok:true` | verifying | ONLINE |
+| `build-engine-offline` | error | OFFLINE |
+| `build-engine-online-but-last-task-failed` | error | **ONLINE** — was rejected by the test |
+| `missing-dependency:dsh-agent` | error | none; the cause is under a different key |
+
+The third is not hypothetical: it fires whenever a build has recently failed, which is exactly when
+someone is likely to be running the suite. ONLINE beside a failed build is a real, diagnosable state
+— the probe proves the CLI runs, never that a build produces content — and the test called it a
+contradiction. The fourth returns its diagnosis under `detail` rather than `result`, so the state
+assertion tripped before reaching the line written to handle it; that line was dead.
+
+The assertions now live in one function that the live test and four **forced** branch tests all
+drive, so the logic no longer depends on which state this machine happens to be in. Each branch is
+forced by seeding `require.cache` with a stub — never by moving a real installation aside, which is
+the destructive pattern that once stranded real ONNX weights in a gitignored backup directory. A
+negative-direction test asserts the shared function *rejects* malformed payloads, without which the
+whole branch could be deleted and every positive test would still pass — a mutation proved exactly
+that before it was added.
+
+---
+
 ## BUG-307 — the vault path helper kept nothing inside the vault (✅ RESOLVED 2026-08-22)
 
 Audit item 7, Phase 3 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. `vaultPath()` in

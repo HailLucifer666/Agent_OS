@@ -437,6 +437,31 @@ reason to weaken the check.
 
 *Three items.*
 
+**STATUS: DONE — BUG-308, plus audit items 9 and 10.** 17 new tests. Nine
+mutations run; seven caught first time and **two survived, both because a test
+of mine was weak rather than because the code was wrong**:
+
+- The non-Error rejection test only checked the log line was non-empty, so
+  dropping the object branch survived — `String({code:'E'})` is
+  `"[object Object]"`, which is non-empty and useless. That exact string is
+  already recorded in this repo as a defect (`reasonText()` exists because audit
+  lines were logging it). The assertion now demands the content.
+- Deleting the online-but-failed branch from the shared reprobe assertion
+  survived, because each forced test also carried its own direct assertions. A
+  negative-direction test — the shared function must REJECT a malformed payload
+  — is what makes that branch load-bearing.
+
+Both were fixed and both mutations then caught. Worth generalising: a positive
+test of a validator does not pin the validator. Something has to assert it says
+no.
+
+Item 9 needed one thing the plan did not anticipate. The plan says three call
+sites exist and all three are correct; there are **four** once `electron/` is
+included, and the hard one is BUG-301's own shape — the spawn sits in a helper
+that receives the environment as a parameter, so there is nothing at the call
+site to inspect. The guard drops to a file-level check there, which is weaker
+and is documented as such in the file, and would still have failed on BUG-301.
+
 ### Item 8 — one stray error can kill the whole system with no message
 
 **Plain English.** MYTHOS's brain runs as a separate program launched by the
@@ -528,6 +553,13 @@ BUG-301 entry in `BUGS.md` to point at the new bug numbers and mark them
 resolved, so nothing is left living only inside another bug's prose.
 
 ### Item 11 — one document was deleted, another is untracked
+
+**ANSWERED BY THE OPERATOR, 2026-08-22: "Yes i deleted the explainer page and
+added / made the capability map page."** So the guess below was right and is no
+longer a guess. Phase 5 should: commit the `MYTHOS-EXPLAINER.html` deletion,
+rename `MYTHOS · CAPABILITY MAP.html` to `MYTHOS-CAPABILITY-MAP.html` (the
+`·` causes trouble in scripts and URLs), and commit it. Do not restore the
+explainer.
 
 **Plain English.** A 1,433-line explainer page was deleted but the deletion was
 never committed, and a 42 KB "capability map" page is sitting in the folder

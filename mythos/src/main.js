@@ -4,6 +4,7 @@
 
 const path = require('path');
 const { createLogger } = require('./core/logger');
+const { installCrashHandlers } = require('./core/crash-handlers');
 const { createBus } = require('./core/bus');
 const { loadConfig, SCHEMA } = require('./core/config');
 const { createLifecycle } = require('./core/lifecycle');
@@ -134,6 +135,14 @@ async function main() {
 
   // Step 2: Logger
   const logger = createLogger(config.LOG_LEVEL);
+  // BUG-308: armed here, immediately after the logger exists and BEFORE any
+  // subsystem is built. Node already terminates this process on an escaped
+  // promise rejection or an uncaught throw; until now it did so with no line
+  // anywhere saying why. Order is the point — a net strung up at the end of boot
+  // catches nothing thrown during boot, which is when a young process is most
+  // likely to throw. See core/crash-handlers.js for why it exits rather than
+  // carrying on.
+  installCrashHandlers({ logger });
   logger.info('config.loaded', { name: config.MYTHOS_NAME, port: config.MYTHOS_PORT });
   // Started as early as there is a logger to report through, because the stall
   // being chased (see loop-lag.js) happened right after boot — a probe armed at
