@@ -117,10 +117,12 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
     // announced as finished — evidence.pass meant "the phases ran", not "it
     // works"). Both signals go through the same completion rule the ship
     // path (agent-actions.js) already uses, so the two surfaces cannot drift.
-    var completion = completionStatusLib.deriveCompletionPayload({
-      reviewStatus: p.reviewVerdict === 'reject' ? 'failed' : 'approved',
-      buildEngine: p.engine
-    });
+    // BUG-311/316: this used to map an ABSENT verdict to 'approved', so a build
+    // nobody reviewed was announced as finished — and it never saw refineStatus,
+    // so the 2026-08-22 artifact the visual gate rejected with six issues was
+    // announced as "Completed and verified, Sir." completionForJob applies the
+    // same allowlist the ship path and job_status use, from the job record.
+    var completion = completionStatusLib.completionForJob(p);
     if (completion.status === 'needs-work') {
       var reasonBits = [];
       if (p.reviewVerdict === 'reject' && Array.isArray(p.reviewIssues) && p.reviewIssues.length > 0) {

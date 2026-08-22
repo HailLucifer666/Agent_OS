@@ -9,6 +9,7 @@
 
 var path = require('path');
 var designSystemPrompt = require('./design-system-prompt');
+var reviewStatusLib = require('./review-status');
 var buildPack = require('../skills/build-pack');
 var personas = require('../agents/personas');
 var { reasonText } = require('../util/reason-text');
@@ -614,15 +615,9 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // Ship — with honest status flag. buildFailed:false clears any stale
         // failure flag a PRIOR job attempt left on this same card (onFailed
         // above) — otherwise a successful retry would still read as failed.
-        var reviewed = review.verdict === 'approve';
         var shipMeta = { progress: 100, jobId: j.id, artifact: artifact, risk: risk, researchStatus: researchStatus, buildFailed: false };
-        if (!reviewed) {
-          shipMeta.reviewIssues = review.issues;
-          shipMeta.reviewStatus = 'failed';
-        } else {
-          shipMeta.reviewStatus = 'approved';
-          if (review.visualDescription) shipMeta.visualReview = review.visualDescription;
-        }
+        // BUG-316: a review that never ran must not record as 'approved'.
+        Object.assign(shipMeta, reviewStatusLib.deriveReviewMeta(review, needsReview));
 
         // C1: evidence.pass used to mean only "the gate phases ran", which a
         // human reads as "the thing works" — those are different facts, and
@@ -630,10 +625,19 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // evidence.pass:true). The completion payload folds in BOTH the
         // review verdict and whether the content actually came from the real
         // build engine, so nothing downstream can announce this as done.
+        //
+        // BUG-311/316: reviewRequired and refineStatus are now supplied too. The
+        // first lets a DECLARED skip finish while an undeclared one cannot; the
+        // second means a visually rejected artifact ('reverted'/'exhausted')
+        // stops reading as done — the 2026-08-22 build shipped refineStatus
+        // 'reverted' after the visual gate listed six defects, and this call
+        // never saw that field.
         var completion = completionStatusLib.deriveCompletionPayload({
-          reviewStatus: shipMeta.reviewStatus, buildEngine: j.engine
+          reviewStatus: shipMeta.reviewStatus, buildEngine: j.engine,
+          reviewRequired: needsReview, refineStatus: j.refineStatus
         });
         shipMeta.status = completion.status;
+        if (j.refineStatus) shipMeta.refineStatus = j.refineStatus;
 
         // P23: Evidence validator — external gate that blocks ship if required
         // phases are missing evidence. Cannot be bypassed by the agent.
@@ -664,7 +668,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         } else {
           pipeline.moveCard(card.id, 'execute', shipMeta);
         }
-        return { artifact: artifact, review: review, researchStatus: researchStatus };
+        return { artifact: artifact, review: review, researchStatus: researchStatus, reviewStatus: shipMeta.reviewStatus, reviewRequired: needsReview };
       }
     });
     // REMEDIATION P2-8: same fix as buildKanbanCard's job.spec below — the
@@ -798,26 +802,22 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           } catch (_) { /* retry failed — ship original with issues flagged */ }
         }
 
-        var reviewed = review.verdict === 'approve';
         // buildFailed:false clears any stale failure flag a prior job attempt
         // left on this card (onFailed above) — a successful retry must not
         // still read as failed.
         var patchMeta = { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact: artifact, researchStatus: researchStatus, buildFailed: false };
-        if (!reviewed) {
-          patchMeta.reviewIssues = review.issues;
-          patchMeta.reviewStatus = 'failed';
-        } else {
-          patchMeta.reviewStatus = 'approved';
-          if (review.visualDescription) patchMeta.visualReview = review.visualDescription;
-        }
+        Object.assign(patchMeta, reviewStatusLib.deriveReviewMeta(review, needsReview)); // BUG-316
         // C1: same rule as executePipelineCard's shipMeta — a failed review,
         // or content that came from the fallback engine rather than the real
-        // one, must never read as a finished build downstream.
+        // one, must never read as a finished build downstream. BUG-311/316 adds
+        // the declared-skip and visual-rejection signals.
         patchMeta.status = completionStatusLib.deriveCompletionPayload({
-          reviewStatus: patchMeta.reviewStatus, buildEngine: j.engine
+          reviewStatus: patchMeta.reviewStatus, buildEngine: j.engine,
+          reviewRequired: needsReview, refineStatus: j.refineStatus
         }).status;
+        if (j.refineStatus) patchMeta.refineStatus = j.refineStatus;
         kanban.patchCard(card.id, patchMeta);
-        return { artifact: artifact, review: review, researchStatus: researchStatus };
+        return { artifact: artifact, review: review, researchStatus: researchStatus, reviewStatus: patchMeta.reviewStatus, reviewRequired: needsReview };
       }
     });
     // FIX H (bug 2): the clean topic, not basePrompt (design-system boilerplate +

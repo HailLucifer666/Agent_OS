@@ -32,7 +32,7 @@ const { listOpenCommitments } = require('./from-calendar');
 // C1: job_status is the pull-side counterpart of the announcer's push-side
 // fix — same defect (a review-failed or fallback-engine build reading as
 // "done"), arriving by voice query instead of by proactive speech.
-const { deriveCompletionPayload } = require('./completion-status');
+const { completionForJob } = require('./completion-status');
 
 // The ONE fetcher. See web_fetch below for why this file no longer has its own.
 const { web_fetch: sharedWebFetch } = require('./web-fetch');
@@ -806,10 +806,7 @@ function buildTools(ctx) {
   // buildRunner's map is never mutated.
   function withCompletionStatus(job) {
     if (!job) return job;
-    var reviewStatus = job.reviewVerdict === 'reject' ? 'failed'
-      : job.reviewVerdict === 'approve' ? 'approved'
-      : undefined;
-    var completion = deriveCompletionPayload({ reviewStatus: reviewStatus, buildEngine: job.engine });
+    var completion = completionForJob(job);   // BUG-316 — see completion-status.js
     return Object.assign({}, job, { completionStatus: completion.status });
   }
 

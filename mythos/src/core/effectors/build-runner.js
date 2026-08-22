@@ -471,6 +471,14 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
       if (runResult && runResult.researchStatus) job.researchStatus = runResult.researchStatus;
       // BUG-016: capture review status and issues so the announcer can inform the user
       // whether the build passed review or has issues that need attention
+      // BUG-316: reviewStatus/reviewRequired carry what the review ACTUALLY
+      // concluded. reviewVerdict alone cannot: a skipped review is implemented
+      // as a hardcoded { verdict: 'approve' }, so every reader of the job record
+      // — job_status, the announcer — saw an approval that never happened.
+      if (runResult && runResult.reviewStatus) job.reviewStatus = runResult.reviewStatus;
+      if (runResult && typeof runResult.reviewRequired === 'boolean') {
+        job.reviewRequired = runResult.reviewRequired;
+      }
       if (runResult && runResult.review) {
         job.reviewVerdict = runResult.review.verdict;
         if (runResult.review.issues && runResult.review.issues.length) {

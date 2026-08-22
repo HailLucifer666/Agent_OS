@@ -39,13 +39,80 @@
 // several existing tests rely on a plain-brain build with an approving review
 // reaching 'shipped'. If 'brain' ever becomes reachable in production, this
 // function needs an explicit decision for it, not a silent fall-through to 'done'.
-function deriveCompletionPayload({ reviewStatus, buildEngine } = {}) {
+// BUG-311/316 — THIS WAS A DENYLIST, AND THAT IS WHY THE CLASS KEPT RETURNING.
+// It used to read:
+//
+//     var needsWork = reviewStatus === 'failed' || isFallbackEngine;
+//
+// so anything it had not been taught to distrust read as 'done'. Measured
+// against the shipped function: `deriveCompletionPayload({})` — no arguments at
+// all — returned status 'done' with evidence.pass true. So did a typo
+// ('aproved'), an undefined reviewStatus, and the literal 'skipped' that
+// agent-actions would need in order to be honest about a review it never ran.
+// The module written to stop success being claimed without evidence claimed it
+// for the empty object.
+//
+// It is now an allowlist: 'done' requires positive evidence of each thing it
+// asserts, and every unrecognised value — including any added later — degrades.
+// That inversion is the guard against the sixth recurrence, and it is what
+// test/bug-311-316-completion-is-allowlist.test.js pins.
+//
+// THE THREE THINGS 'done' NOW ASSERTS:
+//   1. review — either a reviewer ran and approved, or the risk class did not
+//      require one AND the caller says so explicitly (reviewRequired:false).
+//      A bare 'skipped' with no such statement is not enough: that is exactly
+//      the shape the 2026-08-22 build shipped, where a hardcoded
+//      { verdict:'approve' } stood in for a review nobody performed.
+//   2. engine — the content came from the real build engine.
+//   3. refine — the visual gate did not reject it.
+//
+// WHY 'blind' AND 'skipped' REFINE STATUSES DO NOT DEGRADE (deliberate, pinned
+// by a test). "We looked and rejected it" — 'reverted' (the regeneration was
+// worse by the source rules, so the rejected original shipped) and 'exhausted'
+// (the iteration bound was reached with the critique still failing) — is
+// evidence of a defect. "We never looked" — refinement disabled, or the vision
+// lane could not answer — is absence of evidence. Treating absence as failure
+// would make every build read needs-work whenever BUILD_REFINE_ENABLED is off
+// or the vision lane times out, both of which this repo records as routine, and
+// a status that is always bad is a status nobody reads.
+var REAL_REVIEW_APPROVED = 'approved';
+var REVIEW_SKIPPED = 'skipped';
+// Refine outcomes that mean the artifact was LOOKED AT and found wanting.
+var REFINE_REJECTED = ['reverted', 'exhausted'];
+
+function deriveCompletionPayload({ reviewStatus, buildEngine, refineStatus, reviewRequired } = {}) {
   var isFallbackEngine = buildEngine === 'brain-fallback' || buildEngine === 'fallback';
-  var needsWork = reviewStatus === 'failed' || isFallbackEngine;
+  var refineRejected = REFINE_REJECTED.indexOf(refineStatus) !== -1;
+  var reviewProven = reviewStatus === REAL_REVIEW_APPROVED
+    || (reviewStatus === REVIEW_SKIPPED && reviewRequired === false);
+  var needsWork = !reviewProven || isFallbackEngine || refineRejected;
   return {
     status: needsWork ? 'needs-work' : 'done',
     evidence: { pass: !needsWork }
   };
 }
 
-module.exports = { deriveCompletionPayload };
+// Same rule, applied to a persisted job record. BUG-316: reviewVerdict alone
+// cannot distinguish a real approval from a skipped review — the skip is
+// implemented upstream as a hardcoded { verdict: 'approve' } — so the recorded
+// reviewStatus wins when the job carries one.
+//
+// A job with NO review phase at all (a planner job) has neither field. It is
+// treated as a declared skip rather than an unproven one, because under the
+// allowlist above the alternative is every planner job reading needs-work
+// forever. That is the one place absence is read generously, and it is here
+// rather than at the call sites so both readers — job_status and the announcer —
+// cannot drift apart on it.
+function completionForJob(job) {
+  var j = job || {};
+  var reviewStatus = j.reviewStatus || (j.reviewVerdict === 'reject' ? 'failed'
+    : j.reviewVerdict === 'approve' ? 'approved' : 'skipped');
+  return deriveCompletionPayload({
+    reviewStatus: reviewStatus,
+    buildEngine: j.engine,
+    refineStatus: j.refineStatus,
+    reviewRequired: j.reviewRequired === undefined ? false : j.reviewRequired,
+  });
+}
+
+module.exports = { deriveCompletionPayload, completionForJob };
