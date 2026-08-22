@@ -41,6 +41,63 @@ it is committed.
 
 ---
 
+## BUG-301 — the build engine was Electron, not node, so every real build died at 600s (✅ RESOLVED 2026-08-22)
+
+Found by running the desktop app and asking it to build a page — **not** by the suite, which cannot
+see this bug at all. Three consecutive real builds (`job-…-75`, `job-…-357`, `job-…-967`) each sat
+in `stage: generating` for ten minutes and then failed, writing **zero files**, while
+`dsh-agent` reported the engine `ONLINE` the entire time.
+
+**Root cause, in two layers.** `spawnDsh` launches the engine with `process.execPath`. MYTHOS's
+server runs under Electron, so that path is `electron.exe`, not `node`. Electron only behaves as a
+Node interpreter when `ELECTRON_RUN_AS_NODE` is set — and `scrubbedEnv()` deliberately builds a
+fresh allowlisted environment rather than copying `process.env`, which stripped exactly that
+variable. dsh's `bin.js` was therefore handed to Electron **as an application**. The process list
+made it unambiguous:
+
+    electron.exe "…DeepSeek Harness…dshlibin.js" --profile headless --patch …lane.patch.yml "OUTPUT CONTRACT…"
+
+Setting the variable exposed the second layer: dsh's own plugin graph loads
+`@deepseek-ai/cordis-plugin-hmr`, which refuses to initialise without node's `--expose-internals`
+(`failed to apply loader entry … --expose-internals is required for HMR service`). Under plain
+`node` dsh arranges that for itself; under Electron-as-node it does not, so the adapter now passes
+the flag explicitly. The flag widens nothing — `DSH_PERMISSION_MODE` still decides writes, and a
+test pins that.
+
+**Measured under `electron.exe` 43.3.0, same task each time:**
+
+| | result |
+| --- | --- |
+| no fix | killed at **600,000ms**, partial stdout `(none)` |
+| `ELECTRON_RUN_AS_NODE=1` only | honest failure in **1,858ms** (the HMR error) |
+| both fixes | **5,058ms** — identical to plain `node` |
+
+**Why 5,818 tests missed it, which is the part worth keeping.** Under plain `node` —
+the suite, `verify-dsh-build.js`'s 5/5 stages, the dsh-vs-Hermes spike, every mutation run —
+`process.execPath` **is** node, so the bug is unreachable. It exists only on the path a user takes.
+This is the same trap root `CLAUDE.md` already records from the cursor-overlay crash: a green suite
+cannot tell you the Electron app works. W6 shipped with a live-verified build engine that had never
+been run inside the application.
+
+**The probe is not a detector for this and must not be trusted as one.** `bin.js --version` printed
+the pinned version and matched *even under Electron*, so the adapter reported `ONLINE` with evidence
+`version-printed-and-matched-pin` while no build could succeed. A probe that spawns a trivial
+subcommand proves the interpreter can print a string, not that the harness can run.
+
+**Two secondary faults this exposed, both still open:**
+
+1. A ten-minute engine failure appears **nowhere in `mythos-server.log`** — it surfaced only in the
+   vault audit, via the healer's `build-engine-reprobe` detail. `grep -c dsh` over the whole server
+   log for that session returns the boot probe and nothing else.
+2. The adapter's own timeout message misdiagnoses it: *"in headless mode this is the shape an
+   unanswerable approval prompt takes"*. It was a load-time crash, and `stderr` said so
+   immediately. Failing fast on a fatal stderr signature would have turned 600s into ~2s.
+
+Regression test `test/bug-301-build-engine-under-electron.test.js`. Mutation-tested 3/3: dropping
+`ELECTRON_RUN_AS_NODE` fails two tests, dropping `--expose-internals` fails a third.
+
+---
+
 ## BUG-300 — the fabricated result was not only spoken, it was written down (✅ RESOLVED 2026-08-21)
 
 MYTHOS did not only say *"মোহনবাগান জিতে গেছে"* — it said *"আমি নোট করে রাখলাম"* and called

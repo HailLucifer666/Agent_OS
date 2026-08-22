@@ -394,6 +394,33 @@ function scrubbedEnv(opts) {
   // Profile directory: MYTHOS-owned, never the operator's.
   env.DSH_HOME = mythosDshHome();
 
+  // BUG-301 (found live 2026-08-22, inside the real desktop app). spawnDsh uses
+  // `process.execPath`, and MYTHOS's server runs under Electron — so execPath is
+  // electron.exe, not node. Electron only behaves as a Node interpreter when
+  // ELECTRON_RUN_AS_NODE is set, and the allowlist above deliberately builds a
+  // fresh env rather than copying process.env, which STRIPPED exactly that
+  // variable. dsh's bin.js was therefore handed to Electron as an APP: it threw
+  // "App threw an error during load", never emitted a terminal turn, and the
+  // adapter waited its full 600s task timeout before killing it. Three real
+  // builds died that way before anything noticed.
+  //
+  // Set unconditionally, not behind a `process.versions.electron` check: a real
+  // node ignores it, and the parent that matters is whatever spawned THIS
+  // process, which a library cannot reliably introspect.
+  //
+  // WHY EVERY TEST MISSED IT, because that is the part worth remembering: under
+  // plain `node` — the suite, verify-dsh-build.js's 5/5 stages, the dsh-vs-Hermes
+  // spike, every mutation run — execPath IS node and this bug cannot occur. It
+  // only exists on the path a user actually takes. Same shape as the cursor
+  // overlay crash root CLAUDE.md records: a green suite cannot tell you the
+  // Electron app works.
+  //
+  // The probe is NOT a detector for this and must not be trusted as one:
+  // `bin.js --version` printed the pinned version and matched even under
+  // Electron, so dsh-agent reported ONLINE with
+  // evidence "version-printed-and-matched-pin" while no build could succeed.
+  env.ELECTRON_RUN_AS_NODE = '1';
+
   // Permission mode is MYTHOS's call, so it is SET rather than inherited.
   //
   // This is where hermes-runner's `HERMES_YOLO_MODE: '1'` goes, and the
@@ -423,7 +450,27 @@ function spawnDsh(args, spawnOpts) {
   return new Promise(function (resolve) {
     var child;
     try {
-      child = spawn(process.execPath, args, {
+      // BUG-301, second half. `--expose-internals` is REQUIRED, not defensive.
+      // dsh's own plugin graph loads @deepseek-ai/cordis-plugin-hmr, which
+      // refuses to initialise without it:
+      //
+      //   Error: failed to apply loader entry 1e4e3e1a
+      //     (@deepseek-ai/cordis-plugin-hmr): --expose-internals is required
+      //     for HMR service
+      //
+      // Under plain `node` dsh arranges this for itself, which is why every
+      // node-hosted run (the suite, verify-dsh-build.js, the spike) passed
+      // without it. Under Electron-as-node that arrangement does not survive, so
+      // the flag is passed explicitly here. Measured 2026-08-22 under
+      // electron.exe 43.3.0 with ELECTRON_RUN_AS_NODE=1: without the flag the
+      // task dies in 1.9s on the HMR error; with it the same task returns in
+      // 5.06s — the same time it takes under plain node.
+      //
+      // It is prepended (interpreter flags must precede the script) and it does
+      // not widen the sandbox: DSH_PERMISSION_MODE still decides what the task
+      // may write. It only makes node's internal modules visible to a child that
+      // already requires them to boot.
+      child = spawn(process.execPath, ['--expose-internals'].concat(args), {
         cwd: spawnOpts.cwd,
         env: spawnOpts.env,
         windowsHide: true,
