@@ -30,18 +30,21 @@ function titleToStem(title) {
   return validate.slugify(title).slice(0, 60) || 'document';
 }
 
-// Resolve the full vault-relative output path for a generated doc. Guards
-// against traversal by routing through slugify (rejects ../, control chars,
-// path separators) before joining.
+// Resolve the full vault-relative output path for a generated doc. The name is
+// routed through slugify first, which rejects ../, control characters and path
+// separators before anything is joined.
+//
+// The prefix comparison that used to sit here was removed on 2026-08-22
+// (BUG-307): vaultPath() now refuses anything that resolves outside the vault,
+// so this was the third of four hand-rolled copies of one rule. Note the two
+// checks were never quite the same — this one asserted containment within
+// DOCS_REL rather than within the vault — but slugify already makes a name that
+// leaves DOCS_REL unconstructable, so what it added over vaultPath's check was a
+// second opinion about an impossible input.
 function resolveOutputPath(vault, stem, ext) {
   const fileName = stem + '.' + ext;
   const rel = path.join(DOCS_REL, fileName);
-  // Defense-in-depth: assert the resolved path stays under DOCS_REL.
-  const baseAbs = vault.vaultPath(DOCS_REL);
-  const fullAbs = vault.vaultPath(rel);
-  const prefix = baseAbs.endsWith(path.sep) ? baseAbs : baseAbs + path.sep;
-  if (!fullAbs.startsWith(prefix)) throw new Error('path traversal blocked: ' + fileName);
-  return { rel: rel, abs: fullAbs };
+  return { rel: rel, abs: vault.vaultPath(rel) };
 }
 
 // Locate a Chrome/Chromium binary on this machine. Returns a path string or null.

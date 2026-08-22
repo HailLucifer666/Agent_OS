@@ -82,3 +82,69 @@ test('BUG-301 — the permission mode still decides writes, so the flag widens n
   assert.equal(adapter.scrubbedEnv({}).DSH_PERMISSION_MODE, 'read-only');
   assert.equal(adapter.scrubbedEnv({ autoApprove: true }).DSH_PERMISSION_MODE, 'workspace-write');
 });
+
+// ---------------------------------------------------------------------------
+// Audit item 3, Phase 3 (2026-08-22): the case this file was missing.
+//
+// Everything above pins what scrubbedEnv DECIDES. Nothing pinned that the
+// decision survives to the caller — and it did not. The last line of the
+// function was:
+//
+//     return Object.assign(env, opts.extra || {});
+//
+// Later keys win in Object.assign, so anything the caller passed overwrote every
+// setting the function had just deliberately chosen. MEASURED before the fix,
+// with autoApprove:false and a hostile extra:
+//
+//     DSH_PERMISSION_MODE    = "workspace-write"   (asked for read-only)
+//     ELECTRON_RUN_AS_NODE   = ""                  (BUG-301, reintroduced)
+//     DSH_TELEMETRY_DISABLED = ""                  (the privacy opt-out, off)
+//
+// Three settings, including the one this whole file exists to protect.
+//
+// THE FIX IS DELETION, NOT DEFENCE. The option had no callers: a search across
+// src/ and adapters/ found exactly one mention, the forwarding line inside
+// runTask that fed it (extra: opts.env || null), and no runTask caller passed
+// env — build-engine, forge-runner and from-dsh all express intent structurally
+// (cwd, writeRoot, autoApprove) rather than by naming another program's
+// variables. An unused option that can switch off a sandbox is surface to
+// remove, not a hole to guard.
+//
+// If a real need for it appears, the merge goes ABOVE the decided settings so
+// they still win, and the reason goes in a comment. It does not come back below
+// them.
+
+test('audit item 3 — a caller cannot override the settings scrubbedEnv decides', () => {
+  const forced = adapter.scrubbedEnv({
+    autoApprove: false,
+    extra: {
+      DSH_PERMISSION_MODE: 'workspace-write',
+      ELECTRON_RUN_AS_NODE: '',
+      DSH_TELEMETRY_DISABLED: '',
+    },
+  });
+  assert.equal(forced.DSH_PERMISSION_MODE, 'read-only',
+    'a caller asked for the read-only sandbox and got workspace-write. The permission mode is '
+    + "MYTHOS's call — that is why it is SET rather than inherited");
+  assert.equal(forced.ELECTRON_RUN_AS_NODE, '1',
+    'BUG-301 straight back: with this blank the engine spawned from the Electron-hosted '
+    + 'server is Electron itself, and every build dies at the task timeout');
+  assert.equal(forced.DSH_TELEMETRY_DISABLED, '1',
+    "dsh's shipped bundle has no redaction rule, so an enabled export can carry message text, "
+    + 'tool arguments and workspace paths');
+});
+
+test('audit item 3 — the unused escape hatch is gone from the source, not merely outranked', () => {
+  // Behaviour above proves the settings survive TODAY. This proves the mechanism
+  // is absent, because "the merge happens earlier now" is one careless reorder
+  // away from being wrong again, and the option has no callers to justify it.
+  const code = fs.readFileSync(ADAPTER_SRC, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*\/\//.test(line))
+    .join('\n');
+  assert.ok(!/opts\.extra/.test(code),
+    'opts.extra is back in scrubbedEnv. It had no callers and it could switch off the sandbox');
+  assert.ok(!/extra\s*:\s*opts\.env/.test(code),
+    'runTask is forwarding opts.env into scrubbedEnv again — that was the only feeder');
+});

@@ -643,25 +643,13 @@ describe('immune/healer — cooldown + actions', function() {
       // machine actually produced instead of assuming one — asserting the
       // ONLINE shape is what made this test machine-dependent in the first
       // place.
-      var d = payload.detail || {};
-      var probed = d.state ? d : (d.result || {});
-      assert.ok(probed.state === 'ONLINE' || probed.state === 'OFFLINE',
-        'must report a definite re-probed state, not silence (outcome=' + payload.outcome
-        + ', detail=' + JSON.stringify(payload.detail) + ')');
-
-      if (payload.outcome === 'error') {
-        // Engine genuinely absent — the state every fresh clone of this repo is
-        // in until `node mythos/scripts/setup-dsh.js --install` has run, and
-        // the state CI is permanently in. An 'error' with no cause attached is
-        // indistinguishable from a broken healer, so the reason and the probe
-        // diagnostic are required, not optional.
-        assert.equal(probed.state, 'OFFLINE',
-          'the error branch is only correct when the engine really is offline');
-        assert.ok(/offline|missing-dependency/.test(String(d.reason || '')),
-          'the offline branch must NAME its reason, got ' + JSON.stringify(d.reason));
-        assert.ok(probed.probeDiagnostic && probed.probeDiagnostic.kind,
-          'the offline branch must carry the probe diagnostic saying WHY (not-installed, spawn-error, version-mismatch, ...)');
-      }
+      // AUDIT ITEM 10 (2026-08-22). The assertions live in
+      // assertReprobePayload() below, because this test can only ever reach
+      // ONE of the four branches per run — whichever state this machine is
+      // genuinely in. The forced-branch suite drives the SAME function with
+      // all four, so the logic is exercised deterministically and a mistake in
+      // it cannot hide until someone runs the suite on the wrong machine.
+      assertReprobePayload(healed[0].payload);
     } finally {
       healer.stop();
       // Don't leak this test's probe state (a cached probe result and a
@@ -671,6 +659,234 @@ describe('immune/healer — cooldown + actions', function() {
   });
 });
 
+// The one place that says what a build-engine-reprobe result must look like.
+// Called by the live test above (one real branch per run) and by every forced
+// branch below.
+function assertReprobePayload(payload) {
+  assert.notEqual(payload.outcome, 'applied',
+    'a reprobe result must never be announced as an applied heal — a probe reports ONLINE/OFFLINE, it does not prove a build produces content');
+  assert.ok(payload.outcome === 'verifying' || payload.outcome === 'error',
+    'expected the engine-present (verifying) or engine-absent (error) branch, got ' + payload.outcome);
+  // AUDIT ITEM 10 (2026-08-22). FOUR OUTCOMES, not two. reprobe-build-engine
+  // returns four different shapes and this block accepted one of the three
+  // failing ones. It passed here by accident and would have failed for no
+  // good reason on a machine in either of the other two states — the second
+  // time this same test has been machine-dependent, after BUG-258 and the
+  // W6 follow-up above.
+  //
+  //   ok:true                                      -> outcome verifying,
+  //       detail IS the probe detail                   state ONLINE
+  //   ok:false build-engine-offline                -> outcome error,
+  //       detail.result is the probe detail            state OFFLINE
+  //   ok:false build-engine-online-but-last-task-failed
+  //                                                -> outcome error,
+  //       detail.result is the probe detail            state ONLINE  <-- was rejected
+  //   ok:false missing-dependency:dsh-agent        -> outcome error,
+  //       detail.detail is an error STRING             no state at all <-- unreachable
+  //
+  // The third is not hypothetical: it fires whenever a build has recently
+  // failed, which is precisely when a human is most likely to be running
+  // this suite. The fourth carries its diagnosis under a different key, so
+  // the state assertion tripped before reaching the line written for it.
+  //
+  // The property being pinned is unchanged and is stated once here: a probe
+  // result is never announced as a completed repair, and the healer is never
+  // silent about why. Each outcome then gets the assertion that is actually
+  // true of it. Every branch is forced deterministically in the describe()
+  // block below, so none of this depends on what state this machine is in.
+  var d = payload.detail || {};
+  var probed = d.state ? d : (d.result || {});
+  var reason = String(d.reason || "");
+
+  if (reason.indexOf('missing-dependency') === 0) {
+    // The adapter module itself could not be loaded. There is no probe
+    // result to report, so demanding a state here is demanding something
+    // that cannot exist; what must be present is the cause.
+    assert.ok(d.detail, "missing-dependency must carry the load error, got " + JSON.stringify(d));
+  } else {
+    assert.ok(probed.state === 'ONLINE' || probed.state === 'OFFLINE',
+      'must report a definite re-probed state, not silence (outcome=' + payload.outcome
+      + ', detail=' + JSON.stringify(payload.detail) + ')');
+  }
+
+  if (payload.outcome === 'error') {
+    // An error with no cause attached is indistinguishable from a broken
+    // healer, so the reason is required on every failing branch.
+    assert.ok(/offline|missing-dependency|last-task-failed/.test(reason),
+      'a failing reprobe must NAME its reason, got ' + JSON.stringify(d.reason));
+
+    if (reason === 'build-engine-offline') {
+      // Engine genuinely absent — the state every fresh clone is in until
+      // `node mythos/scripts/setup-dsh.js --install` has run, and the state
+      // CI is permanently in.
+      assert.equal(probed.state, 'OFFLINE',
+        'build-engine-offline must report OFFLINE');
+      assert.ok(probed.probeDiagnostic && probed.probeDiagnostic.kind,
+        'the offline branch must carry the probe diagnostic saying WHY (not-installed, spawn-error, version-mismatch, ...)');
+    } else if (reason === 'build-engine-online-but-last-task-failed') {
+      // ONLINE AND FAILING IS A REAL STATE, not a contradiction: the probe
+      // proves the CLI runs, never that a build produces content. Asserting
+      // OFFLINE here is what made this branch fail on a machine where a
+      // build had recently failed.
+      assert.equal(probed.state, 'ONLINE',
+        'this branch exists precisely because the engine answers while builds fail');
+      assert.ok(probed.lastTaskFailure && probed.lastTaskFailure.error,
+        'the claim is that the last TASK failed, so the failure must be attached: '
+        + JSON.stringify(probed));
+    }
+  }
+}
+// ---------------------------------------------------------------------------
+// build-engine-reprobe — every branch, forced (audit item 10)
+// ---------------------------------------------------------------------------
+//
+// The live test above runs against whatever state this machine is genuinely in,
+// which is worth keeping and is also why it can only ever exercise ONE branch
+// per run. These force all four, so a branch cannot rot unnoticed the way the
+// online-but-failing one did.
+//
+// HOW TO REPRODUCE EACH BRANCH BY HAND, since rediscovering this cost time
+// twice already:
+//   verifying                 engine installed, no recent build failure
+//   build-engine-offline      fresh clone, before setup-dsh.js --install
+//   online-but-last-task-failed   run a build that fails, then this test
+//   missing-dependency        the adapter module fails to load at all
+//
+// None of that is needed here: the action does require(adapters/dsh-agent) at
+// call time, so seeding require.cache with a stub reaches every branch without
+// touching the real installation. Moving an install aside to fake a state is
+// the destructive pattern that once stranded real ONNX weights in a gitignored
+// backup directory.
+
+describe('immune/healer — build-engine-reprobe, every branch forced', function() {
+  var ADAPTER_ID = require.resolve('../adapters/dsh-agent');
+
+  async function reprobeWith(stubExports, options) {
+    var saved = require.cache[ADAPTER_ID];
+    delete require.cache[ADAPTER_ID];
+    var entry = { id: ADAPTER_ID, filename: ADAPTER_ID, loaded: true, children: [], paths: [] };
+    if (options && options.throwOnLoad) {
+      Object.defineProperty(entry, 'exports', {
+        get: function() { throw new Error('Cannot find module dsh-agent'); },
+      });
+    } else {
+      entry.exports = stubExports;
+    }
+    require.cache[ADAPTER_ID] = entry;
+
+    var bus = fakeBus();
+    var { createHealer } = require('../src/core/immune/healer');
+    var healer = createHealer({ bus: bus, config: fakeConfig(), memory: fakeMemory(),
+      getCortex: function() { return null; }, getGoals: function() { return null; } });
+    healer.start();
+    try {
+      bus.emit('health.diagnosed', {
+        kind: 'build-engine-failed', target: undefined,
+        evidence: { kind: 'build-engine-failed', engine: 'dsh', error: 'forced' }
+      });
+      var healed = [];
+      for (var i = 0; i < 100 && healed.length === 0; i++) {
+        await sleep(20);
+        healed = bus._emitted().filter(function(e) { return e.type === 'health.healed'; });
+      }
+      assert.equal(healed.length, 1, 'the playbook did not fire');
+      return healed[0].payload;
+    } finally {
+      healer.stop();
+      if (saved) require.cache[ADAPTER_ID] = saved;
+      else delete require.cache[ADAPTER_ID];
+    }
+  }
+
+  it('ONLINE with no recent failure is held for verification, never announced as applied', async function() {
+    var payload = await reprobeWith({
+      probe: async function() { return true; },
+      getStatus: function() {
+        return { state: 'ONLINE', hint: '', probeDiagnostic: null,
+          evidence: 'version-printed-and-matched-pin', lastTaskFailure: null };
+      },
+    });
+    assertReprobePayload(payload);
+    assert.equal(payload.outcome, 'verifying',
+      'a probe proves the CLI runs, not that a build produces content — it must not read as applied');
+    assert.equal((payload.detail || {}).state, 'ONLINE');
+  });
+
+  it('OFFLINE reports the state and the diagnostic that explains it', async function() {
+    var payload = await reprobeWith({
+      probe: async function() { return false; },
+      getStatus: function() {
+        return { state: 'OFFLINE', hint: 'run setup-dsh.js --install',
+          probeDiagnostic: { kind: 'not-installed' }, evidence: 'none', lastTaskFailure: null };
+      },
+    });
+    assertReprobePayload(payload);
+    assert.equal(payload.outcome, 'error');
+    var d = payload.detail || {};
+    assert.equal(d.reason, 'build-engine-offline');
+    assert.equal((d.result || {}).state, 'OFFLINE');
+    assert.equal((d.result || {}).probeDiagnostic.kind, 'not-installed');
+  });
+
+  it('ONLINE-but-the-last-build-failed is a real state, and was the branch the test rejected', async function() {
+    // THE BUG IN ITEM 10. The old assertion demanded OFFLINE on every error
+    // outcome, so this branch — which reports ONLINE on purpose — failed the
+    // test rather than the test describing it.
+    var payload = await reprobeWith({
+      probe: async function() { return true; },
+      getStatus: function() {
+        return { state: 'ONLINE', hint: '', probeDiagnostic: null,
+          evidence: 'version-printed-and-matched-pin',
+          lastTaskFailure: { at: 1, error: 'dsh exit 1 on mistral/codestral-latest' } };
+      },
+    });
+    assertReprobePayload(payload);
+    assert.equal(payload.outcome, 'error');
+    var d = payload.detail || {};
+    assert.equal(d.reason, 'build-engine-online-but-last-task-failed');
+    assert.equal((d.result || {}).state, 'ONLINE',
+      'ONLINE beside a failed build is diagnosable, not a contradiction');
+    assert.match(String((d.result || {}).lastTaskFailure.error), /dsh exit 1/);
+  });
+
+  it('the shared assertion REJECTS a malformed online-but-failed payload', function() {
+    // The positive cases above would all still pass if assertReprobePayload lost
+    // its online-but-failed branch entirely — a mutation proved exactly that,
+    // because each forced test also carries its own direct assertions. This is
+    // the negative direction, and it is what makes that branch load-bearing.
+    assert.throws(function() {
+      assertReprobePayload({
+        outcome: 'error',
+        detail: { reason: 'build-engine-online-but-last-task-failed',
+          result: { state: 'ONLINE', lastTaskFailure: null } },
+      });
+    }, /last TASK failed/, 'a claim that the last build failed, with no failure attached, must not pass');
+
+    assert.throws(function() {
+      assertReprobePayload({
+        outcome: 'error',
+        detail: { reason: 'build-engine-offline',
+          result: { state: 'OFFLINE', probeDiagnostic: null } },
+      });
+    }, /probe diagnostic/, 'an offline report with no diagnostic saying WHY must not pass');
+
+    assert.throws(function() {
+      assertReprobePayload({ outcome: 'applied', detail: { state: 'ONLINE' } });
+    }, /applied heal/, 'a probe result announced as a completed repair must not pass');
+  });
+  it('a module that will not load reports the load error, not a phantom state', async function() {
+    // The fourth branch returns its cause under `detail` rather than `result`,
+    // so the state assertion used to trip before reaching the line written for
+    // it — that line was dead.
+    var payload = await reprobeWith(null, { throwOnLoad: true });
+    assertReprobePayload(payload);
+    assert.equal(payload.outcome, 'error');
+    var d = payload.detail || {};
+    assert.match(String(d.reason), /^missing-dependency/);
+    assert.match(String(d.detail), /Cannot find module/,
+      'the load error is the only diagnosis available here and must survive');
+  });
+});
 // ---------------------------------------------------------------------------
 // (regression) degrade-lane — real registry.js seam
 // ---------------------------------------------------------------------------

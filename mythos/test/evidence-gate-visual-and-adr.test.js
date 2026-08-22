@@ -56,8 +56,18 @@ const { createAgentActions } = require('../src/core/effectors/agent-actions');
 // classifier — not a copy, so the fixture cannot drift from production.
 const ARCH_PHASES = () => gatePath('architecture-change');
 
+// BUG-304 (2026-08-22): the ship gate now confirms the artifact FILE exists and
+// has content, not merely that its path is a non-empty string. These suites are
+// about the visual and review phases — the artifact is scaffolding here, not the
+// subject — so it is stubbed as present-and-non-empty deliberately. The artifact
+// check itself is proven against a real directory on disk in
+// test/bug-304-ship-gate-requires-a-real-file.test.js; asserting it here as well
+// would be a second copy of one invariant, which is this repo's most-repeated
+// defect.
+const artifactIsReallyThere = { exists: () => true, readText: () => '<html>content</html>' };
+
 describe('evidence gate: visual', () => {
-  const ev = createEvidenceValidator();
+  const ev = createEvidenceValidator({ fs: artifactIsReallyThere });
 
   it('BLOCKS a card that required visual verification and has none', () => {
     var result = ev.verify({
@@ -180,7 +190,7 @@ describe('the visual-skip signal is real, not a phantom field', () => {
 
     // And the gate must accept what fullReview actually produced. Building the
     // fixture from the wire, not from what the validator wishes it received.
-    const result = createEvidenceValidator().verify({
+    const result = createEvidenceValidator({ fs: artifactIsReallyThere }).verify({
       card: { id: 'arch-real' },
       artifact: { path: '/vault/builds/arch.html' },
       review: review,

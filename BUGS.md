@@ -41,6 +41,355 @@ it is committed.
 
 ---
 
+## BUG-308 — an escaped error killed MYTHOS and wrote nothing anywhere (✅ RESOLVED 2026-08-22)
+
+Audit item 8, Phase 4 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. MYTHOS's brain runs as a
+separate Node process launched by the desktop app. Since Node 15 an escaped promise rejection
+terminates the process exactly like an uncaught throw. `electron/main.js` handles both and writes a
+line; `src/main.js` — the process that actually does everything — handled neither. A single escaped
+error therefore killed MYTHOS outright and left nothing behind: no log line, no stack, just a process
+that was there and then was not.
+
+**A missing net, not a known leak.** The two likeliest sources were checked when this was written and
+both are safe today. Stated plainly because the opposite claim — "this fixes a live crash" — would be
+false.
+
+**Why it exits rather than carrying on**, which is the only real decision here. Node already
+terminates on both events; that is today's behaviour. A handler that merely logged would *change* it,
+keeping a process alive in a state it has already failed to reason about, and the desktop app
+supervises this child and can restart it. Logging then exiting adds the missing evidence without
+altering what happens. Note `electron/main.js` makes the opposite call for the opposite reason — it
+owns the window, so a missing log line beats a dead desktop app. Same two events, different
+processes, different right answers; the contrast is documented in both files rather than one being
+treated as house style.
+
+Three details the tests pin, each of which is a way this kind of handler goes wrong:
+
+- **It refuses to install without a logger.** A handler with nowhere to write is worse than none: it
+  suppresses the stack trace Node would otherwise print and replaces it with silence.
+- **A logger that throws must not stop the exit.** The failure mode of a crash handler is that it
+  crashes.
+- **The exit is scheduled, not immediate.** stderr to a pipe is asynchronous, and calling
+  `process.exit()` on the same tick as the write produces the truncated line the handler exists to
+  prevent.
+
+Handlers live in `src/core/crash-handlers.js` and are armed in `src/main.js` immediately after the
+logger exists and **before any subsystem is built** — a net strung up at the end of boot catches
+nothing thrown during boot, which is when a young process is most likely to throw. A test asserts
+that ordering by source position.
+
+Regression test `mythos/test/bug-308-server-logs-before-it-dies.test.js` (8 tests), including a real
+child process with the real logger and a real rejection, asserting the message reaches stderr and the
+exit code is 1.
+
+---
+
+## Audit items 9 and 10 — two guards, no production change (✅ DONE 2026-08-22)
+
+Phase 4, recorded here rather than as bugs because neither changed shipping code.
+
+**Item 9 — the same startup mistake has now been made twice, and nothing was watching for a third.**
+`process.execPath` is the Electron binary inside the packaged app, and Electron only behaves as a
+Node interpreter when `ELECTRON_RUN_AS_NODE` is set. Forgetting it does not fail loudly — it
+launches a second copy of MYTHOS. That caused the web-search daemon bug and then BUG-301, three real
+ten-minute build failures. Each got its own test pinning its own call site; the rule itself was
+written nowhere.
+
+`mythos/test/spawn-runs-as-node-guard.test.js` scans `mythos/src`, `mythos/adapters`,
+`mythos/server` and `electron/` for spawns of our own executable. It accepts inheritance as well as
+assignment — two of the four real sites are correct because they pass `process.env` through, and a
+guard demanding an explicit assignment would have failed on day one and been muted rather than
+trusted. It rejects exactly one shape: an environment built from scratch that neither derives from
+`process.env` nor sets the flag.
+
+The hard case was BUG-301's actual shape, where the spawn sits in a helper that receives the
+environment as a parameter and the object is built one call up. Following that statically is more
+machinery than it is worth, so the check drops to file level there — the module must set the flag
+somewhere in its own **code**, not in a comment — and that is stated in the file rather than left as
+a silent weakness. It would still have failed on BUG-301, which never mentioned the flag at all.
+
+**Proven by breaking something**, per the plan: the flag was deleted from `websearch-child.js` and
+the guard was confirmed to fail, naming that file and line 134, before the file was restored
+byte-identical. `mythos/scripts/` is deliberately out of scope — operator-run developer tools
+invoked with a real `node` — and the one script the app itself launches lives behind a call in
+`electron/main.js`, which is scanned.
+
+**Item 10 — a test asserted something that is not always true, for the second time.**
+`immune.test.js`'s build-engine-reprobe test allowed two outcomes where the action produces **four**:
+
+| return | outcome | reported state |
+| --- | --- | --- |
+| `ok:true` | verifying | ONLINE |
+| `build-engine-offline` | error | OFFLINE |
+| `build-engine-online-but-last-task-failed` | error | **ONLINE** — was rejected by the test |
+| `missing-dependency:dsh-agent` | error | none; the cause is under a different key |
+
+The third is not hypothetical: it fires whenever a build has recently failed, which is exactly when
+someone is likely to be running the suite. ONLINE beside a failed build is a real, diagnosable state
+— the probe proves the CLI runs, never that a build produces content — and the test called it a
+contradiction. The fourth returns its diagnosis under `detail` rather than `result`, so the state
+assertion tripped before reaching the line written to handle it; that line was dead.
+
+The assertions now live in one function that the live test and four **forced** branch tests all
+drive, so the logic no longer depends on which state this machine happens to be in. Each branch is
+forced by seeding `require.cache` with a stub — never by moving a real installation aside, which is
+the destructive pattern that once stranded real ONNX weights in a gitignored backup directory. A
+negative-direction test asserts the shared function *rejects* malformed payloads, without which the
+whole branch could be deleted and every positive test would still pass — a mutation proved exactly
+that before it was added.
+
+---
+
+## BUG-307 — the vault path helper kept nothing inside the vault (✅ RESOLVED 2026-08-22)
+
+Audit item 7, Phase 3 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. `vaultPath()` in
+`src/core/memory/fs-store.js` is the one function that turns a short name into a full path inside
+MYTHOS's data folder — every read and every write goes through it — and it was:
+
+    function vaultPath(...segments) { return path.resolve(root(), ...segments); }
+
+`path.resolve` does not contain anything. It walks out of the vault on `..`, and an **absolute
+segment discards the root entirely** rather than being appended to it. Measured at HEAD against a
+temp vault:
+
+| input | resolved to |
+| --- | --- |
+| `..` | the vault's parent |
+| `../../etc/passwd` | two levels up, then `etc/passwd` |
+| `/etc/passwd` | the drive root — the vault was gone |
+| `a/../../..` | two levels up |
+
+**Honest bounding, both halves.** Nothing could exploit this: no model tool and no web route reached
+the two unguarded call sites with a name it controlled. What made it worth fixing is the shape rather
+than the exposure — **four callers had each hand-rolled this same check, in three different styles,
+and two had written none.** One invariant with five implementations is this repo's most-repeated
+defect class, and the two that were missing were one careless parameter away from mattering.
+
+The rule now lives once, at the door every path goes through. The comparison is against the root
+**plus a separator**, because `startsWith(root)` alone accepts a sibling directory whose name merely
+begins with the root's — the classic off-by-one in this check, and now its own test. The redundant
+copies in `from-runner.js` and `from-docs.js` were deleted in the same commit; leaving them is how
+five implementations drift apart.
+
+**Two deliberate non-fixes, both pinned by tests.** `from-okf.js`'s `badSegment()` stays: it rejects
+a bad name with an actionable message *before* the filesystem is involved, which is a different job
+from containment — reject at the edge, contain at the door. And `from-runner.js`'s slug regex stays
+for the same reason; only its prefix re-derivation came out.
+
+**The regression risk was the other direction, and it was measured.** A containment check in the
+function every vault operation calls could easily break the vault. Full suite after the change: one
+failure across 5,879 tests, and it was the AD-7 portability gate objecting to a Windows absolute path
+I had written **in my own explanatory comment**, not a caller relying on loose behaviour. Nothing in
+the codebase depended on `vaultPath` letting a path escape.
+
+Regression test `mythos/test/bug-307-vault-path-containment.test.js` (10 tests). Mutation-tested
+6/6 after one correction: the first M4 removed a `if (!segments.length) return rootAbs` fast path and
+**survived**, because `path.resolve(rootAbs)` already returns `rootAbs` — the branch was dead. It was
+deleted rather than left looking load-bearing, and the mutation retargeted at the clause that really
+carries the no-arguments contract.
+
+---
+
+## BUG-306 — a failed save of your conversation history was completely silent (✅ RESOLVED 2026-08-22)
+
+Audit item 4, Phase 2 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. One line in
+`server/index.js`:
+
+    try { memory.fs.writeJSON(SESSION_PATH, { turns: history, savedAt: historyAt }); } catch (_) {}
+
+Every turn of every conversation is written to the vault so the conversation survives a restart. If
+that write failed the error was caught and dropped — no log, no warning, no counter. The next launch
+began with a missing or stale history, which is indistinguishable from a fresh session, so a vault
+that had stopped accepting writes would never be noticed.
+
+**Best-effort was the right disposition and is kept**: the operator is mid-sentence and a disk
+problem must not end the turn. Best-effort and silent are separate decisions, and only the first one
+had ever been made. The catch now logs `session-history-write-failed` with the path, the turn count
+and the underlying error.
+
+Regression test `mythos/test/bug-306-session-write-failure-is-logged.test.js` (4 tests), driving
+`historyAppend` through a new `_internal` seam — the only production route to it is a full
+websocket voice turn, and the subject is one line of error handling inside it. The logger is
+**injected**, not captured from stdout: this repo's logger is silent under test, so grepping output
+for a log line passes whether or not the line is emitted.
+
+**The first version of this test was itself vacuous, and mutation testing is what caught it.** The
+fixture's error string was `'EACCES: permission denied, open ...session.json'` and the assertion
+matched `/session\.json/` against the whole serialised log line — so it was satisfied by the
+fixture's own text appearing anywhere, and the test passed with the log statement disabled. The
+assertions now read the named fields (`fields.path`, `fields.error`) instead of a JSON blob.
+
+---
+
+## BUG-305 — the build engine's ten-minute failure was misdiagnosed, unlogged, and left running (✅ RESOLVED 2026-08-22)
+
+Audit items 5 and 6, Phase 2. These are the two secondary faults BUG-301 recorded as **still open**;
+both are about the same ten minutes, and fixing them turned up a third.
+
+**1. The adapter waited out the clock on a crash that announced itself.** Three real builds sat in
+`stage: generating` for 600,000ms and then failed having written nothing. stderr was read only
+*after* the timeout fired, and the message then explained the failure as an unanswerable approval
+prompt — a guess, printed next to the evidence that contradicted it.
+
+MEASURED 2026-08-22 against the real installed engine, reproducing the incident shape exactly (dsh
+launched by `electron.exe` as an **application**, which is what BUG-301's first layer produced):
+
+| | |
+| --- | --- |
+| first stdout byte | 47ms |
+| first stderr byte | **1,892ms** — `App threw an error during load` / `failed to apply loader entry … --expose-internals is required for HMR service` |
+| still alive at cap | **yes, at 45,028ms** — and it would have run to 600,000ms |
+
+The companion shape (`ELECTRON_RUN_AS_NODE=1`, no `--expose-internals`) exits 1 on its own at
+1,978ms, matching the 1,858ms in BUG-301. **That shape never needed fail-fast, because it exits. The
+one that hangs is the one that needed it** — a distinction the original write-up did not draw.
+
+`spawnDsh` now watches stderr as it arrives and resolves `kind:'fatal-stderr'` on a measured fatal
+signature, killing the child. The signature list is deliberately two entries long; the risk in
+fail-fast is the opposite of the bug — a pattern that is too eager kills runs that would have
+succeeded — so every entry was observed rather than imagined and carries the reason it means "this
+process cannot recover". A test pins that ordinary stderr chatter does not match.
+
+**2. The same ten minutes left no line in `mythos-server.log`.** The only trace was in the vault
+audit trail. The adapter has built a logger at module load since it was written and already used it
+twice; the failure path simply never called it. `noteTaskFailure` now records the model, the
+elapsed time, the error and the engine's stderr — and still keeps the `lastTaskFailure` bookkeeping
+`getStatus()` depends on, so ONLINE-beside-a-recent-failure stays readable as itself.
+
+The timeout message was rewritten to lead with the evidence. The old wording asserted a cause and was
+wrong three times in one day; the approval-prompt explanation is now offered only when there is no
+output at all to point at.
+
+**3. A THIRD FAULT, found by writing the test: the timeout never killed anything.**
+`treeKill`'s signature is `treeKill(child, pid)` and `dsh-agent` called it as
+`treeKill(child.pid)` — one argument. The pid landed in the `child` parameter, `pid` was
+`undefined`, and Windows ran `taskkill /PID undefined /T /F`, which kills nothing.
+`command-runner` itself calls it correctly; only this adapter had it wrong, since it was written.
+
+Measured on the pre-existing timeout path: after the timeout resolved, the engine kept writing — 26
+bytes at resolve, 51 bytes 1.5 seconds later, still climbing. **So a build that timed out did not
+stop the engine, it only stopped waiting for it.** With the arity fixed the same probe holds flat
+(28 bytes across a 3.2-second sampling window). Both kill paths are now asserted.
+
+Regression test `mythos/test/bug-305-fail-fast-on-fatal-stderr.test.js` (13 tests). It needs no API
+key and no dsh installation: `spawnDsh` runs `process.execPath` with whatever arguments it is
+handed, so a tiny node script is a valid engine for the spawn contract — it crashes on cue and hangs
+on cue, and the code path exercised is the real one. Mutation-tested: removing the stderr watch,
+broadening the signature to anything error-ish, reverting the treeKill arity, dropping the log call,
+restoring the old timeout wording, and making `runTask` ignore the fatal result each fail a named
+test.
+
+---
+
+## BUG-304 — the ship gate checked a filename, not a file (✅ RESOLVED 2026-08-22)
+
+Audit item 2, Phase 2. Before a job is marked shipped, an evidence gate checks that the required
+phases produced something. The artifact check was `if (!artifact || !artifact.path)` — a check on a
+piece of **text**. Nothing looked at the disk. For the smallest risk class that is the **only** check
+the gate performs, so a card could be marked done with nothing written anywhere.
+
+**Measured at HEAD before the fix**, with an artifact naming a file that was never created:
+
+    tiny-fix  gate=["artifact"]           -> {"pass":true,"missing":[]}
+    quick-win gate=["artifact","verify"]  -> {"pass":true,"missing":[]}
+
+The gate now requires the file to exist and to be non-empty, checked separately because they have
+different causes — nothing ran, versus a write that started and failed. With no vault handle it
+**refuses** rather than skipping the check: `if (vault) { …check… }` would turn a wiring mistake
+into a gate that passes everything, which is worse than no gate because it looks like one.
+
+**A second fault, the same one wearing a different hat.** `quick-win`'s gate path required a phase
+called `'verify'` that the validator had no code for. Grepping `src/` for it as a phase name
+returned exactly two hits: the gate-path table demanding it, and the validator's comment listing it.
+No producer, no check — quick-win advertised a two-phase gate and ran a one-phase one. This is
+precisely what the `'adr'` note already in `risk-classifier.js` warns about, in the same table,
+about a different phase. Removed on that precedent.
+
+**And the class, not just the instance.** The validator now carries two explicit lists —
+`CHECKED_PHASES` and `UNCHECKED_PHASES` (each exemption with its reason; `'research'` is there
+because the network may be down and an offline research step must not block delivery) — and
+**throws** on a phase in neither. A phase cannot be added to a gate path and quietly ignored again.
+
+Regression test `mythos/test/bug-304-ship-gate-requires-a-real-file.test.js` (9 tests, against a
+real temp directory). Mutation-tested 5/5. Three pre-existing tests constructed the validator with no
+vault handle; their subject is the visual and review phases, so the artifact is stubbed
+present-and-non-empty there with a comment saying why, and the real-file proof lives in one place.
+
+---
+
+## BUG-303 — the SSRF guard checked one address and connected to another (✅ RESOLVED 2026-08-22)
+
+Found by the 2026-08-22 defect-class audit (`mythos/docs/AUDIT-2026-08-22-defect-classes.md`,
+item 1) and fixed as Phase 1 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. Not found by the
+suite: `web-fetch.js` had 27 tests over this exact boundary, and every one of them checked the
+predicate rather than the connection.
+
+**Plain English.** Before fetching a page, MYTHOS looked up the site's address and refused if it
+was inside your own network — your machine, your router, a cloud metadata service. Then it handed
+the site's *name* to the fetch call, which looked it up a second time and connected to whatever
+came back. Two lookups, two chances to answer differently. Someone who owns a domain answers the
+first with a harmless public address and the second with `127.0.0.1`; the guard approves and the
+connection goes somewhere else entirely. The comment above the check said it *"catches DNS
+rebinding attacks"*. It was the rebinding hole.
+
+**Reachable, not theoretical.** `web_fetch` is registered `danger:false`, tier 0, and sits in the
+Live voice allowlist, so the model can call it with no approval — and this machine serves the
+MYTHOS API on 4478.
+
+**Measured at HEAD before the fix**, with a loopback HTTP server and a resolver that answers
+`93.184.216.34` to the guard and `127.0.0.1` to the socket:
+
+    ok      = true
+    leaked  = true
+    payload = {"ok":true,"result":{"url":"http://rebind.example:56171/creds","status":200,
+               "contentType":"text/plain","content":"INTERNAL-SECRET-/creds","source":"direct"}}
+
+After the fix, same script:
+
+    ok      = false
+    leaked  = false
+    payload = {"ok":false,"error":"Blocked: rebind.example resolves to a private or internal
+               address (127.0.0.1) (SSRF protection)."}
+
+**The fix.** The check and the connection now share one answer. `guardedLookup` in
+`net-address.js` is the resolver the socket itself uses — Node's http/https clients take a
+`lookup` option and call it at connect time — so it resolves, classifies every address it got
+back, and refuses the connection rather than advising someone else to. There is no second
+resolution left to poison. That required replacing `fetch()` with Node's built-in client, because
+`fetch` re-resolves the hostname and cannot be told not to. **No dependency was added**: undici
+would have made it a three-line change, and the SSRF path is the last place to take on
+supply-chain surface in the name of safety.
+
+Three details that are easy to get wrong and are pinned by tests:
+
+- **Two callback shapes.** Node 26 enables `autoSelectFamily` by default, so the socket asks with
+  `{ all: true }` and expects an array of records; the older form expects `(address, family)` as
+  separate arguments. Handling only one breaks every connection.
+- **Any private address refuses the whole connection**, not just the first — `getaddrinfo` can
+  return several and the stack picks one.
+- **Compression.** `fetch()` un-gzipped silently and the raw client does not. Without explicit
+  gzip/deflate/br handling every compressed page returns as binary rubbish and is handed to the
+  brain as research.
+
+**A second, smaller fault fixed in the same commit.** `guardedFetch` tagged an SSRF refusal with
+`ssrfBlocked` so the Jina fallback would not retry it, and a comment said so — but the `catch`
+around the direct fetch read no such tag and treated *"blocked for targeting an internal address"*
+exactly like *"the site is slow"*, re-sending the same target through `r.jina.ai`. An inert
+mechanism with a comment claiming it works is how this survived.
+
+**Layers, deliberately kept.** The pre-flight `isInternalUrl` check stays. It produces the readable
+refusal, and it catches IP literals — which never reach the resolver at all, because Node skips
+resolution for a host it can already parse as an address. Removing either layer reopens a hole the
+other cannot see.
+
+Regression test `mythos/test/bug-303-ssrf-rebinding.test.js` (13 tests). Mutation-tested 6/6:
+dropping the resolver from the request, classifying only the first address, dropping gzip handling,
+letting a blocked request fall through to Jina, collapsing the two callback shapes, and dropping the
+`ssrfBlocked` tag each fail a named test. Live-verified against two real public pages
+(`example.com`, a gzipped Wikipedia article) returning readable text over HTTPS.
+
+---
+
 ## BUG-301 — the build engine was Electron, not node, so every real build died at 600s (✅ RESOLVED 2026-08-22)
 
 Found by running the desktop app and asking it to build a page — **not** by the suite, which cannot
@@ -84,7 +433,9 @@ the pinned version and matched *even under Electron*, so the adapter reported `O
 `version-printed-and-matched-pin` while no build could succeed. A probe that spawns a trivial
 subcommand proves the interpreter can print a string, not that the harness can run.
 
-**Two secondary faults this exposed, both still open:**
+**Two secondary faults this exposed. BOTH CLOSED 2026-08-22 as BUG-305**, which also found a third
+(the timeout never killed the engine — `treeKill` was called with one argument and its signature
+takes two, so `taskkill /PID undefined` ran instead):
 
 1. A ten-minute engine failure appears **nowhere in `mythos-server.log`** — it surfaced only in the
    vault audit, via the healer's `build-engine-reprobe` detail. `grep -c dsh` over the whole server
@@ -95,6 +446,20 @@ subcommand proves the interpreter can print a string, not that the harness can r
 
 Regression test `test/bug-301-build-engine-under-electron.test.js`. Mutation-tested 3/3: dropping
 `ELECTRON_RUN_AS_NODE` fails two tests, dropping `--expose-internals` fails a third.
+
+**Follow-up 2026-08-22 (audit item 3, Phase 3): the fix above was overridable by its own caller.**
+`scrubbedEnv` ended with `return Object.assign(env, opts.extra || {})`, and later keys win — so
+anything a caller passed overwrote every setting the function had just decided. Measured with
+`autoApprove:false` and a hostile `extra`: `DSH_PERMISSION_MODE` came back `workspace-write`
+(the sandbox, off), `ELECTRON_RUN_AS_NODE` came back `""` (**this bug, reintroduced**), and
+`DSH_TELEMETRY_DISABLED` came back `""` (the privacy opt-out, off).
+
+Deleted rather than defended: the option had no callers. The only mention anywhere in `src/` or
+`adapters/` was the forwarding line in `runTask` that fed it, and no `runTask` caller passed
+`env` — build-engine, forge-runner and from-dsh all express intent structurally (`cwd`,
+`writeRoot`, `autoApprove`) instead, which forge-runner's own comment records as the lesson from
+Hermes being deleted out from under a set of `HERMES_`-prefixed variables. Two tests added to this
+file, both mutation-checked.
 
 ---
 

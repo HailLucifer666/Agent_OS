@@ -16,7 +16,15 @@ var KEYWORDS = {
 // Gate path definitions — what phases are required for each risk class
 var GATE_PATHS = {
   'tiny-fix': ['artifact'],
-  'quick-win': ['artifact', 'verify'],
+  // 2026-08-22, BUG-304: 'verify' REMOVED, on the same precedent as 'adr' below
+  // and for a stronger version of the same reason. 'adr' at least named a
+  // document someone might one day produce; 'verify' appeared in exactly two
+  // places in the whole of src/ — this table, demanding it, and
+  // evidence-validator.js's header comment, listing it. No code produced it and
+  // no code checked it, so quick-win advertised a two-phase gate and ran a
+  // one-phase one. The validator now throws on a phase it cannot check, so
+  // re-adding this name without its check is no longer possible quietly.
+  'quick-win': ['artifact'],
   'feature': ['research', 'artifact', 'visual', 'review'],
   // 2026-08-20: 'adr' REMOVED from architecture-change. It is deliberately not
   // required: no ADR generator exists in this repo, so gating on an artifact

@@ -132,14 +132,21 @@ test('isInternalUrl allows a name that resolves publicly', async () => {
 // ---------------------------------------------------------------------------
 // Redirects — bypass 2
 // ---------------------------------------------------------------------------
+//
+// 2026-08-22, BUG-303: these three used to stub global.fetch. web-fetch.js no
+// longer calls it — fetch() re-resolves the hostname at connect time, which was
+// the rebinding hole, so the transport is now Node's built-in client with a
+// guarded resolver (see bug-303-ssrf-rebinding.test.js). The seam moved to
+// _transport.request; what these tests assert about the redirect loop is
+// unchanged, because the loop is unchanged.
 
 test('guardedFetch re-checks every redirect hop, not just the first URL', async () => {
   const realLookup = dns.promises.lookup;
-  const realFetch = global.fetch;
+  const realRequest = webFetch._transport.request;
   const seen = [];
   // The first hop is a public name; the server then points at a private one.
   dns.promises.lookup = async () => [{ address: '93.184.216.34', family: 4 }];
-  global.fetch = async (url) => {
+  webFetch._transport.request = async (url) => {
     seen.push(String(url));
     return {
       status: 302,
@@ -159,16 +166,16 @@ test('guardedFetch re-checks every redirect hop, not just the first URL', async 
     assert.equal(seen.length, 1, 'the private hop must never be requested; got ' + JSON.stringify(seen));
   } finally {
     dns.promises.lookup = realLookup;
-    global.fetch = realFetch;
+    webFetch._transport.request = realRequest;
   }
 });
 
 test('guardedFetch stops after a bounded number of hops', async () => {
   const realLookup = dns.promises.lookup;
-  const realFetch = global.fetch;
+  const realRequest = webFetch._transport.request;
   let hops = 0;
   dns.promises.lookup = async () => [{ address: '93.184.216.34', family: 4 }];
-  global.fetch = async () => {
+  webFetch._transport.request = async () => {
     hops++;
     return { status: 302, headers: { get: () => 'http://public.example/next' } };
   };
@@ -177,21 +184,21 @@ test('guardedFetch stops after a bounded number of hops', async () => {
     assert.ok(hops <= 6, 'a redirect loop must not spin forever; made ' + hops + ' requests');
   } finally {
     dns.promises.lookup = realLookup;
-    global.fetch = realFetch;
+    webFetch._transport.request = realRequest;
   }
 });
 
 test('guardedFetch returns a normal response untouched', async () => {
   const realLookup = dns.promises.lookup;
-  const realFetch = global.fetch;
+  const realRequest = webFetch._transport.request;
   dns.promises.lookup = async () => [{ address: '93.184.216.34', family: 4 }];
-  global.fetch = async () => ({ status: 200, ok: true, headers: { get: () => null } });
+  webFetch._transport.request = async () => ({ status: 200, ok: true, headers: { get: () => null } });
   try {
     const res = await _guardedFetch('http://public.example/page', {});
     assert.equal(res.status, 200, 'the guard must not interfere with an ordinary fetch');
   } finally {
     dns.promises.lookup = realLookup;
-    global.fetch = realFetch;
+    webFetch._transport.request = realRequest;
   }
 });
 

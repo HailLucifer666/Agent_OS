@@ -440,6 +440,67 @@ describe('skills', () => {
     assert.equal(skill.uses, 1);
   });
 
+  // ---------------------------------------------------------------------
+  // Audit item 12 (Phase 5, 2026-08-22) — the score could not tell "never
+  // measured" from "fails every time".
+  //
+  // recordUse keeps a running average. It only averages when there is
+  // something to average against, and it decided that by asking whether the
+  // score was 0 — but 0 is also exactly what a skill that has failed every
+  // time scores. So the first success after ANY all-failure history threw the
+  // history away and recorded a perfect score.
+  //
+  // Measured on the real store before the fix: fail, fail, succeed ended at
+  // successRate 1. goals/index.js:407 replays any skill scoring at or above
+  // SKILL_MIN_SUCCESS_RATE (default 0.5), so a procedure that had just failed
+  // twice was handed back to the planner as flawless. The honest value is 0.1.
+  // ---------------------------------------------------------------------
+
+  it('a skill that failed twice and then succeeded once is not scored as flawless', async () => {
+    const { ref } = skills.write('mostly-broken', {
+      when: ['test'], steps: [{ tool: 'test', args: {} }], successCriteria: []
+    });
+    await skills.recordUse(ref, false);
+    await skills.recordUse(ref, false);
+    await skills.recordUse(ref, true);
+    const skill = skills.get(ref);
+    assert.equal(skill.uses, 3);
+    assert.ok(skill.successRate < 0.5,
+      'two failures then one success scored ' + skill.successRate + ', at or above the '
+      + 'SKILL_MIN_SUCCESS_RATE threshold the planner gates on — so a procedure that mostly '
+      + 'fails gets replayed as a proven one');
+    assert.ok(Math.abs(skill.successRate - 0.1) < 1e-9,
+      'expected the running average 0*0.9 + 1*0.1 = 0.1, got ' + skill.successRate);
+  });
+
+  it('the very first use still sets the score outright, with nothing to average against', async () => {
+    // The counterpart. "Never measured" is a real state and must not start
+    // every new skill at a handicap. It is identified by the uses counter,
+    // which is what the planner at goals/index.js:407 already keys on for
+    // exactly this reason.
+    const good = skills.write('first-try-works', { when: ['t'], steps: [], successCriteria: [] });
+    await skills.recordUse(good.ref, true);
+    assert.equal(skills.get(good.ref).successRate, 1, 'one success out of one use is a rate of 1');
+
+    const bad = skills.write('first-try-fails', { when: ['t'], steps: [], successCriteria: [] });
+    await skills.recordUse(bad.ref, false);
+    assert.equal(skills.get(bad.ref).successRate, 0, 'one failure out of one use is a rate of 0');
+  });
+
+  it('a score already recorded in the file is averaged with, never discarded', async () => {
+    // Why the check is "no uses AND no score" rather than "no uses". A sidecar
+    // can carry a score with its uses counter missing or zeroed — hand-edited,
+    // or seeded by whatever wrote it. Treating that as a first measurement
+    // would throw a real recorded score away, which is the opposite mistake.
+    const { ref } = skills.write('seeded', {
+      when: ['t'], steps: [], successCriteria: [], uses: 0, successRate: 0.8
+    });
+    await skills.recordUse(ref, false);
+    const skill = skills.get(ref);
+    assert.ok(Math.abs(skill.successRate - 0.72) < 1e-9,
+      'expected 0.8*0.9 + 0*0.1 = 0.72, got ' + skill.successRate);
+  });
+
   it('stats returns count', () => {
     skills.write('a', { when: [], steps: [], successCriteria: [] });
     assert.equal(skills.stats().count, 1);

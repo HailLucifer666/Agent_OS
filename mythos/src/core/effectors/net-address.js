@@ -51,6 +51,7 @@
 // than a boolean and will not hand you for free.
 
 var net = require('net');
+var dns = require('dns');
 
 // --- SSRF protection --------------------------------------------------------
 // Block requests targeting private/internal/loopback/metadata networks.
@@ -179,8 +180,80 @@ function isLoopbackHost(hostname) {
   return false;
 }
 
+// --- the check and the connection must share one answer ---------------------
+//
+// BUG-303, fixed 2026-08-22. isPrivateAddress above answers "is this address
+// internal?" That is necessary and it is not sufficient, because a caller that
+// asks it still has to CONNECT afterwards — and every ordinary HTTP client
+// re-resolves the hostname when it does. Two resolutions, two answers: a name
+// whose owner returns a public address to the first query and 127.0.0.1 to the
+// second passes the check and reaches loopback anyway.
+//
+// Not theoretical. Measured against web_fetch at HEAD on 2026-08-22 with a
+// two-answer resolver and a loopback server: ok=true, and the body of the
+// internal service was returned to the model verbatim.
+//
+// guardedLookup closes the window by BEING the resolution the socket uses.
+// Node's http/https clients take a `lookup` option and call it at connect time;
+// whatever it hands back is what gets dialled, so there is no later answer left
+// to poison. The classifier is unchanged — this is about when it runs, not what
+// it decides.
+//
+// TWO CALLBACK SHAPES, BOTH REQUIRED. Node 26 enables autoSelectFamily by
+// default, so the socket asks with { all: true } and expects an ARRAY of
+// records; the older single-address form expects (address, family) as separate
+// arguments. A replacement handling only one of them breaks every connection it
+// touches — loudly, but still broken.
+//
+// ANY private address in the answer refuses the whole connection, not merely
+// the first one. getaddrinfo may return several and the stack chooses; checking
+// [0] would leave the decision to chance.
+//
+// IP LITERALS NEVER REACH THIS FUNCTION. Node skips resolution for a host it
+// can already parse as an address, so http://127.0.0.1/ never calls a custom
+// lookup at all. Literals are covered by the pre-flight isInternalUrl check in
+// web-fetch.js, which classifies them directly. Neither layer is redundant and
+// removing either one reopens a hole the other cannot see.
+function guardedLookup(hostname, options, callback) {
+  if (typeof options === 'function') { callback = options; options = {}; }
+  var wantsAll = !!(options && options.all);
+  // Always ask for every address, whatever the caller wanted, so that every
+  // address gets classified. Answering with one record when all were requested
+  // would be a different bug; wantsAll below restores the caller's shape.
+  var query = Object.assign({}, options || {}, { all: true });
+  dns.lookup(hostname, query, function (err, addresses) {
+    if (err) { callback(err); return; }
+    var list = Array.isArray(addresses) ? addresses : [{ address: addresses, family: 0 }];
+    if (!list.length) {
+      // Fail closed. An empty answer is not evidence that the target is public.
+      callback(ssrfError('blocked: ' + hostname + ' resolved to no addresses'));
+      return;
+    }
+    for (var i = 0; i < list.length; i++) {
+      if (isPrivateAddress(list[i].address)) {
+        callback(ssrfError('blocked: ' + hostname + ' resolves to a private or internal address ('
+          + list[i].address + ')'));
+        return;
+      }
+    }
+    if (wantsAll) { callback(null, list); return; }
+    callback(null, list[0].address, list[0].family);
+  });
+}
+
+// Tagged so a caller can tell a refusal apart from the site being down. The
+// distinction is load-bearing in web-fetch.js: a blocked request must not be
+// retried through the Jina reader, which would answer it by another route.
+function ssrfError(message) {
+  var err = new Error(message);
+  err.ssrfBlocked = true;
+  err.code = 'ESSRFBLOCKED';
+  return err;
+}
+
 module.exports = {
   isPrivateAddress: isPrivateAddress,
+  guardedLookup: guardedLookup,
   isBlockedHostname: isBlockedHostname,
   isLoopbackHost: isLoopbackHost,
   expandIPv6: expandIPv6,

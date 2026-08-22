@@ -438,7 +438,30 @@ function scrubbedEnv(opts) {
     }
     env[opts.apiKeyEnv] = process.env[opts.apiKeyEnv];
   }
-  return Object.assign(env, opts.extra || {});
+  // NO CALLER-SUPPLIED MERGE HERE, deliberately.
+  //
+  // Audit item 3, 2026-08-22. This line was
+  //
+  //     return Object.assign(env, opts.extra || {});
+  //
+  // and later keys win in Object.assign, so whatever the caller passed
+  // overwrote every setting decided above. Measured with autoApprove:false
+  // and a hostile extra: DSH_PERMISSION_MODE came back "workspace-write",
+  // ELECTRON_RUN_AS_NODE came back "" (BUG-301, reintroduced), and
+  // DSH_TELEMETRY_DISABLED came back "" (the privacy opt-out, off). Three
+  // settings this function exists to decide, all overridable by its caller.
+  //
+  // DELETED RATHER THAN DEFENDED, because it had no callers: the only
+  // mention anywhere in src/ or adapters/ was the forwarding line in runTask
+  // that fed it, and no runTask caller passed env. build-engine,
+  // forge-runner and from-dsh all express intent structurally instead —
+  // cwd, writeRoot, autoApprove — which is what forge-runner's own comment
+  // already says it learned when Hermes was deleted out from under a set of
+  // HERMES_-prefixed variables.
+  //
+  // If a real need appears: put the merge ABOVE the decided settings so they
+  // still win, and say why here. It does not come back below them.
+  return env;
 }
 
 // ---------------------------------------------------------------------------
@@ -446,6 +469,52 @@ function scrubbedEnv(opts) {
 // ~450-package plugin graph and a bare kill can leave the child's own children
 // behind, which on Windows shows up later as fork exhaustion in an unrelated
 // test run.
+// FATAL STDERR — the crash the adapter used to sit through.
+//
+// BUG-305. During BUG-301 three real builds each ran to the 600,000ms wall and
+// then failed, and the engine had already said why. MEASURED 2026-08-22 against
+// the installed engine, reproducing the incident shape exactly (dsh launched by
+// electron.exe as an APPLICATION):
+//
+//   first stdout byte : 47ms
+//   first stderr byte : 1892ms  "App threw an error during load"
+//                               "failed to apply loader entry ... (@deepseek-ai/
+//                                cordis-plugin-hmr): --expose-internals is
+//                                required for HMR service"
+//   still alive at    : 45,028ms, and it would have run to the full timeout
+//
+// The diagnosis was available at 1.9 seconds. Watching stderr as it arrives
+// turns ten minutes of silence into a two-second honest failure.
+//
+// THE RISK IN THIS FIX IS THE OPPOSITE OF THE BUG: a pattern that is too eager
+// kills runs that would have succeeded, and plenty of healthy programs write to
+// stderr. So the list is short, every entry was OBSERVED rather than imagined,
+// and every entry carries the reason it means "this process cannot recover".
+// Add to it with a measurement beside it or not at all.
+var FATAL_STDERR_SIGNATURES = [
+  {
+    pattern: /^App threw an error during load/m,
+    why: 'Electron refusing to run the entry as an application — the process never becomes an '
+      + 'engine and will sit there until it is killed. This is BUG-301 first layer, verbatim.',
+  },
+  {
+    pattern: /failed to apply loader entry/,
+    why: "dsh's own plugin loader could not initialise a required plugin. It raises this at load "
+      + 'time, before any model call, and the harness cannot run without its plugin graph.',
+  },
+];
+
+// The first signature present in `text`, or null. Exported so the list can be
+// tested against real captured output rather than against itself.
+function fatalStderrSignature(text) {
+  var s = String(text || '');
+  if (!s.trim()) return null;
+  for (var i = 0; i < FATAL_STDERR_SIGNATURES.length; i++) {
+    if (FATAL_STDERR_SIGNATURES[i].pattern.test(s)) return FATAL_STDERR_SIGNATURES[i];
+  }
+  return null;
+}
+
 function spawnDsh(args, spawnOpts) {
   return new Promise(function (resolve) {
     var child;
@@ -488,12 +557,32 @@ function spawnDsh(args, spawnOpts) {
       // A TIMEOUT IS NOT AN EXIT CODE. Conflating them would hide exactly the
       // failure W6.11 risk 2 predicts — an approval with nowhere to be answered
       // in headless mode simply runs to the wall — behind a generic "exit ?".
-      try { treeKill(child.pid); } catch (_) { /* already gone */ }
+      try { treeKill(child, child.pid); } catch (_) { /* already gone */ }
       resolve({ kind: 'timeout', ms: spawnOpts.timeoutMs, stdout: out, stderr: errOut });
     }, spawnOpts.timeoutMs);
 
+    var startedAt = Date.now();
     child.stdout.on('data', function (b) { out += String(b); });
-    child.stderr.on('data', function (b) { errOut += String(b); });
+    child.stderr.on('data', function (b) {
+      errOut += String(b);
+      if (settled) return;
+      // BUG-305: act on the crash when it is announced, not when the clock runs
+      // out. A FATAL SIGNATURE IS NOT A TIMEOUT and not an exit code — it is its
+      // own kind, so the caller cannot confuse "it crashed at load and told us"
+      // with "it went quiet", which are different problems with different fixes.
+      var signature = fatalStderrSignature(errOut);
+      if (!signature) return;
+      settled = true;
+      clearTimeout(timer);
+      try { treeKill(child, child.pid); } catch (_) { /* already gone */ }
+      resolve({
+        kind: 'fatal-stderr',
+        signature: signature,
+        ms: Date.now() - startedAt,
+        stdout: out,
+        stderr: errOut,
+      });
+    });
     child.on('error', function (err) {
       if (settled) return;
       settled = true;
@@ -506,6 +595,62 @@ function spawnDsh(args, spawnOpts) {
       clearTimeout(timer);
       resolve({ kind: 'exit', code: code, signal: signal, stdout: out, stderr: errOut });
     });
+  });
+}
+
+// What to say when the clock really does run out.
+//
+// BUG-305, second half. The old message asserted a cause: "in headless mode this
+// is the shape an unanswerable approval prompt takes". During BUG-301 that was
+// printed three times in one day and was wrong all three times — the engine had
+// crashed at load, and its stderr was sitting in the same error string, after
+// the guess. A theory that outranks the evidence next to it is worse than no
+// theory, because it stops the reader looking.
+//
+// So: the evidence first, the elapsed time, and the approval prompt offered as
+// one possibility only when there is nothing else to go on.
+function timeoutDiagnosis(ctx) {
+  var stderrText = String((ctx && ctx.stderr) || '').trim();
+  var stdoutText = String((ctx && ctx.stdout) || '').trim();
+  var lines = ['dsh produced no terminal turn within ' + ctx.timeoutMs + 'ms and was killed.'];
+  if (stderrText) {
+    lines.push('It did write to stderr, and that is the first thing to read: '
+      + JSON.stringify(stderrText.slice(0, 600)));
+  } else {
+    lines.push('Nothing on stderr, and nothing was killed early, so there is no crash to point at.');
+  }
+  lines.push('Partial stdout: ' + (stdoutText ? JSON.stringify(stdoutText.slice(0, 300)) : '(none)'));
+  lines.push('Model: ' + ctx.model + '.');
+  if (!stderrText) {
+    lines.push('With no output at all, one possibility is a permission or approval request with '
+      + 'nowhere to be answered in headless mode; another is a provider that accepted the '
+      + 'connection and never replied. Check the provider first — it is the cheaper test.');
+  }
+  return lines.join(' ');
+}
+
+// BUG-305, second loose end: record a failed task where somebody will find it.
+//
+// The three builds that died during BUG-301 appear NOWHERE in mythos-server.log.
+// The only trace was in the vault audit trail, via the healer's reprobe detail —
+// so the first place anyone looks after a ten-minute failure was empty. This
+// adapter has built a logger at module load since it was written and already
+// uses it twice; the failure path simply never called it.
+//
+// The logger is a parameter with a default rather than a module global, because
+// this repo's logger is silent under test: a test that greps captured output for
+// a log line passes whether or not the line is emitted.
+function noteTaskFailure(err, ctx) {
+  ctx = ctx || {};
+  var log = ctx.logger || logger;
+  var message = String((err && err.message) || err);
+  lastProbeAt = 0;            // a failed run invalidates the cached probe
+  lastTaskFailure = { at: Date.now(), error: message.slice(0, 300) };
+  log.warn('dsh-agent.task-failed', {
+    model: ctx.model || null,
+    elapsedMs: typeof ctx.elapsedMs === 'number' ? ctx.elapsedMs : null,
+    error: message.slice(0, 300),
+    stderr: String(ctx.stderr || '').trim().slice(0, 600) || null,
   });
 }
 
@@ -657,6 +802,7 @@ async function runTask(prompt, opts) {
   var text = String(prompt).slice(0, maxPromptChars);
   var timeoutMs = opts.timeoutMs || taskTimeoutMs();
   var overlay = writeOverlay(selected);
+  var taskStartedAt = Date.now();
 
   try {
     // Launcher flags FIRST. dsh's reference is explicit that the launcher's own
@@ -675,7 +821,6 @@ async function runTask(prompt, opts) {
       env: scrubbedEnv({
         apiKeyEnv: selected.apiKeyEnv,
         autoApprove: Boolean(opts.autoApprove),
-        extra: opts.env || null,
       }),
       timeoutMs: timeoutMs,
     });
@@ -683,13 +828,23 @@ async function runTask(prompt, opts) {
     if (res.kind === 'spawn-error') throw new Error('dsh could not be spawned: ' + res.error
       + offlineEvidence());
 
+    // BUG-305: the engine announced a load-time crash and was stopped there,
+    // rather than being left to run to the timeout with the answer already on
+    // its stderr.
+    if (res.kind === 'fatal-stderr') {
+      throw new Error('dsh died at load after ' + res.ms + 'ms on ' + selected.laneProvider + '/'
+        + selected.model + ' and was stopped rather than left to reach the ' + timeoutMs
+        + 'ms timeout. ' + res.signature.why + ' stderr: '
+        + JSON.stringify(String(res.stderr || '').trim().slice(0, 600)));
+    }
+
     if (res.kind === 'timeout') {
-      throw new Error('dsh produced no terminal turn within ' + timeoutMs + 'ms and was killed. '
-        + 'In headless mode this is the shape an unanswerable approval prompt takes (there is no '
-        + 'interactive follow-up surface). Model: ' + selected.laneProvider + '/' + selected.model
-        + '. Partial stdout: '
-        + (String(res.stdout || '').trim() ? JSON.stringify(String(res.stdout).trim().slice(0, 300)) : '(none)')
-        + (String(res.stderr || '').trim() ? ' | stderr: ' + String(res.stderr).trim().slice(0, 300) : ' | stderr empty'));
+      throw new Error(timeoutDiagnosis({
+        timeoutMs: timeoutMs,
+        model: selected.laneProvider + '/' + selected.model,
+        stdout: res.stdout,
+        stderr: res.stderr,
+      }));
     }
 
     var stderrText = String(res.stderr || '').trim();
@@ -714,8 +869,14 @@ async function runTask(prompt, opts) {
     lastTaskFailure = null;   // a real task succeeded — the only thing that clears it
     return String(res.stdout);
   } catch (err) {
-    lastProbeAt = 0;          // a failed run invalidates the cached probe
-    lastTaskFailure = { at: Date.now(), error: String((err && err.message) || err).slice(0, 300) };
+    // BUG-305: this block already knew everything worth logging and logged none
+    // of it. noteTaskFailure keeps the lastTaskFailure bookkeeping getStatus()
+    // depends on AND writes the line the server log was missing.
+    noteTaskFailure(err, {
+      model: selected.laneProvider + '/' + selected.model,
+      elapsedMs: Date.now() - taskStartedAt,
+      stderr: err && err.stderrText,
+    });
     throw err;
   } finally {
     cleanupOverlay(overlay);
@@ -753,6 +914,11 @@ module.exports = {
   scrubbedEnv: scrubbedEnv,
   // Exported for unit tests, and for the failure messages that name them:
   selectModel: selectModel,
+  spawnDsh: spawnDsh,
+  fatalStderrSignature: fatalStderrSignature,
+  FATAL_STDERR_SIGNATURES: FATAL_STDERR_SIGNATURES,
+  timeoutDiagnosis: timeoutDiagnosis,
+  noteTaskFailure: noteTaskFailure,
   requireCwd: requireCwd,
   resolveDshEntry: resolveDshEntry,
   mythosDshHome: mythosDshHome,
