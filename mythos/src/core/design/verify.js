@@ -15,6 +15,10 @@
 
 // Placeholder/generic-template patterns — if any appear, the deliverable is
 // likely a generic template rather than a spec-matched build.
+// Shared with risk-classifier.js — see keyword-match.js's header for why
+// String.includes was wrong here in both directions.
+var keywordMatch = require('../effectors/keyword-match');
+
 var PLACEHOLDER_PATTERNS = [
   /lorem\s+ipsum/i,
   /50,?000\+\s+(users|creators|listeners|customers|people)/i,
@@ -134,28 +138,51 @@ function createVerifier({ brain }) {
       var specLower = String(spec).toLowerCase();
       var requiredElements = [];
 
-      if (specLower.includes('hero') || specLower.includes('hero-centric') || specLower.includes('hero section')) {
+      // BUG-312 (requirement half): these were String.includes, which is wrong
+      // in two separate ways and both were live on 2026-08-22.
+      //
+      // Too loose: 'cta' matched inside "spectacular" (and "octagonal"), 'neon'
+      // inside "neonatal", 'mobile' inside "automobile" — so a page could be
+      // required to have a call-to-action because the brief called it
+      // spectacular. Fixed by matching whole words (keyword-match.js).
+      //
+      // Negation-blind: a spec reading "light theme, not dark" pushed
+      // 'dark.theme' onto requiredElements and then hard-failed the artifact for
+      // not being dark. That is the verifier demanding the opposite of the
+      // brief, so the requirement side asks negationAware and an explicitly
+      // ruled-out element is not required. The PATTERN side (what counts as
+      // satisfying the requirement) is a separate defect, handled separately.
+      var needs = function (words) {
+        return keywordMatch.matchesAny(specLower, words, { negationAware: true });
+      };
+
+      if (needs(['hero', 'hero-centric', 'hero section'])) {
         requiredElements.push('hero');
       }
-      if (specLower.includes('cta') || specLower.includes('call to action') || specLower.includes('primary action')) {
+      if (needs(['cta', 'call to action', 'primary action'])) {
         requiredElements.push('cta');
       }
-      if (specLower.includes('animation') || specLower.includes('animate') || specLower.includes('fade') || specLower.includes('smooth')) {
+      if (needs(['animation', 'animate', 'fade', 'smooth'])) {
         requiredElements.push('animation');
       }
-      if (specLower.includes('fade.in') || specLower.includes('fade-in') || specLower.includes('fade in')) {
+      // 'fade.in' was a literal dot in a String.includes call, so it could only
+      // ever match the exact text "fade.in", which no brief writes. Dropped
+      // rather than carried forward as a dead alternative; 'fade-in'/'fade in'
+      // are the real spellings and matchesAny normalises the separator.
+      if (needs(['fade-in', 'fade in'])) {
         requiredElements.push('fade-in');
       }
-      if (specLower.includes('scroll.reveal') || specLower.includes('scroll-reveal') || specLower.includes('reveal on scroll') || specLower.includes('reveal on scroll')) {
+      // Same for 'scroll.reveal', and 'reveal on scroll' was listed twice.
+      if (needs(['scroll-reveal', 'scroll reveal', 'reveal on scroll'])) {
         requiredElements.push('scroll-reveal');
       }
-      if (specLower.includes('particle') || specLower.includes('synapse') || specLower.includes('neon')) {
+      if (needs(['particle', 'synapse', 'neon'])) {
         requiredElements.push('particle');
       }
-      if (specLower.includes('dark') || specLower.includes('dark theme') || specLower.includes('dark mode')) {
+      if (needs(['dark', 'dark theme', 'dark mode'])) {
         requiredElements.push('dark.theme');
       }
-      if (specLower.includes('responsive') || specLower.includes('mobile')) {
+      if (needs(['responsive', 'mobile'])) {
         requiredElements.push('responsive');
       }
 
