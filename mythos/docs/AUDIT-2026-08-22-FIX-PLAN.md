@@ -75,6 +75,24 @@ are independent and can be reordered if something blocks.
 
 *One item. Do this before anything else.*
 
+**STATUS: DONE — commit `df85fff`.** The plan predicted three faults; there were
+four. The fourth was line endings: `core.autocrlf` is on here and `.githooks`
+carried no attribute, so a fresh clone would have received a hook whose shebang
+ended in a carriage return and therefore never ran at all, while
+`git config core.hooksPath .githooks` still reported success. `.gitattributes`
+now pins `.githooks` and `*.sh` to LF.
+
+The temp-path fault was also worse than described. Git does not pass the
+invoking shell's `TEMP` to a hook — it sets `TEMP=/tmp`, which contains no
+`~1`, so the check the plan proposed would have been inert in the only place it
+mattered. (It was written that way first, and it was.) Git Bash's `/tmp` maps to
+the short-name temp folder, so the suite has been receiving the broken path on
+**every gated commit this repo has ever run**. The hook now asks node what temp
+directory the suite will use and expands it, unconditionally. Measured:
+`deploy-config-conformance.test.js`'s real-boot test dies at 30,138ms under the
+short path and passes 9/9 under the expanded one — a failure that had been
+written off as flakiness.
+
 ### Item 15 — the suite lies to you under the wrong conditions
 
 **Plain English.** Three separate things make the test suite report failures
@@ -115,6 +133,25 @@ comes back green, and a deliberately broken test produces a message naming it.
 ## Phase 1 — the security hole
 
 *One item. Not deferrable regardless of how it scores.*
+
+**STATUS: DONE — BUG-303.** Reproduced at HEAD before fixing (`ok=true`, the
+loopback service's body returned to the caller), then fixed as the plan
+describes: `guardedLookup` in `net-address.js`, Node's built-in client in place
+of `fetch()`, zero new dependencies. 13 new tests, mutation-tested 6/6, and
+live-verified against two real public pages over HTTPS including a gzipped one.
+
+Two things the plan did not anticipate, both now pinned by tests. Node 26 turns
+`autoSelectFamily` on by default, so the socket calls the resolver with
+`{ all: true }` and expects an **array** of records — a replacement handling only
+the single-address shape breaks every connection it touches. And the
+`ssrfBlocked` tag that was supposed to stop the Jina fallback retrying a blocked
+request was never read by anything: the `catch` treated a refusal exactly like a
+slow site and re-sent the same target through `r.jina.ai`. Fixed in the same
+commit, since a comment claiming a mechanism works is what kept it hidden.
+
+Three tests in `web-fetch-ssrf.test.js` stubbed `global.fetch` and were
+repointed at the new transport seam. What they assert about the redirect loop is
+unchanged, because the loop is unchanged.
 
 ### Item 1 — the internet guard checks one address and connects to another
 

@@ -41,6 +41,79 @@ it is committed.
 
 ---
 
+## BUG-303 — the SSRF guard checked one address and connected to another (✅ RESOLVED 2026-08-22)
+
+Found by the 2026-08-22 defect-class audit (`mythos/docs/AUDIT-2026-08-22-defect-classes.md`,
+item 1) and fixed as Phase 1 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. Not found by the
+suite: `web-fetch.js` had 27 tests over this exact boundary, and every one of them checked the
+predicate rather than the connection.
+
+**Plain English.** Before fetching a page, MYTHOS looked up the site's address and refused if it
+was inside your own network — your machine, your router, a cloud metadata service. Then it handed
+the site's *name* to the fetch call, which looked it up a second time and connected to whatever
+came back. Two lookups, two chances to answer differently. Someone who owns a domain answers the
+first with a harmless public address and the second with `127.0.0.1`; the guard approves and the
+connection goes somewhere else entirely. The comment above the check said it *"catches DNS
+rebinding attacks"*. It was the rebinding hole.
+
+**Reachable, not theoretical.** `web_fetch` is registered `danger:false`, tier 0, and sits in the
+Live voice allowlist, so the model can call it with no approval — and this machine serves the
+MYTHOS API on 4478.
+
+**Measured at HEAD before the fix**, with a loopback HTTP server and a resolver that answers
+`93.184.216.34` to the guard and `127.0.0.1` to the socket:
+
+    ok      = true
+    leaked  = true
+    payload = {"ok":true,"result":{"url":"http://rebind.example:56171/creds","status":200,
+               "contentType":"text/plain","content":"INTERNAL-SECRET-/creds","source":"direct"}}
+
+After the fix, same script:
+
+    ok      = false
+    leaked  = false
+    payload = {"ok":false,"error":"Blocked: rebind.example resolves to a private or internal
+               address (127.0.0.1) (SSRF protection)."}
+
+**The fix.** The check and the connection now share one answer. `guardedLookup` in
+`net-address.js` is the resolver the socket itself uses — Node's http/https clients take a
+`lookup` option and call it at connect time — so it resolves, classifies every address it got
+back, and refuses the connection rather than advising someone else to. There is no second
+resolution left to poison. That required replacing `fetch()` with Node's built-in client, because
+`fetch` re-resolves the hostname and cannot be told not to. **No dependency was added**: undici
+would have made it a three-line change, and the SSRF path is the last place to take on
+supply-chain surface in the name of safety.
+
+Three details that are easy to get wrong and are pinned by tests:
+
+- **Two callback shapes.** Node 26 enables `autoSelectFamily` by default, so the socket asks with
+  `{ all: true }` and expects an array of records; the older form expects `(address, family)` as
+  separate arguments. Handling only one breaks every connection.
+- **Any private address refuses the whole connection**, not just the first — `getaddrinfo` can
+  return several and the stack picks one.
+- **Compression.** `fetch()` un-gzipped silently and the raw client does not. Without explicit
+  gzip/deflate/br handling every compressed page returns as binary rubbish and is handed to the
+  brain as research.
+
+**A second, smaller fault fixed in the same commit.** `guardedFetch` tagged an SSRF refusal with
+`ssrfBlocked` so the Jina fallback would not retry it, and a comment said so — but the `catch`
+around the direct fetch read no such tag and treated *"blocked for targeting an internal address"*
+exactly like *"the site is slow"*, re-sending the same target through `r.jina.ai`. An inert
+mechanism with a comment claiming it works is how this survived.
+
+**Layers, deliberately kept.** The pre-flight `isInternalUrl` check stays. It produces the readable
+refusal, and it catches IP literals — which never reach the resolver at all, because Node skips
+resolution for a host it can already parse as an address. Removing either layer reopens a hole the
+other cannot see.
+
+Regression test `mythos/test/bug-303-ssrf-rebinding.test.js` (13 tests). Mutation-tested 6/6:
+dropping the resolver from the request, classifying only the first address, dropping gzip handling,
+letting a blocked request fall through to Jina, collapsing the two callback shapes, and dropping the
+`ssrfBlocked` tag each fail a named test. Live-verified against two real public pages
+(`example.com`, a gzipped Wikipedia article) returning readable text over HTTPS.
+
+---
+
 ## BUG-301 — the build engine was Electron, not node, so every real build died at 600s (✅ RESOLVED 2026-08-22)
 
 Found by running the desktop app and asking it to build a page — **not** by the suite, which cannot
