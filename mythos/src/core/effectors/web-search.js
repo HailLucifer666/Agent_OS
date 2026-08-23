@@ -732,7 +732,21 @@ async function web_search({ query, maxResults, bus }) {
     // note further down): RSS never returns zero, so it must never be a catch-all.
     // A timeless query does not enter this block at all and the chain below is
     // byte-for-byte the order it always had.
-    if (isTimeSensitive(q)) {
+    //
+    // BUG-276 F3 (2026-08-24): a SITE-SCOPED query never enters this rung either.
+    // from-dashboard.js's open_web(type:'youtube') asks for "<q> site:youtube.com"
+    // and from-installer.js asks for "<name> site:github.com"; when the title
+    // carries any freshness word ("Breaking Bad trailer" matches /breaking/,
+    // "score-board" matches /score/), the old gate handed those queries to Google
+    // News RSS, which ignores the site: operator entirely — so a video embed got
+    // news articles with zero youtube.com URLs and failed as "could not extract a
+    // YouTube video ID", and repo lookups were answered by newspapers. The scope
+    // IS the intent statement; the marker list's deliberate over-matching (see
+    // Q1 above) was only ever acceptable for queries with no narrower intent.
+    // Intentionally narrow: only the site: operator exempts a query. Every other
+    // over-match ("the result of the French Revolution") keeps existing behaviour,
+    // because there the worst case remains one wasted request plus an honest hedge.
+    if (isTimeSensitive(q) && !/\bsite:\S+/i.test(q)) {
       var newsSkip = skipReason('google-news-rss')
       if (newsSkip) note('google-news-rss', newsSkip)
       else {
