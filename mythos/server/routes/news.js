@@ -20,8 +20,25 @@ function mountNewsRoutes(app) {
   // ---- /api/news — Google News RSS fetched server-side for the NEWS widget
   // (browsers can't: CORS on the feed, X-Frame-Options on the site) ----
   const newsFeed = createNewsFeed();
+  // BUG-326: ?q=<topic> reaches the feed. It used to be dropped on the floor —
+  // fetchNews() took no argument, so a caller asking about one subject was
+  // answered with the world's top stories and had no way to tell.
+  //
+  // SAID PLAINLY: NOTHING SENDS ?q= TODAY. The HUD widget
+  // (ui/public/js/widgets/kinds/news.js) calls fetch('/api/news') with no query
+  // and has no topic concept, so the population of affected requests before this
+  // change was zero — this adds a capability rather than repairing a live
+  // failure, and the honest thing is to write that here instead of implying a
+  // bug was biting somebody.
+  //
+  // A topic with no coverage comes back ok:false with an empty list. The
+  // general feed is NOT a fallback for it: Google News RSS answers essentially
+  // any query plausibly (news-rung.js's header records the unwindowed endpoint
+  // never returning zero), so a topical miss silently served the world's
+  // headlines would be indistinguishable from a real answer about that topic.
+  // The cache is keyed per topic for the same reason.
   app.get('/api/news', (req, res) => {
-    newsFeed.fetchNews()
+    newsFeed.fetchNews(req.query && req.query.q)
       .then((r) => res.json(r))
       .catch((err) => res.json({ ok: false, error: sanitizeRestError(err), items: [] }));
   });
