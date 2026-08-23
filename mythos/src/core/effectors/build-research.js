@@ -55,6 +55,113 @@ function liveDataMarker(text) {
   return keywordMatch.firstMatch(String(text || '').toLowerCase(), LIVE_DATA_MARKERS) || 'live data';
 }
 
+// ---- BUG-330: the search query is the SUBJECT, not the deliverable ---------
+//
+// Found by running the fixed one-shot brief end to end. Research now reaches the
+// model, and what it reached it with was useless: the query was the whole card
+// text, so the search looked for the ARTIFACT instead of the news.
+//
+//   query: "AI digest landing page Research the live web for today's AI news,
+//           pick the five biggest stories, and build a premium dark AI-digest
+//           landing page"
+//   -> 5 results via exa-mcp, all UNDATED, every one a website that publishes AI
+//      digests: "The Daily AI Digest", "AI Daily News Digest", "GIST: AI News
+//      Digest", "Top AI News Today · Daily AI Digest".
+//
+// The model was handed five homepages of competing products and asked for five
+// news stories, so it invented them: "AI Breakthrough in Healthcare", "New AI
+// Chip Revolutionizes Computing", "AI in Education". The reality-check reviewer
+// caught it in as many words — "Fabricated AI news stories (not sourced from
+// live web research as required by the task)" — five times.
+//
+// WHY IT LANDED ON exa AT ALL, which is the mechanism worth knowing. web-search's
+// chain puts the dated Google News RSS rung first for a time-sensitive question,
+// and Google News matches a QUERY STRING: a 130-character sentence inside a
+// `when:1d` window matches nothing, the rung honestly returns zero, and the chain
+// falls through to a semantic search that answers "pages about AI digests"
+// perfectly well. Measured the same minute, same machine:
+//
+//   "AI digest landing page Research the live web ..." (130 ch) -> exa, 0 dated
+//   "today's AI news"                                  (15 ch) -> news, 5 dated, 1-5h old
+//   "AI news today"                                    (13 ch) -> news, 5 dated
+//   "artificial intelligence news today"               (34 ch) -> news, 5 dated
+//
+// So this drops the words that describe the ARTIFACT and keeps the ones that name
+// the SUBJECT. Across the six real briefs measured, five reach the dated rung
+// with stories 1-5 hours old; the sixth names no time at all, so it is not a
+// live-data brief and a semantic answer is the right one for it.
+//
+// TIME WORDS ARE KEPT DELIBERATELY even though they are common: they are what
+// makes web-search treat the question as time-sensitive and try the dated rung
+// first. Dropping them as stopwords would undo the fix.
+var DELIVERABLE_WORDS = [
+  // asking for work
+  'build', 'builds', 'building', 'built', 'create', 'creates', 'creating', 'make',
+  'makes', 'making', 'design', 'designs', 'designed', 'develop', 'implement',
+  'generate', 'produce', 'research', 'researching', 'pick', 'select', 'selecting',
+  'compile', 'curate', 'summarise', 'summarize', 'identify', 'write',
+  // the thing being asked for
+  'landing', 'page', 'pages', 'website', 'site', 'webpage', 'web', 'app',
+  'dashboard', 'onepager', 'pager', 'single', 'singlepage', 'html', 'css', 'js',
+  'javascript', 'tailwind', 'react', 'vue', 'svelte', 'static', 'file', 'digest',
+  'deliverable', 'artifact', 'ui', 'ux',
+  // how it should look
+  'premium', 'sleek', 'minimal', 'minimalist', 'editorial', 'magazine', 'dark',
+  'light', 'theme', 'themed', 'mode', 'style', 'styled', 'layout', 'grid', 'card',
+  'cards', 'hero', 'section', 'sections', 'header', 'footer', 'sidebar', 'navbar',
+  'badge', 'typography', 'font', 'fonts', 'palette', 'colour', 'color', 'colors',
+  'animation', 'animated', 'responsive', 'lead',
+  // counting and naming
+  'five', 'four', 'three', 'six', 'seven', 'eight', 'nine', 'ten', 'top',
+  'biggest', 'largest', 'best', 'main', 'each', 'stories', 'story', 'headlines',
+  'headline', 'items', 'entries', 'called', 'named', 'titled', 'entitled',
+  // stopwords
+  'the', 'a', 'an', 'and', 'for', 'with', 'of', 'to', 'in', 'on', 'it', 'its',
+  'from', 'that', 'this', 'into', 'as', 'at', 'by', 'or', 'be', 'is', 'are', 'one',
+];
+var DROP = DELIVERABLE_WORDS.reduce(function (set, w) { set[w] = true; return set; }, Object.create(null));
+// 'this' is here, not among the stopwords, purely because "this week" is a span
+// and "week" is a noun. The configuration measured to reach the dated rung kept
+// it; dropping it was a tidy-up that changed the query's meaning.
+var KEEP_ANYWAY = ['today', 'todays', 'tonight', 'yesterday', 'week', 'weeks', 'month',
+  'months', 'day', 'days', 'latest', 'recent', 'now', 'current', 'breaking', 'past',
+  'last', 'live', 'this'].reduce(function (set, w) { set[w] = true; return set; }, Object.create(null));
+
+// 60 is above every query measured to work (13-49 characters) and far below the
+// 130 that failed. It is a length bound, not a taste judgement: Google News
+// matches the string, and a longer one matches less.
+var MAX_SEARCH_CHARS = 60;
+
+function searchQueryFor(brief) {
+  // Possessives first: "today's" must become "todays", not "today" + a stray "s"
+  // in the middle of the query.
+  var text = String(brief == null ? '' : brief)
+    .replace(/['’]s\b/gi, 's')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return '';
+  // Hyphens split, so "AI-digest" and "dark-theme" are seen as the words they
+  // are and can be dropped like any other.
+  var words = text.split(/[^A-Za-z0-9]+/);
+  var kept = [];
+  var seen = Object.create(null);
+  for (var i = 0; i < words.length; i++) {
+    var raw = words[i];
+    if (!raw) continue;
+    var w = raw.toLowerCase();
+    if (!KEEP_ANYWAY[w] && DROP[w]) continue;
+    if (seen[w]) continue;
+    seen[w] = true;
+    if (kept.join(' ').length + raw.length + 1 > MAX_SEARCH_CHARS) break;
+    kept.push(raw);
+  }
+  // A brief made entirely of deliverable vocabulary leaves nothing to search
+  // for. Falling back to the raw text is worse than useless — it is the exact
+  // 130-character query this function exists to avoid — so say nothing and let
+  // the caller treat it as no coverage.
+  return kept.join(' ');
+}
+
 var MAX_BRIEF_CHARS = 2000;
 var MAX_FETCHED_CHARS = 800;
 var MAX_EXTRACT_CHARS = 400;
@@ -88,8 +195,14 @@ function createBuildResearch(deps) {
   async function researchForBuild(topic, maxResults) {
     if (!webSearch) return null;
     var max = maxResults || 5;
+    // BUG-330: `topic` arrives already reduced to the SUBJECT by
+    // searchQueryFor() at the researchIntoPrompt boundary. Callers reaching this
+    // directly (agent-actions re-exports it) get the same treatment rather than
+    // the 130-character brief that sent the search looking for the artifact.
+    var query = searchQueryFor(topic);
+    if (!query) return null;
     try {
-      var searchRes = await webSearch({ query: topic, maxResults: max });
+      var searchRes = await webSearch({ query: query, maxResults: max });
       // THE ENVELOPE IS { ok, result: { query, results } }. Reading .results off
       // the outer object yields undefined and reads exactly like "no coverage" —
       // that misread cost time on 2026-08-23.
@@ -181,12 +294,27 @@ function createBuildResearch(deps) {
       return prompt;
     }
 
+    // BUG-330: A BRIEF WITH NO SEARCHABLE SUBJECT IS NOT A FAILED SEARCH. Strip
+    // the deliverable vocabulary out of "build a landing page" and nothing is
+    // left to look up. Running the search anyway is what produced five rival
+    // product homepages; applying the caller's fatal-on-missing policy to it
+    // would refuse a build for a search that never happened. Reported as its own
+    // reason, and never fatal — a brief with no subject cannot name live data
+    // either, since the time words survive stripping.
+    var query = searchQueryFor(topic);
+    if (!query) {
+      mark('skipped');
+      anomaly('research-skipped', topic, 'the brief names no searchable subject, only the deliverable');
+      return prompt;
+    }
+
     mark('pending');
     // Visible on the dashboard: a web search takes seconds, and a job that sat
     // on 'generating' through it was lying about what it was doing.
     if (job) job.stage = 'researching';
+    if (job) job.researchQuery = query;
 
-    var brief = await researchForBuild(topic, 5);
+    var brief = await researchForBuild(query, 5);
     if (brief) {
       mark('grounded');
       if (job) job.researchBrief = brief;
@@ -210,6 +338,7 @@ function createBuildResearch(deps) {
 
 module.exports = {
   createBuildResearch: createBuildResearch,
+  searchQueryFor: searchQueryFor,
   namesLiveData: namesLiveData,
   liveDataMarker: liveDataMarker,
   _LIVE_DATA_MARKERS: LIVE_DATA_MARKERS,
