@@ -56,13 +56,13 @@ Every hop confirmed by reading the actual require/subscribe/dispatch edges this 
 | 2 ship gate real file | REMEDIATED | bug-304 |
 | 3 sandbox override opts.extra | REMEDIATED | build-engine.js:284-292 fixed args, autoApprove absent |
 | 4 session-write silent | REMEDIATED | bug-306 |
-| 5 engine timeout blame | NOT located at HEAD | stale refs; ~10 min triage |
+| 5 engine timeout blame | TRIAGED 2026-08-24: no defect at HEAD — budget is build-engine.js:147-156 (DSH_TEXT_BUILD_TIMEOUT_MS, 10 min) and the dsh exit-code oracle (:320) makes the old Hermes stdout-blame shape structurally absent |
 | 6 fatal stderr trace | REMEDIATED | bug-305/308 + crash-handlers main.js:7 |
 | 7 vault containment | REMEDIATED | bug-307 |
 | 8 unhandled rejection | REMEDIATED | crash-handlers main.js:143 |
 | 9 spawn-as-node assertion | REMEDIATED | spawn-runs-as-node-guard.test.js |
-| 10 untrue reprobe assertion | NOT re-located | as item 5 |
-| 12 skill score ambiguity | NOT re-located | pending |
+| 10 untrue reprobe assertion | REMEDIATED | immune.test.js:578 asserts a definite state on BOTH reprobe branches |
+| 12 skill score ambiguity | CONFIRMED OPEN at HEAD | memory/skills.js:34 `successRate: skillData.successRate || 0`; newborn skills ship uses:0/successRate:0 (:8) — never-tried still indistinguishable from always-fails |
 | 13 file split + guard | OPEN | index.js 4491 / main.js 2457 / from-browser 1506 / live-tool-adapter 1382 lines; no guard |
 | 14 silent catches | standing decision respected | recount pending |
 
@@ -75,9 +75,11 @@ Settling check: map each name against relay list + test consumers (~1h). No dead
 tool found: spot-checked names all resolve to hub chains.
 
 ### G1 Documented ≠ Wired
-- M5 CONFIRMED: 67 hermes references remain in AGENTS.md/BUGS.md post-swap; AGENTS.md
-  is binding instruction material and still describes Hermes as the build engine with
-  setup-hermes.js — actively misleading.
+- M5 RESOLVED 2026-08-24 for the binding files: AGENTS.md's build-engine section now
+  describes the DSH harness (install root `<repo>/DeepSeek Harness/`, setup-dsh.js).
+  Remaining `hermes` mentions are deliberate history: THIRD_PARTY_NOTICES keeps its row
+  so pre-swap builds stay diffable; other hits are comparative comments or BUGS.md
+  records.
 - Aether phases honestly labelled — no ghost claims.
 - CAPABILITY-MAP web_search entry predates the news-rung landing (BUG-294): stale but
   conservative (safe direction).

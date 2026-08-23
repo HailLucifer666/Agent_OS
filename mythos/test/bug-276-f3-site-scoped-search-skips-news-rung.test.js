@@ -97,4 +97,19 @@ describe('BUG-276 F3: a site-scoped query never enters the news rung', () => {
     assert.ok(calls.some((u) => u.includes('news.google.com')),
       'without a site: scope the freshness-marked query must still try the news rung');
   });
+
+  it('Q1 residual: a false-positive site: match degrades gracefully, not fatally', async () => {
+    // An attacker-controlled or STT-garbled query can carry "site:<word>" in
+    // prose ("latest news about site:reliability"). The exemption then skips
+    // the news rung for what is really a news question — accepted over-match,
+    // worst case is ordinary chain results instead of RSS. What must NEVER
+    // happen is an error: the query falls through the remaining rungs and
+    // returns honestly.
+    const calls = stubChain();
+    const res = await search.web_search({ query: 'latest news about site:reliability', maxResults: 5 });
+    assert.equal(calls.filter((u) => u.includes('news.google.com')).length, 0);
+    assert.equal(res.ok, true, 'the chain must still answer, not fail');
+    assert.ok(Array.isArray(res.result.results) && res.result.results.length > 0,
+      'a skipped news rung must not become a failed search');
+  });
 });
