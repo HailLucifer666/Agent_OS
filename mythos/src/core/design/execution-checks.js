@@ -504,9 +504,19 @@ function run(content, spec) {
   return { issues: issues, warnings: warnings };
 }
 
+// Perceived lightness of a single CSS colour string on 0..1, or null when it
+// cannot be read. Public because design-system-prompt.js asks the same question
+// about a palette's Background as this file asks about a rendered page, and two
+// implementations of it would drift.
+function colorLightness(value) {
+  return lightness(parseColor(value, Object.create(null), 0));
+}
+
 module.exports = {
   run: run,
   pageDarkness: pageDarkness,
+  colorLightness: colorLightness,
+  DARK_MAX_LIGHTNESS: DARK_MAX_LIGHTNESS,
   // Exported for the unit tests: each of these is worth its own inputs.
   _norm: norm,
   _parseColor: parseColor,

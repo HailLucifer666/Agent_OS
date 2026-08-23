@@ -79,10 +79,27 @@ describe('BUG-327 — designQuery keeps what the brief actually said', () => {
   });
 });
 
-// The mechanism that actually resolves a light palette against a dark brief.
-// Guarded because it is prose in a prompt: nothing else in the suite would notice
-// if it were edited away, and the palette contradiction is present on essentially
-// every dark brief.
+// CORRECTED BY BUG-331 — read this before trusting the header above.
+//
+// The reasoning in this file's header is right about designQuery and WRONG about
+// the mode. It concluded that the palette contradiction was "already handled one
+// layer down, in prose the model demonstrably followed", on the evidence of one
+// live run. Three runs of the same brief:
+//
+//   run 1  palette Background #F8FAFC  -> page #0A0A0A   followed
+//   run 2  palette Background #FFFBEB  -> page #FFFBEB   ignored
+//   run 3  palette Background #FFFBEB  -> page #FFFBEB   ignored
+//
+// and runs 2 and 3 produced no artifact at all, because the verifier correctly
+// rejected them for "missing required design element: dark.theme". An
+// instruction obeyed one time in three is not a mechanism. The palette is now
+// reconciled before the model ever sees it — see
+// design-system-prompt.js's reconcileMode and
+// test/bug-331-palette-must-not-contradict-the-brief.test.js.
+//
+// The group below still stands and still matters: the prose instruction is what
+// tells the model HOW to build on the ramp it is handed, and nothing else in the
+// suite would notice it being edited away.
 describe('BUG-327 — the dark-ramp instruction is the real mode fix', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '..', 'src', 'core', 'effectors', 'agent-actions.js'), 'utf8');
