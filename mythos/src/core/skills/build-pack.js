@@ -107,6 +107,50 @@ var STYLE_WORDS = [
 ];
 var MAX_QUERY_CHARS = 160;
 
+// BUG-327 — WHAT THIS FUNCTION DELIBERATELY DOES NOT STRIP, and the numbers
+// behind that. Pinned in test/bug-327-design-query-non-fix.test.js so it is a
+// decision rather than an oversight, and so nobody re-runs the measurement.
+//
+// The 2026-08-23 proposal was to also strip (a) the product name in quotes and
+// `called "X"`, (b) layout nouns — cards, grid, hero, section, header, footer —
+// and (c) to pass the brief's light/dark mode explicitly so the palette could
+// not contradict it. Measured against the real skill on the real brief:
+//
+//   query                                                  style              type
+//   Build a premium dark AI-digest landing page called
+//     "MYTHOS Digest" with five story cards                Bento Box Grid     Inter/Inter
+//   ...same, product name removed                          Bento Box Grid     Inter/Inter
+//   ...same, "cards" removed                               Vibrant & Block-based
+//   ...both removed                                        Vibrant & Block-based
+//
+// (a) IS INERT. The quoted name changed nothing, in either pair. Same for the
+//     hyphen in "AI-digest": "AI digest" and "AI-digest" resolve identically,
+//     as do "dark-themed e-commerce" and "dark themed e commerce".
+//
+// (b) IS HARMFUL HERE. "cards" is what selects Bento Box Grid — a card-grid
+//     style, for a five-card digest. Removing it yields "Vibrant &
+//     Block-based", whose own keywords are "bold, energetic, playful... gaming,
+//     social media, youth-focused". The incidental noun was choosing the design
+//     language, and on this brief it was choosing better than we would.
+//
+// (c) HAS NOWHERE TO GO. search.py takes no mode flag (its options are --domain,
+//     --stack, --design-system, --project-name, --format, --persist, --page,
+//     --output-dir), and the palette ignores the word: six of seven realistic
+//     dark briefs came back with a light Background (#F8FAFC / #FAFAFA /
+//     #FEF2F2). Only the bare query "dark mode" returns a dark one (#020617),
+//     and a two-word query throws away every other piece of intent. The
+//     contradiction is already handled one layer down, in prose the model
+//     demonstrably followed: both DELIVERABLE_PREAMBLE and BUILDER_PREAMBLE
+//     instruct it to derive a near-black ramp rather than invert the light
+//     palette, and the artifact shipped #0A0A0A surfaces with the block's own
+//     accent. That instruction is the load-bearing part, so the test guards its
+//     presence instead of adding a second mechanism beside it.
+//
+// The one lever that DID move typography was the word "editorial": with it, the
+// pairing is Newsreader/Roboto; without it, Inter/Inter, and "news" alone does
+// not recover it. Injecting "editorial" into a brief that never said it would be
+// this function choosing the design — the exact thing it exists to stop.
+
 function designQuery(brief) {
   var text = String(brief == null ? '' : brief).replace(/\s+/g, ' ').trim();
   if (!text) return 'web landing page';
