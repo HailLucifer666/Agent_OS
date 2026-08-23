@@ -19,6 +19,13 @@
 // String.includes was wrong here in both directions.
 var keywordMatch = require('../effectors/keyword-match');
 
+// BUG-325: everything above this line checks VOCABULARY — that the artifact
+// mentions a hero, mentions animation, does not say "lorem ipsum". None of it
+// asks whether the page executes what it declares. execution-checks.js does,
+// and its header records the measurement that made it necessary: an artifact
+// that named Newsreader and Roboto, loaded neither, and passed every gate here.
+var executionChecks = require('./execution-checks');
+
 var PLACEHOLDER_PATTERNS = [
   /lorem\s+ipsum/i,
   /50,?000\+\s+(users|creators|listeners|customers|people)/i,
@@ -232,6 +239,17 @@ function createVerifier({ brain }) {
             break;
           }
         }
+        // BUG-325: a MEASURED dark surface satisfies a dark-theme requirement
+        // even when the file never says the word. Claude's page for the
+        // 2026-08-23 dark-digest brief contains "dark" zero times, paints
+        // body{background:var(--bg)} with --bg:#09090B, and was hard-failed here
+        // for "missing required design element: dark.theme". A rule that rejects
+        // a correct artifact for its vocabulary is the same defect as one that
+        // accepts a wrong artifact for its vocabulary.
+        if (!found && elem === 'dark.theme') {
+          var darkness = executionChecks.pageDarkness(content);
+          if (darkness.known && darkness.dark) found = true;
+        }
         if (!found && patterns.length > 0) {
           var message = 'missing required design element: ' + elem +
             ' (spec mentions it but not found in deliverable)';
@@ -248,6 +266,23 @@ function createVerifier({ brain }) {
         }
       }
     }
+
+    // BUG-325 — EXECUTION, NOT VOCABULARY. Mechanical yes/no questions about
+    // the source: is a named webfont actually loaded, is the headline bigger
+    // than the body copy, is a "landing page" more than a stub. These are
+    // issues rather than warnings deliberately: build-runner feeds issues back
+    // into one regeneration ("your previous output had these problems"), and a
+    // missing stylesheet link is precisely the kind of miss a model fixes when
+    // told. Anything this parser could be wrong about comes back as a warning
+    // instead — see execution-checks.js for what it declines to check at all.
+    //
+    // Measured over the 25 artifacts in the vault on 2026-08-23: 5 fail, every
+    // one for a real reason (four named-but-unloaded faces — Newsreader, Roboto,
+    // Plus Jakarta Sans, Geist — and one 36px landing-page headline), and
+    // Claude's page for the same brief passes clean.
+    var execution = executionChecks.run(content, spec);
+    issues = issues.concat(execution.issues);
+    warnings = warnings.concat(execution.warnings);
 
     // LLM self-check on first 2000 chars. Its findings are ADVISORY warnings,
     // not hard-fail issues — the LLM-judge tends to veto legitimate stylistic
