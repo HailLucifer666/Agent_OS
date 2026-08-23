@@ -74,6 +74,32 @@ function reasonOf(result) {
     || 'terminal failure';
 }
 
+// H1 (2026-08-24): race an effector's promise against the caller's abort signal.
+// Resolves with {__toolTimeout:true} when the signal fires first; resolves with the
+// effector's own value otherwise. A signal that is ALREADY aborted resolves
+// immediately — 'abort' does not re-fire, so checking aborted here is required,
+// not defensive. Pure control flow, no I/O: module scope so it stays testable
+// without a hub.
+function raceSignal(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve({ __toolTimeout: true });
+  return new Promise(function (resolve, reject) {
+    var settled = false;
+    function settle(fn, value) {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      fn(value);
+    }
+    function onAbort() { settle(resolve, { __toolTimeout: true }); }
+    signal.addEventListener('abort', onAbort);
+    // Rejections propagate as REJECTIONS — resolving with the error here would
+    // bypass hub.invoke's own throw-handling catch and let an Error object flow
+    // downstream as if it were a tool result.
+    promise.then(function (v) { settle(resolve, v); }, function (e) { settle(reject, e); });
+  });
+}
+
 function createEffectorHub({ bus, config }) {
   var effectors = new Map();               // tool name -> effector (the 45 gate-counted ones)
   var namedServices = new Map();            // synthetic id -> service object (goals/kanban/pipeline bridges)
@@ -213,7 +239,25 @@ function createEffectorHub({ bus, config }) {
 
     var result;
     try {
-      result = await effector.invoke(params, ctx);
+      // GAP-ANALYSIS-2026-08-24 finding H1 (fixed 2026-08-24): until now this
+      // merely FORWARDED the caller's signal and awaited the effector. An
+      // effector that dropped ctx.signal on the floor (confirmed instance:
+      // from-image-gen.js:99, fetch with no signal) hung this await forever,
+      // making dispatch-action's ACTION_TIMEOUT_MS advisory only — the repo's
+      // own "unbounded call on the Live path is permanent silence" class.
+      // Now the race makes an EXPLICIT caller budget binding. Deliberately no
+      // new default timeout is invented here: tools invoked without a caller
+      // signal (long builds carrying their own 10-minute budget, direct calls)
+      // keep today's behaviour — Q8 disposition pinned by the negative control
+      // in test/hub-enforces-caller-abort.test.js.
+      result = await raceSignal(effector.invoke(params, ctx), ctx && ctx.signal);
+      if (result && result.__toolTimeout) {
+        // Announce before shaping: a wrong classification that also swallowed
+        // the reason it happened would be strictly worse than the hang.
+        if (bus) bus.emit('health.anomaly', { kind: 'tool-timeout', target: resolvedName });
+        breakers.recordFailure(resolvedName);
+        return { ok: false, result: 'tool-timeout' };
+      }
     } catch (err) {
       // invoke() contract says effectors never throw, but hub must not trust that —
       // an uncaught throw here must still count as a breaker failure, not crash Cortex.

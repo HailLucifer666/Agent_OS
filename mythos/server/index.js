@@ -3518,7 +3518,12 @@ function createServer(deps) {
             let audioB64 = null;
         let chunkMime;
             try {
-              const out = await activeChain.synthesize({ text: spoken });
+              // GAP-ANALYSIS-2026-08-24 M2-sibling: this was the one synthesis
+              // site with no signal. sendChain serializes chunks, so a hung
+              // sidecar here stalled every later chunk and the whole vision
+              // turn (undici ~300s). 30s matches ACTION_TIMEOUT_MS default;
+              // the catch below already degrades the chunk honestly.
+              const out = await activeChain.synthesize({ text: spoken, signal: AbortSignal.timeout(30000) });
               audioB64 = out.audio.toString('base64');
               chunkMime = out.mime;
             } catch (err) {
