@@ -196,6 +196,17 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
     // design system looked identical to one that was never resolved, so the
     // degraded path says so on the bus and on the job record — lesson #8, and
     // the same shape as jobs-persist-failed above.
+    // BUG-329: a preparePrompt failure is USUALLY cosmetic — design guidance is
+    // missing, so the page looks worse. It is not always. A brief that asks for
+    // today's news cannot be built from an empty prompt, and building it anyway
+    // means inventing headlines. So the hook may mark its error `fatal` and the
+    // job dies with that reason instead of generating something plausible.
+    //
+    // It cannot simply throw here: this block sits OUTSIDE the try/catch that
+    // records a failed job, so a throw would escape pump() as an unhandled
+    // rejection and the job would sit 'running' forever. Carried into the try
+    // below instead, which owns the whole failure path (status, onFailed, notify).
+    var fatalPrepareError = null;
     if (typeof next.preparePrompt === 'function') {
       try {
         var prepared = await next.preparePrompt(prompt, job);
@@ -208,8 +219,15 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
       } catch (err) {
         job.promptPrepared = false;
         job.promptPrepareError = (err && err.message) || String(err);
-        if (bus) bus.emit('health.anomaly', { kind: 'prompt-prepare-failed', error: job.promptPrepareError });
+        if (err && err.fatal) fatalPrepareError = err;
+        else if (bus) bus.emit('health.anomaly', { kind: 'prompt-prepare-failed', error: job.promptPrepareError });
       }
+      // The hook may have moved the stage (research runs in here now), so the
+      // dashboard sees it rather than a job that sat on 'generating' for the
+      // length of a web search.
+      notify(job);
+      job.stage = 'generating';
+      notify(job);
     }
 
     // One generator, resolved once. hasEngine → Hermes, exclusively.
@@ -226,6 +244,9 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
     }
 
     try {
+      // BUG-329: see the preparePrompt block above. A fatal prepare failure ends
+      // the job here, through the same path every other build failure takes.
+      if (fatalPrepareError) throw fatalPrepareError;
       var result = await generate(prompt, 'build-runner:' + job.id);
       // C1 NOTE: the literal 'brain' here is NOT one of the values
       // completion-status.js treats as a fallback engine (only 'brain-fallback'
