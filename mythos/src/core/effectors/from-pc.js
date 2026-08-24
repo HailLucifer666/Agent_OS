@@ -1256,31 +1256,12 @@ async function readScreenRegions(target) {
   return { ok: true, regions: toAbsoluteRegions(result) || [], text: String(result.text || '') };
 }
 
+const { matchRegions, centreOf } = require('./see-and-click-match.js');
+
 function reasonOf(res) {
   const r = res && res.result;
   if (r && typeof r === 'object' && r.error) return String(r.error);
   return typeof r === 'string' ? r : 'screen OCR failed';
-}
-
-// Exported for tests: pure, no I/O. Progressively looser so an exact label always beats
-// a coincidental substring — "Mou" must not win over "Mousumi" when both are present.
-function matchRegions(regions, query) {
-  const want = String(query || '').trim().toLowerCase();
-  if (!want) return [];
-  const usable = (regions || []).filter((r) =>
-    r && typeof r.x === 'number' && typeof r.y === 'number' &&
-    r.width > 0 && r.height > 0 && String(r.text || '').trim());
-  const norm = (r) => String(r.text).trim().toLowerCase();
-
-  const exact = usable.filter((r) => norm(r) === want);
-  if (exact.length) return exact;
-  const startsWith = usable.filter((r) => norm(r).startsWith(want));
-  if (startsWith.length) return startsWith;
-  return usable.filter((r) => norm(r).includes(want));
-}
-
-function centreOf(r) {
-  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
 }
 
 async function see_and_click({ text, occurrence, expect, pid }) {
@@ -1324,9 +1305,11 @@ async function see_and_click({ text, occurrence, expect, pid }) {
   // Only when a pid was given. Unscoped there is nothing to focus, and picking
   // a window to bring forward would be the guess this whole path avoids.
   let focusNote = '';
+  let focusFailedWithPid = false; // BUG-349: read proceeds, click must not
   if (coercePid(pid)) {
     const focused = await delegate({ cmd: 'focus_window', pid: coercePid(pid) });
     if (!focused.ok) {
+      focusFailedWithPid = true;
       focusNote = ' I could not bring that window to the front first (' +
         reasonOf(focused) + '), so this read may be of whatever is covering it.';
     }
@@ -1372,6 +1355,18 @@ async function see_and_click({ text, occurrence, expect, pid }) {
   }
 
   const point = centreOf(target);
+
+  // BUG-349: a hit found through an OCCLUDED read is not clickable evidence.
+  // The READ stays advisory-on-purpose (grounding info is useful); the CLICK
+  // is not. With focus refused, these screen-absolute pixels may belong to
+  // whatever covered the target - clicking would be the exact wrong-target
+  // class BUG-099/BUG-108 exist for. Refuse with both halves of the truth.
+  if (focusFailedWithPid) {
+    return fail('I found "' + target.text + '" at ' + point.x + ',' + point.y +
+      ' but could not bring its window to the front first, so those pixels may belong to whatever is covering it. ' +
+      'Bring that window forward yourself (or close what covers it) and ask again - I will not click coordinates I cannot vouch for.');
+  }
+
   const clicked = await click_at(point);
   if (!clicked.ok) return fail('Found "' + target.text + '" at ' + point.x + ',' + point.y +
     ' but the click failed: ' + reasonOf(clicked));

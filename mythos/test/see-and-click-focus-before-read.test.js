@@ -172,4 +172,20 @@ describe('see_and_click focuses the target window before reading it', () => {
     );
     assert.ok(out, 'a result must be returned');
   });
+
+  it('BUG-349: focus refused but target FOUND -> refuse the click, never fire occluded coordinates', async () => {
+    // The read is advisory; the click is not. Occluded pixels belong to
+    // whatever covered the target - the exact wrong-target class.
+    const regions = [{ text: 'Video call', x: 100, y: 200, width: 80, height: 20 }];
+    const rec = recordingPc({ ocrText: 'Video call', focusOk: false, regions });
+    const out = await withMockedPcChild(rec.mock, (mod) =>
+      mod.see_and_click({ text: 'Video call', pid: 4321 }));
+    assert.equal(out.ok, false, 'an occluded hit must not be clicked');
+    assert.match(String(out.result), /covering it/i);
+    assert.ok(
+      !rec.sent.some((s) => String(s.cmd) === 'click_at'),
+      'click_at fired on occluded coordinates: ' + JSON.stringify(rec.sent.map((s) => s.cmd))
+    );
+    assert.ok(rec.sent.some((s) => s.cmd === 'screen_read_text'), 'the grounding read still happens');
+  });
 });
