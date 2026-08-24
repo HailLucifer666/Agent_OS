@@ -103,6 +103,11 @@ async function recoverFromCrash({ bus, config, memory, goals, buildRunner }) {
   if (goals && typeof goals.getActiveGoals === 'function') {
     const active = goals.getActiveGoals();
     for (let i = 0; i < active.length; i++) {
+      // BUG-342: commitment-ledger rows ('Commitment: …') are promises to the
+      // operator, not work items. Freezing them produced the endless
+      // "do you want to continue?" nag about goals nothing could un-pause.
+      const label = String(active[i].text || active[i].title || '');
+      if (/^Commitment:/i.test(label)) continue;
       goals.update(active[i].id, { status: 'paused', reason: 'crash-recovery' });
       pausedGoalIds.add(active[i].id);
       pausedCount++;
