@@ -50,3 +50,30 @@ test('the detail view renders a build-plan action and INVOKES the helper', () =>
     'transitionEngagement is still defined-but-never-called for buildPlan — engagements stay frozen at SPEC_READY');
   assert.match(code, /data-action="build-plan"/, 'no build-plan action rendered for SPEC_READY');
 });
+
+test('BUG-343: transitioning an unknown engagement is a 404, not an internal error', async () => {
+  const http = require('http');
+  const express = require('express');
+  const { mountEngagementsRoutes } = require('../server/routes/engagements.js');
+  const app = express();
+  app.use(express.json());
+  mountEngagementsRoutes(app, {
+    engagementManager: { engagement: {
+      findById: async (id) => (id === 'known' ? { id } : null),
+      transition: async () => { throw new Error('should never be reached for unknown ids'); },
+    }},
+    auditRest: () => {},
+    sanitizeErrorForClient: (e) => e.message,
+  });
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((r) => server.once('listening', r));
+  try {
+    const port = server.address().port;
+    const status = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port, path: '/api/engagements/unknown-id/transition', method: 'POST',
+        headers: { 'Content-Type': 'application/json' } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+      req.on('error', reject); req.end(JSON.stringify({ event: 'buildPlan' }));
+    });
+    assert.strictEqual(status, 404, `unknown-id transition returned ${status} — the pre-BUG-343 code leaked a 500 here`);
+  } finally { server.close(); }
+});
