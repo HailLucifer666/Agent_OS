@@ -76,7 +76,9 @@ async function chat(messages, opts = {}) {
 
   if (!res.ok || !res.body) {
     const text = await res.text().catch(() => '');
-    throw new Error(`ollama chat failed: ${res.status} ${text || res.statusText}`);
+    const err = new Error(`ollama chat failed: ${res.status} ${text || res.statusText}`);
+    err.status = res.status; // BUG-336: typed provider-fault identity for chain.js
+    throw err;
   }
 
   const filter = createThinkFilter();

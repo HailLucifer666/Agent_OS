@@ -15,8 +15,33 @@ const google = require('../../../providers/google');
 const ollama = require('../../../providers/ollama');
 
 const { createBreaker } = require('../immune/breakers');
+const { createLogger } = require('../logger');
+const log = createLogger(process.env.LOG_LEVEL || 'info');
 
 const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter, google, ollama };
+
+// BUG-336 (2026-08-24): provider-fault identity. Pure so tests need no
+// providers or network. Priority: explicit kind > numeric status > libuv
+// code > legacy message prose. The prose tier exists only so OLD providers
+// keep today's behaviour; every prose hit is counted and logged by the
+// caller (once per lane per hour) because B1 (2026-08-14) proved prose-only
+// matching lets a dead lane head answer nothing for a whole day when wording
+// drifts ("This operation was aborted" matched none of the patterns).
+function classifyProviderError(err) {
+  if (err && typeof err.kind === 'string' && ['rate-limit', 'server', 'network'].indexOf(err.kind) !== -1) return { basis: 'kind', kind: err.kind };
+  var status = err && err.status;
+  if (status === 429) return { basis: 'status', kind: 'rate-limit' };
+  if (typeof status === 'number' && status >= 500 && status < 600) return { basis: 'status', kind: 'server' };
+  var code = err && err.code;
+  if (code === 'ECONNRESET' || code === 'ETIMEDOUT' || code === 'ENOTFOUND' || code === 'EAI_AGAIN') return { basis: 'code', kind: 'network' };
+  var msg = String((err && err.message) || '');
+  if (/:\s*429\b/.test(msg)) return { basis: 'prose', kind: 'rate-limit' };
+  if (/:\s*5\d\d\b/.test(msg)) return { basis: 'prose', kind: 'server' };
+  if (/fetch failed|network|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg)) return { basis: 'prose', kind: 'network' };
+  return { basis: 'none', kind: null };
+}
+
+var proseFallbackLogAt = {}; // lane -> last Date.now() we logged a prose fallback
 const COOLDOWN_MS = Number(process.env.CHAIN_COOLDOWN_MS) || 60000;
 const ATTEMPT_TIMEOUT_MS = Number(process.env.CHAIN_ATTEMPT_TIMEOUT_MS) || 30000;
 const cooldowns = new Map(); // "lane:model" -> until-timestamp
@@ -378,11 +403,20 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
       // Auth failures (401/403) won't recover in 60s — let isAvailable() handle them.
       // Bad-request (400) means the provider is healthy, the request was wrong — don't
       // penalize the provider. Caller-abort is not a provider fault either.
-      var msg = String(err && err.message || '');
+      // BUG-336: typed identity first (err.kind/err.status/err.code attached
+      // at openai-compat.js, ollama.js, openrouter.js throw sites); prose is
+      // the visible last resort. C7/B1 history preserved below because it is
+      // why attemptTimedOut exists as its own arm.
       var isAbort = err && err.name === 'AbortError';
-      var isRateLimit = /:\s*429\b/.test(msg);
-      var isServerError = /:\s*5\d\d\b/.test(msg);
-      var isNetwork = /fetch failed|network|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg);
+      var cls = classifyProviderError(err);
+      var namesAProvider = cls.kind === 'rate-limit' || cls.kind === 'server' || cls.kind === 'network';
+      if (cls.basis === 'prose') {
+        var nowMs = Date.now();
+        if (!proseFallbackLogAt[lane] || nowMs - proseFallbackLogAt[lane] > 3600000) {
+          proseFallbackLogAt[lane] = nowMs;
+          log.warn('chain.provider-error-classified-by-prose', { lane: lane, model: model, message: String(err && err.message || '').slice(0, 200) });
+        }
+      }
       // C7: Caller-initiated abort is not a provider fault — don't penalize with cooldown.
       //
       // B1 (2026-08-14): attemptTimedOut JOINS that list, and its absence is why
@@ -397,7 +431,6 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
       // attemptTimedOut is specifically OUR timer, i.e. the provider failing to
       // answer inside its own step budget, which is a provider fault by
       // definition. Both are AbortError; only one is evidence.
-      var namesAProvider = isRateLimit || isServerError || isNetwork;
       if (namesAProvider) {
         // Unchanged: a 429, a 5xx or a dead socket is evidence about THIS provider
         // on its own, whatever the rest of the lane did.
@@ -435,6 +468,7 @@ module.exports = {
   isAvailable,
   _internal: {
     cooldowns, markCooldown, expand, toOllamaVisionMessages,
+    classifyProviderError: classifyProviderError,
     _resetCooldowns: () => cooldowns.clear(), LANES,
     // B1 test seams. breakers is null until the flag has been read, so a getter
     // rather than the value — capturing it at export time would always be null.

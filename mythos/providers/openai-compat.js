@@ -82,7 +82,9 @@ function createOpenAICompatProvider(config) {
       } catch {
         // keep statusText
       }
-      throw new Error(`${name} chat failed: ${res.status} ${detail}`);
+      const err = new Error(`${name} chat failed: ${res.status} ${detail}`);
+      err.status = res.status; // BUG-336: typed provider-fault identity for chain.js
+      throw err;
     }
 
     const reader = res.body.getReader();
