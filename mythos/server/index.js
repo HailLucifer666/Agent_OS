@@ -624,15 +624,10 @@ function createServer(deps) {
   // pre-existing test depends on it) and is completely untouched by this;
   // this only tightens what counts as a VALID token once the operator has
   // chosen to set one.
-  const MIN_AUTH_TOKEN_LENGTH = 16;
-  const WEAK_AUTH_TOKEN_RE = /^(password|changeme|admin|secret|letmein|qwerty|default|token|test|12345678)/i;
-  function weakAuthTokenReason(token) {
-    if (token.length < MIN_AUTH_TOKEN_LENGTH) return `shorter than the ${MIN_AUTH_TOKEN_LENGTH}-char minimum`;
-    if (/^(.)\1*$/.test(token)) return 'a single character repeated';
-    if (new Set(token.toLowerCase()).size < 4) return 'too few distinct characters (low entropy)';
-    if (WEAK_AUTH_TOKEN_RE.test(token)) return 'matches a common/weak token pattern';
-    return null;
-  }
+  // H3(b) (security audit, 2026-08-08) — weak-token rejection at boot; the
+  // check itself lives in src/core/server/boot-guards.js (ratchet extraction,
+  // BUG-337). Running with NO token on loopback stays the documented default.
+  const { weakAuthTokenReason, MIN_AUTH_TOKEN_LENGTH } = require('../src/core/server/boot-guards.js');
   if (AUTH_TOKEN) {
     const weakReason = weakAuthTokenReason(AUTH_TOKEN);
     if (weakReason) {
@@ -863,6 +858,11 @@ function createServer(deps) {
   app.use(setCspHeaders);
 
   app.use(express.json({ limit: '1mb' }));
+
+  // BUG-337: DNS-rebinding guard — implementation in boot-guards.js. Loopback
+  // binds only; behind a proxy Host IS foreign and tokens are mandatory anyway.
+  const { createLoopbackHostGuard } = require('../src/core/server/boot-guards.js');
+  if (isLoopbackBind) app.use(createLoopbackHostGuard({ configuredPort: PORT }));
 
   const globalLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_GLOBAL) || 240, scope: 'global-api' });
   const expensiveLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_EXPENSIVE) || 8, scope: 'expensive' });
