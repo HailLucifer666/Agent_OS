@@ -983,14 +983,11 @@ function buildBrowserLaunchArgs(profileDir, extensionDirs) {
 // passed to Chromium — [] when none were configured, never a guess and never
 // "active" for a profile that loaded none.
 function buildLaunchResult(browserName, status, profileDir, extensionDirs) {
-  return {
-    launched: true,
-    browser: browserName,
-    mode: status.mode,
-    pageCount: status.pageCount,
-    profileDir,
-    extensionsLoaded: extensionDirs,
-  };
+  // BUG-345: fresh chrome/edge debug profiles load no extensions and have no Shields - say so on the result.
+  const noBlocking = (!extensionDirs || !extensionDirs.length) && /chrome|edge/i.test(String(browserName));
+  const result = { launched: true, browser: browserName, mode: status.mode, pageCount: status.pageCount, profileDir, extensionsLoaded: extensionDirs };
+  if (noBlocking) result.caveat = 'No ad blocking is active in this fresh profile - pages will show ads. Ask for Brave, or set BROWSER_EXTENSIONS to a uBlock directory.';
+  return result;
 }
 
 // BUG-140: poll interval and worst-case ceiling for waitForDebugPortReady(). The
@@ -1595,6 +1592,7 @@ function registerFromBrowser(hub, ctx) {
 
 module.exports = {
   registerFromBrowser,
+  _buildLaunchResult: buildLaunchResult, // tests (BUG-345 caveat)
   TOOLS,
   browser_navigate, browser_click, browser_type, browser_screenshot, browser_get_title,
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
