@@ -1,5 +1,7 @@
 'use strict';
 
+const { isTimeSensitive, entersNewsRung } = require('./search-intent.js');
+
 // effectors/web-search.js — web search effector with a provider chain.
 // 0. Local open-webSearch daemon (BUG-280) — POST http://127.0.0.1:3100/search
 // 1. Exa (only when EXA_API_KEY is set) — POST with x-api-key header
@@ -66,24 +68,9 @@ function carriesPublicationDates(results) {
 }
 
 // Q1 — WHAT ELSE MATCHES THIS? A word list over the operator's transcribed
-// speech, i.e. over input this project has already watched STT mangle into
-// "आदिए". It WILL over-match: "the result of the French Revolution" trips it and
-// earns a caution it does not need. That asymmetry is deliberate and is the whole
-// design — a false positive costs one extra sentence of hedging, a false negative
-// costs a fabricated football score written to a note. Exported as
-// _isTimeSensitive so the list can be argued with in a test rather than guessed at.
-// `news` and `headlines` were missing from the first version of this list and the
-// spec named `news` explicitly. The recency-window test caught it: "Bengal
-// panchayat election news" never entered the rung at all, so a plainly
-// news-shaped question was answered by an encyclopaedia. They are also the two
-// safest possible additions — Correction 6's hazard case ("how to fix a leaking
-// tap") contains neither.
-var FRESHNESS_MARKERS = /\b(news|headlines|today|tonight|tomorrow|yesterday|now|current|currently|latest|live|recent|breaking|score|scores|result|results|final|standings|who won|price|prices|weather|forecast|this (?:morning|afternoon|evening|week|month|year))\b|\b20[2-9][0-9]\b/i
-
-function isTimeSensitive(query) {
-  return FRESHNESS_MARKERS.test(String(query || ''))
-}
-
+// Freshness markers + the news-rung gate live in ./search-intent.js
+// (single source; ratchet-ceiling extraction). _isTimeSensitive below is
+// that module's function, re-exported for its existing tests.
 var STALE_SOURCE_CAUTION = 'These results carry NO publication date, so none of them can be shown '
   + 'to be current — they may describe a different year entirely. Say plainly that you could not '
   + 'find dated, current information, and do NOT state, guess or infer an answer that is not '
@@ -649,7 +636,9 @@ async function web_search({ query, maxResults, bus }) {
     // note further down): RSS never returns zero, so it must never be a catch-all.
     // A timeless query does not enter this block at all and the chain below is
     // byte-for-byte the order it always had.
-    if (isTimeSensitive(q)) {
+    //
+    // Freshness + BUG-276 F3 site-scope gate: see search-intent.js (single source).
+    if (entersNewsRung(q)) {
       var newsSkip = skipReason('google-news-rss')
       if (newsSkip) note('google-news-rss', newsSkip)
       else {
