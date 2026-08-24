@@ -211,6 +211,14 @@ function processQueue() {
           + MAX_TIMEOUT_RESTARTS + ' input-injecting timeouts in '
           + Math.round(TIMEOUT_RESTART_WINDOW_MS / 60000) + ' minutes). Re-probe health before retrying.';
         log.warn('pc-child exceeded timeout restart budget', {});
+        // BUG-355: everything queued behind this command must settle too.
+        // The old branch rejected only the in-flight entry and returned, so
+        // callers of already-queued commands hung forever on a promise that
+        // would never resolve (reproduced via spawnImpl; scratch -> this test).
+        const drained = commandQueue.splice(0, commandQueue.length);
+        for (const entry of drained) {
+          try { entry.reject(new Error('PC automation offline: ' + hint)); } catch (_) {}
+        }
         rejectFn(new Error(hint));
         return;
       }
