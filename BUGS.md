@@ -13137,7 +13137,7 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   VERIFIED-SATISFIED 2026-08-24: live boot logged websearch.not-installed
   with "node mythos/scripts/setup-websearch.js --install". Remaining
   (optional): promote to health.anomaly if HUD visibility is wanted.
-- BUG-345 - adblock silence caveat. When browser_launch_debug starts
+- BUG-345 - adblock silence caveat. FIXED 639200c: When browser_launch_debug starts
   chrome/edge with extensionsLoaded [] (no Brave, no BROWSER_EXTENSIONS),
   append a spoken caveat ("pages will show ads - ...") to buildLaunchResult
   (src/core/effectors/from-browser.js ~985). Today the empty array is
@@ -13158,10 +13158,8 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
 - BUG-348 - media_status reads ONE SMTC session (ps-automation.ps1
   Handle-MediaStatus ~:4275). Enumerate GetSessions(), report primary owner;
   kills "song playing but says paused" when another app owns the session.
-- BUG-349 - see_and_click must refuse-and-say when focus failed but a pid
-  is known (from-pc.js ~:1326); reading-then-clicking whatever covers the
-  target is the wrong-target class everything else guards against.
-- BUG-350 - verifier hard-fails cta/title-overlap killed most of the 11
+- BUG-349 - see_and_click occluded-click refusal. FIXED 3ce6c8e:
+- BUG-350 - verifier retry-guidance mapping. FIXED 1adad59. Original: hard-fails cta/title-overlap killed most of the 11
   failed builds (design/verify.js :167-169,:236-247). Keep rules HARD
   (operator decision pending D-C) but map rule names onto OUTPUT_CONTRACT
   clauses inside the retry prompt (build-runner.js :278-281); measured
