@@ -2345,7 +2345,7 @@ function createServer(deps) {
         return;
       }
     }
-    proactiveSpeak(e.payload.text);
+    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // ---- Boot greeting (JARVIS-style) ----
@@ -2567,7 +2567,7 @@ function createServer(deps) {
       // "Reminder: walk the dog" as the operator's own words called
       // reminder_add on it — the reminder re-created itself, 9 seconds later.
       // This wording is self-describing as a completed event instead.
-      proactiveSpeak('This reminder has just fired and is now complete: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) });
+      proactiveSpeak('This reminder has just fired and is now complete: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) }).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     }
   });
 
@@ -2590,7 +2590,7 @@ function createServer(deps) {
         return;
       }
     } catch (_) {}
-    proactiveSpeak(e.payload.text);
+    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
         conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
@@ -2598,10 +2598,10 @@ function createServer(deps) {
     } catch (_) {}
   });
   bus.subscribe('plan.checkin', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
   bus.subscribe('plan.evening-review', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // Idle-mull follow-ups (cortex/index.js emits 'cortex.thought' after every
@@ -2625,7 +2625,7 @@ function createServer(deps) {
     if (lastTurnAt && now - lastTurnAt < quietMs) return;
     if (lastFollowupAt && now - lastFollowupAt < gapMs) return;
     lastFollowupAt = now;
-    proactiveSpeak(String(e.payload.text));
+    proactiveSpeak(String(e.payload.text)).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // Gmail triage — proactive speech when the gmail-sensor finds genuinely new
@@ -2673,7 +2673,7 @@ function createServer(deps) {
       logger.info('gmail.batch-deferred-to-greeting', { count: count });
       return;
     }
-    proactiveSpeak(text);
+    proactiveSpeak(text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
         conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
