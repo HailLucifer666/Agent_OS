@@ -199,6 +199,7 @@ function createServer(deps) {
   const kanbanEffector = deps.kanbanEffector;    // P7 effectors/kanban.js
   const pipelineEffector = deps.pipelineEffector; // P7 effectors/pipeline.js
   const effectors = deps.effectors;              // hub — .invoke, .breakers, .effectors
+  const geminiLiveBreakers = require('../src/core/voice/live-breakers.js').ensureGeminiLiveBreakerWired({ bus: bus, config: config, effectors }); // BUG-340: wiring lives in voice/live-breakers.js
   const leash = deps.leash;                      // P5 — .check, .confirm.{create,accept,reject}
   const goals = deps.goals;                       // cognitive GoalSystem — .debitBudget
   const probes = deps.probes;                     // P6 immune/probes.js — .getStatus()
@@ -859,8 +860,7 @@ function createServer(deps) {
 
   app.use(express.json({ limit: '1mb' }));
 
-  // BUG-337: DNS-rebinding guard — implementation in boot-guards.js. Loopback
-  // binds only; behind a proxy Host IS foreign and tokens are mandatory anyway.
+  // BUG-337: DNS-rebinding guard — implementation in boot-guards.js; loopback binds only (behind a proxy Host IS foreign and tokens are mandatory anyway).
   const { createLoopbackHostGuard } = require('../src/core/server/boot-guards.js');
   if (isLoopbackBind) app.use(createLoopbackHostGuard({ configuredPort: PORT }));
 
@@ -2946,7 +2946,7 @@ function createServer(deps) {
           // speaking in the old voice while every other surface had switched —
           // the picker would look broken precisely for the operator who is
           // using Live, which is now the default whenever a Google key exists.
-          config: liveConfigNow(), bus, logger, spend, breakers: effectors.breakers,
+          config: liveConfigNow(), bus, logger, spend, breakers: geminiLiveBreakers,
           createSocket: createLiveSocket, // test-only seam; undefined in production
           // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
           // buildSetup() calls it fresh on every open()/reconnect so the local
