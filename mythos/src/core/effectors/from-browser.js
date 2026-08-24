@@ -422,7 +422,7 @@ async function browser_navigate({ url, newTab, browser }) {
     // settle (3s, swallow) gives a lazy SPA (YouTube) a chance to hydrate its
     // custom elements before the brain's next click lands on a not-yet-existing
     // node. Fast/static pages ignore it (networkidle already true → instant).
-    await page.goto(target, { waitUntil: 'commit' });
+    await _gotoWithRedirectRetry(page, target); // BUG-339: retry module owns the why
     try { await page.waitForLoadState('networkidle', { timeout: 3000 }); } catch (_) {}
     // Every ref from the previous page is meaningless now. Drop them so a
     // leftover ref fails with "snapshot again" instead of resolving against a
@@ -1583,7 +1583,7 @@ const TOOLS = [
   { name: 'browser_launch_debug', description: 'Launch the debug-mode browser so browser control comes online. Use when the user asks to open/start the browser or a browser action fails with OFFLINE. Pass browser:"brave" (or chrome/edge) when the user named one — the debug port holds exactly one browser at a time.', params: { browser: 'string (optional) - chrome (default), brave or edge' }, danger: false, fn: browser_launch_debug },
   { name: 'browser_switch', description: 'Switch the debug browser to a different one (chrome, brave, or edge) when browser control is already attached to a different browser than the one requested. Disconnects the current MYTHOS-launched browser, launches the requested one, and re-attaches — the remedy for a "browser control is attached to X, not Y" refusal.', params: { browser: 'string - chrome, brave or edge to switch to' }, danger: false, fn: browser_switch },
 ];
-
+const { gotoWithRedirectRetry: _gotoWithRedirectRetry } = require('./browser-goto-retry.js');
 function registerFromBrowser(hub, ctx) {
   config = (ctx && ctx.config) || null;
   vaultFs = (ctx && ctx.fs) || null;
