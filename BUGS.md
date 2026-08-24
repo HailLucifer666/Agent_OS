@@ -13231,3 +13231,16 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
 BUGS.md headers stop at BUG-322; BUG-323..342 live in commit messages and
 mythos/docs/AUDIT-2026-08-22-build-gate-collapse.md. Pointer stubs back to
 those records remain owed (this section is the index until then).
+
+- BUG-356 - LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js,
+  the promoted one-shot brief driver): the full pipeline now works up to the
+  engine - real web_search returned five fresh dated AI headlines into the
+  first generation (BUG-329 ordering proven live) - and then dsh exited 1 on
+  mistral/codestral-latest after 72s with EMPTY stderr, so no artifact ships.
+  MISTRAL_API_KEY is present in mythos/.env, so credentials are not the
+  obvious cause; the harness swallowed its own error output. Next diagnostic:
+  run the dsh CLI directly with a trivial task at log-level debug to surface
+  the real failure (provider route? model id? cordon patch?), and consider
+  teaching dsh-agent to capture child stderr instead of reporting null.
+  Evidence: EVIDENCE lines + JOB failed line in the 2026-08-24 session log;
+  runner kept at mythos/scripts/live-ai-digest-brief.js for re-runs.
