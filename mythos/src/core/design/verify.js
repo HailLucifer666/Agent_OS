@@ -319,11 +319,38 @@ function createVerifier({ brain }) {
     return { pass: issues.length === 0, issues: issues, warnings: warnings };
   }
 
-  return { verify: verify };
+  return { verify: verify, retryGuidanceFor: retryGuidanceFor };
+}
+
+// BUG-350 (2026-08-24): retry guidance mapping. The measured @media data
+// (2/9 -> 8/9 passes) showed builds comply when the requirement is stated in
+// the prompt up front — so a failed verification should restate the violated
+// contract, not just echo the rule name. Pure + table-driven so the mapping
+// is testable without generating anything. Unknown rules get the generic
+// verbatim instruction; nothing here softens a hard-fail into a pass.
+const RETRY_GUIDANCE_RULES = [
+  { match: /cta/i, clause: 'Include one primary call-to-action: an <a> or <button> whose class contains "cta".' },
+  { match: /@media|responsive/i, clause: 'Include @media breakpoints so the layout adapts below tablet width.' },
+  { match: /\btitle\b/i, clause: 'The <title> and the visible headline must use words taken from the spec itself - never an invented brand or topic.' },
+  { match: /placeholder|lorem/i, clause: 'Remove every placeholder and lorem-ipsum fragment; all copy must be real spec-derived content.' },
+  { match: /animation/i, clause: 'Include the animation the spec names (CSS keyframes with a visible trigger).' },
+  { match: /dark[ ._-]?theme/i, clause: 'Honour the requested dark theme end-to-end: background, text and accent tokens from the palette section.' },
+];
+
+function retryGuidanceFor(issues) {
+  const list = Array.isArray(issues) ? issues : [issues];
+  if (!list.length) return '';
+  const clauses = [];
+  for (const issue of list.map(String)) {
+    const hit = RETRY_GUIDANCE_RULES.find((r) => r.match.test(issue));
+    clauses.push(hit ? '- ' + hit.clause : '- Fix this exactly as stated: ' + issue);
+  }
+  return 'Contract clauses your regenerated output must satisfy:\n' + clauses.join('\n');
 }
 
 module.exports = {
   createVerifier: createVerifier,
+  retryGuidanceFor: retryGuidanceFor,
   _PLACEHOLDER_PATTERNS: PLACEHOLDER_PATTERNS,
   _judgeSample: judgeSample,
 };

@@ -296,9 +296,16 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
         }
         if (!verification.pass && !job._retried) {
           job._retried = true;
+          // BUG-350: the injected verifier maps violated rules back to the
+          // contract clauses that satisfy them (measured @media data: builds
+          // comply when the requirement is stated up front). Fakes without
+          // the mapper keep the old behaviour.
+          const guidance = (typeof verifier.retryGuidanceFor === 'function')
+            ? verifier.retryGuidanceFor(verification.issues)
+            : verification.issues.map((i) => '- Fix this exactly as stated: ' + i).join('\n');
           var retryResult = await generate(
             prompt + '\n\nYour previous output had these problems: ' +
-            verification.issues.join('; ') + '. Fix them and regenerate.',
+            verification.issues.join('; ') + '.\n' + guidance,
             'build-runner-retry:' + job.id
           );
           if (retryResult && !retryResult.offline) {
