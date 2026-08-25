@@ -131,6 +131,51 @@ describe('the worktree link list stays honest', () => {
       + 'skip message: ' + offenders.join(', '));
   });
 
+  it('covers every wizard component that installs into a gitignored directory', () => {
+    // BUG-360. The "fixture-gated skip" assertion above only finds things whose
+    // absence makes a TEST go quiet. It cannot see the other half of the problem:
+    // a per-machine dependency whose absence makes a FEATURE go quiet while the
+    // suite is entirely happy. adb was exactly that — the wizard downloads it,
+    // nothing linked it into a worktree, and a worktree therefore ran with all 14
+    // phone_* tools withheld from the model with no test saying anything at all.
+    //
+    // The catalogue drives this, not a hand-written list, so a SEVENTH component
+    // added later fails here until someone decides where it belongs. That is the
+    // point: the previous list rotted by standing still while the product grew.
+    const { catalog } = require('../src/core/setup/components.js');
+
+    // component id -> the LINKS path that carries its install, or null with a
+    // stated reason. An entry of null is a claim that nothing on disk needs
+    // sharing; say why, because a wrong null is invisible.
+    const EXPECTED = {
+      silero:    'mythos/ui/public/models/silero',
+      wakeword:  'mythos/ui/public/models/wakeword',
+      piper:     'mythos/models/piper',
+      dsh:       'DeepSeek Harness',
+      adb:       'Android Platform Tools',
+      // Not a file. setup-autostart.js registers a Windows Scheduled Task, which
+      // is machine state outside the repo entirely — a worktree neither has nor
+      // needs a copy, and linking is not a concept that applies.
+      autostart: null,
+    };
+
+    const catalogue = catalog().map((c) => c.id).sort();
+    assert.deepEqual(catalogue, Object.keys(EXPECTED).sort(),
+      'the wizard\'s component list changed and this map did not. Every component either '
+      + 'installs into a gitignored directory that a worktree must share (add it to LINKS and '
+      + 'name it here), or it does not (map it to null and say why). Leaving it out means the '
+      + 'next worktree silently runs without it.');
+
+    const linked = new Set(LINKS.map((l) => l.rel));
+    const missing = Object.entries(EXPECTED)
+      .filter(([, rel]) => rel !== null && !linked.has(rel))
+      .map(([id, rel]) => `${id} -> ${rel}`);
+    assert.deepEqual(missing, [],
+      'these wizard components install into a gitignored directory that LINKS does not carry, so '
+      + 'a worktree runs without them and NOTHING FAILS — the feature is just absent: '
+      + missing.join(', '));
+  });
+
   it('core.bare is false, so git can still see a working tree', () => {
     // A TRIPWIRE, not a style rule, and it is here because it fired for real.
     //

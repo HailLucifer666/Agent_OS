@@ -87,6 +87,26 @@ const LINKS = [
       + 'OFFLINE — which is correct behaviour rather than a failure, so its tests pass while '
       + 'proving nothing about the engine.',
   },
+  // BUG-360 (2026-08-26). Both added because the list was measured against the
+  // wizard's OWN component catalogue for the first time and came up two short.
+  // Note what these two have in common and how it differs from everything above:
+  // their absence produces no skip and no failure ANYWHERE. The entries above are
+  // here because a guard goes quiet without them; these are here because a
+  // FEATURE goes quiet without them, and the suite has no opinion either way.
+  {
+    rel: 'Android Platform Tools',
+    why: 'Google\'s platform-tools (adb), fetched per machine by scripts/setup-android.js and '
+      + 'gitignored. Absent, android-child settles OFFLINE and buildCapabilitySnapshot withholds '
+      + 'all 14 phone_* tools from the model — so they are reported as NOT EXISTING rather than '
+      + 'as failing, which is why BUG-360 read as a missing feature for weeks. No test skips.',
+  },
+  {
+    rel: 'mythos/models/piper',
+    why: 'Piper ONNX voices, fetched per machine by scripts/setup-piper.js and gitignored. Piper '
+      + 'is the LAST link of VOICE_TTS_CHAIN and the only one that speaks with no network and no '
+      + 'API key, so without it a provider outage means silence rather than a degraded voice. '
+      + 'Nothing fails without it either — the chain simply runs out of rungs.',
+  },
 ];
 
 // Secrets, which are copied rather than linked: a worktree may legitimately want

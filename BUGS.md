@@ -41,6 +41,39 @@ it is committed.
 
 ---
 
+## BUG-362 — `search_files` spends its whole scan budget inside `node_modules` and reports "found nothing" instead of "gave up" (🔍 DIAGNOSED 2026-08-26, NOT fixed)
+
+Found by the new packaged-app sweep (`scripts/verify-packaged.js`), which is the first harness
+able to invoke a named tool against a running MYTHOS — so this is also evidence the sweep works.
+
+**The symptom.** Against the real server, `search_files {root:'.', pattern:'package.json'}` returns
+`{entries: [], truncated: true}` — zero results, from a directory that plainly contains
+`package.json`. The same call with `pattern:'*.json'` returns files normally. Zero results *and*
+`truncated: true` together are incoherent: nothing was found, yet the search claims it stopped early.
+
+**The mechanism**, from `src/core/effectors/from-computer.js:556`. `walk()` is DEPTH-FIRST and
+charges every examined entry against one global `MAX_SEARCH_SCAN = 5000` budget. For each entry in
+a directory it tests the name, and if that entry is a directory it recurses **immediately** —
+fully — before moving to the next sibling. So in `mythos/` the walk descends into the early
+subdirectories, `node_modules` among them, and a tree with hundreds of thousands of entries
+exhausts a 5,000-entry budget long before the loop ever reaches `package.json` in the root
+listing. The root's own file is never tested at all. `*.json` only succeeded by luck: it matched
+`issue.json` early, while the budget still had room.
+
+**Why it matters more than it looks.** The failure is silent and directional — it hides SHALLOW
+matches, which are the ones a person searching a project root actually wants, while returning
+whatever happened to be found deep in a dependency tree. And it surfaces as `ok: true`, so every
+caller reads it as an authoritative empty result. `truncated` is the only tell, and nothing in the
+tool's own description tells a reader to check it.
+
+**Not fixed here** — unrelated to the adb work this branch carries. Two directions when someone
+takes it: walk breadth-first so every entry at the current depth is tested before any recursion
+(shallow matches then cannot be starved by a deep sibling), and/or skip `node_modules`/`.git` the
+way any file search is expected to. Either way `truncated: true` with zero entries should not be
+reported as a plain success.
+
+---
+
 ## BUG-360 — adb was installed in two places and resolved from neither, so all 14 `phone_*` tools were withheld from the model as if they did not exist (✅ FIXED 2026-08-26, live-verified)
 
 **THE BUG, mechanically.** `ANDROID_ADB_BIN`'s schema default is the bare string `'adb'`

@@ -3587,8 +3587,8 @@ function createServer(deps) {
       }
     }
 
-    function handleCommand(msg) {
-      send({ type: 'done', reqId: msg.reqId, command: msg.command });
+    function handleCommand(msg) { // off unless MYTHOS_TEST_HATCH=1; loopback + leash + dispatchAction. See server/test-hatch.js.
+      require('./test-hatch').handleCommand(msg, { send, leash, dispatchAction, connectionId, socket: ws, env: process.env, logger });
     }
 
     // Close the loop for whoever is still showing this prompt. `resolution` is
