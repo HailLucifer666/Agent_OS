@@ -38,6 +38,24 @@ test('the README node badge states the same major as package.json engines', () =
   );
 });
 
+// The stack table sat on "Express 4" for the whole of the 4 -> 5 upgrade, and
+// would have shipped that way, because nothing compared it to the manifest —
+// exactly the drift the node-badge test above exists to prevent, one row down.
+test('the README stack table names the same Express major as package.json', () => {
+  const readme = readRepoFile('README.md');
+  const claimed = readme.match(/\|\s*\*\*Server\*\*\s*\|\s*Express\s+(\d+)/);
+  assert.ok(claimed, 'the README stack table must name an Express major on its Server row');
+
+  const pkg = JSON.parse(fs.readFileSync(path.join(MYTHOS_ROOT, 'package.json'), 'utf8'));
+  const installed = String(pkg.dependencies.express).match(/(\d+)/);
+  assert.ok(installed, 'mythos/package.json must declare an express dependency');
+  assert.strictEqual(
+    Number(claimed[1]),
+    Number(installed[1]),
+    `README says Express ${claimed[1]} but mythos/package.json depends on "${pkg.dependencies.express}" — one of them is lying`
+  );
+});
+
 test('no tracked doc calls edge-tts bundled while the Dockerfile disclaims bundling', () => {
   const dockerfile = fs.readFileSync(path.join(MYTHOS_ROOT, 'Dockerfile'), 'utf8');
   // Guard-the-guard: prove the forbidden patterns still match the strings they
