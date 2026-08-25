@@ -1016,7 +1016,7 @@ function createServer(deps) {
   //    first.
   const IMMUTABLE_MAX_AGE = '365d';
   const { TEXT_ASSET_TYPES, TEXT_ASSET_RE } = require('./text-asset-types'); // NOT express.static.mime — gone in Express 5; see that file
-  const UI_PUBLIC_DIR = path.join(__dirname, '..', 'ui', 'public');
+  const UI_PUBLIC_DIR = deps.uiPublicDir || path.join(__dirname, '..', 'ui', 'public'); // injectable like routes/config.js's wakewordModelsDir — the SPA fallback below is untestable without it. BUG-360, test/spa-fallback-dot-path.test.js
   const NODE_MODULES_DIR = path.join(__dirname, '..', 'node_modules');
   // URL prefix -> directory, longest prefix first. The vendor roots are included
   // because onnxruntime's ort.all.mjs alone is 5.8 MB of plain JavaScript, and
@@ -1538,7 +1538,7 @@ function createServer(deps) {
 
   app.get(/.*/, (req, res, next) => { // NOT '*' — Express 5's path-to-regexp 8 throws on it at registration, and '*splat' would not match '/'. test/express-5-compat.test.js
     if (req.path.startsWith('/api')) return next();
-    res.sendFile(path.join(__dirname, '..', 'ui', 'public', 'index.html'));
+    res.sendFile(path.join(UI_PUBLIC_DIR, 'index.html'), { dotfiles: 'allow' }); // dotfiles MUST be set: send's default 'ignore' tests every segment of the absolute path, so any dot-directory in the install path 404s a file that exists while express.static still serves '/'. No user input reaches this path. BUG-360
   });
 
   // eslint-disable-next-line no-unused-vars
