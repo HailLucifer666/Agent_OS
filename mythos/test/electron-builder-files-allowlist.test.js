@@ -277,17 +277,35 @@ test('build.files still includes the files the packaged app needs to run', () =>
   }
 });
 
-// Regression guard: FileMatcher/minimatch alone says mythos/node_modules is
-// included (it matches "mythos/**/*"), but electron-builder's AppFileWalker
-// applies a SEPARATE, hardcoded filter — any directory literally named
-// "node_modules" that isn't the project root's is dropped unless
-// build.includeSubNodeModules is true (see app-builder-lib/out/util/
-// AppFileWalker.js's createAppFilter/nodeModulesFilter). A real `npm run dist`
-// build silently produced a packaged app with zero files under
-// mythos/node_modules (confirmed by walking dist/win-unpacked) before this
-// flag was added — express/ws/etc. would have been missing at runtime. The
-// FileMatcher-only test above cannot catch this because it is not part of the
-// matcher; assert the raw build.includeSubNodeModules config flag instead.
+// HISTORY, because the shape of this guard changed and the reason matters.
+//
+// Under electron-builder 25, FileMatcher/minimatch alone said mythos/node_modules
+// was included (it matches "mythos/**/*"), but AppFileWalker applied a SEPARATE,
+// hardcoded filter: any directory literally named "node_modules" that wasn't the
+// project root's was dropped unless build.includeSubNodeModules was true (see
+// v25's app-builder-lib/out/util/AppFileWalker.js createAppFilter/
+// nodeModulesFilter). A real `npm run dist` silently produced a packaged app
+// with zero files under mythos/node_modules — express/ws missing at runtime —
+// until that flag was added. So this file used to assert the flag directly.
+//
+// 2026-08-25, electron-builder 26.15.3: the flag is GONE, and not renamed —
+// `grep -r includeSubNodeModules node_modules/app-builder-lib/out` returns
+// nothing, and v26's AppFileWalker.createAppFilter() is now just
+// `matcher.createFilter()` with no node_modules special case. The behaviour the
+// flag used to buy is the default, so the flag is deleted rather than
+// translated: nothing reads it any more, and a config key electron-builder does
+// not recognise is a HARD build failure, not a warning — schema validation runs
+// with additionalProperties:false, so `npm run dist` aborted with
+// "configuration has an unknown property 'includeSubNodeModules'" before
+// packaging a single file.
+//
+// That is the class of bug this file now guards, and it is the same class as
+// CLAUDE.md's "a green suite cannot tell you the Electron app boots": a config
+// assumption that only fails in a real build, while 6226 unit tests stay green.
+// The invariant has now broken twice (v25 needed a flag, v26 rejects it), so the
+// guard below stops asserting one flag's value and asserts the thing that
+// actually matters — that the config this repo ships still validates against the
+// electron-builder that is installed.
 //
 // H11 (2026-08-08): asar is now ENABLED, but not by just flipping the flag —
 // two earlier sessions correctly refused that, because electron/main.js forks
@@ -320,12 +338,46 @@ test('build.asar is enabled, with the whole mythos/ tree unpacked to real files'
     '.node addons) needs real files on disk too');
 });
 
-test('build.includeSubNodeModules is set (mythos/node_modules would otherwise be dropped)', () => {
-  const config = loadBuildConfig();
-  assert.equal(config.includeSubNodeModules, true,
-    'without this flag, electron-builder\'s AppFileWalker drops any non-root ' +
-    'node_modules directory regardless of the files allowlist — confirmed by ' +
-    'a real build that shipped mythos/node_modules empty');
+test('the build config validates against the INSTALLED electron-builder schema', () => {
+  // electron-builder's own validator, not a hand-rolled key check: a key check
+  // over the root object would have missed a bad key nested under win/nsis/
+  // directories, and this is the exact code path `npm run dist` fails on.
+  // Deliberately NOT wrapped in try/catch — if these internal paths move in a
+  // future electron-builder, this test must fail loudly rather than skip and
+  // report a guard that is no longer guarding anything.
+  const { validateSchema } = require('app-builder-lib/out/util/config/schemaValidator');
+  const scheme = require('app-builder-lib/scheme.json');
+  const version = require('electron-builder/package.json').version;
+
+  // The validator is built with ajv coerceTypes:true, so it MUTATES what it is
+  // given. Hand it a copy; loadBuildConfig()'s result is used by other tests.
+  validateSchema(scheme, JSON.parse(JSON.stringify(loadBuildConfig())),
+    { name: `MYTHOS build config (electron-builder ${version})` });
+
+  // A guard nobody has watched fail is a guard that might pass vacuously. Pin
+  // its teeth here, using the real historical key: electron-builder 25 required
+  // build.includeSubNodeModules, 26 rejects it, and this assertion is what
+  // proves the check above would actually have caught that.
+  assert.throws(
+    () => validateSchema(scheme, { ...loadBuildConfig(), includeSubNodeModules: true }, { name: 'mutation probe' }),
+    /includeSubNodeModules/,
+    'the schema validator must reject an unknown root key — if this passes, the ' +
+    'validation above proves nothing');
+});
+
+// The v25 flag is gone, so the only thing left that decides whether
+// mythos/node_modules ships is the files allowlist itself. Assert that directly
+// against the real matcher, so deleting the flag cannot quietly re-run the
+// incident described above. A real build was also walked when the flag was
+// removed (2026-08-25): dist-eb26/win-unpacked/.../mythos/node_modules/express
+// was present, which is the oracle this test stands in for on every run.
+test('mythos/node_modules is included by the files allowlist (express must ship)', () => {
+  const filterFn = buildRealFilter(loadBuildConfig().files);
+  const target = path.join(REPO_ROOT, 'mythos', 'node_modules', 'express', 'package.json');
+  assert.ok(fs.existsSync(target), 'fixture path must exist — run npm ci in mythos/ first: ' + target);
+  assert.equal(isIncluded(filterFn, target), true,
+    'mythos/node_modules must ship: electron/main.js forks mythos/src/main.js, which ' +
+    'require()s express/ws at runtime from this tree');
 });
 
 // The setup screen's server route (server/routes/setup.js) require()s

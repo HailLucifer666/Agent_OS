@@ -29,7 +29,6 @@
     "asarUnpack": [
       "mythos/**/*"
     ],
-    "includeSubNodeModules": true,
     "files": [
       "package.json",
       "electron/**/*",
