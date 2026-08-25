@@ -22,10 +22,18 @@ function mountKanbanRoutes(app, deps) {
     auditRest('rest.kanban.addCard', { title: String(title).slice(0, 80), lane }, 'ok');
   });
   app.post('/api/kanban/cards/:id/move', (req, res) => {
+    // `req.body || {}` like every sibling handler here, and not decoration:
+    // Express 4's json parser left req.body === {} for a request it did not
+    // parse, Express 5's leaves it undefined (measured on 5.2.1). Reading
+    // .lane off undefined threw, and because the throw happened inside this
+    // try/catch the client still got a 400 — with "Cannot read properties of
+    // undefined (reading 'lane')" as the reason. Right status, wrong story,
+    // and no sign in the log that the request had simply arrived bodyless.
+    const { lane } = req.body || {};
     try {
-      const card = kanbanEffector.moveCard(req.params.id, req.body.lane);
+      const card = kanbanEffector.moveCard(req.params.id, lane);
       res.json({ card, board: kanbanEffector.listBoard() });
-      auditRest('rest.kanban.moveCard', { id: req.params.id, lane: req.body.lane }, 'ok');
+      auditRest('rest.kanban.moveCard', { id: req.params.id, lane }, 'ok');
     } catch (err) { res.status(400).json({ error: sanitizeRestError(err) }); }
   });
   app.delete('/api/kanban/cards/:id', (req, res) => {

@@ -1015,7 +1015,7 @@ function createServer(deps) {
   //    immutable caching above already removes them from every load after the
   //    first.
   const IMMUTABLE_MAX_AGE = '365d';
-  const TEXT_ASSET_RE = /\.(js|mjs|css|html|svg)$/i;
+  const { TEXT_ASSET_TYPES, TEXT_ASSET_RE } = require('./text-asset-types'); // NOT express.static.mime — gone in Express 5; see that file
   const UI_PUBLIC_DIR = path.join(__dirname, '..', 'ui', 'public');
   const NODE_MODULES_DIR = path.join(__dirname, '..', 'node_modules');
   // URL prefix -> directory, longest prefix first. The vendor roots are included
@@ -1100,7 +1100,7 @@ function createServer(deps) {
     // version-pinned vendor bytes are immutable, editable app source revalidates.
     res.setHeader('Cache-Control', root.immutable ? 'public, max-age=31536000, immutable' : 'no-cache');
     res.setHeader('ETag', etag);
-    res.setHeader('Content-Type', express.static.mime.lookup(abs) || 'application/octet-stream');
+    res.setHeader('Content-Type', TEXT_ASSET_TYPES[path.extname(abs).toLowerCase()] || 'application/octet-stream');
     res.setHeader('Content-Encoding', 'gzip');
 
     if (req.headers['if-none-match'] === etag) {
@@ -1536,7 +1536,7 @@ function createServer(deps) {
     res.status(404).json({ error: `No such route in the MYTHOS REST surface: ${req.method} ${req.path}` });
   });
 
-  app.get('*', (req, res, next) => {
+  app.get(/.*/, (req, res, next) => { // NOT '*' — Express 5's path-to-regexp 8 throws on it at registration, and '*splat' would not match '/'. test/express-5-compat.test.js
     if (req.path.startsWith('/api')) return next();
     res.sendFile(path.join(__dirname, '..', 'ui', 'public', 'index.html'));
   });
