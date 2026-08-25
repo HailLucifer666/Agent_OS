@@ -243,13 +243,35 @@ function resolveRecipient(to) {
   return fuzzyNote ? { number, name: hit, fuzzyNote } : { number, name: hit };
 }
 
-// A4: how long the composer is given to appear after focus, and how often it is
-// asked. 3s covers the measured cold start (the successful 17:31:47 attempt came
-// after the operator asked it to wait a couple of seconds) without turning a
-// genuinely dead window into a long stall — and a warm app answers on the first
-// read, before either constant is consulted.
-const COMPOSER_SETTLE_MS = 3000;
-const COMPOSER_POLL_MS = 250;
+  // A4: how long the composer is given to appear after focus, and how often it is
+  // asked. 3s covers the measured cold start (the successful 17:31:47 attempt came
+  // after the operator asked it to wait a couple of seconds) without turning a
+  // genuinely dead window into a long stall — and a warm app answers on the first
+  // read, before either constant is consulted.
+  const COMPOSER_SETTLE_MS = 3000;
+  const COMPOSER_POLL_MS = 250;
+
+  // BUG-359 — 2026-08-25. Same question as A4's pair above, one stage EARLIER in
+  // this flow: how long the WINDOW gets to appear after a deep-link activation.
+  // MEASURED LIVE on this machine that day: WhatsApp's MSIX process OUTLIVES its
+  // window — chat closed reads `pid=17056 processName=WhatsApp.Root
+  // MainWindowHandle=0`, and after activation the SAME pid owns the visible
+  // "WhatsApp" window. Activation-to-enumerable-window takes seconds. This used
+  // to be probed exactly once; on a cold start that one probe landed before the
+  // window existed and three operator-approved sends failed with "could not
+  // identify its window" / "Process 17056 has no main window" — the second time
+  // this flow produced that shape (C1 was the name mismatch; BUGS.md's C1 Q8 note
+  // declined a poll until there was evidence of a timing case, and asked for
+  // exactly the measurement that now exists).
+  //
+  // Defaults follow A4's own arithmetic, scaled for the heavier event: 6s of
+  // settle, asked every 400ms. BOTH apply only on the failure path — a window
+  // present on the first probe answers immediately, so the warm send gains
+  // nothing and loses nothing.
+  const WINDOW_SETTLE_MS = 6000;
+  const WINDOW_POLL_MS = 400;
+  let windowSettleMs = WINDOW_SETTLE_MS;
+  let windowPollMs = WINDOW_POLL_MS;
 
 async function whatsapp_send({ to, text, send }) {
   const recipient = resolveRecipient(to);
@@ -329,10 +351,7 @@ async function whatsapp_send({ to, text, send }) {
     // clean refusal ("the message is NOT sent") into an exception — a worse outcome
     // than the bug being fixed, and caught by whatsapp-send.test.js's existing
     // no-window case rather than by anything written for C1.
-    let listed = null;
-    try { listed = await fromPc.list_windows(); } catch (_) { listed = null; }
-    const rows = (listed && listed.ok && listed.result && Array.isArray(listed.result.windows))
-      ? listed.result.windows : [];
+    //
     // 2026-08-21 audit: this compared against the bare string 'whatsapp', and
     // the desktop app on Windows reports its process as "WhatsApp.Root" — 23
     // occurrences in the live vault and server log, zero occurrences of a bare
@@ -350,25 +369,47 @@ async function whatsapp_send({ to, text, send }) {
     // Still matched on processName only, never on title — the browser-tab trap
     // in the Q1 note above is unchanged.
     //
-    // Q8 — WHAT DELIBERATELY DOES NOT CHANGE: no retry/settle poll was added
-    // here. All three recorded failures are explained by the name mismatch, and
-    // there is no evidence of a "window not yet enumerable" timing case — an
-    // unexercised retry loop would be a mechanism nobody can prove works.
-    const WHATSAPP_PROCESS_RE = /^whatsapp(\.[a-z0-9._-]+)?$/;
-    const matches = rows.filter((row) => {
-      const name = String((row && row.processName) || '').trim().toLowerCase();
-      return WHATSAPP_PROCESS_RE.test(name) && row.visible !== false && typeof row.pid === 'number';
-    });
-    // Exactly one, or none. Two visible WhatsApp windows means the desktop app and
-    // something else claiming the name, and picking one at random is the guess this
-    // whole path exists to avoid — so it names them and stops.
-    if (matches.length === 1) {
-      pid = matches[0].pid;
-    } else if (matches.length > 1) {
-      return fail('WhatsApp opened the chat with ' + label + ', but ' + matches.length +
-        ' windows report themselves as WhatsApp (pids ' + matches.map((m) => m.pid).join(', ') +
-        '), so I will not guess which one to type into. The conversation should be open — ' +
-        'the message is NOT sent.');
+    // BUG-359 — an earlier Q8 note here read "no retry/settle poll was added:
+    // there is no evidence of a 'window not yet enumerable' timing case." The
+    // 2026-08-24 session supplied that evidence (three approved sends failing
+    // while the MSIX process was alive but windowless — see the WINDOW_SETTLE_MS
+    // comment above for the live capture), so the bounded poll below now exists.
+    // It early-exits on the first decisive answer and still refuses blind-typing
+    // when exhausted.
+    //
+    // Q8 — WHAT DELIBERATELY DOES NOT CHANGE. If this finds nothing even after
+    // the settle window is exhausted, the send still refuses. Typing blind into
+    // an unidentified window is how a message reaches the wrong person, and the
+    // whole point of step 3.5 below is that even a confirmed window is not a
+    // confirmed RECIPIENT. A fallback that guessed would be worse than the
+    // failure it replaced.
+    const deadline = Date.now() + Math.max(0, windowSettleMs);
+    for (;;) {
+      let listed = null;
+      try { listed = await fromPc.list_windows(); } catch (_) { listed = null; }
+      const rows = (listed && listed.ok && listed.result && Array.isArray(listed.result.windows))
+        ? listed.result.windows : [];
+      const WHATSAPP_PROCESS_RE = /^whatsapp(\.[a-z0-9._-]+)?$/;
+      const matches = rows.filter((row) => {
+        const name = String((row && row.processName) || '').trim().toLowerCase();
+        return WHATSAPP_PROCESS_RE.test(name) && row.visible !== false && typeof row.pid === 'number';
+      });
+      if (matches.length === 1) {
+        pid = matches[0].pid;
+        break;
+      }
+      // Exactly one, or none. Two visible WhatsApp windows means the desktop app
+      // and something else claiming the name, and picking one at random is the
+      // guess this whole path exists to avoid — so it names them and stops,
+      // WITHOUT waiting out the settle first: ambiguity is not cured by waiting.
+      if (matches.length > 1) {
+        return fail('WhatsApp opened the chat with ' + label + ', but ' + matches.length +
+          ' windows report themselves as WhatsApp (pids ' + matches.map((m) => m.pid).join(', ') +
+          '), so I will not guess which one to type into. The conversation should be open — ' +
+          'the message is NOT sent.');
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.max(1, windowPollMs)));
     }
   }
   if (!pid) {
@@ -711,6 +752,10 @@ const TOOLS = [
 function registerFromWhatsapp(hub, ctx) {
   vaultFs = (ctx && ctx.memory && ctx.memory.fs) || (ctx && ctx.vault) || null;
   logger = (ctx && ctx.logger) || null;
+  // BUG-359 test seam — same shape as createLiveToolAdapter's toolAckDeadlineMs:
+  // production registers without these and gets WINDOW_SETTLE_MS/WINDOW_POLL_MS.
+  if (ctx && Number.isFinite(ctx.windowSettleMs)) windowSettleMs = ctx.windowSettleMs;
+  if (ctx && Number.isFinite(ctx.windowPollMs)) windowPollMs = ctx.windowPollMs;
   for (let i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }
@@ -725,5 +770,6 @@ module.exports = {
   whatsapp_contact_save,
   whatsapp_contact_delete,
   // exported for tests
-  _internal: { resolveRecipient, sanitizeNumber, sanitizeMessage, CONTACTS_PATH, COMPOSER_SETTLE_MS, COMPOSER_POLL_MS },
+  _internal: { resolveRecipient, sanitizeNumber, sanitizeMessage, CONTACTS_PATH,
+    COMPOSER_SETTLE_MS, COMPOSER_POLL_MS, WINDOW_SETTLE_MS, WINDOW_POLL_MS },
 };
