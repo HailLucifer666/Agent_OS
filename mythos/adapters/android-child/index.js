@@ -238,12 +238,54 @@ function sendCommand(opts) {
   });
 }
 
+// BUG-360 (2026-08-26): all 14 phone_* tools were dead on a machine that had adb
+// installed in TWO places, and nothing anywhere failed loudly.
+//
+// THE MECHANISM, in order. `config.ANDROID_ADB_BIN` has schema default 'adb'
+// (src/core/config/schema.js). src/main.js passes that straight in. The old line
+// here was `adbBin = o.adbBin || DEFAULT_ADB_BIN`, so 'adb' passed through as
+// 'adb' and spawnSync did a PATH lookup. adb is not on PATH — it never is, since
+// setup-android.js --install deliberately unpacks INSIDE the project rather than
+// touching the machine. So the probe ENOENT'd, the adapter settled OFFLINE, and
+// buildCapabilitySnapshot() withheld all 14 phone_* tools from the Live session
+// as UNAVAILABLE. The model was never told a tool had failed — it was told the
+// tool did not exist, which is why this looked like a missing feature rather than
+// a bug for weeks.
+//
+// WHY THE SENTINEL IS 'adb' AND NOT AN EMPTY STRING. Treating bare 'adb' as
+// "resolve this for me" also fixes the operator who uncomments .env.example's own
+// `# ANDROID_ADB_BIN=adb` line, which an empty-string sentinel would leave broken
+// in exactly the way this bug was broken. An ABSOLUTE path is still obeyed
+// verbatim and never second-guessed. Cost of the sentinel: an operator who
+// explicitly wants the PATH copy in preference to a project-local install cannot
+// express that. Accepted — both are adb, and no such operator exists today.
+//
+// WHAT THIS DOES NOT COVER: a phone that is installed-and-resolvable but not
+// PAIRED still yields zero devices, and every phone_* tool still fails — that is
+// setup-android.js --pair/--connect's job and needs a physical handset. This fix
+// is about finding the binary, nothing further.
+function resolveAdbBin(requested) {
+  if (requested && requested !== DEFAULT_ADB_BIN) return requested;
+  // Required lazily, not at module load: setup-android.js is safe to require (its
+  // CLI sits behind a require.main guard) but it reads MYTHOS_TOOLS_DIR when
+  // ASKED, and electron/main.js injects that during boot. A module-scope require
+  // would still work, but resolving at start() time is what makes the dev tree
+  // and the packaged app agree — which is the entire point.
+  try {
+    return require('../../scripts/setup-android.js').findInstalledAdb() || DEFAULT_ADB_BIN;
+  } catch (_) {
+    // A missing or broken setup script must not stop this adapter degrading
+    // honestly. Fall back to the PATH lookup and let the probe below report.
+    return DEFAULT_ADB_BIN;
+  }
+}
+
 // startAndroidChild(opts?: { adbBin, pollMs, cmdTimeoutMs })
 // Probes `adb version` synchronously. ENOENT -> OFFLINE with an install
 // hint; boot continues either way (AD-9) — this function never throws.
 function startAndroidChild(opts) {
   const o = opts || {};
-  adbBin = o.adbBin || DEFAULT_ADB_BIN;
+  adbBin = resolveAdbBin(o.adbBin);
   pollMs = o.pollMs || DEFAULT_POLL_MS;
   cmdTimeoutMs = o.cmdTimeoutMs || DEFAULT_CMD_TIMEOUT_MS;
   // BUG-334 seam: tests inject devicesRunner/log; production gets the real
@@ -262,8 +304,13 @@ function startAndroidChild(opts) {
   try {
     // BUG-334 seam: tests inject a successful probe so they can reach the
     // ONLINE polling path without a real adb binary on the machine.
+    // BUG-360: the seam is handed the RESOLVED adbBin. It used to take no
+    // arguments, which made the resolution step untestable — a test could reach
+    // the ONLINE path without a real adb, but nothing could observe WHICH binary
+    // would have been spawned, and that is the only thing this bug was ever
+    // about. Existing injectors that ignore the argument are unaffected.
     probe = o.versionProbe
-      ? o.versionProbe()
+      ? o.versionProbe(adbBin)
       : spawnSync(adbBin, ['version'], { encoding: 'utf8', timeout: ADB_PROBE_TIMEOUT_MS, windowsHide: true });
   } catch (err) {
     probe = { error: err };
@@ -272,7 +319,13 @@ function startAndroidChild(opts) {
   if (!probe || probe.error || probe.status !== 0) {
     state = 'OFFLINE';
     if (probe && probe.error && probe.error.code === 'ENOENT') {
-      hint = 'adb not found — run node mythos/scripts/setup-android.js --install';
+      // BUG-360: say WHICH adb was not found. The old message was identical
+      // whether adb had never been installed or was installed somewhere this
+      // build does not search, and that ambiguity is what let the real cause sit
+      // unexamined — the hint read like a to-do the operator had simply skipped.
+      hint = adbBin === DEFAULT_ADB_BIN
+        ? 'adb not found on PATH and not installed in any known location — run node mythos/scripts/setup-android.js --install'
+        : 'adb not found at "' + adbBin + '" — run node mythos/scripts/setup-android.js --install';
     } else if (probe && probe.error) {
       hint = 'Failed to probe adb: ' + probe.error.message;
     } else {
@@ -322,4 +375,6 @@ module.exports = {
   sendCommand: sendCommand,
   getStatus: getStatus,
   buildAdbArgs: buildAdbArgs, // exported for unit testing only (security-review finding)
+  resolveAdbBin: resolveAdbBin, // exported for unit testing only (BUG-360)
+  DEFAULT_ADB_BIN: DEFAULT_ADB_BIN, // exported so a test can pin it against setup-android.js's copy
 };

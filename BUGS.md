@@ -41,6 +41,72 @@ it is committed.
 
 ---
 
+## BUG-360 — adb was installed in two places and resolved from neither, so all 14 `phone_*` tools were withheld from the model as if they did not exist (✅ FIXED 2026-08-26, live-verified)
+
+**THE BUG, mechanically.** `ANDROID_ADB_BIN`'s schema default is the bare string `'adb'`
+(`src/core/config/schema.js:492`). `src/main.js` passes it straight to
+`startAndroidChild({ adbBin: config.ANDROID_ADB_BIN, … })`, and the adapter did
+`adbBin = o.adbBin || DEFAULT_ADB_BIN` — so `'adb'` survived untouched and `spawnSync` did a
+PATH lookup. **adb is never on PATH here, by design:** `setup-android.js --install` unpacks
+Google's platform-tools *inside the project* rather than touching the machine, exactly as the
+portability rule requires. The probe therefore ENOENT'd, `android-child` settled OFFLINE, and
+`buildCapabilitySnapshot()` withheld every `phone_*` tool from the Live session.
+
+**Why it read as a missing feature rather than a bug.** A withheld tool is not a failing tool.
+The model was never told a call had failed — it was told the tool did not exist, so nothing
+surfaced an error, no incident was logged, and the honest-degradation contract (AD-9) worked
+perfectly while the feature was silently absent. The only visible trace was one boot line,
+`android-child.offline`, whose hint read `adb not found — run … --install`: advice the operator
+had *already followed*, which made the line look like a to-do they had skipped.
+
+**WHY NOT HYPOTHETICAL.** Measured on this machine 2026-08-26, before the fix: `adb.exe` present
+at BOTH `<repo>\Android Platform Tools\platform-tools\` and
+`%APPDATA%\MYTHOS\tools\Android Platform Tools\platform-tools\`, `which adb` empty, adapter
+OFFLINE, 14 `phone_*` tools absent from `vault/Identity/capabilities.md`. The binary had been
+installed the whole time.
+
+**The second half — the one that also breaks the packaged app.** `setup-android.js` computed a
+single install directory at *require* time: `<userData>/tools` when Electron injected
+`MYTHOS_TOOLS_DIR`, the repo otherwise. It WROTE to one place and READ from only that same
+place, so a dev run could not see a packaged install's adb and a packaged run could not see a
+dev checkout's. `doctor.js` already records this identical defect and its fix for the build
+engine — *"Both sides search userData/tools (MYTHOS_TOOLS_DIR) first and the repo second"* — and
+`setup-dsh.js`'s `dshSearchHomes()` is the shape both now follow. `--install`'s closing line also
+told the operator to paste `ANDROID_ADB_BIN=<path>` into `.env`; the first-run wizard runs
+`--install` unattended, so nobody ever saw it. **A setup step whose last instruction is a manual
+paste has not finished setting anything up.**
+
+**THE FIX.** `androidSearchDirs()` / `findInstalledAdb()` in `scripts/setup-android.js` search
+every install location, resolved when called rather than when required; `android-child` treats
+the bare `'adb'` as "resolve this for me" and obeys an absolute path verbatim; `--install` no
+longer advertises a `.env` line, because none is needed; and both `--check` and the OFFLINE hint
+now name the paths that were actually tried. **`'adb'` rather than `''` as the sentinel is
+deliberate** — `.env.example` ships a commented `# ANDROID_ADB_BIN=adb`, and an empty-string
+sentinel would leave anyone who uncommented it broken in precisely the way this bug was broken.
+
+**Live-verified 2026-08-26:** real boot of `src/main.js` → `{"msg":"android-child.online"}`,
+`{"msg":"effectors.ready","count":179}`, `MYTHOS ALIVE`, `capabilities.md` listing
+`android-child: ONLINE` and all **14** `phone_*` tools. Regression tests in
+`test/android-adb-resolution.test.js` (14) and `test/parity-check-adapters.test.js` (18);
+both mutation-proved — reverting the adapter wiring, the dual-location search, the manifest
+freshness gate and the reason parser each turns a test red.
+
+**Also fixed, in the guard rather than the product:** `parity-check.js` now asserts adapter
+state, wizard components and adb resolution — the layer that would have caught this on its own.
+Its first version reported `browser-agent … NO REASON GIVEN` for an adapter that *had* given a
+reason: `src/main.js` writes the adapter reason into a line-oriented manifest unescaped, and
+Playwright's CDP error contains a newline, so the line ends mid-reason with no closing `)`. The
+parser demanded one. **The guard reproduced the exact defect class it was added to catch.**
+
+**SCOPE — what this does NOT fix.** A phone that is resolvable but not PAIRED still yields zero
+devices and every `phone_*` tool still fails honestly; that is `--pair`/`--connect`'s job and
+needs a physical handset, which this machine does not have. The multi-line reason in the manifest
+writer (`src/main.js`) is left alone deliberately — the parser tolerates both shapes and fixing
+the writer is a separate, unrelated change. And `component:autostart` reports NOT installed on
+this machine: real, pre-existing, out of scope here.
+
+---
+
 ## BUG-359 — WhatsApp window resolution probed exactly once during a cold start, so approved sends failed for seconds-old timing, not capability (✅ FIXED 2026-08-25, not yet live-verified)
 
 Third round of the BUG-273 C1 family. MEASURED LIVE ON THIS MACHINE 2026-08-25: the desktop
