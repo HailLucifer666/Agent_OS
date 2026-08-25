@@ -14,15 +14,34 @@ it on their machine. Therefore:
 - **External binaries are optional** — with one deliberate exception. cua-driver
   (and anything similar) must degrade gracefully when absent: spawn ENOENT →
   adapter stays OFFLINE → fallback paths take over.
-  **Hermes-Agent is the exception**: since 2026-07-29 it is the only
-  build-content engine (build-runner, the engagement build stage, and Forge all
-  route through `src/core/effectors/build-engine.js`), and there is no
-  brain.think fallback by design — a build with no engine FAILS with an install
-  hint instead of shipping a plausible-but-wrong artifact. Boot still succeeds
-  without it; only builds stop. It installs project-local into
-  `<repo>/Hermes Agent/` (gitignored) via
-  `node mythos/scripts/setup-hermes.js --install`, which clones from git and
-  runs that clone's own installer — never `curl | bash` / `iex (irm …)`.
+  **The build engine is the exception, and the RULE SURVIVED A CHANGE OF ENGINE.**
+  Since 2026-07-29 there has been exactly one build-content engine
+  (build-runner, the engagement build stage, Forge and the `dsh_task` tool all
+  route through `src/core/effectors/build-engine.js` or
+  `forge-runner.js`), and there is no brain.think fallback by design — a build
+  with no engine FAILS with an install hint instead of shipping a
+  plausible-but-wrong artifact. Boot still succeeds without it; only builds stop.
+
+  **That engine is DeepSeek Harness (`dsh`) as of 2026-08-22 (W6). It was
+  Hermes-Agent until then, and Hermes is now deleted.** Ruling A was NOT dropped
+  along with the program it originally named — one engine, no fallback, still
+  binding. It installs project-local into `<repo>/DeepSeek Harness/`
+  (gitignored) via `node mythos/scripts/setup-dsh.js --install`, which runs
+  `npm install --save-exact` against a pinned version — never `curl | bash` /
+  `iex (irm …)`. Two things about it that are easy to get wrong:
+
+  - **The HARNESS changed; the MODELS did not.** "DeepSeek Harness" is the name
+    of a program, not an instruction to run DeepSeek's models. dsh runs whatever
+    `BRAIN_TABLES.build` in `src/core/brain/lanes.default.js` ranks first that
+    the machine can reach — today `mistral/codestral-latest`, on the
+    `MISTRAL_API_KEY` the lane already needs. **No `DEEPSEEK_API_KEY` is
+    required anywhere.** Measured 2026-08-22 on the same model Hermes itself ran:
+    the two harnesses score identically (3/9 each, prompt for prompt), so the
+    swap is quality-neutral.
+  - **The version is PINNED and asserted before every task.** dsh is a developer
+    preview whose own README promises compatibility-breaking changes, so
+    `adapters/dsh-agent` checks the installed `package.json` AND the CLI's own
+    `--version` output and refuses a mismatch. Do not float it on `latest`.
 - **All secrets and provider keys live in `mythos/.env`** (gitignored), with
   every supported key documented in `mythos/.env.example`. No key, no
   hardcoded default — features degrade honestly instead.
@@ -43,7 +62,46 @@ Rules to prevent a repeat:
    before writing.
 2. **Commit verified fixes immediately** — never leave live-verified work
    sitting uncommitted while other sessions may be running.
-3. **After any `git pull` that touches `ps-automation.ps1`**, re-check that
+3. **Two sessions in one checkout share one git INDEX, and the loser does not
+   find out.** Proven twice on 2026-08-22 within an hour. First, an uncommitted
+   fix — source edits, its test file and a BUGS.md entry — was reverted wholesale
+   by the other session; it survived only because of an unrelated scratch backup.
+   Then a `git add`ed test file was swallowed by the other session's index-wide
+   commit while this session's pre-commit hook was still running its suite, so
+   262 lines of BUG-322 are committed under a BUG-319 message, and for the length
+   of one commit `HEAD` carried a test without the fix it tests. That second one
+   passed both hooks, because **a hook runs the suite against the WORKING TREE,
+   which is not what gets committed.**
+
+   Two rules follow. **`git add` publishes your work to a shared index** — keep
+   the window between `add` and `commit` to seconds, never the length of a test
+   run, and prefer `git commit -- <pathspec>` on already-tracked files so no
+   `add` is needed at all. And **if two sessions will run at once, give one of
+   them a worktree** — that removes the shared index entirely rather than
+   managing it:
+
+   ```
+   git worktree add .claude/worktrees/<name> -b <branch> HEAD
+   node mythos/scripts/setup-worktree.js --path .claude/worktrees/<name>
+   ```
+
+   Branching from `HEAD` is deliberate: the tooling default is
+   `origin/<default-branch>`, which silently leaves your current work behind.
+
+   **A fresh worktree tests LESS than the main checkout, and does not say so.**
+   `git worktree add` copies tracked files only, and six gitignored paths are
+   needed to run the real suite. Missing `node_modules` fails loudly; missing
+   FIXTURES do not fail at all — the licence guards `t.skip()` honestly when
+   theirs are absent. Measured: a fresh worktree reported 6031 tests, 0 failures
+   and **2 silent skips**, both of them redistribution guards that block release.
+   Run `sync-test-count.js --write` there and `skipped=2` becomes the committed
+   baseline. `setup-worktree.js` links all six and `--check` reports what is
+   missing; `test/worktree-setup-links.test.js` fails if a new fixture-gated
+   guard appears that the list does not cover. After setup, **verify by running
+   the full suite in the worktree and demanding the same numbers as the main
+   checkout, `skipped=0` included.**
+
+4. **After any `git pull` that touches `ps-automation.ps1`**, re-check that
    these load-bearing pieces still exist before trusting the file:
    UTF-8 console encoding block, `Await-WinRTOperation` (explicit
    `[type]$ResultType` param), `$TargetPid` parameters (NEVER `$pid` — it is a
@@ -124,9 +182,12 @@ everything" is a known trap.
 (1) TTS stays **BYO** like the API keys — removes the LGPL exposure *without* a
 Piper swap, so the planned swap is no longer required for TTS; the constraint
 becomes "step-7 installer never bundles the LGPL package" + BYO docs, not a 6.5
-code task; (2) free demo deferred; (3) the wider licence audit (Hermes-Agent,
+code task; (2) free demo deferred; (3) the wider licence audit (the build engine,
 cua-driver, MediaPipe assets, provider ToS for resale) split into its own tracked
-**step 6.6**. One decision still deferred: how the paid product handles the NC
+**step 6.6**. Note that the build engine's licence question MOVED rather than
+closed on 2026-08-22: Hermes-Agent (MIT, plus a Python dependency tree) was
+replaced by DeepSeek Harness (MIT, plus a ~450-package npm tree), so the audit
+now has a different closure to enumerate. One decision still deferred: how the paid product handles the NC
 wake-word weights. This gate blocks **shipping, not building** — step 7 is
 buildable in parallel. This never surfaces in testing. Do not write a confident
 legal conclusion into any tracked file — that is a lawyer's call, not a session's.
@@ -161,13 +222,15 @@ already pushed to `origin/main`):**
    the activation stub exits within ~1s, or (single-instance apps) the new
    process never gets its own window at all. Fixed by resolving the real
    windowed process after launch instead of trusting `Start-Process`'s raw
-   pid. **Still open, not fixed**: `focus_window` was reproducibly denied by
-   Windows' foreground-lock in headless/no-app-focused test conditions, even
-   with the existing `AttachThreadInput` workaround — unconfirmed whether
-   this reproduces in real voice-driven usage where some app is normally
-   already focused. If typing into a launched app still silently fails,
-   re-test starting from a real app (not the bare desktop) having focus —
-   that's the next thing to chase.
+   pid. **`focus_window`'s foreground-lock: question CLOSED 2026-08-17, and the
+   answer is yes.** This entry used to ask whether the denial reproduces in
+   real voice-driven usage with an app already focused. It does — the
+   2026-08-17 session hit it on pid 17996 under exactly those conditions
+   (BUG-272 T3), with all three ladder rungs already run and the error string
+   saying so. **Ladder exhausted; do not add a 4th rung** — Windows is refusing
+   deliberately and the alternatives are unreliable or user-hostile. It now
+   fails honestly, and `focus_window`'s stale-pid failure names `list_windows`
+   as the recovery step. Details in `mythos/adapters/CLAUDE.md`.
 
 **Wiring needed on a fresh clone/pull:** `git config core.hooksPath
 .githooks` (once per clone) — nothing else; no new deps, no build step.
@@ -202,17 +265,22 @@ testing discipline (below).
 - No fix is "done" until live-verified against the running system (or the
   relevant oracle: `media_status` for playback, window title for Spotify).
   Plausible theories have been wrong 3+ times in this repo's history.
-- Baseline (reproduced 2026-08-03 at commit `5ee5306`, full `cd mythos &&
-  node --test`): **2488 tests, 2487 pass, 0 fail, 1 skip, 0 todo.** The 1 skip
-  is `test/sensors-file.test.js` honestly skipping via `t.skip()` — an
-  environment-specific `fs.watch` crash on this Node/Windows build, not a real
-  failure. There are currently no known deterministic failures — anything
-  failing is a regression.
-  - **This number goes stale fast — do not hand-edit it.** The "1735" that sat
-    here until 2026-08-03 was itself the second stale baseline in this file
-    (see the "1197" note below). `scripts/sync-test-count.js` emits the real
-    figures on every commit; trust its output over anything written in prose,
-    here or in a plan document.
+- **Baseline: 0 failures, 0 skips. The test COUNT is deliberately not written
+  here.** Three different numbers have sat in this paragraph and every one of
+  them went stale — 1197, then 1735, then 2488, each presented as current while
+  the real suite had moved on by hundreds of tests. A number a human types is a
+  number nobody updates, and this file is read at the start of every session, so
+  a stale one here misleads more effectively than it informs. Removed 2026-08-19
+  rather than corrected for a fourth time.
+  - Get the real figures from the thing that measures them:
+    `cd mythos && node scripts/sync-test-count.js --check`. It prints
+    `tests=… pass=… fail=… skipped=…` plus the effector/provider/sensor counts,
+    and it is the same code the pre-commit hook and CI run. Trust its output
+    over any number written in prose, here or in a plan document.
+  - What IS stable, and what this baseline actually asserts: **fail=0 and
+    skipped=0.** There are no known deterministic failures — anything failing is
+    a regression. A run that reports 1 skip is almost always the short-`TEMP`
+    artefact described below (`test/sensors-file.test.js`), not a real skip.
   - **The old "1197" baseline in this file was stale for days.** Until
     `42c2b48` (2026-07-30) all three gates — `sync-test-count.js`, the
     pre-commit hook and CI — globbed `test/*.test.js` **non-recursively**, so

@@ -1,12 +1,12 @@
 /* setup.css — the first-run setup screen (js/setup/setup-screen.js).
+   Redesigned 2026-08-11 (ui-ux-pro-max): a real setup flow instead of a wall
+   of rows — progress bar, stored-with-tick rows, one primary CTA per state,
+   SVG icons (no emoji), focus-visible rings, reduced-motion support.
 
    Same copy-not-couple relationship to auth.css that auth.css has to pin.css:
    the two screens can be live in the same session (token first, then setup) and
-   must be free to diverge, since this one is a scrollable list of capability
-   gaps rather than a single field.
-
-   z-index 405 sits between pin.css's 400 and auth.css's 410. That order is not
-   cosmetic: the token gate has to be satisfied before GET /api/setup/status can
+   must be free to diverge. z-index 405 sits between pin.css's 400 and auth.css's
+   410 — the token gate has to be satisfied before GET /api/setup/status can
    answer anything but 401, so it must paint on top of this one. */
 
 .setup-overlay {
@@ -15,36 +15,76 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(5, 8, 15, 0.92);
-  backdrop-filter: blur(10px);
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(12px);
   pointer-events: auto;
   z-index: 405;
 }
 
 .setup-modal {
-  width: min(560px, 94vw);
+  width: min(600px, 94vw);
   /* A gap list can be long on a fresh machine; cap it and scroll inside the
      modal rather than letting the page scroll behind the overlay. */
-  max-height: min(80vh, 720px);
+  max-height: min(82vh, 760px);
   overflow-y: auto;
-  padding: 30px 26px 18px;
+  padding: 30px 28px 20px;
   border-color: var(--accent-dim);
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.75);
+  border-top: 2px solid var(--accent-dim);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.75), var(--glow-soft);
   animation: fadeInUp var(--dur-med) var(--ease) both;
 }
 
 .setup-title {
-  font-size: 16px;
-  font-weight: 500;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   color: var(--text);
   margin: 0 0 8px;
 }
 
 .setup-lede {
-  font-size: 11px;
-  line-height: 1.55;
+  font-size: 12.5px;
+  line-height: 1.6;
   color: var(--text-dim);
-  margin: 0 0 18px;
+  margin: 0 0 6px;
+  max-width: 46ch;
+}
+
+/* ---- progress ------------------------------------------------------------- */
+
+.setup-progress {
+  margin: 14px 0 4px;
+}
+
+.setup-progress-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-raised-2);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+}
+
+.setup-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent));
+  transition: width var(--dur-fast) var(--ease);
+}
+
+.setup-progress-label {
+  margin: 7px 0 0;
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+
+/* ---- sections ------------------------------------------------------------- */
+
+.setup-section-label {
+  margin: 20px 0 8px;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--text-faint);
 }
 
 .setup-list {
@@ -53,14 +93,24 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
 
+/* ---- rows ----------------------------------------------------------------- */
+
 .setup-row {
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.02);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-raised);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.setup-row-done {
+  border-left-color: var(--status-ok);
+  border-color: rgba(67, 229, 160, 0.25);
+  background: rgba(67, 229, 160, 0.05);
 }
 
 .setup-row-head {
@@ -71,16 +121,28 @@
 }
 
 .setup-row-label {
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
   color: var(--text);
+}
+
+.setup-row-done .setup-row-label {
+  color: var(--status-ok);
+}
+
+.setup-tick {
+  flex: none;
+  display: block;
 }
 
 .setup-badge {
   flex: none;
   font-size: 9px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  padding: 2px 7px;
+  padding: 3px 8px;
   border-radius: 999px;
   border: 1px solid var(--border);
   color: var(--text-dim);
@@ -91,13 +153,18 @@
   color: var(--accent);
 }
 
+.setup-badge-done {
+  border-color: rgba(67, 229, 160, 0.4);
+  color: var(--status-ok);
+}
+
 .setup-row-why,
 .setup-row-fix,
 .setup-row-note {
-  font-size: 10.5px;
-  line-height: 1.5;
+  font-size: 11px;
+  line-height: 1.55;
   color: var(--text-dim);
-  margin: 6px 0 0;
+  margin: 8px 0 0;
 }
 
 .setup-row-fix {
@@ -109,104 +176,161 @@
   user-select: text;
 }
 
+/* ---- key fields ----------------------------------------------------------- */
+
 .setup-field {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 6px 8px;
+  gap: 8px 10px;
   align-items: center;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .setup-field-label {
   grid-column: 1 / -1;
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 10px;
+  letter-spacing: 0.08em;
   color: var(--text-dim);
 }
 
 .setup-field-input {
   min-width: 0;
-  padding: 7px 9px;
-  font-size: 12px;
+  padding: 9px 11px;
+  font-size: 13px;
   color: var(--text);
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(0, 0, 0, 0.4);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md, 6px);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+
+.setup-field-input:hover {
+  border-color: var(--accent-dim);
 }
 
 .setup-field-input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+  border-color: var(--accent);
 }
 
 .setup-field-save {
-  padding: 7px 14px;
-  font-size: 11px;
+  padding: 9px 16px;
+  font-size: 12px;
   color: var(--text);
   background: rgba(79, 216, 255, 0.10);
   border: 1px solid var(--accent-dim);
-  border-radius: 6px;
+  border-radius: var(--radius-md, 6px);
   cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.setup-field-save:hover {
+  background: rgba(79, 216, 255, 0.18);
+  border-color: var(--accent);
+}
+
+.setup-field-save:active {
+  transform: scale(0.98);
+}
+
+.setup-field-save:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .setup-field-save:disabled {
   opacity: 0.5;
   cursor: default;
+  transform: none;
 }
 
 .setup-field-status {
   grid-column: 1 / -1;
   min-height: 1em;
-  font-size: 10px;
+  font-size: 11px;
+  line-height: 1.5;
   color: var(--text-dim);
   margin: 0;
 }
 
 .setup-field-status.is-error {
-  color: var(--danger, #ff6b6b);
+  color: var(--danger);
 }
 
 .setup-field.is-stored .setup-field-label {
-  color: var(--accent);
+  color: var(--status-ok);
 }
 
+/* ---- optional + security PIN sections ------------------------------------- */
+
 .setup-optional {
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
 .setup-optional > summary {
   font-size: 11px;
+  letter-spacing: 0.05em;
   color: var(--text-dim);
   cursor: pointer;
   margin-bottom: 10px;
+  padding: 8px 0;
 }
+
+.setup-optional > summary:hover {
+  color: var(--text);
+}
+
+.setup-optional > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.setup-pin {
+  margin-top: 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: var(--radius-md, 8px);
+  background: var(--bg-raised);
+}
+
+.setup-pin-actions {
+  margin-top: 12px;
+}
+
+/* ---- footer --------------------------------------------------------------- */
 
 .setup-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 18px;
-  padding-top: 14px;
+  margin-top: 20px;
+  padding-top: 16px;
   border-top: 1px solid var(--border);
 }
 
 .setup-restart-note {
-  font-size: 10px;
+  font-size: 10.5px;
   line-height: 1.5;
-  color: var(--text-dim);
+  color: var(--text-faint);
   margin: 0;
+  max-width: 34ch;
 }
 
 .setup-dismiss {
   flex: none;
-  padding: 7px 14px;
-  font-size: 11px;
+  padding: 9px 18px;
+  font-size: 12px;
   color: var(--text-dim);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md, 6px);
   cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 
 .setup-dismiss:hover {
@@ -214,9 +338,348 @@
   border-color: var(--accent-dim);
 }
 
+.setup-dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.setup-dismiss:active {
+  transform: scale(0.98);
+}
+
+/* Done state: one primary CTA. */
+.setup-dismiss-done {
+  color: #001418;
+  font-weight: 600;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: var(--accent-glow);
+}
+
+.setup-dismiss-done:hover {
+  color: #001418;
+  background: #7be4ff;
+  border-color: #7be4ff;
+}
+
 @media (max-width: 520px) {
   .setup-footer {
     flex-direction: column;
     align-items: stretch;
   }
+  .setup-modal {
+    padding: 22px 18px 16px;
+  }
+  .setup-field {
+    grid-template-columns: 1fr;
+  }
 }
+
+/* Respect reduced-motion: the entrance animation and the fill transition are
+   cosmetic — drop them rather than risk vestibular discomfort. */
+@media (prefers-reduced-motion: reduce) {
+  .setup-modal {
+    animation: none;
+  }
+  .setup-progress-fill,
+  .setup-row,
+  .setup-field-input,
+  .setup-field-save,
+  .setup-dismiss {
+    transition: none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   First-run wizard (js/setup/first-run-wizard.js)
+
+   Deliberately NOT a new visual language: same glass panel, same --accent, same
+   fadeInUp as the gap screen above and as pin.css, so the first thing a new
+   operator ever sees already looks like the HUD they are about to use. What it
+   adds over the gap list is structure — a step rail, a scrolling body, and a
+   fixed footer — because it is a flow rather than a report.
+
+   z-index 406: one above .setup-overlay (405) so a manually reopened wizard
+   stacks over a gap screen that may still be painted, and still below auth.css
+   (410), which must be satisfied before /api/setup/status answers anything.
+   --------------------------------------------------------------------------- */
+
+.wiz-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 15, 0.94);
+  backdrop-filter: blur(12px);
+  pointer-events: auto;
+  z-index: 406;
+}
+
+.wiz-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 94vw);
+  max-height: min(86vh, 780px);
+  padding: 0;
+  border-color: var(--accent-dim);
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.78);
+  animation: fadeInUp var(--dur-med) var(--ease) both;
+}
+
+.wiz-header {
+  padding: 22px 26px 14px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.wiz-title {
+  margin: 0 0 14px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+/* The rail is an <ol>: the steps have a real order, and a screen reader should
+   hear it as one. aria-current="step" marks the live one (set in JS). */
+.wiz-rail {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex-wrap: wrap;
+}
+
+.wiz-dot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.wiz-dot-mark {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--hairline);
+  font-size: 10px;
+  line-height: 1;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+/* State is carried by BOTH the ring colour and the label weight — never colour
+   alone, so the current step survives a colour-blind reading and a greyscale
+   screen-share. */
+.wiz-dot.is-current { color: var(--text); }
+.wiz-dot.is-current .wiz-dot-mark { border-color: var(--accent); color: var(--accent); }
+.wiz-dot.is-current .wiz-dot-label { font-weight: 600; }
+.wiz-dot.is-done .wiz-dot-mark { border-color: var(--status-ok); color: var(--status-ok); }
+
+.wiz-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 20px 26px 8px;
+}
+
+.wiz-step-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.wiz-lede {
+  margin: 0 0 16px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-width: 62ch;
+}
+
+.wiz-warn {
+  margin: 0 0 14px;
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--status-warn);
+  border: 1px solid var(--status-warn);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 95, 102, 0.08);
+}
+
+.wiz-facts {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+
+.wiz-empty {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--status-ok);
+}
+
+.wiz-cards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wiz-card {
+  padding: 13px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.wiz-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.wiz-card-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.wiz-badge {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.wiz-badge-ok { color: var(--status-ok); border-color: var(--status-ok); }
+.wiz-badge-gap { color: var(--status-degraded); border-color: var(--status-degraded); }
+.wiz-badge-required { color: var(--status-warn); border-color: var(--status-warn); }
+
+.wiz-card-why,
+.wiz-card-note,
+.wiz-card-fix {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-dim);
+}
+
+/* A fix line is a command to type, not a control to press — monospace says so
+   without pretending to be clickable. */
+.wiz-card-fix {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text);
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  overflow-wrap: anywhere;
+}
+
+.wiz-more { margin-top: 14px; }
+
+.wiz-more > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--accent);
+  margin-bottom: 10px;
+}
+
+.wiz-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 26px 18px;
+  border-top: 1px solid var(--hairline);
+}
+
+/* "Do this later" sits hard left, away from the two navigation buttons: it is
+   the one action that abandons the flow, and it should not be adjacent to the
+   button the operator taps repeatedly. */
+.wiz-later { margin-right: auto; }
+
+.wiz-primary,
+.wiz-ghost {
+  min-height: 34px;
+  padding: 8px 16px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease),
+              border-color var(--dur-fast) var(--ease);
+}
+
+.wiz-primary {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+}
+
+.wiz-primary:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+
+.wiz-ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--hairline);
+}
+
+.wiz-ghost:hover:not(:disabled) { color: var(--text); border-color: var(--accent-dim); }
+.wiz-primary:disabled,
+.wiz-ghost:disabled { opacity: 0.5; cursor: default; }
+
+.wiz-restart-status {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.wiz-restart-status.is-error { color: var(--status-warn); }
+
+/* Respect the operator's motion setting: the entry animation is decoration, the
+   content is the point. */
+@media (prefers-reduced-motion: reduce) {
+  .wiz-modal { animation: none; }
+}
+
+/* Components step — checkbox rows reuse .wiz-card, so the step reads as the same
+   surface as the provider list rather than a second design. */
+.wiz-check {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.wiz-check:disabled { cursor: default; opacity: 0.5; }
+.wiz-check:disabled + .wiz-card-label { opacity: 0.6; }
+.wiz-card-head label.wiz-card-label { cursor: pointer; }
+
+/* Per-row install state. Lives under its own card so a failure sits next to the
+   thing that failed, never only in a summary line at the bottom. */
+.wiz-comp-status {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  color: var(--status-ok);
+}
+
+.wiz-comp-status.is-error { color: var(--status-warn); }
+
+.wiz-manual { margin-top: 18px; }

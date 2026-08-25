@@ -267,6 +267,56 @@ test('perception relay is salience-gated: below-threshold non-ws perceptions are
   await server.stop();
 });
 
+// The action.* relay (Agent Actions feed) is a PREFIX glob — matchGlob in
+// src/core/bus/index.js is startsWith — so it also catches
+// 'action.speak-requested', a fourth event with no `tool`/`ok` that already
+// has its own dedicated subscriber (~line 1929) feeding proactiveSpeak(). Before
+// this test's fix, the relay's fallback branches painted it as a nameless
+// failed row in the Agent Actions feed and tripped the missing-tool warning
+// meant for genuine outcome events. This test pins both halves: the
+// dedicated handler still runs (a real 'done' comes back), and the relay
+// ignores the event outright — no 'action' broadcast, no warning — while a
+// real outcome event with a missing tool still gets both.
+test('action relay ignores action.speak-requested — only real outcome events produce an action row', async () => {
+  const bus = createBus({ historySize: 50 });
+  const warnings = [];
+  const server = createServer(baseDeps(bus, {
+    logger: { info() {}, warn: (msg, meta) => warnings.push({ msg, meta }), error() {} },
+  }));
+
+  await server.ready;
+  const addr = server.httpServer.address();
+  const ws = new WebSocket(`ws://127.0.0.1:${addr.port}/ws`);
+  await new Promise((resolve) => ws.on('open', resolve));
+
+  const received = [];
+  ws.on('message', (raw) => received.push(JSON.parse(raw.toString())));
+
+  bus.emit('action.speak-requested', { text: 'hello' });
+  // Wait for the dedicated subscriber's turn to actually finish (proves it
+  // still fires, unmodified by this fix) before asserting on the relay.
+  await waitForMessages(received, (m) => m.type === 'done', 2000);
+
+  assert.equal(received.some((m) => m.type === 'action'), false,
+    'action.speak-requested must never produce an "action" row in the Agent Actions feed');
+  assert.equal(warnings.some((w) => w.msg === 'action-relay.missing-tool'), false,
+    'action.speak-requested must not trip the missing-tool warning meant for real outcome events');
+
+  // A genuine outcome event with no tool must still relay AND still warn.
+  bus.emit('action.denied', { reason: 'tier-2-requires-confirm' });
+  await waitForMessages(received, (m) => m.type === 'action', 2000);
+
+  const actionMsgs = received.filter((m) => m.type === 'action');
+  assert.equal(actionMsgs.length, 1, 'the real denial is the only action row relayed');
+  assert.equal(actionMsgs[0].payload.state, 'denied');
+  assert.equal(actionMsgs[0].payload.tool, null);
+  assert.ok(warnings.some((w) => w.msg === 'action-relay.missing-tool' && w.meta.state === 'denied'),
+    'a genuine outcome event with no tool must still trip the missing-tool warning');
+
+  ws.close();
+  await server.stop();
+});
+
 // REMEDIATION P1-4: FIX B's lifecycle bridge flipped entityStatus='alive' on
 // ANY 'lifecycle.started'{component:'cortex'} — but cortex.start() ALSO fires
 // during ordinary boot sequencing, before later fail-fast boot steps run. If

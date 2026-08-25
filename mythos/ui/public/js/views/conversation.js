@@ -1,9 +1,26 @@
 // conversation.js — E4: Scrollable chat transcript panel.
 // Accumulates user queries and MYTHOS replies in real time.
-// Also fetches recent conversation history from the server on mount.
+//
+// F7: on mount, also renders the WHOLE session (not just what has streamed
+// over WS since the panel opened) by fetching session.json's rolling window
+// + today's episodic conversation log and merging them via
+// transcript-model.js's pure mergeTranscript(). The fetch stays best-effort —
+// it never throws and never blocks live rendering, so any failure degrades to
+// the previous WS-only behavior.
+//
+// The route DOES exist now (server/index.js's /api/conversation/history); this
+// comment claimed it did not, which is how the real defect below stayed hidden.
+// It returns `session` as a PARSED OBJECT (memory.fs.readJSON), not raw text —
+// buildTranscript used to JSON.parse it, throw, and silently drop the whole
+// session half of the transcript. See transcript-model.js's buildTranscript.
 import { subscribe } from '/js/ws.js';
+import { buildTranscript } from '/js/views/transcript-model.js';
 
 const MAX_MESSAGES = 200;
+// Returns { session: <parsed Conversation/session.json>, episodic: <today's
+// Episodic/<date>.jsonl RAW TEXT> } — the two halves are deliberately
+// asymmetric on the wire; see the header comment above.
+const CONVERSATION_HISTORY_ENDPOINT = '/api/conversation/history';
 
 export async function render(mount) {
   // xss-safe: static template, no interpolation
@@ -11,6 +28,7 @@ export async function render(mount) {
     <div class="conversation-log" id="conv-log" style="overflow-y:auto;max-height:70vh;padding:8px;">
       <div class="text-faint" id="conv-empty">No conversation yet — start speaking to see the transcript.</div>
     </div>
+    <div class="sr-only" id="conv-live" aria-live="polite"></div>
     <div style="padding:4px 8px;border-top:1px solid var(--border,#333);">
       <button id="conv-clear" style="background:none;border:1px solid var(--border,#555);color:var(--text,#ccc);padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px;">Clear</button>
     </div>
@@ -18,10 +36,18 @@ export async function render(mount) {
 
   const logEl = mount.querySelector('#conv-log');
   const emptyEl = mount.querySelector('#conv-empty');
+  // sr-only aria-live mirror of the transcript (third live region in the HUD,
+  // after core-orb.js's #hud-status-live and kanban.js's #kanban-note).
+  // Deliberately NOT aria-live on #conv-log itself: appendChunk fires per
+  // streamed token and would spam screen readers — the mirror is written only
+  // on message completion (addMessage / finalizeStreaming), never per chunk,
+  // the same state-transitions-only pattern as core-orb.js's announceState.
+  const liveEl = mount.querySelector('#conv-live');
   let messageCount = 0;
 
   function addMessage(role, text, kind) {
     if (!text || !text.trim()) return;
+    if (liveEl) liveEl.textContent = text; // completion-only announce; empty text already returned above
     emptyEl.style.display = 'none';
     const div = document.createElement('div');
     div.className = 'conv-msg conv-' + role;
@@ -77,10 +103,30 @@ export async function render(mount) {
     if (streamingEl && streamingText) {
       const body = streamingEl.querySelector('span:last-child');
       if (body) body.textContent = streamingText;
+      if (liveEl) liveEl.textContent = streamingText; // completion-only announce (never per chunk)
     }
     streamingEl = null;
     streamingText = '';
   }
+
+  // F7: load the merged full-session transcript once, before live WS
+  // messages start appending. Best-effort — any failure (endpoint missing,
+  // bad JSON, network error) just leaves the panel showing only what
+  // streams in live from here, exactly like before this change.
+  async function loadFullSessionHistory() {
+    try {
+      const res = await fetch(CONVERSATION_HISTORY_ENDPOINT);
+      if (!res.ok) return;
+      const payload = await res.json();
+      const transcript = buildTranscript(payload.session, payload.episodic);
+      transcript.forEach((m) => {
+        if (m.role === 'user' || m.role === 'assistant') addMessage(m.role, m.text);
+      });
+    } catch (_err) {
+      // Best-effort — see header comment.
+    }
+  }
+  loadFullSessionHistory();
 
   // Subscribe to WS messages that carry conversation content
   const unsub = subscribe(['utterance', 'speech-chunk', 'done', 'proactive-speech'], (msg) => {

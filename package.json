@@ -1,11 +1,12 @@
 {
   "name": "agent-os",
-  "version": "0.1.1",
+  "version": "0.1.9",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
     "start": "electron electron/main.js",
     "dist": "electron-builder --win",
+    "parity-check": "node mythos/scripts/parity-check.js",
     "release": "node scripts/release.js"
   },
   "dependencies": {
@@ -14,7 +15,7 @@
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "electron": "^43.2.0",
+    "electron": "^43.4.1",
     "electron-builder": "^25.0.0"
   },
   "build": {
@@ -38,6 +39,7 @@
       "!mythos/.env",
       "!mythos/services/edge-tts-server.py",
       "!mythos/ui/public/models{,/**/*}",
+      "mythos/ui/public/models/gesture_recognizer.task",
       "!mythos/models{,/**/*}",
       "!**/.cache{,/**/*}",
       "!mythos/test{,/**/*}",
@@ -53,17 +55,31 @@
       "!mythos/scripts/graphify-validate.js",
       "!mythos/scripts/live-logs.js",
       "!mythos/scripts/diagnose-type-mechanisms.js",
-      "!mythos/scripts/e2e{,/**/*}"
+      "!mythos/scripts/e2e{,/**/*}",
+      "!**/onnxruntime-node/bin/napi-v*/darwin{,/**/*}",
+      "!**/onnxruntime-node/bin/napi-v*/linux{,/**/*}",
+      "!**/onnxruntime-web/lib{,/**/*}"
     ],
     "win": {
       "target": "nsis",
       "forceCodeSigning": false
     },
+    "nsis": {
+      "include": "build/installer.nsh",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false
+    },
     "publish": [
       {
         "provider": "github",
         "owner": "HailLucifer666",
-        "repo": "Agent_OS"
+        "repo": "Agent_OS",
+        "releaseType": "release"
       }
     ]
   }

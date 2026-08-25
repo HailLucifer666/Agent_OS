@@ -29,6 +29,10 @@ const ALLOWED_EVENTS = new Set([
   'reflect',
   'confirm-request',
   'brain-spend',
+  // Wave 1 (2026-08-13): leash/confirm.js's per-entry expiry timer routes an
+  // EXPIRED confirm back to the specific connection that raised it — same
+  // channel-less shape as 'confirm-request' above, and documented alongside it.
+  'confirm-expired',
 
   // perception.*
   'perception.tick',       // D-36 fix: was 'sensor.timer'
@@ -68,6 +72,7 @@ const ALLOWED_EVENTS = new Set([
   'memory.decay',
   'memory.checkpoint.saved',
   'memory.merged',      // V10 (Phase 4): consolidate-* dedup/contradiction merge pass
+  'memory.consolidate-skip', // fix-plan 3.1 (2026-08-17): diagnostic per distillation skip reason
 
   // lifecycle.*
   'lifecycle.started',     // D-37 fix: was 'lifecycle.cortex-started'
@@ -95,8 +100,21 @@ const ALLOWED_EVENTS = new Set([
   'cortex.recall',      // V1 (Phase 4): orient→recallHybrid per-tick cache hydration
   'cortex.proposed',    // V8 (Phase 4): mull() → propose_goal suggestion surfaced
   'conversation.announced',
+  // BUG-273 D3: the SPOKEN copy of a repeating anomaly is held back by a backoff
+  // ladder (5m/15m/45m, capped at 2h) after the operator's 2026-08-18 session
+  // announced the same self-healed cortex stall four times in sixteen minutes. The
+  // anomaly still reaches the log, the audit and the HUD — this event exists so the
+  // silence itself is diagnosable rather than looking like the fault stopped.
+  'conversation.suppressed',
   'conversation.intent',   // Phase 5a — conversation-gateway.js's non-engagement route() fallback
   'cortex.thought',
+  // BUG-282: the cortex re-proposed a confirm-blocked action every tick — 42
+  // browser_click confirms for the identical {ref:"e12"} in 41.6 seconds in the
+  // audited 2026-08-20 session. act() now asks once per unresolved confirm, and
+  // emits this each time it declines to ask again, carrying a running count.
+  // The event is not optional decoration: suppressing 41 of 42 emissions removes
+  // 41 log lines, and silence would turn a visible spin into an invisible stall.
+  'cortex.confirm-suppressed',
 
   // engagement.* (Phase 5a — engagement layer wired end-to-end: store, state
   // machine transitions, gateway action routing, immune hooks). The two
@@ -155,6 +173,11 @@ const ALLOWED_EVENTS = new Set([
   // reminder.* (P21 — calendar/reminder effector)
   'reminder.due',
 
+  // calendar.* — F2 (2026-08-12): lets reminder-sensor's due-time wake timer
+  // reschedule the instant a reminder is created, instead of waiting for its
+  // safety-poll cadence to notice one added while it was idle.
+  'calendar.reminder-added',
+
   // gmail.* (Item 7 — Gmail unread triage sensor, mirrors reminder-sensor)
   'gmail.unread-batch',
 
@@ -210,6 +233,13 @@ const ALLOWED_EVENTS = new Set([
   // immune system has no playbook for it, the explainer narrated a normal
   // cost-saving close to the operator as a fault with an invented cause.
   'voice.live.idle-closed',
+  // B3 (2026-08-14): a reasoning strip. Deliberately NOT health.anomaly, for the
+  // identical reason as idle-closed above — it fired 24 times in one session and
+  // produced 24 no-match heal round trips, while being a report that the FILTER
+  // WORKED. BUG-170's "a strip is never silent" rule still holds: live-session.js
+  // logs every one (live.reasoning-stripped) and this event carries the same
+  // turnId/channel/spokenAnyway.
+  'voice.live.reasoning-filtered',
 ]);
 
 // -- Static scan -------------------------------------------------------------

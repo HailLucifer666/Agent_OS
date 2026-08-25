@@ -31,6 +31,18 @@ var AUTONOMOUS_EXCLUDED = [
   'delete_file',       // permanently deletes a user file — operator-gated
 ];
 
+// B4 (2026-08-14): the literal 20000 was written out twice here, and both copies
+// had to agree with schema.js's GOAL_TOKEN_BUDGET default while nothing checked
+// that they did — the same defect class as Wave A's hand-tuned preroll ring. It is
+// named once now, and goal-budget-calibration.test.js pins it equal to the schema
+// default. It is only reachable when `config` is absent (tests); production always
+// has a config, and .env.example ships the same number a third time because that
+// file is copied to .env and would otherwise override the schema silently.
+//
+// See schema.js for the measurement: two goals spent ~31,200 tokens over 2 actions
+// and auto-paused 5s after creation against the old 20,000.
+const GOAL_TOKEN_BUDGET_FALLBACK = 250000;
+
 function createGoalSystem({ fs, config, bus, memory, brain }) {
   var goals = new Map(); // id -> goal record (in-memory index)
 
@@ -50,7 +62,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       status: opts.status || 'proposed',
       priority: typeof opts.priority === 'number' ? opts.priority : 0.5,
       budget: {
-        tokens: opts.budget && opts.budget.tokens || (config && config.GOAL_TOKEN_BUDGET) || 20000,
+        tokens: opts.budget && opts.budget.tokens || (config && config.GOAL_TOKEN_BUDGET) || GOAL_TOKEN_BUDGET_FALLBACK,
         actions: opts.budget && opts.budget.actions || (config && config.GOAL_ACTION_BUDGET) || 25,
         deadline: opts.budget && opts.budget.deadline || null
       },
@@ -486,6 +498,19 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
         }
       } catch (_) { /* grounding is advisory — never block planning on it */ }
 
+      // DELIBERATELY NOT MOVED to the 'reasoning' lane in the 2026-08-14 lane
+      // rewire, and this is the only record of that decision. Goal planning is
+      // the highest-frequency autonomous brain call in the system — the cortex
+      // loop drives it — and Cerebras, which heads 'reasoning', is capped at
+      // 5 req/min. Putting the loop there would starve the seven low-frequency
+      // roles the lane exists to serve. It also feeds the FAILURE-AVOIDANCE
+      // block above, whose value comes from the tool list, not from model depth.
+      //
+      // This is also the one dynamic `lane:` argument in src/ — a static scan
+      // cannot resolve it, so test/brain-lane-registration.test.js whitelists
+      // this line BY NAME and asserts both branches ('build', 'simple') are
+      // registered lanes. If this expression ever gains a third branch, add it
+      // to that test's expectation rather than letting the guard go vacuous.
       var lane = goal.drive === 'user-service' ? 'build' : 'simple';
       // RC#1: build the available-tool list from the effector registry so the
       // planner can only choose real tools. Without this, the LLM hallucinated
@@ -752,7 +777,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           if (data && data.id) {
             // B1: Normalize loaded goals to prevent crashes on corrupt/legacy files.
             data.spent = data.spent || { tokens: 0, actions: 0 };
-            data.budget = data.budget || { tokens: (config && config.GOAL_TOKEN_BUDGET) || 20000, actions: (config && config.GOAL_ACTION_BUDGET) || 25, deadline: null };
+            data.budget = data.budget || { tokens: (config && config.GOAL_TOKEN_BUDGET) || GOAL_TOKEN_BUDGET_FALLBACK, actions: (config && config.GOAL_ACTION_BUDGET) || 25, deadline: null };
             data.plan = data.plan || [];
             data.childIds = data.childIds || [];
             data.grants = data.grants || {};

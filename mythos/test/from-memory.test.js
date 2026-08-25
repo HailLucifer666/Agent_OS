@@ -443,8 +443,14 @@ describe('from-memory: log_incident', () => {
     const log = tools.find(t => t.name === 'log_incident');
     const result = await log.fn({ text: 'check date' });
     assert.equal(result.ok, true);
-    const today = new Date().toISOString().slice(0, 10);
-    assert.equal(result.result.date, today);
+    // F11 (2026-08-15): LOCAL, not UTC. Incidents and Audit used to name their
+    // files from toISOString() while Episodic used local date components, so a
+    // session spanning local midnight wrote Incidents/2026-08-14.jsonl beside
+    // Episodic/2026-08-15.jsonl for events minutes apart. Asserted through the
+    // shared helper rather than a second copy of the arithmetic — a second date
+    // basis is what caused the divergence in the first place.
+    const { dayKey } = require('../src/core/util/day-key');
+    assert.equal(result.result.date, dayKey());
   });
 
   it('incidents entry includes timestamp and id', async () => {
@@ -581,11 +587,16 @@ describe('from-memory: recall_memory', () => {
 // tool structure invariants
 // ---------------------------------------------------------------------------
 describe('from-memory: tool structure', () => {
-  it('exports exactly 7 tools (P5 self_capabilities, BUG-160 forget_fact, BUG-171 the incident read side)', () => {
+  it('exports exactly 10 tools (P5 self_capabilities, BUG-160 forget_fact, BUG-171 the incident read side, 2026-08-14 notes)', () => {
     const tools = buildTools({ semantic: { write: () => ({}) }, fs: { ensureDir: () => {}, appendLine: () => {} }, memory: { recallHybrid: async () => [] } });
-    assert.equal(tools.length, 7);
+    assert.equal(tools.length, 10);
+    // The note_* trio registers even with no notes store in ctx — the tools
+    // then fail honestly ("notes store unavailable") rather than vanishing,
+    // because a tool that disappears based on wiring is invisible to the
+    // TIER_TABLE conformance gate that has to see every registered name.
     assert.deepEqual(tools.map(t => t.name).sort(), [
       'forget_fact', 'incident_status', 'list_incidents', 'log_incident',
+      'note_read', 'note_search', 'note_take',
       'recall_memory', 'remember', 'self_capabilities',
     ]);
   });
@@ -608,6 +619,18 @@ describe('from-memory: tool structure', () => {
     assert.ok(typeof log.description === 'string');
     assert.ok(log.description.length > 0);
     assert.ok(typeof log.fn === 'function');
+  });
+
+  // Wave 7 (2026-08-13): log_incident firing on the model's OWN initiative
+  // (noticing a mistake it made, or a tool failure) rather than an explicit
+  // operator request was observed in the 2026-08-12/13 session. This is a
+  // prompt-level fix — the description is the only lever available, since
+  // the tool itself has no way to distinguish who decided to call it.
+  it('log_incident\'s description forbids calling it on the model\'s own initiative', () => {
+    const tools = buildTools({ fs: { ensureDir: () => {}, appendLine: () => {} } });
+    const log = tools.find(t => t.name === 'log_incident');
+    assert.match(log.description, /OPERATOR explicitly asks/i);
+    assert.match(log.description, /do NOT call this on your own initiative/i);
   });
 
   it('recall_memory tool has correct metadata', () => {

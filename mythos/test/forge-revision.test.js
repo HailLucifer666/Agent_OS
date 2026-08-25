@@ -1,10 +1,10 @@
 'use strict';
 
 // Phase 3 of the Hermes orchestration change: applyRevision no longer asks a
-// brain to pick a revision-target subset — it re-runs the SAME hermes-runner
+// brain to pick a revision-target subset — it re-runs the SAME forge-runner
 // build in the same project directory with `feedback` set, and Hermes reads
 // back whatever it wrote before. This file covers that plumbing; the actual
-// Hermes-driving logic lives in hermes-runner.js (tested separately).
+// The engine-driving logic lives in forge-runner.js (tested separately).
 
 const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');

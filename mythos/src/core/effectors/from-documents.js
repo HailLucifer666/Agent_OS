@@ -147,7 +147,10 @@ function createDocumentsEffector({ documents, documentsIndex, embed, brain }) {
         const numbered = passages.map(function(p, i) { return '[' + (i + 1) + '] ' + p; }).join('\n\n');
         const result = await Promise.race([
           brain.think({
-            lane: 'simple',
+            // lane 'memory' (2026-08-14) — grounded retrieval-answering, the
+            // same class of work as memory consolidation, moved off the
+            // trivial/formatting lane with it.
+            lane: 'memory',
             messages: [{ role: 'user', content:
               'Answer the question using ONLY the passages below, and cite them inline like [1]. ' +
               'If the passages do not contain the answer, say so plainly instead of guessing.\n\n' +

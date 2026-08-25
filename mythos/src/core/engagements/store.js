@@ -174,7 +174,13 @@ function createEngagementStore({ fs, config, bus }) {
       if (!record) {
         throw new Error('Engagement not found: ' + id);
       }
-      var now = Date.now();
+      // Monotonic updatedAt: a versioned, immutable-history record must never
+      // carry an equal-or-older timestamp than the version it replaces. Two
+      // updates inside the same wall-clock millisecond (or clock skew) could
+      // produce that, and it raced a test on CI (2026-08-16: "updates record
+      // immutably" asserts strict >). Nudge to old+1 rather than wait — the
+      // ordering property is what matters, not clock fidelity.
+      var now = Math.max(Date.now(), (record.updatedAt || 0) + 1);
       var updated = Object.assign({}, record, patch, {
         version: record.version + 1,
         updatedAt: now

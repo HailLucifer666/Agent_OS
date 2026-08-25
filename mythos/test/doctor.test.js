@@ -76,6 +76,27 @@ describe('doctor: key checks', () => {
     assert.equal(live.ok, false, 'a blank value in .env is the classic "I set it" false positive');
   });
 
+  it('a key stored in the desktop key store counts as configured by name', () => {
+    // The operator saves keys through the setup screen straight into the
+    // Electron key store — they are NOT in process.env until the next launch
+    // injects them. A report that ignored the store would tell the setup screen
+    // "GOOGLE_API_KEY missing" right after the operator stored it (the exact
+    // "I set it and it still says no keys" false negative). This pins the
+    // documented intent: present-by-name counts as configured.
+    const live = doctor.evaluateKeyChecks(['GOOGLE_API_KEY']).find((r) => r.id === 'live-voice');
+    assert.equal(live.ok, true);
+    assert.match(live.detail, /GOOGLE_API_KEY/);
+    const brain = doctor.evaluateKeyChecks(['CEREBRAS_API_KEY']).find((r) => r.id === 'brain');
+    assert.equal(brain.ok, true, 'a single stored provider key is a brain, same as a single env one');
+  });
+
+  it('a stored key closes the required gap in the assembled report', () => {
+    const isolated = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-store-'));
+    const report = doctor.buildReport(isolated, { keyStoreNames: ['GOOGLE_API_KEY'] });
+    assert.equal(report.requiredGaps.some((g) => g.id === 'live-voice'), false,
+      'the setup screen must stop nagging about a key that is already stored');
+  });
+
   it('no report line ever contains a key VALUE', () => {
     // The whole surface, with distinctive values planted in every key.
     const canary = 'CANARY-SECRET-VALUE-a1b2c3';
@@ -164,10 +185,13 @@ describe('doctor: cli contracts', () => {
   });
 
   it('--strict exits 1 while a required key gap remains, and 0 once it is filled', () => {
-    // No provider key -> the brain gap is required.
-    assert.equal(doctor.main(['--strict', '--json'], { envDir: isolatedEnv }), 1);
+    // No provider key and no desktop key store -> the brain gap is required.
+    // keyStoreNames:[] makes this a machine-with-nothing simulation: a real
+    // store on the dev machine would otherwise satisfy the gap and pass --strict
+    // for the wrong reason.
+    assert.equal(doctor.main(['--strict', '--json'], { envDir: isolatedEnv, keyStoreNames: [] }), 1);
     process.env.GOOGLE_API_KEY = 'x'.repeat(20);
-    const code = doctor.main(['--strict', '--json'], { envDir: isolatedEnv });
+    const code = doctor.main(['--strict', '--json'], { envDir: isolatedEnv, keyStoreNames: [] });
     // Asset gaps (adb, piper voices) are machine-dependent and never required,
     // so filling the key gaps is enough to pass --strict anywhere.
     assert.equal(code, 0, 'only REQUIRED gaps may fail a strict run');

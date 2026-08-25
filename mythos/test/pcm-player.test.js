@@ -69,14 +69,22 @@ function samplesBase64(n) {
 }
 
 describe('pcm-player (Phase 4, V2 §9)', () => {
-  it('enqueue() schedules a source with a 40ms floor on the first chunk', async () => {
+  // CHANGED 2026-08-19, deliberately. This asserted `startedAt === 0.04`, and
+  // that 40ms lead was the defect: measured on the operator's link, chunks
+  // arrive later than the previous chunk finishes on about half of all turns,
+  // by 272ms to 1486ms, so a 40ms lead meant the room heard a gap every time.
+  // The first chunk now starts a jitter cushion ahead instead. See
+  // test/pcm-player-jitter-cushion.test.js for the cushion's own behaviour.
+  it('enqueue() schedules the first chunk a jitter cushion ahead, not 40ms ahead', async () => {
     const { createPcmPlayer } = await import(PCM_PLAYER_URL);
     const ctx = fakeContext();
     const player = createPcmPlayer({ sampleRate: 24000, contextFactory: () => ctx });
     player.enqueue(twoSamplesBase64());
     assert.equal(ctx._sources.length, 1);
     assert.ok(ctx._sources[0].started);
-    assert.ok(Math.abs(ctx._sources[0].startedAt - 0.04) < 1e-9, 'first chunk must start at currentTime+0.04, not 0');
+    assert.ok(Math.abs(ctx._sources[0].startedAt - 0.25) < 1e-9,
+      'first chunk must start a cushion ahead so a late second chunk has somewhere '
+      + 'to land; got ' + ctx._sources[0].startedAt);
   });
 
   it('back-to-back enqueues schedule sequentially, never overlapping', async () => {
@@ -117,7 +125,15 @@ describe('pcm-player (Phase 4, V2 §9)', () => {
     ctx.currentTime = 5.0; // time has moved on (barge-in mid-playback)
     player.enqueue(twoSamplesBase64());
     const newest = ctx._sources[ctx._sources.length - 1];
-    assert.ok(Math.abs(newest.startedAt - 5.04) < 1e-9, 'after flush, the next chunk must schedule relative to the NEW currentTime, not the stale nextAt');
+    // 5.25, not 5.04: the post-flush chunk begins a new run and so gets the
+    // cushion, exactly like the first chunk of any reply. What this test is
+    // actually pinning — that scheduling restarts from the NEW currentTime
+    // rather than the stale nextAt — is unchanged.
+    assert.ok(Math.abs(newest.startedAt - 5.25) < 1e-9,
+      'after flush, the next chunk must schedule relative to the NEW currentTime, '
+      + 'not the stale nextAt; got ' + newest.startedAt);
+    assert.equal(player.stats().underruns, 0,
+      'a barge-in is not a network underrun and must not grow the cushion');
   });
 
   it('isSpeaking() reflects whether scheduled audio extends past currentTime', async () => {

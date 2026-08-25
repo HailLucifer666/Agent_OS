@@ -33,6 +33,17 @@ const RESTART_BACKOFF_MS = process.env.PC_CHILD_RESTART_BACKOFF_MS
   ? process.env.PC_CHILD_RESTART_BACKOFF_MS.split(',').map(Number)
   : [2000, 5000];
 const COMMAND_TIMEOUT_MS = 15000; // 15s per command
+// BUG-335 (2026-08-24): an input-injecting command whose child outlives the
+// caller's patience gets the child KILLED, because a PowerShell mid-SendInput
+// cannot be told to abandon the keystrokes — killing it is the only way to
+// guarantee the action cannot land after the caller already saw "timed out"
+// and retried. Those kill-restarts draw their OWN budget below, never the
+// crash budget (MAX_RESTART_ATTEMPTS=2): otherwise two wedged ui_types would
+// permanently offline desktop automation, trading a double-typing bug for a
+// dead surface. Looker commands keep today's behaviour plus a visible bell.
+const INPUT_INJECTING_CMDS = new Set(['ui_type', 'ui_click', 'click_at', 'right_click_at', 'send_key', 'drag']);
+const MAX_TIMEOUT_RESTARTS = 3;
+const TIMEOUT_RESTART_WINDOW_MS = 10 * 60 * 1000;
 // BUG-141(b): STARTUP_TIMEOUT_MS is deliberately shorter than
 // COMMAND_TIMEOUT_MS (15s). The startup ping is queued through the SAME
 // pipeline as any other command (processQueue()), so it carries the full
@@ -66,6 +77,10 @@ let commandInFlight = null; // { resolve, reject, timer, id, cmdName, sentAt }
 // gets matched to whatever command is in-flight NEXT — a permanent off-by-one
 // under queue pressure (found live 2026-07-17 while chasing BUG-038).
 let nextCommandId = 1;
+let timeoutRestartTimes = []; // Date.now() stamps of recent timeout-restarts (BUG-335 budget)
+let lateCompletionSink = null; // set via startPcChild({lateCompletionSink}); emits health.anomaly
+let spawnImpl = null; // test seam: startPcChild({spawnImpl}); production uses real spawn
+let commandTimeoutMs = COMMAND_TIMEOUT_MS; // test seam: startPcChild({commandTimeoutMs})
 
 // stdout line buffer (incomplete lines accumulate here)
 let stdoutBuf = '';
@@ -116,6 +131,19 @@ function handleStdoutChunk(chunk) {
         if (parsed && parsed.id !== undefined && parsed.id !== commandInFlight.id) {
           log.warn('pc-child stale response dropped', { expected: commandInFlight.id, got: parsed.id });
           pushRingLine(`[stale-response id=${parsed.id}] ${line.slice(0, 200)}`);
+          // BUG-335 bell (looker path): a response arriving after its caller
+          // was told "timed out" means the action DID run. Never silently
+          // swallow that again — hand it to the immune system.
+          if (lateCompletionSink) {
+            try {
+              lateCompletionSink({
+                expectedId: commandInFlight.id,
+                gotId: parsed.id,
+                cmdName: commandInFlight.cmdName,
+                preview: line.slice(0, 200),
+              });
+            } catch (_) { /* sink must never break the dispatch loop */ }
+          }
           continue;
         }
         clearTimeout(commandInFlight.timer);
@@ -131,7 +159,17 @@ function handleStdoutChunk(chunk) {
         log.warn('pc-child unparseable line', { preview: line.slice(0, 200) });
       }
     } else {
-      // No command in flight — diagnostic line
+      // No command in flight — diagnostics, or a LATE response to an
+      // already-timed-out command (BUG-335): with nothing in flight the id
+      // guard below never even runs, which is exactly how a late completion
+      // used to vanish into chatter. Ring the bell before filing it.
+      let lateParsed = null;
+      try { lateParsed = JSON.parse(line); } catch (_) { /* genuine chatter */ }
+      if (lateParsed && lateParsed.id !== undefined && lateCompletionSink) {
+        try {
+          lateCompletionSink({ expectedId: null, gotId: lateParsed.id, cmdName: lateParsed.cmd || null, preview: line.slice(0, 200) });
+        } catch (_) { /* sink must never break the dispatch loop */ }
+      }
       pushRingLine(line);
     }
   }
@@ -157,11 +195,42 @@ function processQueue() {
   const timer = setTimeout(() => {
     if (commandInFlight === null || commandInFlight.id !== id) return; // already resolved
     const rejectFn = commandInFlight.reject;
-    log.warn('pc-child command timeout', { cmd: cmdName, id, timeoutMs: COMMAND_TIMEOUT_MS, queueDepth: commandQueue.length });
+    const touchesWorld = INPUT_INJECTING_CMDS.has(cmdName);
+    log.warn('pc-child command timeout', { cmd: cmdName, id, touchesWorld, timeoutMs: commandTimeoutMs, queueDepth: commandQueue.length });
     commandInFlight = null;
-    rejectFn(new Error('PC automation command timed out'));
+    if (touchesWorld) {
+      // BUG-335: the child cannot be told to abandon keystrokes it is mid-way
+      // through sending — kill it so the action cannot land after the caller
+      // was told it failed and retried. Its restarts draw their own budget.
+      const now = Date.now();
+      timeoutRestartTimes = timeoutRestartTimes.filter((t) => now - t < TIMEOUT_RESTART_WINDOW_MS);
+      if (timeoutRestartTimes.length >= MAX_TIMEOUT_RESTARTS) {
+        killLiveChild();
+        state = 'OFFLINE';
+        hint = 'PC automation exceeded the command-timeout restart budget ('
+          + MAX_TIMEOUT_RESTARTS + ' input-injecting timeouts in '
+          + Math.round(TIMEOUT_RESTART_WINDOW_MS / 60000) + ' minutes). Re-probe health before retrying.';
+        log.warn('pc-child exceeded timeout restart budget', {});
+        // BUG-355: everything queued behind this command must settle too.
+        // The old branch rejected only the in-flight entry and returned, so
+        // callers of already-queued commands hung forever on a promise that
+        // would never resolve (reproduced via spawnImpl; scratch -> this test).
+        const drained = commandQueue.splice(0, commandQueue.length);
+        for (const entry of drained) {
+          try { entry.reject(new Error('PC automation offline: ' + hint)); } catch (_) {}
+        }
+        rejectFn(new Error(hint));
+        return;
+      }
+      timeoutRestartTimes.push(now);
+      killLiveChild();
+      scheduleRestart('command-timeout:' + cmdName, { skipCrashBudget: true });
+      rejectFn(new Error('PC automation command timed out; child restarted so it cannot execute late'));
+    } else {
+      rejectFn(new Error('PC automation command timed out'));
+    }
     processQueue(); // process next
-  }, COMMAND_TIMEOUT_MS);
+  }, commandTimeoutMs);
 
   commandInFlight.timer = timer;
 
@@ -200,18 +269,24 @@ function sendCommand(cmdObj) {
 // session, with a live zombie process still holding the pipes. Extracted so
 // the handshake-timeout path enters the SAME sequence.
 // Returns true if a restart was scheduled.
-function scheduleRestart(reason) {
+// opts.skipCrashBudget (BUG-335): timeout-kill restarts pass true — they are
+// budgeted by MAX_TIMEOUT_RESTARTS in the caller and must NOT consume
+// restartAttempts, or two wedged ui_types would exhaust the crash budget and
+// permanently offline desktop automation.
+function scheduleRestart(reason, opts) {
+  const o = opts || {};
   if (intentionalShutdown) return false;
 
-  if (restartAttempts >= MAX_RESTART_ATTEMPTS) {
+  if (!o.skipCrashBudget && restartAttempts >= MAX_RESTART_ATTEMPTS) {
     state = 'OFFLINE';
     hint = 'PC automation exceeded restart budget. Retry with a health re-probe.';
     log.warn('pc-child exceeded restart attempts', { reason });
     return false;
   }
 
-  const backoffMs = RESTART_BACKOFF_MS[restartAttempts] || RESTART_BACKOFF_MS[RESTART_BACKOFF_MS.length - 1];
-  restartAttempts += 1;
+  const backoffIdx = o.skipCrashBudget ? 0 : restartAttempts;
+  const backoffMs = RESTART_BACKOFF_MS[backoffIdx] || RESTART_BACKOFF_MS[RESTART_BACKOFF_MS.length - 1];
+  if (!o.skipCrashBudget) restartAttempts += 1;
   log.warn('pc-child restarting', { attempt: restartAttempts, backoffMs, reason });
   state = 'STARTING';
   clearRestartTimer();
@@ -251,7 +326,7 @@ function spawnChild() {
     '-File', scriptPath,
   ];
 
-  const proc = spawn('powershell.exe', args, {
+  const proc = (spawnImpl || spawn)('powershell.exe', args, {
     shell: false,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -377,7 +452,14 @@ function spawnChild() {
   const startupPingId = commandInFlight ? commandInFlight.id : null;
 }
 
-async function startPcChild() {
+async function startPcChild(opts) {
+  const o = opts || {};
+  // BUG-335 seams: tests inject a fake child factory; main.js injects the
+  // late-completion sink that turns dropped stale responses into anomalies.
+  spawnImpl = o.spawnImpl || null;
+  lateCompletionSink = o.lateCompletionSink || null;
+  timeoutRestartTimes = [];
+  commandTimeoutMs = o.commandTimeoutMs || COMMAND_TIMEOUT_MS;
   // BUG-141(a): startPcChild() used to spawn unconditionally — if ever called
   // while a previous child was still alive, that old process was orphaned:
   // never killed, only abandoned once the `proc !== child` identity guards

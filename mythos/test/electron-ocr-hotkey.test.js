@@ -82,9 +82,19 @@ describe('HUD ocr-result handling (Slice 2)', () => {
   it('subscribes to ocr-result and respects the PIN gate', () => {
     assert.match(APP_JS, /subscribe\(\['ocr-result'\]/);
     const block = APP_JS.slice(APP_JS.indexOf("subscribe(['ocr-result']"));
-    const window = block.slice(0, 400);
+    // Window widened from 400 to 1600 chars on 2026-08-20. BUG-268's boundary-3
+    // instrumentation added a comment and a log line above the gate check, which
+    // pushed it past a 400-char window and failed this test without touching the
+    // invariant it guards. Widen the window, never the invariant — a source-shape
+    // window narrow enough to break on a comment reports a defect that is not
+    // there, and the fix people reach for is deleting the assertion.
+    const window = block.slice(0, 1600);
     assert.match(window, /isGateClosed\(pinLockScreen\.lockState\(\)\)/,
       'a locked HUD must not surface OCR text — same invariant as navigate/proactive-speech');
+    // And the verdict must still short-circuit the subscriber. Reading the gate
+    // and rendering anyway would satisfy the match above while breaking the rule.
+    assert.match(window, /if \(gateClosed\) return;|if \(isGateClosed\([^)]*\)\) return;/,
+      'the gate verdict must return early, not merely be computed');
   });
 
   it('captions the result and copies to the clipboard best-effort', () => {

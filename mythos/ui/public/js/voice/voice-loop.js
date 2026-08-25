@@ -15,7 +15,8 @@
 // States: idle -> listening -> processing -> speaking -> listening.
 
 import { utterance, stopRequest, sendMessage } from '../ws.js';
-import { getMicDeviceId, setMicDeviceId, buildAudioConstraints, micErrorMessage } from './mic-device.js';
+import { getMicDeviceId, setMicDeviceId, micErrorMessage, openMicWithFallback } from './mic-device.js';
+import { isVisionQuery } from './vision-trigger.js';
 // Static import is cheap: silero-vad.js only DEFINES functions at module
 // scope — it fetches onnxruntime-web and the ONNX model lazily, inside
 // ensureLoaded(), which is only ever called when VAD_ENGINE==='silero'. A HUD
@@ -26,8 +27,19 @@ const WAKE_WORD = 'mythos';
 const WAKE_PATTERN = new RegExp('^\\s*' + WAKE_WORD + '[,\\s]+', 'i');
 // BUG-020: these four are `let`, not `const` — createVoiceLoop's optional
 // `vad` option can override them per-instance. Values below are the
-// unchanged defaults (zero behavior change unless a caller opts in).
+// defaults and match the previously-hardcoded constants.
+// SILENCE_MS default is 1800. The 2026-08-17 experiment of 900 (faster
+// endpointing) was live-falsified the same day: natural mid-sentence pauses
+// of 0.9–1.8s split one utterance into two clips, MYTHOS answered
+// mid-thought, and the assistantSpeaking half-duplex gate then swallowed the
+// operator's continuation. 1800 restored; env-tunable via VAD_SILENCE_MS.
 let SILENCE_MS = 1800;       // quiet gap that ends an utterance
+// BUG-271 (2026-08-17): these batch-path thresholds are deliberately UNTOUCHED
+// by the Live-path noise gate. live-noise-gate.js (0.02 RMS floor) gates the
+// Gemini Live SEND path only; this file's SPEECH_RMS/MIN_PEAK_RMS gate the
+// batch Whisper path, which is the tested fallback under VOICE_S2S_ENABLED=false
+// and already tuned against this room's ambient (fans/AC/bikes). Two paths,
+// two gates, no shared constant — same reasoning as barge-in-backstop.js's.
 let SPEECH_RMS = 0.035;      // volume threshold marking "speech present" — raised from 0.02 (fans/AC/bikes were clearing it)
 const VAD_TICK_MS = 100;
 let SPEECH_HOLD_TICKS = 3;   // consecutive above-threshold ticks required before recording starts — raised from 2; 300ms sustained filters transient noise (door slam, keyboard, cough, bike pass)
@@ -65,6 +77,7 @@ const NAV_COMMANDS = [
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:backend|terminal|system\s+logs?)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'backend'],
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:conversation|chat|transcript|history)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'conversation'],
   [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?engagements?(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'engagements'],
+  [/^(?:show|open|view|display)\s+(?:my\s+|the\s+)?(?:security|pin|lock)(?:\s+(?:panel|tab|view))?(?:\s|$)/i, 'security'],
 ];
 
 // Close commands — close the top panel or all panels.
@@ -75,8 +88,9 @@ const CLOSE_COMMANDS = [
 ];
 
 // Vision questions are intercepted before the brain, same as NAV_COMMANDS —
-// they need a camera frame attached, which only the client can do.
-const VISION_TRIGGER = /^(what (do you|can you) see|describe (this|what you see)|look at (this|me)|take a look|what am i (holding|showing))/i;
+// they need a camera frame attached, which only the client can do. The phrase
+// list moved to voice/vision-trigger.js (imported above) so it can be tested
+// without a browser; the interception point below is unchanged.
 
 // E2: Strip markdown, HTML, and control characters before passing text to TTS engines.
 // Without this, the browser SpeechSynthesis reads aloud "asterisk asterisk bold asterisk"
@@ -539,6 +553,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     if (speakSession !== session) return;
     if (doneReceived && (lastChunkPlayed || chunkQueue.length === 0) && !playing) {
       stopSpeaking();
+      // Task 6: the reply just finished playing — clear the caption back to
+      // the idle hint instead of leaving the spoken phrase on screen forever.
+      caption('', 'idle');
       finishTurn();
     }
   }
@@ -575,6 +592,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     const finish = () => {
       if (speakSession !== session) return;
       stopSpeaking();
+      // Task 6: same clear-on-finish as maybeFinishTurn() above, for the
+      // non-chunked (speechSynthesis fallback) reply path.
+      caption('', 'idle');
       finishTurn();
     };
     if (window.speechSynthesis && !disposed) {
@@ -619,7 +639,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }
     if (speakingText) stopSpeaking();    // barge-in: user talked over playback
     caption('» ' + command, 'heard');
-    if (VISION_TRIGGER.test(command) && onVisionQuery) {
+    if (isVisionQuery(command) && onVisionQuery) {
       onVisionQuery(command);
       return;
     }
@@ -645,7 +665,13 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
 
   async function ensureMic() {
     if (stream) return stream;
-    stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
+    // BUG-272 W1: shares the stale-device rescue with the wake word and the Live
+    // bridge — one saved id, one recovery, not three.
+    const openedMic = await openMicWithFallback();
+    stream = openedMic.stream;
+    if (openedMic.fallbackFired) {
+      caption('Saved microphone was unavailable — using the system default.', 'error');
+    }
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
@@ -668,7 +694,13 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     } catch (err) {
       // Worklet not supported or module failed to load — degrade to no pre-roll
       // (the old behavior: first 1-3 words may be clipped, but capture works).
-      console.warn('[voice] preroll worklet unavailable, capturing without pre-roll:', err);
+      // Context, not just the message: addModule() reports every cause as the
+      // same "Unable to load a worklet's module", so err alone cannot tell a 404
+      // from an AudioContext whose render thread never started (see the same
+      // note in wakeword.js, operator 2026-08-13).
+      console.warn('[voice] preroll worklet unavailable, capturing without pre-roll:',
+        (err && err.name) || 'Error', (err && err.message) || err,
+        `[ctx.state=${audioCtx && audioCtx.state} sampleRate=${audioCtx && audioCtx.sampleRate}]`);
       prerollNode = null;
     }
     return stream;
@@ -737,13 +769,28 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
       recorder = null;
       chunks = [];
       prerollBuffer = null;
-      if (!loudEnough) return; // never actually got louder than ambient noise — drop silently
+      if (!loudEnough) {
+        // BUG-270: this drop used to be silent — missed speech left zero
+        // evidence anywhere, so "not picking up words" was undiagnosable.
+        // Warn with the measured peak and the floor, and say so in the HUD.
+        console.warn('[voice] clip dropped: peak RMS ' + peakRms.toFixed(4)
+          + ' below floor ' + MIN_PEAK_RMS
+          + ' — speech detected but too quiet (tune VAD_MIN_PEAK_RMS)');
+        caption('🎤 too quiet — not sent', 'error');
+        return;
+      }
       // With pre-roll, the effective clip length includes the pre-roll duration.
       // MIN_CLIP_MS was originally raised to 500 because the first words were
       // being clipped — with pre-roll recovered, we can check the full duration.
       var prerollMs = capturedPreroll ? Math.round(capturedPreroll.length / prerollSampleRate * 1000) : 0;
       var effectiveMs = clipMs + prerollMs;
-      if (effectiveMs < MIN_CLIP_MS || blob.size < MIN_CLIP_BYTES) return;
+      if (effectiveMs < MIN_CLIP_MS || blob.size < MIN_CLIP_BYTES) {
+        // BUG-270: same observability hole as the loudness gate above.
+        console.warn('[voice] clip dropped: ' + effectiveMs + 'ms / ' + blob.size
+          + 'B below minimums (' + MIN_CLIP_MS + 'ms / ' + MIN_CLIP_BYTES + 'B)');
+        caption('🎤 too short — not sent', 'error');
+        return;
+      }
       // Merge pre-roll + recorded audio if a pre-roll snapshot is available.
       if (capturedPreroll && capturedPreroll.length) {
         mergePrerollAndTranscribe(blob, type, capturedPreroll);
@@ -941,6 +988,11 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
 
   async function start() {
     if (active) return true;
+    // BUG-269 defect 3: instant visible feedback, synchronously, before
+    // anything asynchronous — ensureMic() is unbounded on the first press per
+    // session, and a slow press used to look exactly like a lost one. The
+    // compose-bar/orb/hud fan-out treats an unknown state harmlessly.
+    setState('arming');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
       setState('unsupported'); // honest: no mic-recording API in this browser
       return false;
@@ -958,6 +1010,9 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     processing = false;
     setState('listening');
     vadTimer = setInterval(vadTick, VAD_TICK_MS);
+    vadTick(); // BUG-269 defect 3: first VAD tick NOW, not up to a full 100ms
+    // tick later — removes the dead time between arming and the first sample.
+    // vadTick() is a safe no-op if the analyser is somehow gone.
     return true;
   }
 

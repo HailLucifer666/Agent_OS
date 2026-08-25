@@ -186,7 +186,12 @@ describe('the release workflow', () => {
   });
 
   it('publishes with the repository-scoped token and asks for no more permission than it needs', () => {
-    const text = fs.readFileSync(WORKFLOW, 'utf8');
+    // Line endings normalised to \n before ANY regex runs. release.yml is CRLF on
+    // disk, so /\npermissions:\n/ below found nothing and this test reported "the
+    // workflow does not declare permissions" about a workflow that declares them
+    // on line 50 — a test failing for the opposite of the reason it exists, which
+    // is the same shape its own comments already complain about twice.
+    const text = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
     assert.match(text, /GH_TOKEN:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/,
       'the built-in token is the entire reason this route needs no personal one');
     // Assert the GUARANTEE, not the comment layout: exactly one write scope, and
@@ -208,6 +213,26 @@ describe('the release workflow', () => {
     const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
     assert.doesNotMatch(code, /CSC_LINK|CSC_KEY_PASSWORD|secrets\.CSC/,
       'a signing certificate must not be wired into repository secrets before that decision is actually made');
+  });
+
+  it('regenerates release notes from the commit log before the build/publish step', () => {
+    // build/release-notes.md is gitignored (see .gitignore) precisely because
+    // it must never be committed, which means CI's fresh checkout has to
+    // rebuild it itself — otherwise app-builder-lib's getReleaseInfo() finds
+    // nothing and latest.yml's releaseNotes field goes back to being empty.
+    const text = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
+    const notesIdx = text.indexOf('node scripts/build-release-notes.js');
+    const buildIdx = text.indexOf('Build and publish the installer');
+    assert.notEqual(notesIdx, -1, 'the workflow must run scripts/build-release-notes.js');
+    assert.notEqual(buildIdx, -1, 'the workflow must still have its build/publish step');
+    assert.ok(notesIdx < buildIdx,
+      'release notes must be generated BEFORE the build step reads build/release-notes.md');
+  });
+
+  it('checks out full history, which build-release-notes.js needs for git log', () => {
+    const text = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
+    assert.match(text, /fetch-depth:\s*0/,
+      'a shallow checkout would leave git log with no previous-tag range to walk');
   });
 
   it('refuses a tag that disagrees with package.json, and proves latest.yml was produced', () => {

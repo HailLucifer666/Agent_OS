@@ -551,7 +551,11 @@ describe('aether-sensor (Phase 1)', function () {
     });
     sensor.start();
     try {
-      assert.ok(await waitFor(function () { return agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
+      // Wait on the CLIENT-side `connected` flag (the exact gate speak() checks),
+      // not just the server-side client count — under load the server sees the
+      // socket a tick before the client's 'open' handler flips its flag, and
+      // speak() would bail on !connected.
+      assert.ok(await waitFor(function () { return sensor._internal.isConnected() && agg.wss.clients.size === 1; }, 1000), 'sensor must connect');
       var client = [...agg.wss.clients][0];
       var received = new Promise(function (resolve) {
         client.on('message', function (raw) { resolve(JSON.parse(raw.toString())); });

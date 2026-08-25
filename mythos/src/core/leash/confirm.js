@@ -13,12 +13,31 @@
 
 const crypto = require('crypto');
 
-function createConfirmRegistry({ config }) {
+function createConfirmRegistry({ config, onExpire }) {
   const ttlMs = config.LEASH_CONFIRM_TTL_MS;   // exact key, do not paraphrase
-  const pending = new Map(); // confirmId -> { summary, action, expiresAt, connectionId }
+  const pending = new Map(); // confirmId -> { summary, action, expiresAt, connectionId, timer }
 
   function nextId() {
     return 'confirm-' + crypto.randomUUID();
+  }
+
+  // Wave 1 (2026-08-13): an expired confirm used to be swept SILENTLY — only
+  // ever discovered by the next create() call's opportunistic sweep, with no
+  // record anywhere that it happened. The 2026-08-12/13 session's
+  // gmail_send confirm (1 created, 0 completed) is exactly that: the operator
+  // never saw a decline, MYTHOS never learned the send didn't happen, and
+  // nothing in the audit trail distinguishes "operator said no" from "nobody
+  // ever answered". A per-entry timer makes expiry an EVENT, not an absence.
+  function armExpiry(confirmId, entry) {
+    const timer = setTimeout(() => {
+      if (pending.get(confirmId) !== entry) return; // already accepted/rejected
+      pending.delete(confirmId);
+      if (typeof onExpire === 'function') {
+        try { onExpire(confirmId, entry); } catch (_) { /* caller's problem, never ours */ }
+      }
+    }, ttlMs);
+    if (typeof timer.unref === 'function') timer.unref(); // never keeps the process alive
+    return timer;
   }
 
   // create(summary, action, connectionId) -> confirmId. `action` is caller-defined
@@ -32,6 +51,9 @@ function createConfirmRegistry({ config }) {
     // leaves orphaned {summary, action, expiresAt, connectionId} entries that
     // never get swept — unbounded memory growth over a long-running session
     // with reconnects. The Map is typically <10 entries so this scan is cheap.
+    // Still needed alongside armExpiry's timer below: this catches any entry
+    // created before onExpire existed in a long-lived process (a stale timer
+    // reference is harmless, just redundant with this sweep firing first).
     if (pending.size > 0) {
       const now = Date.now();
       for (const [id, entry] of pending) {
@@ -40,8 +62,14 @@ function createConfirmRegistry({ config }) {
     }
     connectionId = connectionId === undefined ? null : connectionId;
     const confirmId = nextId();
-    pending.set(confirmId, { summary: summary, action: action, expiresAt: Date.now() + ttlMs, connectionId: connectionId });
+    const entry = { summary: summary, action: action, expiresAt: Date.now() + ttlMs, connectionId: connectionId, timer: null };
+    entry.timer = armExpiry(confirmId, entry);
+    pending.set(confirmId, entry);
     return confirmId;
+  }
+
+  function clearExpiry(entry) {
+    if (entry && entry.timer) clearTimeout(entry.timer);
   }
 
   // accept(confirmId, connectionId) -> the stored action, or null if unknown,
@@ -52,6 +80,7 @@ function createConfirmRegistry({ config }) {
     if (!entry) return null;
     if (entry.connectionId !== null && entry.connectionId !== connectionId) return null;
     pending.delete(confirmId);
+    clearExpiry(entry);
     if (Date.now() > entry.expiresAt) return null;
     return entry.action;
   }
@@ -64,6 +93,7 @@ function createConfirmRegistry({ config }) {
     const entry = pending.get(confirmId);
     if (!entry) return false;
     if (entry.connectionId !== null && entry.connectionId !== connectionId) return false;
+    clearExpiry(entry);
     return pending.delete(confirmId);
   }
 

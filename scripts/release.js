@@ -32,6 +32,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const buildReleaseNotes = require('./build-release-notes');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const PKG_PATH = path.join(REPO_ROOT, 'package.json');
@@ -119,7 +120,7 @@ function evaluatePreflight(facts) {
   }
 
   if (!f.signing) {
-    warnings.push('CSC_LINK is not set — this will be an UNSIGNED build. Windows SmartScreen warns on install, and electron-updater cannot verify a downloaded installer (fine today: autoDownload is false and quitAndInstall is never called)');
+    warnings.push('CSC_LINK is not set — this will be an UNSIGNED build. Windows SmartScreen warns on install. Updates still install: electron-updater skips (does not fail) the signature check when app-update.yml has no publisherName, and the sha512 in latest.yml still gates integrity — see CONTRIBUTING.md for the risk that signing would close');
   }
 
   return { ok: blockers.length === 0, blockers, warnings };
@@ -237,6 +238,10 @@ function main(argv) {
   }
 
   writeVersion(version);
+  // Must exist on disk before the electron-builder step runs (it is one of the
+  // `steps` below) — that is the only point at which anything reads it, via
+  // app-builder-lib's getReleaseInfo() resolving build/release-notes.md.
+  buildReleaseNotes.main([]);
   for (const [cmd, cmdArgs] of steps) {
     console.log(`+ ${cmd} ${cmdArgs.join(' ')}`);
     const res = run(cmd, cmdArgs, { stdio: 'inherit' });

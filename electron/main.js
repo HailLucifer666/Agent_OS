@@ -12,6 +12,45 @@
 // injects decrypted values ONLY into the child process env (server-side). The
 // preload surface (preload.js) exposes no value-returning channel to the
 // renderer — names + booleans only.
+//
+// ---------------------------------------------------------------------------
+// THIS FILE IS DELIBERATELY NOT SPLIT, and that is a decision, not neglect.
+// (Audit item 13, Phase 6, 2026-08-22. Pinned by
+// mythos/test/electron-main-stays-whole.test.js.)
+//
+// It is well over 2,500 lines against a house limit of 800, and it stays that
+// way. (No exact figure here on purpose — a number a human types is a number
+// nobody updates. The ratchet test holds the real one.)
+//
+// The reason is load order. Several Electron exports are lazy getters that
+// THROW until the app emits 'ready' — screen, powerMonitor, session,
+// desktopCapturer among them — and merely reading the property counts as using
+// it. A defensive `typeof x.method !== 'function'` check is enough to kill the
+// app. That is not hypothetical here: the cursor-overlay slice shipped with 16
+// passing tests, a walked installer artefact and 2,598 green tests, and the
+// shell would not start at all. The guard WAS the crash. Root CLAUDE.md records
+// it in full.
+//
+// Splitting a file moves requires around, and moving requires is exactly the
+// operation that reorders when those getters are first touched. Worse, the
+// suite cannot see the damage: unit tests inject a fake `screen`, so they stay
+// green while the real app is dead on launch. A green suite cannot tell you the
+// desktop app boots — the only detector is starting it.
+//
+// So the trade is: a file over the limit, which is a readability cost paid
+// continuously, versus a class of unbootable-app bug that no test catches. The
+// file stays whole.
+//
+// WHAT IS ENFORCED INSTEAD, so this is not merely a promise:
+//   - ready-gated Electron APIs are required lazily AT THEIR USE SITE, never
+//     destructured from require('electron') at module scope. The destructure on
+//     the next line is limited to exports that are safe before ready.
+//   - mythos/test/electron-main-stays-whole.test.js asserts that, and asserts
+//     this decision comment still exists — so splitting the file means first
+//     deleting the explanation of why not to.
+//   - the file-size ratchet (mythos/test/file-size-ratchet.test.js) records the
+//     current size as a ceiling, so the exception cannot quietly get bigger.
+// ---------------------------------------------------------------------------
 
 const { app, BrowserWindow, ipcMain, safeStorage, globalShortcut } = require('electron');
 const path = require('node:path');
@@ -22,7 +61,33 @@ const child_process = require('node:child_process');
 // checkForUpdates() below for why it is required lazily at its use site.
 const { createMediaWindowController } = require('./media-window');
 const { createCursorOverlayController } = require('./cursor-overlay-window');
-const { resolveVaultRoot } = require('./vault-migration');
+const { createHotkeyLatch } = require('./hotkey-latch');
+const { resolveVaultRoot, adoptSiblingVault, adoptSiblingUserDataFiles } = require('./vault-migration');
+const { recryptForeignStore } = require('./keystore-recrypt');
+const { createNoWindowRelaunchPrompt } = require('./relaunch-no-window');
+const { rotateLogIfOver } = require('./log-rotate');
+const settingsStore = require('../mythos/src/core/config/settings-store');
+
+// ---- ONE app identity -----------------------------------------------------------
+// MUST be the first thing that runs, and specifically before ANY
+// app.getPath('userData') call — Electron caches the userData path on first use,
+// so a later setName is silently ignored.
+//
+// THE BUG (operator, 2026-08-11): package.json `name` is "agent-os" while
+// build.productName is "MYTHOS", and nothing called setName. Electron derives
+// userData from productName when packaged and from `name` otherwise, so the
+// operator's machine ended up with THREE independent brains and no migration
+// between them:
+//   %APPDATA%\Electron  — the dev run (`npm start`, Start Electron App.bat)
+//   %APPDATA%\agent-os  — the installed .exe
+//   %APPDATA%\MYTHOS    — where build/installer.nsh writes install-selection.json
+// The install's vault was therefore a second, empty brain: no
+// Identity/boundaries.md (which clamped the autonomy ceiling to Tier 1 and
+// produced the approval-prompt incident), no operator profile or style, no
+// contacts, and none of the 8 learned skills. Pinning the name to the product
+// name collapses all three onto one path; adoptSiblingVault (below, and in
+// ./vault-migration.js) carries an existing vault across on first boot.
+app.setName('MYTHOS');
 
 // Disable Chromium's background timer/media throttling process-wide. Pairs with
 // per-window backgroundThrottling:false below: the YouTube iframe's media
@@ -51,9 +116,52 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 //   2. the child writes to its own log file, not the inherited pipe (see
 //      startChild). The parent's stdout/stderr are left untouched for `npm
 //      start` from a terminal, where they're useful.
+// ---- main.log ----------------------------------------------------------------
+// stderr is written to a pipe nobody reads when the app is launched by
+// double-click, so until 2026-08-13 a GUI-launched main process left NO evidence
+// of anything: "it opens and closes immediately" had to be diagnosed from file
+// timestamps, and a 40-minute silent update was indistinguishable from a dead
+// app. Every line now also lands in <userData>/logs/main.log.
+//
+// Capped by ROTATION, not by truncation (BUG-273 D4): truncating at the cap threw
+// away the run leading up to the overflow, which is the only part anybody reads after
+// a crash. userData (not the install tree) for the same reason as everything else here
+// — writable without elevation, survives updates.
+const MAIN_LOG_MAX_BYTES = 2 * 1024 * 1024;
+// BUG-273 D4 — the child log had NO ceiling before this slice: it was opened with
+// flags:'w' on every startChild(), and truncate-per-run WAS the bound. Appending
+// across runs (so a crash-restart cannot erase the crash that caused it) needs a real
+// one. 8 MB is sized from measurement, not taste: a real installed session was
+// recorded growing 42 KB -> 363 KB in about two hours, so this is roughly forty hours
+// of ordinary logging per generation, and 16 MB is the total on-disk ceiling for the
+// two generations kept.
+const CHILD_LOG_MAX_BYTES = 8 * 1024 * 1024;
+let mainLogPath = null;
+function mainLogFile() {
+  if (mainLogPath) return mainLogPath;
+  // Safe before app.whenReady() (unlike `screen`/`powerMonitor`), and safe here
+  // specifically because app.setName('MYTHOS') runs at the top of this file.
+  const dir = path.join(app.getPath('userData'), 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  mainLogPath = path.join(dir, 'main.log');
+  return mainLogPath;
+}
+
+// BUG-273 D4 — the logs are capped by ROTATING, never by erasing. Both mechanisms
+// this replaced (truncateSync(file, 0) here, flags:'w' in startChild) threw away the
+// run leading up to the failure, which is the only part anybody reads after a death.
+// The rules and the reasoning live in ./log-rotate.js, where they can be tested for
+// real rather than shape-asserted.
 function log(...args) {
   const line = args.map((a) => (typeof a === 'string' ? a : safeStringify(a))).join(' ') + '\n';
   try { process.stderr.write(line); } catch { /* broken pipe in GUI mode — swallow */ }
+  try {
+    const file = mainLogFile();
+    try {
+      rotateLogIfOver(file, MAIN_LOG_MAX_BYTES);
+    } catch { /* first write — no file to cap yet */ }
+    fs.appendFileSync(file, line);
+  } catch { /* a log that cannot be written must never take the app down */ }
 }
 function safeStringify(v) {
   try { return v instanceof Error ? v.message : JSON.stringify(v); } catch { return String(v); }
@@ -66,6 +174,54 @@ function safeStringify(v) {
 // strictly better failure mode than a dead desktop app.
 process.on('uncaughtException', (err) => {
   log('main process uncaughtException:', err && err.stack ? err.stack : err);
+});
+
+// BUG-273 D4 — FOUR WAYS THIS APP DISAPPEARS THAT USED TO LOG NOTHING AT ALL.
+// The 2026-08-18 session died after ~2 minutes with no Crashpad dump, no child exit
+// line and no trail, and it was filed as "needs more evidence". Three of these four
+// would have produced that evidence, and none of them was handled.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Nothing: each is a distinct Electron/Node event with a
+// single meaning, so there is no heuristic here to mis-fire. They only ever add a line.
+// Q8 — PIN THE DISPOSITION: observers only. Nothing here changes behaviour — no quit,
+// no restart, no reload. A diagnostic that also acts is how a wrong diagnosis becomes
+// an outage, and the restart policy is deliberately left where it already is.
+
+// `uncaughtException` above does NOT catch a rejected promise, and most of this file is
+// async — an async throw in the main process left no line whatsoever.
+process.on('unhandledRejection', (reason) => {
+  log('main process unhandledRejection:', reason && reason.stack ? reason.stack : reason);
+});
+
+// The HUD renderer dying while the main process lives on is the exact shape of an
+// "it just stopped responding" report: blank or vanished window, process still there.
+app.on('render-process-gone', (_event, contents, details) => {
+  let url = '';
+  try { url = contents && contents.getURL ? contents.getURL() : ''; } catch { url = ''; }
+  log('render-process-gone:', JSON.stringify({
+    reason: details && details.reason,
+    exitCode: details && details.exitCode,
+    hud: isHudContents(contents),
+    url,
+  }));
+});
+
+// A GPU or utility process fault takes the window with it, and the main process
+// survives to write it down — which is the only reason this is diagnosable at all.
+app.on('child-process-gone', (_event, details) => {
+  log('child-process-gone:', JSON.stringify({
+    type: details && details.type,
+    reason: details && details.reason,
+    exitCode: details && details.exitCode,
+    name: details && details.name,
+  }));
+});
+
+// THE LINE THAT MADE D4 UNANSWERABLE BY ITS ABSENCE. With nothing written for an
+// orderly exit, a log that simply stops is equally consistent with a clean quit, a
+// kill, and a vanish — so no amount of reading it could ever settle which happened.
+app.on('quit', (_event, exitCode) => {
+  log('app quit: orderly exit, code=' + exitCode);
 });
 
 // ---- asar-unpack path translation (H11) ---------------------------------------
@@ -91,6 +247,39 @@ process.on('uncaughtException', (err) => {
 function toRealPathIfPackaged(p) {
   if (!app.isPackaged) return p;
   return p.split(`${path.sep}app.asar${path.sep}`).join(`${path.sep}app.asar.unpacked${path.sep}`);
+}
+
+// When was this build made? See MYTHOS_BUILD_TIME at the fork below for why the
+// version string cannot answer that. The asar's own mtime is the one build
+// identifier every packaged install carries without a build-time codegen step,
+// and process.resourcesPath is only meaningful when packaged. Best-effort: a
+// missing/unreadable archive returns '' and the badge falls back to the version.
+// WHICH BUILD WROTE THIS LOG. app.getVersion() is correct in a PACKAGED build —
+// it reads the asar's own package.json through Electron — and wrong in dev, where
+// there is no asar and it returns ELECTRON's version instead. The first boot marker
+// this file ever wrote said "MYTHOS 43.3.0", which is Electron 43.3.0.
+//
+// That is not a cosmetic slip in this repo. The operator spent 2026-08-12 with four
+// different builds and no way to tell them apart from inside the app, and the HUD
+// badge on a 0.1.7 install read "v0.1.0" because a version was resolved from the
+// wrong package.json. A boot marker exists to say WHICH RUN a log belongs to; one
+// that names the wrong product is worse than no marker, because it will be believed.
+//
+// Every other app.getVersion() in this file is on the auto-update path, which runs
+// only when packaged, so they are all correct where they stand and are left alone.
+function appVersionForLog() {
+  if (app.isPackaged) return app.getVersion();
+  try { return require('../package.json').version + '-dev'; }
+  catch (_) { return 'unknown-dev'; }
+}
+
+function buildTimeISO() {
+  if (!app.isPackaged) return '';
+  try {
+    return fs.statSync(path.join(process.resourcesPath, 'app.asar')).mtime.toISOString();
+  } catch (_) {
+    return '';
+  }
 }
 
 // ---- resolved paths / ports (never hardcoded) ---------------------------------
@@ -119,8 +308,31 @@ const BIND = process.env.MYTHOS_BIND || '127.0.0.1';
 // Poll GET /health until the server answers { ok: true } before loading the
 // window — never load a dead URL. Bounded retries with backoff so a server that
 // never comes up fails loudly (via log()) instead of hanging.
-const PROBE_ATTEMPTS = 50;
+//
+// 50 attempts (10s) was NOT enough and produced the exact failure it exists to
+// prevent — reported from a real launch 2026-08-10, diagnosed from that run's
+// own child log:
+//
+//   08:12:40.188  config.loaded          (child process alive)
+//   08:12:45.751  edge-tts.started
+//   08:12:47.224  piper.started
+//   08:12:47.259  server.listening       <- FIRST moment a socket exists
+//
+// The child does not call app.listen() until the very END of its boot
+// (server/index.js), i.e. AFTER it spawns the edge-tts and piper sidecars — so
+// time-to-first-socket was ~11.5s from fork against a 10s budget. Every probe
+// was refused, and the window then loaded a port nothing was listening on
+// (Chromium: ERR_CONNECTION_REFUSED) in front of a server that went on to run
+// happily for another four minutes. So:
+//   - 150 attempts (30s) for the pre-window wait: the failing case was a WARM
+//     boot; a cold cache or slower disk exceeds 10s routinely.
+//   - and if even that expires, keep probing in the background and reload the
+//     window when the server does arrive (waitForLateReady below). Giving up
+//     permanently is what turned a slow boot into a dead HUD.
+const PROBE_ATTEMPTS = 150;
 const PROBE_INTERVAL_MS = 200;
+// Second-chance budget, spent only after PROBE_ATTEMPTS has already expired.
+const LATE_PROBE_ATTEMPTS = 300; // a further 60s at the same interval
 
 function probeHealth(host, port, attemptsLeft) {
   return new Promise((resolve) => {
@@ -148,6 +360,30 @@ function probeHealth(host, port, attemptsLeft) {
     };
     tryOnce();
   });
+}
+
+// Second chance for a server that is merely slow rather than dead. Called ONLY
+// after the pre-window budget expired and the window has already loaded (and
+// therefore failed to load) the URL — so its one job is to reload that window
+// if the server shows up late. Reuses probeHealth rather than opening a second
+// polling path: one probe implementation, one place for its semantics to live.
+//
+// It reloads instead of loadURL()ing so the window keeps whatever identity it
+// already has, and it checks isDestroyed() because the operator may well have
+// closed the error page while we were still waiting — reloading a destroyed
+// BrowserWindow throws.
+async function waitForLateReady() {
+  const startedAt = Date.now();
+  const ready = await probeHealth(BIND, PORT, LATE_PROBE_ATTEMPTS);
+  if (!mainWindow || mainWindow.isDestroyed()) return; // window closed while we waited
+  if (!ready) {
+    log(`mythos server still not ready after a further ${Date.now() - startedAt}ms — giving up on the `
+      + `automatic reload. Check the server log: ${childLogPath()}`);
+    return;
+  }
+  log(`mythos server became ready ${Date.now() - startedAt}ms late — reloading the window.`);
+  try { mainWindow.loadURL(`http://${BIND}:${PORT}`); }
+  catch (err) { log('late reload failed:', err && err.message); }
 }
 
 // ---- safeStorage-backed key store --------------------------------------------
@@ -221,9 +457,88 @@ function decryptedKeysForChild() {
 // themselves in .env — we deliberately do NOT inject it as one of "our" keys,
 // so it never appears in getKeyNames()/hasKey() and is never echoed anywhere.
 
+// ---- Task D4: the app authenticates itself ------------------------------------
+// Whatever the source (keys.json via decryptedKeysForChild(), or a plain .env
+// MYTHOS_AUTH_TOKEN for headless/Docker), the main process already holds the
+// same value it forks into the child's env (startChild() below) — the server
+// it is about to talk to trusts exactly that secret. Reading it back here adds
+// no new exposure: this function returns nothing to the renderer and adds no
+// preload channel; it only lets the main process present a credential it
+// already possesses. Same precedence as startChild()'s env merge, so this can
+// never disagree with what the server itself will accept.
+function resolveAuthTokenForPriming() {
+  return decryptedKeysForChild().MYTHOS_AUTH_TOKEN || process.env.MYTHOS_AUTH_TOKEN || '';
+}
+
+// The app holds its own credential (see resolveAuthTokenForPriming above).
+// Asking the operator to paste it back after every restart is asking a human
+// to be a password manager for a secret the process already has. A loopback
+// install has no token at all (/health reports authRequired:false) and never
+// reaches past the first line — untouched, per AD-8.
+//
+// A failure here (bad token, rate limit, combined-PIN 409, server not up yet)
+// must still land the operator on the existing gate with the server's
+// verbatim message: nothing is swallowed, and nothing beyond a status code is
+// ever logged — the token itself must never reach a URL, a log line, or an
+// error message.
+async function primeAuthSession(win, token, port) {
+  if (!token) return;
+  let res;
+  try {
+    res = await fetch(`http://127.0.0.1:${port}/api/auth/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+  } catch (err) {
+    // Connection refused (server not up yet) etc. — never fatal; the operator
+    // still sees the ordinary gate, and waitForLateReady() already covers the
+    // "server was late" race for the window itself.
+    log('auth.session-prime: request failed —', err && err.message);
+    return;
+  }
+  if (!res.ok) {
+    log('auth.session-prime: exchange failed, status', res.status);
+    return;
+  }
+  const setCookie = res.headers.get('set-cookie') || '';
+  const value = (/mythos_token=([^;]+)/.exec(setCookie) || [])[1];
+  if (!value) {
+    log('auth.session-prime: 200 response carried no mythos_token cookie');
+    return;
+  }
+  await win.webContents.session.cookies.set({
+    url: `http://127.0.0.1:${port}`,
+    name: 'mythos_token',
+    value,
+    httpOnly: true,
+    sameSite: 'lax',
+  });
+}
+
 // ---- child lifecycle ----------------------------------------------------------
 let child = null;
 let mainWindow = null;
+// Set from unfinishedUpdate() just before the FIRST startChild() call of this
+// boot, and forwarded to the child once as MYTHOS_UPDATE_RESULT (see
+// startChild()'s env block below) — then cleared, so a later re-fork (the
+// exit-handler's backoff restart, or mythos:restart-server) never resends a
+// stale report. Single-shot on the wire, same contract as the attempt file
+// unfinishedUpdate() itself unlinks after reading.
+let pendingUpdateResult = null;
+// True once we are on the way out (quit, or an update handover). Read by the
+// child's exit handler, which must not resurrect the server while the app is
+// shutting down — during an update that respawned child lands inside the very
+// directory the installer is renaming. See beginInstall().
+let isQuitting = false;
+// SEPARATE from isQuitting on purpose (BUG-225). before-quit used to infer
+// "beginInstall already pushed the vault" from isQuitting being pre-set — the
+// only thing that could set it before before-quit ran. window-all-closed now
+// also sets isQuitting early (to close the re-fork race), which would make
+// that inference skip the vault push on EVERY ordinary quit. An explicit flag
+// keeps the two meanings distinct: isQuitting = "no restarts", this = "the
+// installer handover already did the quit-time work".
+let installerHandover = false;
 
 // security-reviewer B2/H6 (2026-08-08): the key-store IPC channels below used to
 // answer ANY sender holding a contextBridge handle to this preload — including
@@ -308,6 +623,95 @@ ipcMain.handle('mythos:has-key', async (event, name) => {
   return Object.prototype.hasOwnProperty.call(loadStore(), name);
 });
 
+// mythos:restart-server — re-fork the server child so keys stored a moment ago
+// actually reach it.
+//
+// Why this exists: decryptedKeysForChild() runs inside startChild(), i.e. the
+// decrypted values are injected into the child's env at fork() time and never
+// afterwards. So a key saved through the setup screen was genuinely stored and
+// genuinely not in effect, and the only remedy the product offered was "restart
+// MYTHOS" — a full app relaunch for what is a child-process concern. The first-
+// run wizard's last step calls this instead.
+//
+// Killing the child is enough: its 'exit' handler (startChild) already re-forks
+// with backoff, and a fresh fork re-reads the key store. No new lifecycle path,
+// so nothing else has to learn about this one. Carries the same HUD-only sender
+// check as the key channels — a page that could trigger server restarts at will
+// would have a cheap denial-of-service.
+ipcMain.handle('mythos:restart-server', async (event) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:restart-server: denied — sender is not the HUD window');
+  }
+  if (child) {
+    stopChild();     // kill(); the exit handler re-forks on the backoff floor
+    return { ok: true, restarting: true };
+  }
+  // No child right now: either it is mid-restart already or it never started.
+  // startChild() no-ops when one exists, so this is safe either way.
+  startChild();
+  return { ok: true, restarting: true };
+});
+
+// ---- non-secret settings (config.json) ----------------------------------------
+// The counterpart to the key store above, and the other half of the installer-
+// parity fix. keys.json holds SECRETS, encrypted, and never comes back across
+// the bridge. config.json holds the ~140 non-secret schema keys the packaged
+// build previously had no way to set at all — VOICE_S2S_ENABLED,
+// VOICE_TTS_PROVIDER, WAKEWORD_ENABLED, AUTONOMOUS_MAX_TIER, the AETHER_*/
+// DSH_* block, the local tool paths. Plain text on purpose: it is read by the
+// forked server through MYTHOS_SETTINGS_PATH, and settings-store.js refuses to
+// write a secret-shaped key into it.
+//
+// Same directory as keys.json, for the same reason: userData is OS-managed,
+// survives reinstall and update, and needs no write access to the install tree.
+function settingsPath() {
+  return path.join(app.getPath('userData'), 'config.json');
+}
+
+// Reading is a value-returning channel, which the key store deliberately does
+// NOT have (AD-8). That is not a contradiction: these keys are non-secret by
+// construction, and settings-store.js's own secret filter is applied again here
+// so a hand-written secret in config.json still never reaches the renderer.
+ipcMain.handle('mythos:get-settings', async (event) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:get-settings: denied — sender is not the HUD window');
+  }
+  const read = settingsStore.readSettings({ settingsPath: settingsPath() });
+  const values = {};
+  for (const [name, value] of Object.entries(read.values)) {
+    if (settingsStore.isSecretShaped(name)) continue; // presence is the server's story to tell
+    values[name] = value;
+  }
+  return {
+    file: read.file,
+    values,
+    unknown: read.unknown,
+    dropped: read.dropped,
+    error: read.error || null,
+  };
+});
+
+ipcMain.handle('mythos:set-setting', async (event, name, value) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:set-setting: denied — sender is not the HUD window');
+  }
+  // The name lands verbatim in the child's env at fork() (startChild below), so
+  // the env-injection denylist that guards mythos:set-key guards this too. In
+  // practice no schema key collides with it, which is exactly why the check must
+  // be here rather than assumed.
+  if (typeof name === 'string' && ENV_INJECTION_DENYLIST.has(name.toUpperCase())) {
+    return { ok: false, error: 'this key name is reserved (env-injection vector) and cannot be stored' };
+  }
+  const res = settingsStore.writeSetting({ name, value, settingsPath: settingsPath() });
+  if (!res.ok) return res;
+  // Deliberately does NOT restart the server. The wizard/panel calls
+  // mythos:restart-server once, after a batch of edits — one re-fork for ten
+  // changed keys, not ten. Saying "saved" while the running child still has the
+  // old value is the same dishonesty interpretStoreResult already refuses, so
+  // the flag is returned rather than hidden.
+  return { ok: true, needsRestart: true, cleared: res.cleared === true };
+});
+
 // Stage 5 (BUG-075) — routes 'ui.open-web' (relayed from the server child over
 // the fork() IPC channel below — see server/index.js's process.send() call in
 // its bus.subscribe('ui.open-web', ...) handler) into a real second
@@ -374,31 +778,205 @@ function childLogPath() {
 
 function startChild() {
   if (child) return;
-  // Reopen the log stream per run (truncates, so it reflects the latest boot,
-  // not an accumulating tail). Append-mode would grow without bound across a
-  // crash-restart loop; truncate-on-start keeps it bounded and current.
-  try { childLogStream = fs.createWriteStream(childLogPath(), { flags: 'w' }); }
+  // BUG-225: never re-fork once quitting has begun. The child's exit handler
+  // checks isQuitting at exit time, but a restart scheduled during the
+  // window-all-closed -> before-quit gap can still land here after the quit
+  // started; this guard closes the race at the destination too, not only at
+  // the source.
+  if (isQuitting) {
+    log('startChild: suppressed — app is quitting');
+    return;
+  }
+  // BUG-273 D4 — THIS FUNCTION IS THE RESTART PATH, NOT ONLY THE BOOT PATH.
+  // It used to open the log with flags:'w'. The child's own exit handler below
+  // re-forks through here after a 1s backoff, so a crashing child had its log
+  // ERASED BY ITS OWN RESTART about a second later, every time — and in a crash
+  // loop only the last and shortest attempt survived. That is precisely the
+  // reported symptom of D4: a session that died and left nothing behind.
+  //
+  // The old comment was right that append-mode grows without bound across a
+  // crash loop. So the bound moved to a real size cap with one kept generation
+  // (rotateLogIfOver, see the logging block at the top of this file) instead of
+  // being paid for by deleting the evidence.
+  //
+  // The path is unchanged on purpose: scripts/verify-voice-session.js reads this
+  // file by name, and a per-run filename would split one voice session in two.
+  rotateLogIfOver(childLogPath(), CHILD_LOG_MAX_BYTES);
+  try { childLogStream = fs.createWriteStream(childLogPath(), { flags: 'a' }); }
   catch (err) { log('could not open child log:', err.message); }
+  // Appending across runs is only readable if each run says where it starts.
+  // Without this, "the log ends here" and "the log was overwritten here" are
+  // indistinguishable — which is half of why D4 could not be answered.
+  try {
+    if (childLogStream) {
+      childLogStream.write('--- boot: MYTHOS ' + appVersionForLog() + ' pid=' + process.pid
+        + ' at ' + new Date().toISOString() + ' ---\n');
+    }
+  } catch (err) { log('could not write the child log boot marker:', err.message); }
 
   // B3: resolve + (one-time, best-effort) migrate the vault BEFORE fork so
   // the child never even sees the install-tree default. Explicit env (the
   // operator's own .env, render.yaml's /data/vault) always wins inside
   // resolveVaultRoot and skips migration entirely.
+  // The vault is not the only thing the app.setName('MYTHOS') rename orphaned:
+  // keys.json and config.json sit directly in userData, so the operator's real
+  // key store stayed at %APPDATA%\agent-os\keys.json while this build read
+  // %APPDATA%\MYTHOS\keys.json and reported every provider key missing — which
+  // is why a fresh install re-ran the setup wizard over a machine that had been
+  // configured for weeks. Must happen BEFORE decryptedKeysForChild() in the fork
+  // below, or the adopted keys would first reach the child one launch late.
+  adoptSiblingUserDataFiles({
+    userDataDir: app.getPath('userData'),
+    siblingUserDataNames: ['agent-os', 'Electron'],
+    log,
+  });
+
+  // ...and the adoption ALONE is not enough (operator, 2026-08-13). keys.json
+  // was copied across on 2026-08-12 and the wizard still asked for all 9 keys,
+  // because safeStorage's ciphertext is per-PROFILE, not per-Windows-user:
+  // Chromium's OSCrypt key lives in each profile's `Local State`. So the copy
+  // could only ever deliver blobs THIS profile cannot decrypt — measured as
+  // `safeStorage: failed to decrypt "<name>"` for every key, every boot, which
+  // is also why Groq STT had no key and health reported stt-failed.
+  // recryptForeignStore re-encrypts them under this profile's key, using the
+  // source profile's Local State key (read-only) to recover the plaintext. It
+  // skips anything that already decrypts, so it is safe to run on every boot.
+  // Never fatal: the app already boots with zero keys, so a recovery failure
+  // must land in the log, not in the operator's face.
+  try {
+    const recrypt = recryptForeignStore({
+      userDataDir: app.getPath('userData'),
+      siblingProfileDirs: ['agent-os', 'Electron']
+        .map((name) => path.join(path.dirname(app.getPath('userData')), name)),
+      safeStorage,
+      log,
+    });
+    if (recrypt.recovered.length || recrypt.failed.length) {
+      log(`keystore-recrypt: ${recrypt.recovered.length} recovered, ${recrypt.failed.length} unrecoverable, `
+        + `${recrypt.skipped.length} already usable`);
+    }
+  } catch (err) {
+    log('keystore-recrypt: recovery pass failed (continuing):', err && err.message);
+  }
+
   const vaultRoot = resolveVaultRoot({
     explicitEnv: process.env.MYTHOS_VAULT_ROOT,
     oldVaultDir: OLD_VAULT_DIR,
     userDataDir: app.getPath('userData'),
+    // Installer parity: before falling back to the install-tree vault, look for
+    // a vault this machine already has under a SIBLING userData name. See
+    // app.setName at the top of this file for how three of them came to exist,
+    // and adoptSiblingVault in ./vault-migration.js for how one is chosen.
+    siblingUserDataNames: ['agent-os', 'Electron'],
     log,
   });
 
   child = child_process.fork(SERVER_ENTRY, [], {
     cwd: MYTHOS_DIR, // .browser-agent.pid etc. still resolve to mythos/
-    env: { ...process.env, ...decryptedKeysForChild(), MYTHOS_VAULT_ROOT: vaultRoot },
+    env: {
+      ...process.env,
+      ...decryptedKeysForChild(),
+      MYTHOS_VAULT_ROOT: vaultRoot,
+      // Installer parity — where the child reads its non-secret settings.
+      // Injected rather than derived server-side because only the main process
+      // knows Electron's userData path; settings-store.js falls back to a file
+      // beside the vault when this is absent (headless/Docker/tests).
+      MYTHOS_SETTINGS_PATH: settingsPath(),
+      // Downloaded model weights (wake word, Silero VAD, Piper voices) and the
+      // adb platform-tools. userData for the same three reasons as everything
+      // else here: writable without elevation, survives an update, survives a
+      // reinstall. The install tree can do none of those — build.files excludes
+      // mythos/ui/public/models entirely, and an update replaces the tree.
+      // See mythos/src/core/setup/model-paths.js.
+      MYTHOS_MODELS_DIR: path.join(app.getPath('userData'), 'models'),
+      // PACKAGED-BUILD SIGNAL. The packaged install tree ships no models
+      // (build.files excludes ui/public/models — deliberate, the CC BY-NC-SA
+      // licensing gate), so modelSearchDirs must stop searching it there or a
+      // dev machine's leftovers arm the wake word in a build that is dead for
+      // everyone else (2026-08-15 RCA). The server child cannot see
+      // app.isPackaged itself, hence the injection. Empty in dev, where the
+      // install tree stays a legitimate search dir.
+      MYTHOS_PACKAGED: app.isPackaged ? '1' : '',
+      MYTHOS_TOOLS_DIR: path.join(app.getPath('userData'), 'tools'),
+      // WHICH BUILD IS THIS. A packaged install ships no .git, so
+      // identity/version.js can only report the package.json version — and the
+      // operator spent 2026-08-12 with four different 0.1.4 builds, an install
+      // a day older than the fixes it was supposed to contain, and no way to
+      // tell from inside the app. The version alone cannot answer it; a build
+      // timestamp can. Derived, never hardcoded: the mtime of the archive this
+      // code is running out of. Empty string in dev (no asar), where
+      // version.js's git path already gives a better answer.
+      MYTHOS_BUILD_TIME: buildTimeISO(),
+      // WHICH VERSION IS THIS. identity/version.js used to derive it by walking
+      // four directories up from src/core/identity to reach the app's
+      // package.json — which resolves to resources/app.asar.unpacked/package.json
+      // in a packaged build, and THAT FILE DOES NOT EXIST: build.files only
+      // unpacks mythos/** and node_modules. So it silently fell through to
+      // mythos/package.json, whose version has been 0.1.0 for months, and the
+      // HUD badge on a 0.1.7 install read "v0.1.0" (operator, 2026-08-13).
+      // app.getVersion() reads the asar's own package.json through Electron:
+      // the same number the installer names, the updater compares, and the
+      // release asset carries. Injected rather than resolved, for the same
+      // reason as MYTHOS_BUILD_TIME above — only the main process can know it.
+      MYTHOS_APP_VERSION: app.getVersion(),
+      // WHAT THE LAST UPDATE DID, if anything — unfinishedUpdate()'s result,
+      // read in whenReady() BEFORE this fork (see pendingUpdateResult above).
+      // JSON, not a file: this repo has a documented divergence where the
+      // packaged app and the batch launcher use DIFFERENT vault directories,
+      // so a file handoff would land in the wrong one. Empty string when there
+      // is nothing to report — mythos/src/core/identity/update-report.js reads
+      // this and must be able to tell "nothing happened" from "malformed".
+      MYTHOS_UPDATE_RESULT: pendingUpdateResult ? JSON.stringify(pendingUpdateResult) : '',
+    },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], // stdout+stderr → our log stream
   });
+  // Single-shot on the wire: cleared immediately after being placed in the
+  // env above, so the exit-handler's backoff re-fork (or a manual
+  // mythos:restart-server) does not resend a report from an update that
+  // finished boots ago.
+  pendingUpdateResult = null;
   if (childLogStream) {
     child.stdout.pipe(childLogStream);
     child.stderr.pipe(childLogStream);
+  }
+
+  // BUG-272 T2 — hand a URL to the operator's real browser.
+  //
+  // SECURITY, and the reason this is an allowlist rather than a pass-through:
+  // shell.openExternal hands the string to the OS handler for its scheme, so it
+  // is not "open a web page", it is "run whatever is registered for this
+  // protocol". A file: URL opens Explorer on an arbitrary path; ms-msdt:,
+  // search-ms:, and friends have been live Windows RCE vectors; a custom scheme
+  // reaches any application that registered one. The URL here originates from a
+  // TOOL CALL the model composed, so it is attacker-influenceable by anything
+  // that reached the model's context — a web page it summarised, an email, a
+  // filename. Reject at the edge: http and https only, parsed by WHATWG URL
+  // rather than string-matched, so "https:/\evil" and similar cannot slip past a
+  // startsWith check.
+  //
+  // Returns a verdict instead of throwing, because the caller must be able to
+  // report the refusal honestly — a silently-dropped URL is the bug this fixes.
+  function openExternalUrl(raw) {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return { opened: false, reason: 'no url' };
+    let parsed;
+    try { parsed = new URL(value); } catch (_) { return { opened: false, reason: 'not a valid url' }; }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return { opened: false, reason: 'refused scheme ' + parsed.protocol + ' — only http and https are opened externally' };
+    }
+    try {
+      // Lazily required at the use site: several Electron exports are lazy
+      // getters that throw when touched before app.ready, and a module-scope
+      // destructure of one is what once stopped this app booting at all.
+      const { shell } = require('electron');
+      shell.openExternal(parsed.href);
+      // openExternal resolves when the OS ACCEPTS the request, not when a page
+      // renders, so this is genuinely "handed off", never "the operator saw it".
+      // The effector reports it as unverified for that reason.
+      return { opened: true, reason: null };
+    } catch (err) {
+      return { opened: false, reason: err.message };
+    }
   }
 
   // Stage 5 (BUG-075) — the child's only outbound channel to us is this fork()
@@ -411,6 +989,64 @@ function startChild() {
     if (msg.channel === 'mythos:ui.open-web') {
       const res = mediaWindowController.handleOpenWeb(msg.payload);
       log('media-window: open-web ->', JSON.stringify(res));
+      // BUG-272 T2: the verdict used to be logged and DROPPED here. When it says
+      // opened:false ('not a media widgetType', i.e. anything but youtube/web),
+      // nothing rendered and nobody downstream was told — open_web still reported
+      // ok:true. Ack it back so the effector can fail honestly.
+      try { child.send({ channel: 'mythos:ui.open-web-ack', opened: Boolean(res && res.opened), reason: (res && res.reason) || null }); }
+      catch (err) { log('media-window: open-web ack send failed:', err.message); }
+    } else if (msg.channel === 'mythos:open-external') {
+      // BUG-272 T2: open_web(browser:true) had NO working surface under Electron.
+      // The media window refuses widgetType 'newtab' by design, and the HUD's
+      // window.open fallback is denied unconditionally by setWindowOpenHandler (a
+      // deliberate 2026-07-31 fix that must stay). shell.openExternal appeared
+      // nowhere in the codebase, so all seven attempts in the 2026-08-17 session
+      // failed silently while reporting success.
+      //
+      // shell is required lazily at the use site, like session/desktopCapturer/
+      // screen elsewhere in this file: several Electron exports are lazy getters
+      // that throw when touched before app.ready, and a module-scope destructure
+      // is what once made the whole app fail to boot.
+      const verdict = openExternalUrl(msg.url);
+      log('open-external ->', JSON.stringify(verdict));
+      try { child.send({ channel: 'mythos:open-external-ack', opened: verdict.opened, reason: verdict.reason }); }
+      catch (err) { log('open-external: ack send failed:', err.message); }
+    } else if (msg.channel === 'mythos:open-path') {
+      // open_file's shell hop (2026-08-21 audit). Same shape as open-external
+      // directly above: MYTHOS could reveal a folder and serve a vault build
+      // over HTTP, but had no way to open an ordinary file in its associated
+      // app — open_folder refused files and pointed at open_artifact, which
+      // only serves builds out of the vault.
+      //
+      // shell is required lazily at the use site, like open-external above:
+      // several Electron exports are lazy getters that throw when touched
+      // before app.ready, and a module-scope destructure of one is what once
+      // stopped this app booting at all.
+      //
+      // NO path validation here beyond string coercion. The sandbox is
+      // server-side in resolveSandboxed(), which is the single source of that
+      // truth; duplicating a weaker copy here is how two checks drift and the
+      // weaker one wins. The http/https allowlist next door is a DIFFERENT
+      // boundary for a different threat and is deliberately not reused.
+      (async () => {
+        let opened = false;
+        let reason = null;
+        try {
+          const { shell } = require('electron');
+          // Resolves with '' on success, or an error STRING on failure — it
+          // does not reject. Either way this is the OS accepting or refusing
+          // the request; whether an app rendered anything is not observable
+          // from here, which is why the effector reports it unverified.
+          const errStr = await shell.openPath(String(msg.path || ''));
+          opened = !errStr;
+          reason = errStr || null;
+        } catch (err) {
+          reason = err.message;
+        }
+        log('open-path ->', JSON.stringify({ opened, reason }));
+        try { child.send({ channel: 'mythos:open-path-ack', opened, reason }); }
+        catch (err) { log('open-path: ack send failed:', err.message); }
+      })();
     } else if (msg.channel === 'mythos:close-media-window') {
       const closed = mediaWindowController.closeMediaWindow();
       try { child.send({ channel: 'mythos:close-media-window-ack', closed }); }
@@ -421,7 +1057,29 @@ function startChild() {
   // floor so a single past crash doesn't pin the delay at the 5s cap forever.
   backoffIndex = 0;
 
+  // BUG-273 D4 — a fork that fails to START emits 'error', not 'exit', so the exit
+  // handler below (which carries the ONLY crash line this app writes about its own
+  // server) never ran and nothing at all was said. A missing node binary, a bad
+  // SERVER_ENTRY path after an update, or an EPERM all land here.
+  //
+  // Q8: log only. Node emits 'exit' after 'error' when the process did start, and the
+  // existing handler owns the restart decision; adding a second restart trigger here
+  // is how a crash loop doubles its own rate.
+  child.on('error', (err) => {
+    log('mythos child failed to spawn:', err && err.stack ? err.stack : err);
+  });
+
   child.on('exit', (code, signal) => {
+    // NEVER restart while we are shutting down. Without this guard, stopChild()
+    // during a quit scheduled a FRESH server child 1s later — a new MYTHOS.exe
+    // whose cwd is inside resources/app.asar.unpacked/mythos, which is exactly
+    // the directory the updater's uninstaller is trying to rename. That is one
+    // of the three things that made every 0.1.7 update fail (see beginInstall).
+    if (isQuitting) {
+      log(`mythos child exited (code=${code} signal=${signal}) during shutdown — not restarting.`);
+      child = null;
+      return;
+    }
     // Record the dead child, then restart with backoff. Full immune-announcer
     // wiring is out of scope for this slice — just don't swallow the crash.
     log(`mythos child exited (code=${code} signal=${signal}); restarting in ` +
@@ -435,8 +1093,46 @@ function startChild() {
 
 function stopChild() {
   if (!child) return;
-  try { child.kill(); } catch (err) { log('failed to kill child:', err.message); }
+  const dying = child;
+  try { dying.kill(); } catch (err) { log('failed to kill child:', err.message); }
   child = null;
+  // BUG-225: the normal close path gets the same kill ladder the update
+  // handover already had — awaitChildExit escalates to SIGKILL at the 3s
+  // deadline instead of trusting one bare kill(). Returns a promise sync
+  // callers may ignore: the kill above already fired, and the ladder's
+  // escalation is timer-driven, so it needs no awaiter to make progress.
+  return awaitChildExit(dying, 3000, log);
+}
+
+// BUG-225: the quit-path backstop. before-quit can wedge — syncVault('--push')
+// is a BLOCKING spawnSync with a 15s timeout on vault-git machines — and a
+// wedged quit IS the zombie report: window gone, process alive, single-
+// instance lock held, double-click does nothing. 10s mirrors the child's own
+// SHUTDOWN_MS design (schema default 10000): graceful shutdown gets a real
+// budget, and only a quit still going nowhere after it gets cut short. When
+// it fires: tree-kill the child (taskkill /T on win32 — the forked server
+// leaves piper and pc-child grandchildren a bare kill() never reaches) and
+// app.exit(0). That app.exit does NOT violate the relaunch-no-window "quit,
+// never exit" ruling: this fires only AFTER before-quit has already run and
+// failed to finish — exactly the case that ruling's reason ("it skips
+// before-quit") no longer describes. The timer is deliberately REF'd (the
+// BUG-259 lesson: an unref'd deadline never fires in a drained process), and
+// deliberately never cleared — a graceful quit exits the process, which kills
+// the timer; only a wedged one is still around to hear it.
+function armQuitWatchdog(childPid) {
+  setTimeout(() => {
+    log('quit watchdog: graceful quit did not complete in 10s — tree-killing the child and exiting');
+    if (childPid) {
+      try {
+        if (process.platform === 'win32') {
+          child_process.spawn('taskkill', ['/PID', String(childPid), '/T', '/F'], { windowsHide: true });
+        } else {
+          process.kill(childPid, 'SIGKILL');
+        }
+      } catch (err) { log('quit watchdog: tree-kill failed:', err && err.message); }
+    }
+    app.exit(0);
+  }, 10000);
 }
 
 // ---- B6: update check (electron-updater) --------------------------------------
@@ -485,7 +1181,14 @@ function stopChild() {
 // is worse than a session whose memory arrives one launch late.
 function syncVault(flag) {
   try {
-    const script = path.join(__dirname, '..', 'mythos', 'scripts', 'vault-sync.js');
+    // MYTHOS_DIR, not a raw path.join(__dirname, '..', 'mythos'): in a packaged
+    // build the raw path lands inside app.asar, and a spawned child process can
+    // neither read a script from an archive nor use one as its cwd — spawnSync
+    // fails ENOENT for both --pull and --push. The existsSync guard below does
+    // NOT catch it, because Electron's asar-patched fs reads through the archive
+    // happily while the fresh OS process cannot. Same reason SERVER_ENTRY and
+    // MYTHOS_DIR are translated at the top of this file.
+    const script = path.join(MYTHOS_DIR, 'scripts', 'vault-sync.js');
     if (!fs.existsSync(script)) return;
     // The SAME four arguments startChild() passes, not a shortcut. Called with
     // only explicitEnv, resolveVaultRoot path.join()s an undefined userDataDir
@@ -496,10 +1199,11 @@ function syncVault(flag) {
       explicitEnv: process.env.MYTHOS_VAULT_ROOT,
       oldVaultDir: OLD_VAULT_DIR,
       userDataDir: app.getPath('userData'),
+      siblingUserDataNames: ['agent-os', 'Electron'], // same list startChild passes
       log,
     });
     const res = require('child_process').spawnSync(process.execPath, [script, flag], {
-      cwd: path.join(__dirname, '..', 'mythos'),
+      cwd: MYTHOS_DIR,
       encoding: 'utf8',
       timeout: 15000,
       windowsHide: true,
@@ -538,12 +1242,10 @@ function syncVault(flag) {
 // trade, and an OS notification is arguably better anyway — it shows up whether
 // or not the HUD window is focused.
 //
-// What it deliberately does NOT do is offer to install. autoDownload is false
-// and quitAndInstall is never called, because CONTRIBUTING.md's release gate
-// says not to enable automatic download before the build is signed: an unsigned
-// installer gives electron-updater nothing to verify against, so a compromised
-// host could serve any executable. So this points at the release page and lets
-// the operator decide.
+// What it does NOT do is install. It says a download has STARTED; the restart
+// prompt in checkForUpdates()'s update-downloaded handler is the only thing that
+// installs, and only on a click. See that function's header for why downloading
+// automatically is defensible on an unsigned build and what is still missing.
 function notifyUpdateAvailable(version) {
   try {
     // Required at the use site, like `screen`/`session` elsewhere in this file:
@@ -556,7 +1258,7 @@ function notifyUpdateAvailable(version) {
     }
     new Notification({
       title: `MYTHOS ${version} is available`,
-      body: `You are running ${app.getVersion()}. Nothing has been downloaded — open the releases page to update.`,
+      body: `You are running ${app.getVersion()}. Downloading it in the background — you will be asked before anything is installed.`,
       silent: false,
     }).show();
   } catch (err) {
@@ -566,9 +1268,171 @@ function notifyUpdateAvailable(version) {
   }
 }
 
+// Say out loud that an update FINISHED. Until now a completed update was as
+// silent as an incomplete one — the only trace was "the update to X
+// completed" inside main.log. Fires once, from unfinishedUpdate()'s success
+// branch at the next boot after the handover, so it lands the moment the
+// operator is back at a working app rather than trying to survive across the
+// installer's own process teardown.
+//
+// A native Notification for the same reason notifyUpdateAvailable() is one:
+// it is immune to the update-not-available handler's setUpdateState('idle',
+// '') firing ~1s after boot and clobbering the HUD's 'incomplete'/'ready'
+// banner state (see whenReady() below) — a banner-based success message
+// would be erased before most operators could read it.
+function notifyUpdateCompleted(version, releaseNotes) {
+  try {
+    // Required at the use site — see notifyUpdateAvailable() above for why.
+    const { Notification } = require('electron');
+    if (!Notification.isSupported()) {
+      log('auto-update: desktop notifications unsupported here — the log line above is the only notice.');
+      return;
+    }
+    let body = `MYTHOS updated to ${version}.`;
+    if (releaseNotes) body += ` What's new: ${releaseNotes}`;
+    new Notification({
+      title: `MYTHOS updated to ${version}`,
+      body,
+      silent: false,
+    }).show();
+  } catch (err) {
+    // A failed notification must never take down boot. The log line is the
+    // fallback notice.
+    log('auto-update: could not show the update-completed notification —', err && err.message);
+  }
+}
+
+// How often a long-running install re-asks the feed. The boot check alone means
+// a machine left running for a week never sees a release.
+const UPDATE_RECHECK_MS = 6 * 60 * 60 * 1000;
+
+// Lives in ./release-notes.js for the same reason child-exit.js does: main.js
+// requires `electron` and can only ever be source-shape asserted by node --test,
+// so the actual normalizing/sanitizing logic needs to live somewhere callable.
+const { sanitizeReleaseNotes } = require('./release-notes');
+
+// The release notes for whichever version is currently in flight. Kept
+// separate from updateState (below) because it is read by version, not by
+// state: promptInstall() only trusts these notes when updateReleaseNotes.version
+// still matches the version it is about to show a dialog for, so notes from a
+// stale/superseded update can never bleed into the wrong dialog.
+let updateReleaseNotes = { version: '', notes: '' };
+
+// Captures and sanitizes releaseNotes off an electron-updater UpdateInfo. Safe
+// to call from both update-available and update-downloaded — whichever fires
+// last for a given version wins, and that's fine since both carry the same
+// UpdateInfo for that version.
+function captureReleaseNotes(info) {
+  const version = (info && info.version) || '';
+  const notes = sanitizeReleaseNotes(info && info.releaseNotes);
+  updateReleaseNotes = { version: String(version), notes };
+}
+
+// ---- update state, mirrored into the HUD ---------------------------------------
+// The operator asked for a visible control ("a UI that says Update, and clicking
+// it updates"), not only an OS notification that can be missed while the window
+// is focused. So the main process keeps one small state value and pushes it to
+// the HUD, which renders js/update-banner.js.
+//
+// This is the SECOND main->renderer channel on the AD-8 preload surface (after
+// mythos:hotkey), and it is deliberately shaped like that one: two plain strings,
+// re-derived in preload.js rather than forwarded, so nothing structured — and
+// therefore nothing secret — can ride the event into a renderer that also loads
+// remote pages. See electron/preload.js and
+// mythos/test/electron-preload-surface.test.js, which pins the whole surface.
+// 'incomplete': the previous launch handed over to the installer and the version
+// did not change (see unfinishedUpdate()). News, not a fault — but news the
+// operator got no hint of before 2026-08-13.
+const UPDATE_STATES = ['idle', 'available', 'downloading', 'ready', 'error', 'incomplete'];
+let updaterRef = null;               // set once checkForUpdates() has built one
+let updateState = { state: 'idle', version: '', percent: 0 };
+
+function setUpdateState(state, version, percent) {
+  // A typo'd state would render as a banner the HUD has no copy for, i.e. a
+  // silent blank. Fail loudly into the log and keep the last known good state.
+  if (UPDATE_STATES.indexOf(state) === -1) {
+    log('auto-update: refusing an unknown update state', String(state));
+    return;
+  }
+  // percent defaults to 0, so every non-downloading transition (available,
+  // ready, error, idle, incomplete) auto-resets it rather than leaking the
+  // last download's progress into an unrelated state.
+  updateState = { state, version: String(version || ''), percent: Number(percent) || 0 };
+  sendUpdateState();
+}
+
+function sendUpdateState() {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('mythos:update-status', updateState.state, updateState.version, updateState.percent);
+  } catch (err) {
+    // A dead/reloading webContents is not an error worth taking anything down for.
+    log('auto-update: could not push status to the HUD —', err && err.message);
+  }
+}
+
+// The HUD's Update button. Takes no arguments: what it does is decided HERE from
+// state the main process owns, never from anything the renderer says — a
+// renderer-supplied version or path would be a way for a page to choose what
+// gets executed.
+ipcMain.handle('mythos:install-update', async (event) => {
+  if (!isHudContents(event.sender)) {
+    throw new Error('mythos:install-update: denied — sender is not the HUD window');
+  }
+  if (updateState.state === 'ready' && updaterRef) {
+    log('auto-update: installing', updateState.version, '(HUD button) and restarting');
+    // beginInstall is async (it waits for the server child to actually exit
+    // before handing over), so failures arrive as a rejection, not a throw.
+    setImmediate(() => {
+      beginInstall(updaterRef, updateState.version)
+        .catch((err) => {
+          log('auto-update: quitAndInstall failed —', err && err.message);
+          recordUpdateError('install', err);
+        });
+    });
+    return { ok: true, installing: true, state: updateState.state, version: updateState.version };
+  }
+  // Not downloaded yet: nudge a check rather than pretending. The banner keeps
+  // showing whatever the events say next.
+  if (updaterRef && (updateState.state === 'idle' || updateState.state === 'error')) {
+    updaterRef.checkForUpdates().catch((err) => log('auto-update: manual check rejected —', err && err.message));
+  }
+  return { ok: true, installing: false, state: updateState.state, version: updateState.version };
+});
+
+// WHY THIS DOWNLOADS AND INSTALLS NOW (operator, 2026-08-11), reversing the
+// "notify only, never auto-download" gate that CONTRIBUTING.md and
+// .github/workflows/release.yml still describe as the state of the world:
+//
+// Every fix had to be shipped as a full manual installer run. The gate existed
+// because the build is unsigned, and the stated reasoning was that
+// electron-updater "has nothing to verify against". Two things about that,
+// verified in node_modules rather than assumed:
+//
+//   * NsisUpdater.verifySignature() returns null — i.e. PASSES — when
+//     app-update.yml carries no publisherName (out/NsisUpdater.js:84-99). On an
+//     unsigned build the signature check is SKIPPED, not failed. Refusing to
+//     auto-download bought no signature verification; it only cost releases.
+//   * Integrity is still enforced regardless of signing: DownloadedUpdateHelper
+//     hashes the downloaded file and compares it to the sha512 in latest.yml,
+//     which is fetched from GitHub over HTTPS. A tampered download fails.
+//
+// What signing WOULD add is protection against a compromised release host
+// serving a validly-hashed malicious installer. That risk is accepted here, not
+// disproven: this feed is the project's own public GitHub Releases, and anyone
+// who can publish a release there can already publish the source this app is
+// built from. A cert is still worth buying — see CONTRIBUTING.md's release gate.
+//
+// Installing remains the operator's click (autoInstallOnAppQuit stays false),
+// because a desktop assistant that restarts itself mid-sentence is its own bug.
+// MYTHOS_AUTO_UPDATE=off disables the whole thing.
 function checkForUpdates() {
   if (!app.isPackaged) {
     log('auto-update: dev build — update check runs in packaged builds only; skipping.');
+    return;
+  }
+  if (String(process.env.MYTHOS_AUTO_UPDATE || '').trim().toLowerCase() === 'off') {
+    log('auto-update: disabled by MYTHOS_AUTO_UPDATE=off; skipping.');
     return;
   }
   const feedUrl = String(process.env.MYTHOS_UPDATE_URL || '').trim();
@@ -587,24 +1451,506 @@ function checkForUpdates() {
     // host is actually configured, and a future version of the library moving
     // more work into that constructor cannot take boot down with it.
     const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoDownload = false;
+    updaterRef = autoUpdater;
+    autoUpdater.autoDownload = true;
+    // The one thing that must stay false: quitting must never become an install.
+    // An operator who closes the app to do something else would come back to a
+    // different version they never agreed to.
+    autoUpdater.autoInstallOnAppQuit = false;
+    // This build never produces a web installer, so NsisUpdater's per-download
+    // "disableWebInstaller is not set" warning is pure log noise. Setting it
+    // true silences the warning and pins the intent: only the full NSIS
+    // installer we publish is ever an acceptable download.
+    autoUpdater.disableWebInstaller = true;
     if (feedUrl) {
       autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
     }
-    autoUpdater.on('error', (err) => log('auto-update: check failed —', err && err.message));
+    autoUpdater.on('error', (err) => {
+      log('auto-update: check failed —', err && err.message);
+      setUpdateState('error', updateState.version);
+      recordUpdateError('check', err);
+    });
     autoUpdater.on('update-available', (info) => {
       const version = (info && info.version) || 'unknown';
-      log('auto-update: update available —', version, '(not downloaded automatically)');
+      log('auto-update: update available —', version, '— downloading in the background');
+      captureReleaseNotes(info);
+      setUpdateState('downloading', version);
       notifyUpdateAvailable(version);
     });
-    autoUpdater.on('update-not-available', () => log('auto-update: already on the latest version'));
+    autoUpdater.on('update-not-available', () => {
+      log('auto-update: already on the latest version');
+      setUpdateState('idle', '');
+    });
+    // Percent only, and only on whole-percent boundaries: this log is a file the
+    // operator reads after the fact, not a progress bar.
+    let lastPercent = -1;
+    autoUpdater.on('download-progress', (p) => {
+      const percent = Math.floor((p && p.percent) || 0);
+      if (percent === lastPercent) return;
+      lastPercent = percent;
+      setUpdateState('downloading', updateState.version, percent);
+      if (percent % 10 === 0) log('auto-update: download-progress', `${percent}%`);
+    });
+    autoUpdater.on('update-downloaded', (info) => {
+      const version = (info && info.version) || 'unknown';
+      log('auto-update: downloaded', version, '— asking the operator to restart');
+      captureReleaseNotes(info);
+      setUpdateState('ready', version);
+      promptInstall(autoUpdater, version);
+    });
     log(`auto-update: checking ${feedUrl ? `custom feed ${feedUrl}` : 'the embedded release feed (GitHub Releases)'}`);
-    autoUpdater.checkForUpdates().catch((err) => {
+    const check = () => autoUpdater.checkForUpdates().catch((err) => {
       log('auto-update: checkForUpdates rejected —', err && err.message);
     });
+    check();
+    // unref()'d: a pending timer must never be the reason the process refuses to
+    // exit when every window is gone.
+    const timer = setInterval(check, UPDATE_RECHECK_MS);
+    if (typeof timer.unref === 'function') timer.unref();
   } catch (err) {
     log('auto-update: setup failed —', err && err.message);
   }
+}
+
+// ---- the handover to the installer -------------------------------------------
+// Everything that must happen before NSIS takes the machine over. BOTH install
+// paths (the dialog below and the HUD's Update button) call beginInstall(), so
+// the two cannot drift apart.
+//
+// WHY (operator, 2026-08-13): the 0.1.7 update was accepted and the app never
+// came back — white icon, dead double-click, for 40+ minutes. Nothing was
+// corrupt. The installer was still running, because the ≤0.1.6 layout put the
+// Hermes Python venv INSIDE the install tree: ~17.6k files / ~1 GB that NSIS must
+// delete before it can extract a ~1.2 GB payload. A silent install shows no
+// window and no progress bar, so a working install looks exactly like a dead app.
+//
+// Moving the tool trees out first turns that delete into a directory rename, and
+// puts them where 0.1.7 wants them anyway: <userData>/tools is what
+// MYTHOS_TOOLS_DIR points at (see startChild), what setup-hermes.js and
+// setup-android.js write to, and what build/installer.nsh probes when it decides
+// a component is "already installed".
+//
+// IT CAN LEGITIMATELY FAIL, and must then get out of the way. A rename across
+// volumes throws EXDEV — an install on D: with userData on C: is a real layout on
+// this operator's machine — and copying a gigabyte here would freeze the main
+// process with the window already closing. Rescuing the tools is an optimisation.
+// Blocking an update is not an option, so every failure logs and installs anyway.
+const RESCUABLE_TOOL_DIRS = ['Hermes Agent', 'Android Platform Tools'];
+
+// An operator MYTHOS_DSH_INSTALL_DIR pointing INSIDE the install tree defeats all of this,
+// and did on the machine this was written on (2026-08-13): it outranks
+// MYTHOS_TOOLS_DIR in mythos/scripts/setup-hermes.js, so every reinstall puts
+// ~17.6k files back into the tree, every update then deletes them, and the slow
+// install returns for good. Nothing here can fix that — the env var is the
+// operator's, and the next reinstall would undo any move — so say so in the log
+// rather than silently rescuing a directory that is about to be recreated.
+function warnIfHermesHomeIsInTheInstallTree(installRoot) {
+  const home = process.env.MYTHOS_DSH_INSTALL_DIR;
+  if (!home || !installRoot) return;
+  try {
+    const inTree = path.resolve(home).toLowerCase().startsWith(path.resolve(installRoot).toLowerCase());
+    if (!inTree) return;
+    log('auto-update: MYTHOS_DSH_INSTALL_DIR points inside the install tree —', home);
+    log('auto-update: every update will delete that Hermes install. Repoint it at',
+      path.join(app.getPath('userData'), 'tools', 'Hermes Agent'), 'and reinstall there.');
+  } catch (err) {
+    log('auto-update: could not check MYTHOS_DSH_INSTALL_DIR —', err && err.message);
+  }
+}
+
+function rescueToolDirs() {
+  if (!app.isPackaged) return; // a dev run has no install tree for NSIS to delete
+  const src = path.join(process.resourcesPath || '', 'app.asar.unpacked');
+  warnIfHermesHomeIsInTheInstallTree(process.resourcesPath);
+  const dest = path.join(app.getPath('userData'), 'tools');
+  for (const name of RESCUABLE_TOOL_DIRS) {
+    try {
+      const from = path.join(src, name);
+      const to = path.join(dest, name);
+      if (!fs.existsSync(from)) continue;
+      if (fs.existsSync(to)) {
+        // Already migrated. Never clobber the userData copy with an older
+        // in-tree one — the installer deleting the stale duplicate is correct.
+        log('auto-update: tools —', name, 'already lives in userData; leaving the in-tree copy to the installer');
+        continue;
+      }
+      fs.mkdirSync(dest, { recursive: true });
+      fs.renameSync(from, to);
+      log('auto-update: tools — moved', name, 'out of the install tree to', to);
+    } catch (err) {
+      log('auto-update: tools — could not move', name, '—', err && err.message, '— installing anyway (this will be slow)');
+    }
+  }
+}
+
+// An update that never completes used to be silent on the next launch: the app
+// came back on the old version and said nothing. This file is written before the
+// handover and read (then cleared) on the next boot — if it is still there and
+// the version has not moved, the install did not happen.
+function updateAttemptPath() {
+  return path.join(app.getPath('userData'), 'update-attempt.json');
+}
+
+// releaseNotes travels with the attempt (not just the version) so that a
+// completion notification on the NEXT boot — a fresh process, after
+// updateReleaseNotes has been reinitialized to its module-load default — can
+// still say what changed. Sanitized already (captureReleaseNotes ran on the
+// update-available/update-downloaded events); stored as plain text.
+function recordUpdateAttempt(version, releaseNotes) {
+  try {
+    fs.writeFileSync(updateAttemptPath(), JSON.stringify({
+      version: String(version || ''),
+      from: app.getVersion(),
+      at: new Date().toISOString(),
+      releaseNotes: String(releaseNotes || ''),
+    }, null, 2));
+  } catch (err) {
+    log('auto-update: could not record the update attempt —', err && err.message);
+  }
+}
+
+// PEEK at the attempt file — deliberately WITHOUT clearing it, unlike
+// unfinishedUpdate() below.
+//
+// WHY (operator, 2026-08-13): the 0.1.9 install ran for 8+ minutes, and for all
+// of that time the install tree was being rewritten underneath a MYTHOS.exe
+// that anything could still launch — a desktop shortcut, an autostart entry, a
+// leftover relaunch. Measured on that machine: an instance was running at
+// 04:09:54 while the installer was still writing at 04:10:26 and 04:14:15. An
+// app booted mid-install forks its server from inside the very directory NSIS
+// is renaming and, worse, holds the single-instance lock — so the installer's
+// own relaunch afterwards quits immediately and silently. That is the "I
+// clicked restart and nothing ever happened" report.
+//
+// Returns the in-flight attempt, or null. Two guards keep this from ever
+// bricking a launch, which matters more than the case it prevents:
+//   - AGE: a marker older than the window below is stale, not an install in
+//     progress. A crashed installer must never make the app refuse to start.
+//   - VERSION: if we are already the version the attempt was for, it landed.
+const UPDATE_IN_FLIGHT_MS = 15 * 60 * 1000;
+
+function updateAttemptInFlight() {
+  try {
+    const file = updateAttemptPath();
+    if (!fs.existsSync(file)) return null;
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const target = String((record && record.version) || '');
+    if (!target || target === app.getVersion()) return null;
+    const startedAt = Date.parse((record && record.at) || '');
+    if (!Number.isFinite(startedAt)) return null;
+    const age = Date.now() - startedAt;
+    if (age < 0 || age > UPDATE_IN_FLIGHT_MS) return null;
+    return { version: target, ageMs: age };
+  } catch (err) {
+    // Unreadable means "no idea", and the safe answer to that is to let the app
+    // start. Silence is the wrong default elsewhere in this repo; here it is
+    // the one that cannot lock the operator out.
+    log('auto-update: could not read the update attempt —', err && err.message);
+    return null;
+  }
+}
+
+// Reads the attempt file left by recordUpdateAttempt() and reports what
+// happened to it. Returns null when there is nothing to report (no attempt
+// file, or an unreadable/versionless one); otherwise a plain, JSON-
+// serializable object — {completed, version, from, releaseNotes} — since a
+// later task forwards this exact shape to the server child as JSON. Clears
+// the file either way: one report per attempt, never a banner that cannot be
+// dismissed.
+function unfinishedUpdate() {
+  const file = updateAttemptPath();
+  let record = null;
+  try {
+    if (!fs.existsSync(file)) return null;
+    record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch (err) {
+    log('auto-update: update-attempt.json is unreadable —', err && err.message);
+  }
+  try { fs.unlinkSync(file); } catch { /* already gone */ }
+  const target = record && String(record.version || '');
+  if (!target) return null;
+  const from = String((record && record.from) || '');
+  const releaseNotes = String((record && record.releaseNotes) || '');
+  if (target === app.getVersion()) {
+    log('auto-update: the update to', target, 'completed');
+    // A completed update means whatever the last recorded error was is now
+    // stale — best-effort only, same as everything else in this function: a
+    // failed unlink must never turn a successful update into a boot problem.
+    try { fs.unlinkSync(updateErrorPath()); } catch { /* stale or already gone */ }
+    return { completed: true, version: target, from, releaseNotes };
+  }
+  log('auto-update: the last update to', target, 'did NOT complete — still running', app.getVersion());
+  return { completed: false, version: target, from, releaseNotes };
+}
+
+// update-error.json is deliberately a SEPARATE file from update-attempt.json,
+// because the two have opposite contracts. The attempt file is written before
+// a handover and cleared on the next boot — one report per attempt. This one
+// PERSISTS: each new failure overwrites it, so "what was the last thing that
+// went wrong" survives across as many boots as it takes to notice, instead of
+// being read once and thrown away like the attempt file above.
+//
+// Added after three in-app update failures (0.1.6-0.1.7) whose only forensic
+// trace was a single log line in a file nobody opens. A stack trace is not an
+// AD-8 status primitive — this never travels over IPC, file only.
+function updateErrorPath() {
+  return path.join(app.getPath('userData'), 'update-error.json');
+}
+
+// context is 'check' (autoUpdater's own 'error' event, i.e. the feed check
+// failed) or 'install' (beginInstall/promptInstall rejected). Same try/catch
+// idiom as recordUpdateAttempt() and notifyUpdateAvailable() above: a failure
+// to write this must never take down boot or the update flow it is trying to
+// diagnose.
+function recordUpdateError(context, err) {
+  try {
+    fs.writeFileSync(updateErrorPath(), JSON.stringify({
+      context: String(context || ''),
+      message: String((err && err.message) || ''),
+      stack: String((err && err.stack) || ''),
+      version: String(updateState.version || ''),
+      appVersion: app.getVersion(),
+      at: new Date().toISOString(),
+    }, null, 2));
+  } catch (writeErr) {
+    log('auto-update: could not record the update error —', writeErr && writeErr.message);
+  }
+}
+
+// $PLUGINSDIR — where the old uninstaller renames the install tree to — is
+// derived from %TEMP%, and electron-updater spawns the installer with
+// `env: undefined` (electron-updater/out/BaseUpdater.js), so it inherits ours.
+// That matters because the uninstaller's "atomic" update path is a per-file
+// Rename into $PLUGINSDIR\old-install: on the SAME volume that is instant and
+// genuinely atomic, but when %TEMP% is on C: and the install is on D: every
+// single file is copied across, and copied back again if anything goes wrong.
+// That is where the 40-minute update with no window came from — and it also
+// makes the whole update depend on the system drive having room for a second
+// copy of the app. Point TEMP at a scratch dir on the install's own volume.
+//
+// Derived from process.resourcesPath, never hardcoded (AD-7). Best-effort: if it
+// cannot be created, the ordinary (slow) %TEMP% path still works.
+function pointInstallerTempAtInstallVolume() {
+  if (!app.isPackaged || !process.resourcesPath) return;
+  try {
+    // BESIDE the install dir, never inside it. $PLUGINSDIR is created under
+    // %TEMP%, and the uninstaller renames every entry of $INSTDIR into
+    // $PLUGINSDIR\old-install — so a scratch dir inside $INSTDIR would contain
+    // the destination it is being moved into. Same volume is all that is needed
+    // for the rename to stay a rename.
+    // <install>/resources -> <install> -> <install>/../MYTHOS-update-temp
+    const installRoot = path.dirname(process.resourcesPath);
+    const scratch = path.join(path.dirname(installRoot), 'MYTHOS-update-temp');
+    fs.mkdirSync(scratch, { recursive: true });
+    process.env.TEMP = scratch;
+    process.env.TMP = scratch;
+    log('auto-update: installer TEMP ->', scratch, '(same volume as the install: rename, not copy)');
+  } catch (err) {
+    log('auto-update: could not redirect the installer TEMP —', err && err.message, '— continuing on %TEMP%');
+  }
+}
+
+// Wait for the server child to actually be gone. Resolves as soon as it exits;
+// after the deadline it escalates to SIGKILL and resolves anyway, because a
+// stubborn child must not be able to block an update either.
+// Takes the child EXPLICITLY rather than reading the module-level `child`,
+// because stopChild() sets that to null — reading it here resolved instantly and
+// waited for nothing, which is the whole point of this function. Caught by
+// re-reading the handover rather than by a test, so the test below now pins the
+// argument (2026-08-13).
+// Lives in ./child-exit.js so node --test can exercise it for real: main.js
+// requires `electron` and can therefore only ever be source-shape asserted, and
+// source-shape assertions did NOT catch this function resolving instantly when
+// it read the module-level `child` that stopChild() had just nulled.
+const { awaitChildExit } = require('./child-exit');
+
+// THE HANDOVER, in order. Order is the whole correctness of this function.
+//
+// WHY (operator, 2026-08-13, after three failed 0.1.7 updates): the installer
+// died every time on "Failed to uninstall old application files ...: 2". That 2
+// is the OLD uninstaller's exit code. On an update it does not delete files — it
+// renames each one into $PLUGINSDIR\old-install (app-builder-lib's
+// templates/nsis/uninstaller.nsh, the ${isUpdated} branch), and a SINGLE failed
+// rename makes it restore everything and Abort. The installer retries that 5
+// times, one second apart, then gives up and rolls back — which is why the app
+// always came back looking fine on the old version.
+//
+// Every one of those renames was racing us, because quitAndInstall() spawns the
+// installer FIRST and quits the app AFTER, and the uninstaller skips its
+// "is the app running?" check entirely in silent mode. Our shutdown then took
+// far longer than its ~5s retry budget and actively held the tree open:
+//   - before-quit ran syncVault('--push'), a BLOCKING spawnSync with a 15s
+//     timeout, whose cwd is inside resources/app.asar.unpacked/mythos — and a
+//     process's current directory cannot be renamed;
+//   - the server child's exit handler restarted it 1s later (no quitting guard),
+//     spawning a fresh MYTHOS.exe inside the tree mid-shutdown;
+//   - that child is forked from process.execPath, so it holds MYTHOS.exe itself.
+//
+// So: do all of it here, while we still own the clock, and only hand over once
+// nothing of ours is left inside the install tree.
+async function beginInstall(autoUpdater, version) {
+  isQuitting = true; // stops the child's exit handler from scheduling a restart
+  installerHandover = true; // and before-quit's push skip keys off THIS, not isQuitting (BUG-225)
+  // Same match-by-version guard promptInstall() uses for the same reason: notes
+  // captured for a superseded update must never be attributed to this one.
+  const notesForThisVersion = updateReleaseNotes.version === version ? updateReleaseNotes.notes : '';
+  recordUpdateAttempt(version, notesForThisVersion);
+  rescueToolDirs();
+  // Captured BEFORE stopChild(), which nulls the module-level reference.
+  const dyingChild = child;
+  stopChild();
+  await awaitChildExit(dyingChild, 3000, log);
+  // AFTER the child is gone, for the reason before-quit already documents: a
+  // half-written episodic line committed as "synced" is worse than a late push.
+  // Here rather than in before-quit, because in before-quit it runs INSIDE the
+  // uninstaller's retry window and is the single biggest thing that blew it.
+  syncVault('--push');
+  pointInstallerTempAtInstallVolume();
+  // isSilent=FALSE (operator, 2026-08-13). See promptInstall's header for the
+  // full reasoning: silent was chosen to avoid the wizard, and it worked — the
+  // 0.1.9 update installed correctly — but it also meant an 8-minute install
+  // with NO window, no progress bar and no popup, which is indistinguishable
+  // from a dead update. The wizard pages are now suppressed at their source
+  // (build/installer.nsh guards its component page on ${isUpdated}; the
+  // template already guards the licence and directory pages), so a non-silent
+  // update shows only the progress bar it should always have shown.
+  autoUpdater.quitAndInstall(false, true);
+}
+
+// The install gate. A modal dialog rather than a notification, because this one
+// has consequences (the app exits and the NSIS installer runs) and a
+// notification is dismissable by accident.
+//
+// quitAndInstall(isSilent=FALSE, forceRunAfter=true): show the installer's own
+// progress bar, no wizard pages, then relaunch.
+//
+// THE HISTORY, because both settings have now been wrong in production:
+//
+// isSilent was false for one release and the operator caught what that meant:
+// build.nsis is oneClick:false + allowToChangeInstallationDirectory:true, so a
+// non-silent run showed the FULL first-install wizard — licence page, "where do
+// you want to install this", and this repo's own component page — with no
+// mention of an update anywhere on it. Indistinguishable from being asked to
+// reinstall from scratch.
+//
+// So it went silent, and silent was wrong in the other direction (2026-08-13):
+// /S suppresses EVERY page, and this installer takes minutes — measured at 8+
+// on the 0.1.8 -> 0.1.9 upgrade. The operator clicked "Restart now", saw the
+// installer window flash for about a second before NSIS hides it, and then had
+// no window, no progress and no popup for eight minutes. The update in fact
+// succeeded; nothing on screen said so, so it read as a dead app.
+//
+// The real fault was never the visibility — it was the pages. Those are now
+// suppressed individually: the template already guards its licence and
+// directory pages with skipPageIfUpdated, and build/installer.nsh now guards
+// this repo's component page on ${isUpdated} the way a raw `Page custom`
+// requires. What is left for an update is MUI_PAGE_INSTFILES — a titled
+// window with a live progress bar — and the finish page, whose run-MYTHOS
+// checkbox is on by default. The dialog above is what asks permission; the
+// installer still does not ask a second time.
+//
+// The manual .exe still shows the wizard, and should: that is a fresh install,
+// where choosing a location is the point. The server child is killed by the
+// existing before-quit handler, so there is no extra teardown here.
+function promptInstall(autoUpdater, version) {
+  try {
+    const { dialog } = require('electron');
+    let detail = 'This window will close and the MYTHOS installer will take over, showing a progress bar.\n\n'
+      + 'Replacing the installed files can take several minutes — the last upgrade took about eight. '
+      + 'You will not be asked anything: no licence page, no install location, no component list. '
+      + 'MYTHOS reopens by itself when the progress bar finishes.\n\n'
+      + 'Your vault, keys and PIN are untouched by an update.';
+    // Only trust updateReleaseNotes when its version matches the one this
+    // dialog is about — otherwise notes captured for a superseded update could
+    // show up attached to the wrong version's install prompt.
+    if (updateReleaseNotes.version === version && updateReleaseNotes.notes) {
+      detail += `\n\nWhat's new in ${version}: ${updateReleaseNotes.notes}`;
+    }
+    dialog.showMessageBox({
+      type: 'info',
+      buttons: ['Restart now', 'Later'],
+      defaultId: 0,
+      cancelId: 1,
+      title: 'MYTHOS update ready',
+      message: `MYTHOS ${version} is ready to install.`,
+      // Measured, not guessed, and re-measured after each failure: "about half
+      // a minute" was wrong by a factor of eighty on the 0.1.7 upgrade, and the
+      // 0.1.9 one took 8 minutes (see beginInstall above). A wrong ETA is what
+      // turns a working update into "the app is dead", so quote the real one and
+      // describe exactly what will be on screen.
+      detail,
+    }).then(({ response }) => {
+      if (response !== 0) {
+        log('auto-update: operator chose Later — it will be offered again on the next launch.');
+        return;
+      }
+      log('auto-update: installing', version, '(progress bar, no wizard pages) and restarting');
+      // Returned, not fire-and-forget: beginInstall is async, and a rejection
+      // inside it must reach the .catch below rather than becoming an unhandled
+      // rejection that loses the update silently.
+      return beginInstall(autoUpdater, version);
+    }).catch((err) => {
+      log('auto-update: install prompt failed —', err && err.message);
+      recordUpdateError('install', err);
+    });
+  } catch (err) {
+    // A dialog that cannot be shown must not lose the download or kill the app.
+    log('auto-update: could not ask about installing —', err && err.message);
+  }
+}
+
+// Bring a window to the actual foreground on Windows.
+//
+// A bare focus() is not enough and this repo has already learned that twice:
+// Windows' foreground lock refuses a focus request from a process that does not
+// own the foreground, silently (see mythos/adapters/CLAUDE.md's focus_window
+// entry). It bites hardest in the two places the operator noticed:
+//
+//   - after an update, where NSIS starts us via StdUtils.ExecShellAsUser — a
+//     launch with no foreground rights at all, so the window came up behind
+//     everything and the update read as "nothing happened";
+//   - clicking the desktop shortcut while MYTHOS is already running, where the
+//     second instance quits and the primary's focus() was denied.
+//
+// The alwaysOnTop pulse is the documented way through it: setting always-on-top
+// puts the window above the foreground window without needing foreground
+// rights, and dropping it immediately afterwards leaves the z-order intact
+// without pinning the window over everything else forever.
+function raiseWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  try {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.setAlwaysOnTop(true);
+    win.setAlwaysOnTop(false);
+    win.focus();
+    // Only on Windows: steal:true is a no-op elsewhere and macOS treats it as
+    // an activation policy change, which is not what this is for.
+    if (process.platform === 'win32') app.focus({ steal: true });
+  } catch (err) {
+    // Never fatal. A window we could not raise is still a window the operator
+    // can click in the taskbar; a throw here would take the boot down with it.
+    log('raiseWindow: could not bring the window forward —', err && err.message);
+  }
+}
+
+// Built on first use, not at module scope, and memoized so the prompt's own
+// repeat-click guard survives across launches. `dialog` is required at the use
+// site for the reason the cursor-overlay comment below spells out: Electron's
+// app-ready-gated exports are lazy getters that throw on property access, and a
+// module-scope destructure of one is what took a whole boot down before.
+let noWindowRelaunchPromptFn = null;
+function noWindowRelaunchPrompt() {
+  if (!noWindowRelaunchPromptFn) {
+    const { dialog } = require('electron');
+    noWindowRelaunchPromptFn = createNoWindowRelaunchPrompt({
+      dialog,
+      app,
+      log,
+      detail: () => `Server log: ${childLogPath()}`,
+    });
+  }
+  return noWindowRelaunchPromptFn;
 }
 
 // ---- single instance + window ------------------------------------------------
@@ -614,19 +1960,82 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
+    // raiseWindow, not a bare focus(): the operator reported clicking the
+    // desktop shortcut and having nothing happen at all, which is exactly what
+    // a foreground-lock-denied focus() looks like from the outside.
+    //
+    // The no-window branch is BUG-225's real half. raiseWindow() returns
+    // silently when handed nothing and mainWindow is nulled by its own 'closed'
+    // handler, so a primary instance alive without a window used to swallow
+    // every double-click forever, with Task Manager the only remaining signal.
+    // This handler must never be able to no-op — see relaunch-no-window.js.
+    const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+    if (win) {
+      raiseWindow(win);
+      return;
     }
+    log('second-instance: the primary instance is alive but has NO window to raise');
+    noWindowRelaunchPrompt()();
   });
 
   app.whenReady().then(async () => {
+    // BEFORE anything touches the install tree: is an installer rewriting it
+    // right now? (See updateAttemptInFlight for the measurement behind this.)
+    // Starting here would fork a server out of a directory being renamed and
+    // take the single-instance lock the installer's own relaunch needs.
+    //
+    // Asked, not enforced. The operator is the one who can see whether an
+    // installer window is on screen, and a wrong guess here must never be the
+    // reason MYTHOS will not open — so "Open anyway" is always available and
+    // the marker expires on its own.
+    const inFlight = updateAttemptInFlight();
+    if (inFlight) {
+      const seconds = Math.round(inFlight.ageMs / 1000);
+      log(`auto-update: an install of ${inFlight.version} started ${seconds}s ago and has not completed — asking before booting`);
+      const { dialog } = require('electron');
+      const choice = dialog.showMessageBoxSync({
+        type: 'warning',
+        buttons: ['Wait for it', 'Open anyway'],
+        defaultId: 0,
+        cancelId: 0,
+        title: 'MYTHOS is updating',
+        message: `MYTHOS ${inFlight.version} is being installed.`,
+        detail: 'The installer is still replacing files. MYTHOS opens by itself when its progress bar '
+          + 'finishes — starting a second copy now can make the update fail.\n\n'
+          + 'If you are sure the installer is no longer running, open anyway.',
+      });
+      if (choice === 0) {
+        log('auto-update: operator chose to wait for the installer — quitting this launch');
+        app.quit();
+        return;
+      }
+      log('auto-update: operator opened anyway during an in-flight install');
+    }
     // BEFORE startChild(), deliberately: the child constructs the memory facade
     // over the vault as it boots, so a pull that lands afterwards would be read
     // only on the NEXT launch — which is exactly the "the other machine's work is
     // not here" complaint this exists to fix.
     syncVault('--pull');
+    // ALSO before startChild(), and for the same reason: unfinishedUpdate() is
+    // single-shot (it unlinks the attempt file as it reads it), and its result
+    // is forwarded to the child as MYTHOS_UPDATE_RESULT in the fork() env below
+    // — so it must be read before the fork, not after, or the child boots with
+    // nothing to tell the brain about what the update did.
+    const lastUpdate = unfinishedUpdate();
+    pendingUpdateResult = lastUpdate;
     startChild();
+    // Before checkForUpdates(), so the log reads in the order things happened.
+    // A later 'available'/'ready' from the check legitimately supersedes this
+    // banner — that one is more actionable, and the log keeps the evidence.
+    if (lastUpdate) {
+      if (lastUpdate.completed) {
+        // A banner would be clobbered by the ~1s-later update-not-available
+        // handler (see notifyUpdateCompleted()'s header) — a notification isn't.
+        notifyUpdateCompleted(lastUpdate.version, lastUpdate.releaseNotes);
+      } else {
+        setUpdateState('incomplete', lastUpdate.version);
+      }
+    }
     checkForUpdates();
 
     // --- Microphone permission for the HUD's getUserMedia() -----------------
@@ -793,13 +2202,21 @@ if (!gotLock) {
       }
     }
 
+    const probeStartedAt = Date.now();
     const ready = await probeHealth(BIND, PORT, PROBE_ATTEMPTS);
-    if (!ready) {
-      // Server never came up. Fail loudly; loading a dead URL would show a
-      // broken Chromium error page with no diagnostic.
-      log(`mythos server did not become ready at http://${BIND}:${PORT} after ${PROBE_ATTEMPTS} probes. Server log: ${childLogPath()}`);
-      // Still create the window so the operator sees something; the renderer
-      // can surface its own error state. But log first so it's diagnosable.
+    if (ready) {
+      // Log the MEASURED wait, not just the fact of success: this is the only
+      // signal that boot is creeping toward the budget again, and it is what
+      // made the 2026-08-10 failure diagnosable after the fact.
+      log(`mythos server ready after ${Date.now() - probeStartedAt}ms at http://${BIND}:${PORT}`);
+    } else {
+      log(`mythos server did not become ready at http://${BIND}:${PORT} after ${PROBE_ATTEMPTS} probes `
+        + `(${Date.now() - probeStartedAt}ms). Still waiting in the background; server log: ${childLogPath()}`);
+      // Create the window anyway so the operator sees something — but DO NOT
+      // stop waiting. The window below will load a refused URL and show
+      // Chromium's error page; waitForLateReady() reloads it the moment the
+      // server answers, so a merely-slow boot self-heals instead of needing a
+      // manual relaunch.
     }
 
     mainWindow = new BrowserWindow({
@@ -818,7 +2235,38 @@ if (!gotLock) {
         backgroundThrottling: false,
       },
     });
+    // Task D4: prime the HUD's own session BEFORE the first load, so a
+    // configured deployment never shows the paste-the-token gate on a normal
+    // restart. A no-op when there's no token to present (see
+    // resolveAuthTokenForPriming/primeAuthSession above), and never fatal —
+    // a failed prime just leaves the existing gate exactly as it was.
+    await primeAuthSession(mainWindow, resolveAuthTokenForPriming(), PORT);
     mainWindow.loadURL(`http://${BIND}:${PORT}`);
+    if (!ready) waitForLateReady();
+
+    // The launch that follows an update has no foreground rights (NSIS starts
+    // us through StdUtils.ExecShellAsUser), so without this the new build comes
+    // up BEHIND whatever the operator was doing — which, after a multi-minute
+    // install with the app gone, is indistinguishable from the update having
+    // failed. --updated is passed by the installer's StartApp macro; gating on
+    // it keeps every ordinary launch untouched.
+    if (process.argv.includes('--updated')) {
+      log('auto-update: relaunched by the installer — bringing the window to the front');
+      raiseWindow(mainWindow);
+    }
+
+    // Replay the current update state to a freshly-loaded HUD. Events fire on
+    // the main process's own schedule — a download can finish before the window
+    // exists, and the HUD reloads on every server restart — so without this the
+    // banner would only ever appear if the timing happened to line up.
+    mainWindow.webContents.on('did-finish-load', () => sendUpdateState());
+
+    // BUG-269 defect 1 (re-arm): a reload destroys the renderer's onHotkey
+    // listener, so the talk-hotkey ready-latch must re-arm — otherwise the
+    // lost-IPC race would reappear after every refresh. The renderer's next
+    // notifyReady() (app.js sends it after registering the listener) flushes
+    // any press latched in the meantime.
+    mainWindow.webContents.on('did-start-loading', () => talkHotkeyLatch.markLoading());
 
     // Trap window.open(_blank) from the renderer so it never spawns an external
     // browser. Without this, the HUD's `window.open(url, '_blank')` (app.js,
@@ -849,7 +2297,20 @@ if (!gotLock) {
       }
     });
 
-    mainWindow.on('closed', () => { mainWindow = null; });
+    mainWindow.on('closed', () => {
+      mainWindow = null;
+      // BUG-225: secondary windows were only closed in before-quit — which
+      // never starts while one of them keeps window-all-closed un-fired. A
+      // media window (or a live, merely hidden overlay window) outliving the
+      // HUD meant the X-close left the app running with no window to reach it
+      // and no quit at all. Close them HERE so the quit chain can begin.
+      // Non-darwin, matching the quit rule below: on macOS the app
+      // deliberately outlives its windows.
+      if (process.platform !== 'darwin') {
+        mediaWindowController.closeMediaWindow();
+        if (cursorOverlayController) cursorOverlayController.destroy();
+      }
+    });
 
     registerTalkHotkey();
     registerOcrGrabHotkey();
@@ -879,18 +2340,45 @@ if (!gotLock) {
 
   // Clean shutdown: stop the child before quitting so we never orphan the server.
   app.on('window-all-closed', () => {
+    // BUG-225 re-fork race: isQuitting must be set BEFORE stopChild(). before-
+    // quit only runs after the app.quit() below, so without this the child's
+    // exit handler sees isQuitting === false during the gap between the kill
+    // and the quit, and schedules a re-fork — a fresh MYTHOS.exe born inside
+    // the quit window: the zombie. Non-darwin only: there window-all-closed
+    // does not quit, and suppressing restarts would strand a live macOS app
+    // with a dead server.
+    if (process.platform !== 'darwin') isQuitting = true;
     stopChild();
     if (process.platform !== 'darwin') app.quit();
   });
 
   app.on('before-quit', () => {
+    const handedOverToInstaller = installerHandover; // beginInstall() already did all of this
+    isQuitting = true;
+    // Captured BEFORE stopChild(), which nulls the reference — the quit
+    // watchdog below needs the pid once `child` is gone.
+    const dyingPid = child && child.pid;
     stopChild();
     mediaWindowController.closeMediaWindow();
     // null when the overlay is disabled (the default) or failed to construct.
     if (cursorOverlayController) cursorOverlayController.destroy();
+    // BUG-225: armed BEFORE anything that can block below (syncVault's push is
+    // a blocking spawnSync with a 15s budget) — a backstop armed after the
+    // wedge can never fire.
+    armQuitWatchdog(dyingPid);
     // AFTER stopChild(), so the vault is not being written while it is committed.
     // A half-written episodic line committed as "synced" is worse than a late push,
     // and the push is idempotent: whatever misses this window goes next time.
+    //
+    // SKIPPED during an update handover, and that is the point: this is a
+    // BLOCKING spawnSync with a 15s timeout (see syncVault), while the NSIS
+    // uninstaller that is already running gives the whole app ~5s to let go of
+    // its files. Running it here is what made every 0.1.7 update fail. On that
+    // path beginInstall() has already pushed, with the clock still ours.
+    if (handedOverToInstaller) {
+      log('auto-update: skipping the before-quit vault push — beginInstall already pushed.');
+      return;
+    }
     syncVault('--push');
   });
 
@@ -921,6 +2409,30 @@ if (!gotLock) {
 // silently failed to register is indistinguishable from a broken mic.
 const TALK_HOTKEY_FALLBACKS = ['Alt+Space', 'Control+Alt+Space', 'Control+Shift+Space', 'Control+Alt+M'];
 
+// BUG-269 defect 1: the accelerator is claimed right after loadURL(), but the
+// renderer's onHotkey listener does not exist until app.js evaluates — Electron
+// does not queue IPC for unregistered listeners, so a press in that window was
+// lost forever. The latch holds at most one pre-ready press and flushes it when
+// the renderer announces itself ('mythos:renderer-ready', sent by preload's
+// notifyReady() right after app.js registers the listener). A reload destroys
+// the renderer's listeners, so did-start-loading re-arms it (see createWindow).
+// Behavioural tests: mythos/test/electron-hotkey-latch.test.js.
+const talkHotkeyLatch = createHotkeyLatch({
+  send: () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    try {
+      mainWindow.webContents.send('mythos:hotkey', 'talk');
+    } catch (err) {
+      log('push-to-talk hotkey: send failed:', err && err.message);
+    }
+  },
+});
+
+// The renderer's ready signal — its onHotkey listener is registered, so the
+// latch may flush. Payload-free by design (preload's notifyReady sends nothing),
+// so nothing structured can ride this channel into the main process either.
+ipcMain.on('mythos:renderer-ready', () => talkHotkeyLatch.markReady());
+
 function talkHotkeyCandidates() {
   const configured = String(process.env.MYTHOS_HOTKEY_TALK || '').trim();
   if (configured.toLowerCase() === 'false' || configured.toLowerCase() === 'off') return [];
@@ -939,12 +2451,10 @@ function registerTalkHotkey() {
     let registered = false;
     try {
       registered = globalShortcut.register(accel, () => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        try {
-          mainWindow.webContents.send('mythos:hotkey', 'talk');
-        } catch (err) {
-          log('push-to-talk hotkey: send failed:', err && err.message);
-        }
+        // BUG-269: route through the ready-latch — a press before the renderer
+        // has registered its listener is latched and flushed on the ready
+        // signal instead of being sent into the void (see talkHotkeyLatch).
+        talkHotkeyLatch.press();
       });
     } catch (err) {
       log('push-to-talk hotkey: register threw for', accel, '-', err && err.message);
@@ -994,6 +2504,27 @@ function registerOcrGrabHotkey() {
     let registered = false;
     try {
       registered = globalShortcut.register(accel, () => {
+        // BUG-268 instrumentation (2026-08-20). This is boundary 1 of 3 — the
+        // other two are server/index.js's mythos:ocr-grab handler and the HUD's
+        // ocr-result subscriber. The operator reports a "clipboard-looking
+        // toast" and nothing actionable following it, which is consistent with
+        // several different faults at four different stages, and the pipeline
+        // was silent at every one of them except its own failure paths.
+        //
+        // Grep these three lines in order after one press. Missing 1 means the
+        // accelerator never registered or another app holds it; 1-without-2 is
+        // the fork IPC channel; 2 with empty text is GDI capture or WinRT OCR;
+        // 2-without-3 is the broadcast wiring; 3 reporting the gate closed means
+        // the PIN lock ate it; 3 rendering fine means this is not a pipeline bug
+        // and the gap is the operator's expectation, which is a scoping question
+        // rather than a defect.
+        //
+        // A DIAGNOSIS, NOT A FIX. Do not close BUG-268 when this lands.
+        //
+        // Inside its own try: a globalShortcut callback that throws takes down
+        // the Electron main process, and adding an instrumentation line is a
+        // ridiculous way to do that.
+        try { log('OCR-grab hotkey fired (accel ' + accel + ', server child ' + (child ? 'up' : 'DOWN') + ')'); } catch { /* never break the handler to log */ }
         if (!child) { log('OCR-grab hotkey pressed but server child is not running'); return; }
         try {
           child.send({ channel: 'mythos:ocr-grab' });

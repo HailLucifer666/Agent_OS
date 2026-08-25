@@ -8,11 +8,13 @@
 // test/server-auth.test.js's and test/pin-routes.test.js's real-server
 // harness pattern exactly (real createServer, real createPinLock).
 //
-// Back-compat is the whole point of the gate: PIN_SESSION_ENFORCE defaults
-// to false/unset, so a loopback install with no token and no PIN configured
-// (the default, and every pre-existing test) must keep behaving exactly as
-// before. Only tests in the 'enforcement ON' describe block exercise the
-// new refusal path.
+// Back-compat is the whole point of the gate: the schema default flipped to
+// true in Task A2 (2026-08-17), but pinSessionRequired() (server/index.js)
+// requires BOTH the flag AND a configured PIN, and a config object handed to
+// createServer directly carries no schema defaults at all — so a loopback
+// install with no token and no PIN configured (the default, and every
+// pre-existing test) must keep behaving exactly as before. Only tests in the
+// 'enforcement ON' describe block exercise the new refusal path.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -97,7 +99,7 @@ function extractSessionCookie(setCookieHeader) {
   return null;
 }
 
-describe('PIN session (Track B1): enforcement OFF (default) — total back-compat', () => {
+describe('PIN session (Track B1): enforcement flag unset on a raw config — total back-compat', () => {
   test('a PIN configured but PIN_SESSION_ENFORCE unset: /api/status is still 200 with no token at all', async () => {
     const bus = createBus({ historySize: 50 });
     const pinLock = realPinLock();

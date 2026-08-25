@@ -38,9 +38,29 @@ describe('P18: job<->goal mapping (build-runner + agent-actions + crash recovery
   let dir;
   afterEach(() => { if (dir) cleanupVaultDir(dir); });
 
+  // BUG-329 found this, and it is a harness defect rather than a product one, so
+  // it is fixed here.
+  //
+  // `dir` is shared and reassigned by every test in this describe, and
+  // createFsStore takes a THUNK — `() => dir` reads whichever directory is
+  // current at WRITE time, not at construction. The tests below enqueue jobs and
+  // do not await them (they only assert what enqueue() returns), so those jobs
+  // are still pumping when the next test begins. Every notify() persists, so a
+  // leftover job from an earlier test wrote its own job list into the NEXT test's
+  // vault, clobbering Checkpoints/build-jobs.json between the crash-recovery
+  // test's snapshot and its restart — recoveredJobs came back 0.
+  //
+  // It survived because it needed a build to take slightly longer: BUG-329 added
+  // an awaited preparePrompt hook, which was enough. Binding the directory at
+  // construction removes the class rather than the instance — a stray write now
+  // lands in the directory it belongs to, wherever the test has got to.
+  function vaultAt(root) {
+    return createFsStore(() => root);
+  }
+
   it('build-runner.enqueue() carries goalId onto the job record, and honestly records null when absent', async () => {
     dir = tempVaultDir();
-    const fs = createFsStore(() => dir);
+    const fs = vaultAt(dir);
     const bus = fakeBus();
     const brain = { think: async () => ({ content: 'ok', offline: false }) };
     const buildRunner = createBuildRunner({ config: {}, brain, bus, vault: fs });
@@ -54,7 +74,7 @@ describe('P18: job<->goal mapping (build-runner + agent-actions + crash recovery
 
   it('agent-actions.executePipelineCard/buildKanbanCard/assembleKanbanPlan thread goalId through to the real build-runner job', async () => {
     dir = tempVaultDir();
-    const fs = createFsStore(() => dir);
+    const fs = vaultAt(dir);
     const bus = fakeBus();
     const brain = { think: async () => ({ content: '# Deliverable\nbody', offline: false }) };
     const buildRunner = createBuildRunner({ config: {}, brain, bus, vault: fs });
@@ -85,7 +105,7 @@ describe('P18: job<->goal mapping (build-runner + agent-actions + crash recovery
 
   it('real crash recovery: a job enqueued for a goal, persisted mid-run, restarted — recoverFromCrash() surfaces a real job->goal map', async () => {
     dir = tempVaultDir();
-    const fsA = createFsStore(() => dir);
+    const fsA = vaultAt(dir);
     const busA = fakeBus();
     // brain.think() never resolves before we snapshot — we seed the persisted file
     // directly instead of racing a real hung run(), same technique as
@@ -99,7 +119,7 @@ describe('P18: job<->goal mapping (build-runner + agent-actions + crash recovery
 
     // Restart: fresh buildRunner over the same vault (loadPersisted() reads the
     // 'running' job back and flips it to 'failed', carrying goalId through).
-    const fsB = createFsStore(() => dir);
+    const fsB = vaultAt(dir);
     const busB = fakeBus();
     const buildRunnerB = createBuildRunner({ config: {}, brain: { think: async () => ({ content: 'ok' }) }, bus: busB, vault: fsB });
 
@@ -123,7 +143,7 @@ describe('P18: job<->goal mapping (build-runner + agent-actions + crash recovery
 
   it('a goal-less recovered job (system job, no goalId) maps to an honest null, never a fabricated goal', async () => {
     dir = tempVaultDir();
-    const fs = createFsStore(() => dir);
+    const fs = vaultAt(dir);
     fs.writeJSON('Checkpoints/build-jobs.json', {
       jobs: [{ id: 'job-system-1', kind: 'test', goalId: null, status: 'running', stage: 'generating', artifact: null, error: null, createdAt: Date.now(), finishedAt: null }]
     });

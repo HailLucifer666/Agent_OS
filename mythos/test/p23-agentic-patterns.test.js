@@ -38,9 +38,19 @@ describe('P23: Risk Classifier', () => {
 
   it('gatePath returns correct phases per risk class', () => {
     assert.deepEqual(gatePath('tiny-fix'), ['artifact']);
-    assert.deepEqual(gatePath('quick-win'), ['artifact', 'verify']);
+    // 'verify' was REMOVED from this path on 2026-08-22 (BUG-304), on the same
+    // precedent as 'adr' below and for a stronger version of the same reason:
+    // grepping src/ for it as a phase name returned the gate-path table that
+    // demanded it and one comment listing it, and nothing else. No producer, no
+    // check — quick-win advertised a two-phase gate and ran a one-phase one.
+    assert.deepEqual(gatePath('quick-win'), ['artifact']);
     assert.deepEqual(gatePath('feature'), ['research', 'artifact', 'visual', 'review']);
-    assert.deepEqual(gatePath('architecture-change'), ['research', 'adr', 'artifact', 'visual', 'review']);
+    // 'adr' was removed from this path on 2026-08-20. It was declared here and
+    // enforced nowhere — evidence-validator.js's adr block held only comments —
+    // and nothing in the repo produces an ADR artifact, so enforcing it would
+    // have deadlocked every architecture-change card. The disposition and its
+    // revisit trigger live in test/evidence-gate-visual-and-adr.test.js.
+    assert.deepEqual(gatePath('architecture-change'), ['research', 'artifact', 'visual', 'review']);
   });
 
   it('requiresReview/research/visual flags are correct', () => {
@@ -65,7 +75,10 @@ describe('P23: Risk Classifier', () => {
 });
 
 describe('P23: Evidence Validator', () => {
-  var ev = createEvidenceValidator();
+  // BUG-304: the gate reads the disk now. These cases are about phase logic, so
+  // the artifact is stubbed present — see
+  // test/bug-304-ship-gate-requires-a-real-file.test.js for the real-file proof.
+  var ev = createEvidenceValidator({ fs: { exists: () => true, readText: () => 'content' } });
 
   it('passes when all required phases have evidence', () => {
     var result = ev.verify({

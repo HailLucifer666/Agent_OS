@@ -57,11 +57,22 @@ async function getStatus() {
 }
 
 // Synthesize text to an MP3 audio Buffer. Throws if the service is down or returns an error.
-async function synthesize({ text, voice, format, rate, pitch }) {
+//
+// `signal` is not optional decoration. providers/tts.js's chain passes one into
+// every provider (tts.js:133) and treats an abort as barge-in rather than as a
+// provider failure (tts.js:143) — and this file used to accept the argument
+// implicitly and drop it on the floor. gemini-tts, piper-tts and kokoro-tts all
+// honour it; edge-tts is in the DEFAULT chain, so the one engine most likely to
+// be speaking was the one engine that could not be cut off. The operator would
+// interrupt, the state machine would agree, and the audio would keep arriving.
+async function synthesize({ text, voice, format, rate, pitch, signal }) {
   if (!text || !text.trim()) throw new Error('text required');
+  // Already-aborted: do not even open the connection. Mirrors kokoro-tts.js.
+  if (signal && signal.aborted) throw new Error('aborted');
   const res = await fetch(`${BASE}/v1/audio/speech`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    signal: signal,
     body: JSON.stringify({
       input: text,
       voice: voice || 'en-US-AriaNeural',
@@ -83,7 +94,11 @@ async function listVoices() {
   const now = Date.now();
   if (now - _voiceCache.at < VOICE_CACHE_MS) return _voiceCache.voices;
   try {
-    const res = await fetch(`${BASE}/v1/voices`);
+    // GAP-ANALYSIS-2026-08-24 M2: this fetch had no timeout — a sidecar that
+    // accepted the connection but never answered blocked the caller for undici's
+    // ~300s default. 8s matches the voice path's tolerance elsewhere
+    // (news-feed.js uses the same budget); fail-soft behaviour below is unchanged.
+    const res = await fetch(`${BASE}/v1/voices`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`voices ${res.status}`);
     const data = await res.json();
     _voiceCache = { at: now, voices: Array.isArray(data.voices) ? data.voices : [] };

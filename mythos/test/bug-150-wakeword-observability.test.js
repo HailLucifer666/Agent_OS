@@ -265,7 +265,15 @@ describe('BUG-150: the detector proves liveness instead of asserting it', () => 
   test("onWake's five guards each name themselves instead of returning silently", () => {
     const idx = APP.indexOf('onWake:');
     assert.ok(idx !== -1, 'the onWake handler must still exist');
-    const body = APP.slice(idx, idx + 1800);
+    // BUG-273 A3: this was `APP.slice(idx, idx + 1800)`, and adding a sixth guard
+    // with its comment pushed the fifth reason past character 1800 — so a correct
+    // chain failed on a fixed width that had nothing to do with the invariant.
+    // Bounded by the handler's own next stage instead: the local guards and their
+    // telemetry all sit above the mesh arbitration call, so this covers exactly what
+    // the test is about and cannot be broken by prose again.
+    const arb = APP.indexOf('askWakeArbitration', idx);
+    assert.ok(arb > idx, 'the local guards must still precede mesh arbitration');
+    const body = APP.slice(idx, arb);
     for (const reason of ['pin-gate-closed', 'voice-turn-already-active', 's2s-session-already-active',
       'mythos-is-speaking', 'voice-state-speaking']) {
       assert.ok(body.includes(reason), 'guard must be named in telemetry: ' + reason);

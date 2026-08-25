@@ -55,11 +55,51 @@ function resolveVaultRoot() {
   return path.join(MYTHOS_DIR, 'vault');
 }
 
+// BUG-328 — THE AMBIENT GIT ENVIRONMENT MUST BE STRIPPED, and `cwd` is not
+// enough. An explicit GIT_DIR beats the working directory, always: with it set,
+// every command below operates on THAT repository and silently ignores
+// vaultRoot.
+//
+// This is not theoretical. `git commit` EXPORTS the repository environment to
+// its hooks — measured 2026-08-23 inside .githooks/pre-commit:
+//
+//     GIT_DIR=<repo>/.git/worktrees/<name>
+//     GIT_INDEX_FILE=<repo>/.git/worktrees/<name>/index
+//
+// The hook runs the whole suite, test/vault-sync.test.js calls main(['--init'])
+// on a temp directory, and `git init -b main` therefore re-initialised THE
+// MYTHOS REPOSITORY. With GIT_DIR set and no GIT_WORK_TREE, git concludes the
+// repository has no working tree and writes `bare = true` into the SHARED
+// .git/config — which breaks the main checkout and every worktree at once with
+//
+//     fatal: this operation must be run in a work tree
+//
+// FOUR COMMITS IN A ROW WERE BLOCKED BY IT before the cause was found, and the
+// operator's notes had recorded the flip since 2026-08-22 as "a thing that
+// happens and has no known trigger". The trigger is any commit.
+//
+// `git init` was merely the loudest instance. The same helper runs `remote add
+// origin`, `add -A`, `commit` and `push origin main` — so an ambient GIT_DIR
+// would point a vault push at the code repository. The --init test passes
+// `git@example.invalid:nobody/vault.git` as the remote; MYTHOS's own origin
+// survived only because `remote add` refuses a name that already exists.
+const INHERITED_GIT_ENV = [
+  'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_PREFIX',
+  'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE',
+];
+
+function vaultGitEnv() {
+  const env = Object.assign({}, process.env);
+  for (const key of INHERITED_GIT_ENV) delete env[key];
+  return env;
+}
+
 // A git command inside the vault. Time-boxed, because this runs on the boot path
 // and a hung network call must not become a hung MYTHOS. Never throws.
 function git(vaultRoot, args, timeoutMs) {
   const res = spawnSync('git', args, {
     cwd: vaultRoot,
+    env: vaultGitEnv(),
     encoding: 'utf8',
     timeout: timeoutMs || 20000,
     windowsHide: true,
@@ -351,4 +391,8 @@ module.exports = {
   isGitRepo,
   midConflict,
   main,
+  // BUG-328: exported so the regression test can assert the strip list directly
+  // as well as behaviourally.
+  _INHERITED_GIT_ENV: INHERITED_GIT_ENV,
+  _vaultGitEnv: vaultGitEnv,
 };

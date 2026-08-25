@@ -3,7 +3,7 @@
 
 // scripts/setup-android.js — Task 9 (Wave 2, ADB phone bridge): install,
 // pair, and connect Android devices for android-child's ADB bridge.
-// Modeled on setup-hermes.js's --check/--install shape.
+// Modeled on setup-dsh.js's --check/--install shape.
 //
 // WHAT IT DOES
 //   --check (default)   resolve adb (ANDROID_ADB_BIN, the project-local
@@ -24,8 +24,8 @@
 //                        than .env.
 //
 // EVERYTHING STAYS INSIDE THE PROJECT. Downloads land in
-// <repo>/Android Platform Tools/ (gitignored — mirrors Hermes-Agent's own
-// /Hermes Agent/ convention: a full third-party tool checkout never belongs
+// <repo>/Android Platform Tools/ (gitignored — mirrors the build engine's own
+// /DeepSeek Harness/ convention: a full third-party tool tree never belongs
 // in git, contributors fetch their own copy).
 
 const { spawnSync } = require('child_process');
@@ -34,7 +34,16 @@ const fs = require('fs');
 const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const INSTALL_DIR = path.join(REPO_ROOT, 'Android Platform Tools');
+// Installer parity (2026-08-11): in a PACKAGED install, <repo>/Android Platform
+// Tools resolves inside the install tree — which an update replaces wholesale, so
+// every upgrade would silently un-install adb and take every phone_* effector
+// with it. MYTHOS_TOOLS_DIR is injected by electron/main.js as <userData>/tools,
+// beside the models directory and for the same three reasons: writable without
+// elevation, survives an update, survives a reinstall. A dev checkout sets nothing
+// and keeps the historical in-repo location, so existing installs are untouched.
+const INSTALL_DIR = process.env.MYTHOS_TOOLS_DIR
+  ? path.join(path.resolve(process.env.MYTHOS_TOOLS_DIR), 'Android Platform Tools')
+  : path.join(REPO_ROOT, 'Android Platform Tools');
 const VAULT_DEVICES_PATH = path.resolve(__dirname, '..', 'vault', 'Identity', 'android-devices.json');
 
 function platformToken() {

@@ -155,11 +155,29 @@ function createSkillsStore({ fs, config, bus, logger }) {
           const freshContent = fs.readText(relPath, '');
           if (!freshContent) return;
           const parsed = parseSkill(freshContent);
-          parsed.uses = (parsed.uses || 0) + 1;
-          // Update success rate as running average
+          const priorUses = parsed.uses || 0;
+          parsed.uses = priorUses + 1;
           const oldRate = parsed.successRate || 0;
           const newRate = success ? 1 : 0;
-          parsed.successRate = oldRate === 0 ? newRate : (oldRate * 0.9 + newRate * 0.1);
+          // Running average, EXCEPT on the very first measurement, when there
+          // is nothing to average against and the result simply is the rate.
+          //
+          // Audit item 12 (2026-08-22): this used to ask whether the rate was
+          // 0, and 0 is also exactly what a skill that has failed every time
+          // scores. So the first success after any all-failure history threw
+          // that history away and recorded a perfect 1. Measured: fail, fail,
+          // succeed ended at 1, and goals/index.js gates replay on this number
+          // (SKILL_MIN_SUCCESS_RATE, default 0.5) — so a procedure that had
+          // just failed twice was handed back to the planner as proven. The
+          // honest value is 0.1.
+          //
+          // The condition is no-uses AND no-rate, not no-uses alone: a sidecar
+          // can carry a rate with its uses counter missing, and reading that as
+          // a first measurement would discard a real recorded score — the same
+          // mistake in the other direction. The uses counter is what
+          // goals/index.js already keys on to spot a brand-new skill.
+          const neverMeasured = priorUses === 0 && oldRate === 0;
+          parsed.successRate = neverMeasured ? newRate : (oldRate * 0.9 + newRate * 0.1);
           write(files[i].name.replace('.md', ''), parsed);
         });
         return;

@@ -55,6 +55,30 @@ async function freeBase(count) {
   throw new Error(`no free block of ${count} consecutive ports found`);
 }
 
+// Bind with retry. freeBase probes a block and then RELEASES it, so under
+// full-suite load another process (or another test file) can take the port in
+// the microseconds before the proxy binds — measured 2026-08-13 as
+// `EADDRINUSE 127.0.0.1:61054` during a release build, which blocked the commit
+// gate for a port race rather than a defect. A fresh block on retry costs
+// milliseconds; a false red costs a release.
+async function startProxy(ids, count = 1) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const base = await freeBase(count);
+    const p = proxy(ids, base);
+    p.start();
+    try {
+      await p.whenReady();
+      return { p, base };
+    } catch (err) {
+      p.stop();
+      lastErr = err;
+      if (!/EADDRINUSE/.test(String(err && err.message))) throw err;
+    }
+  }
+  throw lastErr;
+}
+
 async function waitFor(cond, ms) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -87,11 +111,8 @@ async function dial(port) {
 
 describe('aether scanner-proxy — port assignment and config validation', () => {
   it('assigns ports by position in AETHER_NODE_IDS', async () => {
-    const base = await freeBase(2);
-    const p = proxy('kitchen-phone,desk-phone', base);
-    p.start();
+    const { p, base } = await startProxy('kitchen-phone,desk-phone', 2);
     try {
-      await p.whenReady();
       assert.deepEqual(p.ports(), { 'kitchen-phone': base, 'desk-phone': base + 1 });
     } finally { p.stop(); }
   });
@@ -116,10 +137,7 @@ describe('aether scanner-proxy — port assignment and config validation', () =>
 
 describe('aether scanner-proxy — §4 wire contract', () => {
   it('pushes state on connect with no handshake, and reports lost before any reading', async () => {
-    const base = await freeBase(1);
-    const p = proxy('kitchen-phone', base);
-    p.start();
-    await p.whenReady();
+    const { p, base } = await startProxy('kitchen-phone');
     const peer = await dial(base);
     try {
       // §4: the scanner pushes immediately; the aggregator sends nothing first.
@@ -135,10 +153,7 @@ describe('aether scanner-proxy — §4 wire contract', () => {
   });
 
   it('turns a phone push into a §4.1 reading, seeding the EMA on the first sample', async () => {
-    const base = await freeBase(1);
-    const p = proxy('kitchen-phone', base);
-    p.start();
-    await p.whenReady();
+    const { p, base } = await startProxy('kitchen-phone');
     const peer = await dial(base);
     try {
       assert.equal(p.updateReading('kitchen-phone', { rssi: -60, name: 'Pixel Watch' }), true);
@@ -155,10 +170,7 @@ describe('aether scanner-proxy — §4 wire contract', () => {
   });
 
   it('smooths subsequent samples with the reference EMA (alpha 0.3)', async () => {
-    const base = await freeBase(1);
-    const p = proxy('kitchen-phone', base);
-    p.start();
-    await p.whenReady();
+    const { p, base } = await startProxy('kitchen-phone');
     const peer = await dial(base);
     try {
       p.updateReading('kitchen-phone', { rssi: -60 });
@@ -172,10 +184,7 @@ describe('aether scanner-proxy — §4 wire contract', () => {
   });
 
   it('markLost drops the node to §4.2 lost and clears its rssi', async () => {
-    const base = await freeBase(1);
-    const p = proxy('kitchen-phone', base);
-    p.start();
-    await p.whenReady();
+    const { p, base } = await startProxy('kitchen-phone');
     const peer = await dial(base);
     try {
       p.updateReading('kitchen-phone', { rssi: -55 });
@@ -189,10 +198,7 @@ describe('aether scanner-proxy — §4 wire contract', () => {
   });
 
   it('caps a node-supplied name — it is echoed to every peer every 400ms', async () => {
-    const base = await freeBase(1);
-    const p = proxy('kitchen-phone', base);
-    p.start();
-    await p.whenReady();
+    const { p, base } = await startProxy('kitchen-phone');
     const peer = await dial(base);
     try {
       p.updateReading('kitchen-phone', { rssi: -50, name: 'x'.repeat(5000) });
@@ -203,9 +209,7 @@ describe('aether scanner-proxy — §4 wire contract', () => {
   });
 
   it('an unknown nodeId is dropped, never auto-registered', async () => {
-    const base = await freeBase(1);
-    const p = proxy('kitchen-phone', base);
-    p.start();
+    const { p, base } = await startProxy('kitchen-phone');
     try {
       assert.equal(p.updateReading('rogue-phone', { rssi: -40 }), false);
       assert.equal(p.knows('rogue-phone'), false);
@@ -260,10 +264,7 @@ describe('aether scanner-proxy — §4 wire contract', () => {
   });
 
   it('stop() releases the ports so a restart can rebind them', async () => {
-    const base = await freeBase(1);
-    const p1 = proxy('kitchen-phone', base);
-    p1.start();
-    await p1.whenReady();
+    const { p: p1, base } = await startProxy('kitchen-phone');
     p1.stop();
     const p2 = proxy('kitchen-phone', base);
     p2.start();

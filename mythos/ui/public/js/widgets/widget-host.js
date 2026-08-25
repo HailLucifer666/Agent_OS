@@ -297,8 +297,13 @@ export function mountWidgets(root, ctx) {
   // live at once), so 'dynamic' keeps the old stack-a-new-card behavior.
   const spawnedByType = new Map();
 
+  // BUG-273 B3: returns { mounted, reason } instead of undefined. This used to
+  // swallow a kind-module throw into a failureNode and return nothing, so a card
+  // reading "could not render" was indistinguishable from one that worked — which
+  // is precisely the silent non-render the three 2026-08-18 incidents reported.
+  // The caller relays this to the server as the render ack.
   function spawnWebWidget(payload) {
-    if (!payload || !payload.widgetType) return;
+    if (!payload || !payload.widgetType) return { mounted: false, reason: 'no widgetType in the descriptor' };
     const dedupeKey = payload.widgetType !== 'dynamic' ? payload.widgetType : null;
     if (dedupeKey && spawnedByType.has(dedupeKey)) {
       spawnedByType.get(dedupeKey)(); // tear down the stale card for this surface first
@@ -331,7 +336,11 @@ export function mountWidgets(root, ctx) {
     // Stop pointerdown propagation so makeDraggable's setPointerCapture
     // doesn't hijack the click away from the button.
     const closeBtn = card.querySelector('.web-widget-close');
+    // Per-card mount cleanups (currently only the countdown's interval).
+    const spawnedMountCleanups = [];
     const teardown = () => {
+      spawnedMountCleanups.forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+      spawnedMountCleanups.length = 0;
       let idx = spawnedCleanups.indexOf(teardown);
       if (idx !== -1) spawnedCleanups.splice(idx, 1);
       if (dedupeKey && spawnedByType.get(dedupeKey) === teardown) spawnedByType.delete(dedupeKey);
@@ -344,17 +353,34 @@ export function mountWidgets(root, ctx) {
     // generative-UI, from the spawn_widget effector) gets its own fixed
     // renderer; every other widgetType keeps going through web-result.js
     // unchanged.
+    var mountError = null;
     try {
       if (payload.widgetType === 'dynamic') {
-        mountDynamicWidget(card.querySelector('.web-result-body'), payload);
+        // The return value used to be discarded, which was harmless while every
+        // dynamic layout rendered synchronously. The countdown layout starts a
+        // 1s interval, so its cleanup must reach teardown — an interval that
+        // outlives its card ticks forever. This file's own header already
+        // states the contract: "Every mount returns a cleanup".
+        const dynamicCleanup = mountDynamicWidget(card.querySelector('.web-result-body'), payload);
+        if (typeof dynamicCleanup === 'function') spawnedMountCleanups.push(dynamicCleanup);
       } else {
         mountWebResult(card.querySelector('.web-result-body'), payload);
       }
     } catch (err) {
       card.querySelector('.web-result-body').replaceChildren(failureNode(err));
+      // BUG-273 B3: the failureNode still renders — the operator should see WHY —
+      // but the ack must not call this a mount. Kept caught rather than rethrown so
+      // one broken widget cannot take the HUD down with it.
+      mountError = (err && err.message) || String(err);
     }
     spawnedCleanups.push(teardown);
     if (dedupeKey) spawnedByType.set(dedupeKey, teardown);
+    // Containment is the part worth reporting: appendChild above can only fail to
+    // put the card on screen if root is detached, which IS the "nothing appeared"
+    // case and is invisible to a try/catch around the mount.
+    if (!document.contains(card)) return { mounted: false, reason: 'the widget card was not attached to the dashboard' };
+    if (mountError) return { mounted: false, reason: 'the ' + payload.widgetType + ' widget failed to render: ' + mountError };
+    return { mounted: true, surface: 'floating widget' };
   }
 
   // REMEDIATION P1-5: close_panel was structurally unable to reach floating

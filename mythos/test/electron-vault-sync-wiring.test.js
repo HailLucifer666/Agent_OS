@@ -102,10 +102,28 @@ test('syncVault resolves the vault root exactly as startChild does', () => {
     'an operator-set vault root must still win');
 });
 
+test('syncVault uses real unpacked paths, never a raw path inside app.asar', () => {
+  const text = readMainJs();
+  const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text)[0];
+  const code = codeOnly(fn);
+  // Confirmed at source, from a packaged install whose --pull AND --push both
+  // failed spawnSync ENOENT: this function built its script path and its cwd with
+  // a raw path.join(__dirname, '..', 'mythos'), which in a packaged build points
+  // inside app.asar. A spawned OS process can neither read a script out of the
+  // archive nor use one as a cwd, and the existsSync guard above it passes anyway
+  // because Electron's asar-patched fs reads through the archive transparently.
+  // So the whole feature was dead in every packaged install while looking wired.
+  assert.doesNotMatch(code, /path\.join\(__dirname,\s*'\.\.',\s*'mythos'/,
+    'a raw __dirname/../mythos path resolves into app.asar when packaged — use MYTHOS_DIR, which is ' +
+    'run through toRealPathIfPackaged()');
+  assert.match(code, /cwd:\s*MYTHOS_DIR/,
+    'a process cwd cannot point inside an archive at all — the spawn fails ENOENT before the script runs');
+});
+
 test('the sync script it calls actually exists at the path main.js uses', () => {
   const text = readMainJs();
   const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text)[0];
-  assert.match(fn, /'mythos',\s*'scripts',\s*'vault-sync\.js'/,
+  assert.match(fn, /path\.join\(MYTHOS_DIR,\s*'scripts',\s*'vault-sync\.js'\)/,
     'the path is asserted here so a moved/renamed script fails a test rather than silently disabling sync');
   assert.equal(
     fs.existsSync(path.join(REPO_ROOT, 'mythos', 'scripts', 'vault-sync.js')),

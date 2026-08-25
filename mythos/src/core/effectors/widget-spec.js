@@ -7,7 +7,7 @@
 // proved the pattern: the brain sends a strict declarative DATA spec, never
 // markup, and the fixed client renderer (ui/public/js/widgets/kinds/dynamic.js)
 // turns it into DOM with every string escaped. This module gives the BUILD
-// path (Hermes, via hermes-runner.js's runWidgetBuild) the same contract, so a
+// path (the build engine, via forge-runner.js's runWidgetBuild) the same contract, so a
 // "build me a widget" request is validated exactly like a live tool call
 // instead of falling back to free HTML. The two producers (a spawn_widget tool
 // call vs. a one-shot Hermes reply) share the same shape on purpose; this file

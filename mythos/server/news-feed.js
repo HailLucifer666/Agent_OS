@@ -10,6 +10,11 @@
 const https = require('https');
 
 const FEED_URL = 'https://news.google.com/rss';
+// BUG-294: the same host answers a QUERY, and it always has — this module simply
+// never sent one. Measured 2026-08-21: /rss/search?q=Mohun+Bagan+Durand+Cup
+// returned 92 items whose first title was the entire answer to the operator's
+// question. That is why the voice search chain now reaches this module too.
+const SEARCH_URL = 'https://news.google.com/rss/search?q=';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_ITEMS = 12;
 const FETCH_TIMEOUT_MS = 8000;
@@ -57,6 +62,24 @@ function parseRss(xml, now) {
   return items;
 }
 
+// BUG-294 — the one change this module needed: a URL builder instead of a
+// constant. No query means the bare front page, byte-for-byte what the HUD news
+// card has always requested, so that card is unaffected by construction.
+//
+// NO LOCALE, DELIBERATELY. Measured 2026-08-21 on one query, three ways: with no
+// locale params, 92 items; with hl=en-IN&gl=IN, 92 items and an identical top
+// result; with hl=en-US&gl=US, 100 items and a different ranking. So the params
+// change nothing for the operator who reported this, and the en-US row proves
+// they are a real knob — which is exactly why baking one in would violate the
+// root CLAUDE.md portability rule and quietly degrade results for every other
+// clone of this repo. If it is ever wanted, it is ONE optional config key
+// defaulting to empty, and empty must omit the parameters entirely rather than
+// send blank ones.
+function feedUrl(query) {
+  const q = String(query == null ? '' : query).trim();
+  return q ? SEARCH_URL + encodeURIComponent(q) : FEED_URL;
+}
+
 // Minimal GET with redirect-follow and timeout; resolves to the body string.
 function httpGet(url, redirectsLeft) {
   if (redirectsLeft === undefined) redirectsLeft = MAX_REDIRECTS;
@@ -82,28 +105,70 @@ function httpGet(url, redirectsLeft) {
   });
 }
 
+// BUG-326: a topic is a DIFFERENT feed, so it needs a different cache slot.
+// fetchNews() took no argument at all and held one `cache` variable, so the
+// moment it learned to answer a topic the general feed and every topic would
+// share one slot: ask for "AI news", then open the HUD, and the widget renders
+// AI headlines as the world's top stories — or worse, a topic with no coverage
+// falls back to the general feed's stale items and reads as a real answer for
+// that topic. That is the failure mode news-rung.js's header already names: an
+// endpoint that never returns zero cannot be trusted about freshness or
+// relevance. Keyed, bounded, and a miss stays a miss.
+const MAX_CACHE_KEYS = 8;
+// A topic long enough to matter is a topic somebody typed by mistake. The feed
+// URL is fixed and the query is encoded into it, so this is a size bound rather
+// than a safety one.
+const MAX_QUERY_CHARS = 120;
+
+// The one shape a caller may pass. Express hands back an ARRAY for a repeated
+// parameter (?q=a&q=b), and an array coerced through String() becomes "a,b" —
+// a query nobody asked for, silently. Anything that is not a plain non-empty
+// string is the general feed.
+function normalizeQuery(query) {
+  if (typeof query !== 'string') return '';
+  return query.trim().replace(/\s+/g, ' ').slice(0, MAX_QUERY_CHARS);
+}
+
 // deps.get is injectable for tests; defaults to the real HTTPS fetch.
 function createNewsFeed(deps) {
   const get = (deps && deps.get) || httpGet;
-  let cache = null; // { at, items }
+  const cache = new Map(); // normalised query -> { at, items }
 
-  async function fetchNews() {
-    if (cache && Date.now() - cache.at < CACHE_TTL_MS) {
-      return { ok: true, items: cache.items, cached: true };
+  function remember(key, items) {
+    cache.set(key, { at: Date.now(), items });
+    // Insertion-ordered, so the oldest key goes first. The general feed ('') is
+    // re-fetched every 5 minutes by the widget, so it re-enters immediately;
+    // there is no need to pin it.
+    while (cache.size > MAX_CACHE_KEYS) {
+      const oldest = cache.keys().next();
+      if (oldest.done) break;
+      cache.delete(oldest.value);
+    }
+  }
+
+  // query: optional topic. Omitted/empty means the general feed, exactly as
+  // before. A topic with no coverage returns ok:false with an empty list — never
+  // the general feed, and never another topic's items.
+  async function fetchNews(query) {
+    const key = normalizeQuery(query);
+    const hit = cache.get(key);
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) {
+      return { ok: true, items: hit.items, cached: true, query: key || undefined };
     }
     try {
-      const xml = await get(FEED_URL);
+      const xml = await get(feedUrl(key));
       const items = parseRss(xml, Date.now());
-      if (!items.length) throw new Error('no items parsed from feed');
-      cache = { at: Date.now(), items };
-      return { ok: true, items };
+      if (!items.length) throw new Error(key ? 'no items for topic' : 'no items parsed from feed');
+      remember(key, items);
+      return { ok: true, items, query: key || undefined };
     } catch (err) {
-      if (cache) return { ok: true, items: cache.items, stale: true };
-      return { ok: false, error: err.message, items: [] };
+      // Stale is only ever stale for THIS key.
+      if (hit) return { ok: true, items: hit.items, stale: true, query: key || undefined };
+      return { ok: false, error: err.message, items: [], query: key || undefined };
     }
   }
 
   return { fetchNews };
 }
 
-module.exports = { parseRss, createNewsFeed, agoLabel };
+module.exports = { parseRss, createNewsFeed, agoLabel, feedUrl, normalizeQuery, MAX_QUERY_CHARS };

@@ -6,6 +6,7 @@
 const { createFsStore } = require('./fs-store');
 const { createEpisodicStore } = require('./episodic');
 const { createSemanticStore } = require('./semantic');
+const { createHabitPromoter } = require('./habit-promoter');
 const { createSkillsStore } = require('./skills');
 const { createIdentityStore } = require('./identity');
 const { createWorkingMemory } = require('./working');
@@ -13,6 +14,7 @@ const { createAuditWriter } = require('./audit-writer');
 const { createCheckpointStore } = require('./checkpoints');
 const { createDocumentsStore } = require('./documents');
 const { createLessonsStore } = require('./lessons');
+const { createNotesStore } = require('./notes');
 const { createVectorIndex, rrfMerge } = require('./vector-index');
 const embeddings = require('../../../providers/embeddings');
 
@@ -33,6 +35,18 @@ function createMemory({ config, bus, logger, brain }) {
   // planner reads here BEFORE its brain call so a known-bad approach is grounded
   // against instead of re-tried. See lessons.js for the full rationale.
   const lessons = createLessonsStore({ fs, config, bus, logger });
+  // Notes — the operator's own markdown documents (Obsidian-compatible), NOT
+  // MYTHOS's asserted facts. MYTHOS_NOTES_DIR lets the operator point this at
+  // an existing Obsidian vault; default keeps it inside the MYTHOS vault so a
+  // fresh clone works with no configuration. Path is derived, never literal.
+  const notes = createNotesStore({
+    dir: (config && config.MYTHOS_NOTES_DIR) ? config.MYTHOS_NOTES_DIR : fs.vaultPath('Notes'),
+  });
+
+  // F9: writes through the semantic store, so it is constructed after it and
+  // holds no store of its own — a promoted habit IS a semantic fact, not a
+  // fourth place facts can live.
+  const habits = createHabitPromoter({ semantic, logger });
 
   // ---- semantic recall layer (vector indexes over episodic + semantic + documents) ----
   // Existing sync recall() on each store is untouched (tests + callers keep
@@ -129,7 +143,7 @@ function createMemory({ config, bus, logger, brain }) {
     var result;
     try {
       result = await brain.think({
-        lane: 'simple',
+        lane: 'memory',
         messages: [{ role: 'user', content:
           'You are consolidating a knowledge base. Below are facts drawn from ' +
           topics.length + ' previously-distilled memory snapshots (the [N] tag ' +
@@ -198,6 +212,8 @@ function createMemory({ config, bus, logger, brain }) {
     documents,                          // §7.5/§7.11 chunk store — shared by both
     documentsIndex: vecIndexes.documents, // the ONE shared vector-index partition
     lessons,                            // durable failure memory (learning loop)
+    notes,                              // operator-owned Obsidian-compatible markdown notes
+    habits,                             // F9: repeated actions -> durable facts (dispatch-action)
 
     async init() {
       // Ensure all store directories exist
@@ -301,26 +317,52 @@ function createMemory({ config, bus, logger, brain }) {
 
       // 3. Episodic → semantic distillation via Brain 'simple' lane — best-effort,
       // skips cleanly if Brain is offline or unavailable.
+      //
+      // FIX-PLAN 3.1 (2026-08-17): every skip now says WHY on the bus
+      // ('memory.consolidate-skip'), because "did distillation ever run" was
+      // undiagnosable — a silent skip and a dead gate look identical in every
+      // log. Diagnostic only: never an anomaly, never a failure.
       if (brain && typeof brain.think === 'function') {
         try {
           const tail = episodic.tail(20).filter(Boolean);
-          const highSalience = tail.filter(function(e) { return (e.salience || 0) > 0.5; });
-          if (highSalience.length > 0) {
-            const summaryText = highSalience.map(function(e) { return '- ' + (e.summary || ''); }).join('\n');
-            const result = await brain.think({
-              lane: 'simple',
-              messages: [{ role: 'user', content: 'Distill these recent high-salience memories into durable facts:\n' + summaryText }],
-              source: 'memory:consolidate'
-            });
-            if (result && !result.offline && result.content) {
-              semantic.write('consolidated-' + Date.now(), [result.content], {
-                confidence: 0.6,
-                sources: highSalience.map(function(e) { return e.id; })
+          if (tail.length === 0) {
+            bus.emit('memory.consolidate-skip', { reason: 'episodic-tail-empty', detail: 'no recent episodic entries to distill' });
+          } else {
+            const highSalience = tail.filter(function(e) { return (e.salience || 0) > 0.5; });
+            if (highSalience.length === 0) {
+              bus.emit('memory.consolidate-skip', { reason: 'no-high-salience', detail: tail.length + ' recent entries, none above 0.5' });
+            } else {
+              const summaryText = highSalience.map(function(e) { return '- ' + (e.summary || ''); }).join('\n');
+              // lane 'memory' (2026-08-14) — split off 'simple' for LOAD as much
+              // as quality: consolidation is one of the two frequent brain
+              // consumers and shared Groq's 12k-token window with everything else.
+              // Terse styling follows this lane by default (schema.js's
+              // BRAIN_TERSE_LANES = 'simple,memory'), so summaries stay compact.
+              const result = await brain.think({
+                lane: 'memory',
+                messages: [{ role: 'user', content: 'Distill these recent high-salience memories into durable facts:\n' + summaryText }],
+                source: 'memory:consolidate'
               });
+              if (!result || result.offline || !result.content) {
+                bus.emit('memory.consolidate-skip', {
+                  reason: 'brain-offline',
+                  detail: result && result.offline ? 'think() reported offline' : 'think() returned no content',
+                });
+              } else {
+                try {
+                  semantic.write('consolidated-' + Date.now(), [result.content], {
+                    confidence: 0.6,
+                    sources: highSalience.map(function(e) { return e.id; })
+                  });
+                } catch (writeErr) {
+                  bus.emit('memory.consolidate-skip', { reason: 'semantic-write-failed', detail: writeErr && writeErr.message });
+                }
+              }
             }
           }
-        } catch (_) {
+        } catch (err) {
           // Brain distillation is best-effort — never block consolidation on it
+          bus.emit('memory.consolidate-skip', { reason: 'think-threw', detail: err && err.message });
         }
 
         // 3b. Conversation → user-facts distillation: mine recent conversation
@@ -337,7 +379,7 @@ function createMemory({ config, bus, logger, brain }) {
           if (convos.length >= 3) {
             const convoText = convos.map(function(c) { return '- ' + (c.record.summary || ''); }).join('\n');
             const result = await brain.think({
-              lane: 'simple',
+              lane: 'memory',
               messages: [{ role: 'user', content:
                 'Extract durable facts about the user from these conversation excerpts.\n' +
                 'Only include facts that will still be true tomorrow: preferences, ongoing projects, ' +
@@ -377,6 +419,10 @@ function createMemory({ config, bus, logger, brain }) {
           // visible rather than vanishing into an empty catch.
           bus.emit('health.anomaly', { kind: 'consolidate-merge-failed', error: err.message });
         }
+      } else {
+        // FIX-PLAN 3.1: the brain-missing skip used to be indistinguishable
+        // from every other silent skip (see the step-3 comment).
+        bus.emit('memory.consolidate-skip', { reason: 'brain-missing', detail: 'no brain.think available' });
       }
 
       // 4. Stats

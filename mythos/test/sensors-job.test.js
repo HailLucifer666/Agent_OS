@@ -56,6 +56,30 @@ describe('sensors/job: createJobSensor', () => {
     assert.equal(evt.payload.salience, 0.5);
   });
 
+  // job.artifact is an OBJECT ({path, …}) on the job record — job_status,
+  // agent-actions and from-dashboard all read artifact.path. The perception
+  // must carry the PATH STRING: the announcer composes the spoken completion
+  // sentence from it, and the object stringified to "[object Object]" there,
+  // so the operator and the model heard a garbage artifact name on every
+  // announced build.
+  it('emits the artifact PATH string, never the artifact object', () => {
+    const bus = fakeBus();
+    const buildRunner = fakeBuildRunner();
+    const sensor = createJobSensor({ bus, buildRunner });
+    sensor.start();
+
+    buildRunner._fire({
+      id: 'job-a', kind: 'build', status: 'done', stage: 'done', error: null,
+      artifact: { path: '/vault/Builds/2026-08-17/report.html', kind: 'html' },
+    });
+
+    const evt = bus._lastEvent('perception.job');
+    assert.equal(evt.payload.artifact, '/vault/Builds/2026-08-17/report.html');
+    buildRunner._fire({ id: 'job-b', kind: 'build', status: 'done', stage: 'done', error: null, artifact: null });
+    assert.equal(bus._lastEvent('perception.job').payload.artifact, null,
+      'a job with no artifact must stay null, not become "undefined"');
+  });
+
   it('does not emit after stop()', () => {
     const bus = fakeBus();
     const buildRunner = fakeBuildRunner();

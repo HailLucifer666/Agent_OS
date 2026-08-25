@@ -91,12 +91,17 @@ test('BUG-069: a no-match diagnosis is labeled unhandled, not healed', async () 
   assert.doesNotMatch(writes[0].summary, /^healed:/);
 });
 
-test('BUG-069: a cooldown-suppressed diagnosis is also labeled unhandled', async () => {
+test('Wave 0 (2026-08-13): a cooldown-suppressed diagnosis is labeled cooldown, not unhandled', async () => {
+  // Superseded BUG-069's original assertion (outcome:'unhandled' for cooldown
+  // too) — a cooldown is the healer intentionally throttling a playbook it
+  // already ran, not a fix attempt that failed, and lumping it in with
+  // no-match/error made a healthy suppression read as a standing problem.
   const { entry, writes } = await withHealthBroadcast({
     kind: 'quota-low', target: 'openai', outcome: 'cooldown', playbookId: 'quota-guard',
   });
-  assert.equal(entry.healed, false);
-  assert.equal(writes[0].outcome, 'unhandled');
+  assert.equal(entry.healed, false, 'cooldown is still not a heal for the HUD card');
+  assert.equal(writes[0].outcome, 'cooldown');
+  assert.match(writes[0].summary, /^cooldown:/);
 });
 
 test('BUG-069 (regression guard): a genuinely applied playbook is still labeled healed', async () => {

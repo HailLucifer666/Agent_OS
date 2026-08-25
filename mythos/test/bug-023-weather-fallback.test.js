@@ -87,7 +87,13 @@ describe('BUG-023: Weather widget geocoding fallback', () => {
     const result = await open_web({ type: 'weather', location: 'Atlantis, Fictional' });
 
     assert.equal(result.ok, false, 'Should fail');
-    assert.match(result.result, /No location found for/);
+    // BUG-293 reworded this failure so it names get_weather: the old bare "No
+    // location found" read to the model as THE WEATHER IS UNAVAILABLE rather than
+    // WRONG TOOL, and on 2026-08-20 that is what it did with "Kullu Manali current
+    // weather". The behaviour under test here — both geocode attempts made, then a
+    // clean failure — is unchanged.
+    assert.match(result.result, /No PLACE matched/);
+    assert.match(result.result, /get_weather/, 'the failure must name the tool that answers this');
     assert.equal(fetchCalls.length, 2, 'Should try both full and city name');
   });
 

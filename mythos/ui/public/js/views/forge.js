@@ -4,6 +4,7 @@
 // instruction), and an <iframe> preview once a build is awaiting review or done.
 // WS-driven (subscribe ['forge','checkpoint']), no polling.
 import { subscribe, checkpointReply } from '/js/ws.js';
+import { safeSameOriginUrl, escapeAttr } from '/js/url.js';
 
 function escapeHtml(s) {
   const d = document.createElement('div');
@@ -34,7 +35,14 @@ export async function render(mount) {
   function previewFrame(p) {
     const showPreview = p.previewUrl && (p.status === 'awaiting-final-review' || p.status === 'done');
     if (!showPreview) return '';
-    return `<iframe class="forge-preview" src="${escapeHtml(p.previewUrl)}" title="preview of ${escapeHtml(p.name)}"></iframe>`;
+    // escapeHtml() below is the textContent/innerHTML trick, which leaves `"`
+    // intact — fine in text position, a break-out in an attribute. The project
+    // name is model-authored, so `" onload=…` would land as a real attribute.
+    // previewUrl additionally gets a scheme gate: an iframe src honours
+    // javascript:/data: exactly like a link does.
+    const src = safeSameOriginUrl(p.previewUrl);
+    if (!src) return '';
+    return `<iframe class="forge-preview" src="${escapeAttr(src)}" title="preview of ${escapeAttr(p.name)}"></iframe>`;
   }
 
   function approvalCard(p) {

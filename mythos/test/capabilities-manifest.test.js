@@ -65,3 +65,69 @@ describe('capabilities manifest (P5)', () => {
     assert.equal(cap.fn({}).ok, false);
   });
 });
+
+// Wave 7 (2026-08-13) — "when did you first boot" / "how long have you been
+// in development" had no honest answer: version.js's bootDate re-stamps
+// every process restart. boot-timeline.js persists the FIRST boot exactly
+// once, and writeManifest renders it into the same self-knowledge surface
+// self_capabilities already reads.
+describe('boot-timeline — first-ever-boot persistence (Wave 7)', () => {
+  const { ensureFirstBootRecorded, FILE } = require('../src/core/identity/boot-timeline');
+  let dir, fsStore;
+
+  beforeEach(() => { dir = tempVaultDir(); fsStore = createFsStore(() => dir); fsStore.ensureDir(fsStore.vaultPath('Identity')); });
+  afterEach(() => cleanupVaultDir(dir));
+
+  it('writes Identity/first-boot.json exactly once and returns its timestamp', () => {
+    const first = ensureFirstBootRecorded(fsStore, Date.parse('2026-01-01T00:00:00Z'));
+    assert.equal(first, '2026-01-01T00:00:00.000Z');
+    assert.deepEqual(fsStore.readJSON(FILE, null), { firstBootAt: '2026-01-01T00:00:00.000Z' });
+  });
+
+  it('a later call with a DIFFERENT "now" still returns the ORIGINAL first-boot time', () => {
+    ensureFirstBootRecorded(fsStore, Date.parse('2026-01-01T00:00:00Z'));
+    const second = ensureFirstBootRecorded(fsStore, Date.parse('2027-06-15T00:00:00Z'));
+    assert.equal(second, '2026-01-01T00:00:00.000Z', 'the recorded first boot must never be overwritten by a later one');
+  });
+
+  it('with no fs store at all, still answers honestly for THIS boot only (no throw)', () => {
+    const answer = ensureFirstBootRecorded(null, Date.parse('2026-01-01T00:00:00Z'));
+    assert.equal(answer, '2026-01-01T00:00:00.000Z');
+  });
+
+  it('generateMarkdown renders firstBootAt with a day count when given one', () => {
+    const twoDaysAgo = new Date(Date.now() - 2 * 86400000).toISOString();
+    const md = capabilities.generateMarkdown(fakeHub(), [], twoDaysAgo);
+    assert.match(md, /First boot ever recorded on this install:/);
+    assert.match(md, /2 days ago/);
+  });
+
+  it('generateMarkdown omits the line entirely when no firstBootAt is passed (unaffected default)', () => {
+    const md = capabilities.generateMarkdown(fakeHub(), []);
+    assert.doesNotMatch(md, /First boot ever recorded/);
+  });
+
+  it('writeManifest seeds first-boot.json AND renders it into capabilities.md in one call', () => {
+    capabilities.writeManifest(fsStore, fakeHub(), []);
+    const recorded = fsStore.readJSON(FILE, null);
+    assert.ok(recorded && recorded.firstBootAt, 'writeManifest must trigger the one-time seed');
+    assert.match(fsStore.readText('Identity/capabilities.md', ''), /First boot ever recorded on this install:/);
+  });
+
+  it('self_capabilities surfaces the first-boot line through the real tool, filterable by topic', () => {
+    capabilities.writeManifest(fsStore, fakeHub(), []);
+    const tools = buildTools({ fs: fsStore });
+    const cap = tools.find((t) => t.name === 'self_capabilities');
+    const filtered = cap.fn({ topic: 'first boot' });
+    assert.equal(filtered.ok, true);
+    assert.ok(filtered.result.matches >= 1, 'the topic filter must find the first-boot line');
+  });
+
+  it('a SECOND writeManifest call (a later boot) keeps the SAME first-boot timestamp', () => {
+    capabilities.writeManifest(fsStore, fakeHub(), []);
+    const firstRecord = fsStore.readJSON(FILE, null);
+    capabilities.writeManifest(fsStore, fakeHub(), []);
+    const secondRecord = fsStore.readJSON(FILE, null);
+    assert.deepEqual(firstRecord, secondRecord, 'a later boot must not move the recorded first-boot time');
+  });
+});

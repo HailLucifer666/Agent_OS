@@ -23,7 +23,24 @@ const { spawn, spawnSync } = require('child_process');
 const PIPER_SCRIPT = path.join(__dirname, '..', '..', '..', 'services', 'piper-server.py');
 const MYTHOS_DIR = path.join(__dirname, '..', '..', '..');
 const REPO_ROOT = path.join(MYTHOS_DIR, '..');
-const DEFAULT_MODEL_DIR = path.join(MYTHOS_DIR, 'models', 'piper');
+const LEGACY_MODEL_DIR = path.join(MYTHOS_DIR, 'models', 'piper');
+// Installer parity (2026-08-11): scripts/setup-piper.js now downloads voices into
+// the userData-scoped models directory (the install tree is excluded from
+// build.files and replaced by every update), so the reader has to look there too
+// or a successful download would still resolve to "no voices". Read at call time
+// rather than at require time so an env injected after this module loads counts.
+// See src/core/setup/model-paths.js.
+const { userDataModelsDir } = require('../setup/model-paths');
+function defaultModelDir() {
+  const userModels = userDataModelsDir();
+  if (userModels) {
+    const candidate = path.join(userModels, 'piper');
+    // Only prefer it once it actually holds something — otherwise a machine whose
+    // voices are still in the legacy directory would report none.
+    try { if (require('fs').readdirSync(candidate).length > 0) return candidate; } catch (_) { /* fall through */ }
+  }
+  return LEGACY_MODEL_DIR;
+}
 
 // Project-local virtualenvs before PATH — identical policy to edge-tts-child, and
 // for the same reason: a correct project-local install must not leave the feature
@@ -58,14 +75,18 @@ function createPiperChild({ logger, config }) {
     if (process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT) return false;
 
     const port = String((config && config.PIPER_PORT) || process.env.PIPER_PORT || 5051);
-    const modelDir = (config && config.PIPER_MODEL_DIR) || process.env.PIPER_MODEL_DIR || DEFAULT_MODEL_DIR;
+    const modelDir = (config && config.PIPER_MODEL_DIR) || process.env.PIPER_MODEL_DIR || defaultModelDir();
 
     // No voices = nothing to serve. Say so with the install command rather than
     // starting a service whose every request would 404.
     if (!hasVoices(modelDir)) {
       logger.warn('piper.no-voices', {
         dir: modelDir,
-        hint: 'node mythos/scripts/setup-piper.js --install',
+        // True again as of 2026-08-11: this hint named a script that did not
+        // exist for months (doctor.js documented the lie rather than repeat it).
+        // scripts/setup-piper.js now exists and the wizard's Components step
+        // runs it, so all three places finally agree.
+        hint: 'node mythos/scripts/setup-piper.js --install  (or the Components step in setup)',
         note: 'piper offline — TTS chain will use the next provider',
       });
       return false;

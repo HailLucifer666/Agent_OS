@@ -154,13 +154,21 @@ build is how an evening gets lost.
    build against a same-version feed logged `already on the latest version`;
    and with no `MYTHOS_UPDATE_URL` it polled the embedded GitHub config and
    honestly reported no published versions.)
-3. **Sign the release build if you want the signature check to mean anything.**
-   On Windows, electron-updater verifies a downloaded installer against the
-   installed app's publisher name; an unsigned build has nothing to verify
-   against, so a compromised update host would be free to serve any executable.
-   Today the exposure is nil only because nothing downloads or installs
-   automatically (`autoDownload` is `false`, `quitAndInstall` is never called).
-   Do not enable automatic download before the build is signed.
+3. **Signing is still worth buying, but it is no longer what gates updates.**
+   Since 2026-08-11 the packaged app downloads a newer release in the background
+   and installs it when the operator clicks (`autoDownload` is `true`,
+   `autoInstallOnAppQuit` stays `false`, and `quitAndInstall` runs only from a
+   `showMessageBox` choice or the HUD's Update button). This reverses the earlier
+   "never auto-download while unsigned" rule, which rested on a wrong premise:
+   `NsisUpdater.verifySignature()` returns `null` — i.e. passes — when
+   `app-update.yml` carries no `publisherName`, so on an unsigned build the
+   signature check is **skipped, not failed**. Refusing to download bought no
+   verification; it only made every fix a manual reinstall. Integrity is still
+   enforced by the `sha512` in `latest.yml`, which electron-updater checks against
+   the downloaded file. What signing *would* add is protection against a
+   compromised release host serving a validly-hashed installer — accepted here
+   because anyone who can publish a release on this public repo can already
+   publish its source. Set `MYTHOS_AUTO_UPDATE=off` to disable the whole thing.
 
 ### Self-hosting instead of GitHub
 

@@ -88,6 +88,12 @@ class NodeLink(private val settings: NodeSettings) {
         // twice is a trap for the next caller.
         if (webSocket != null && _status.value != Status.DISCONNECTED) return
         if (!settings.isConfigured()) {
+            // Say WHY. isConfigured() now also rejects a server URL with no
+            // scheme, which is the single most likely way for this to be false
+            // on a device the operator believes they set up — and "NO LINK" with
+            // no text under it is what sent the last debugging session to the
+            // server logs, where there was nothing to find.
+            _lastError.value = settings.serverUrlProblem() ?: "Server URL, token and node id are all required"
             _status.value = Status.DISCONNECTED
             return
         }
@@ -106,13 +112,52 @@ class NodeLink(private val settings: NodeSettings) {
         if (previous != null) runCatching { previous.cancel() }
 
         _status.value = Status.CONNECTING
-        val request = Request.Builder()
-            .url(settings.webSocketUrl())
-            // Also sent as a header, for the HTTP routes and in case a future
-            // MYTHOS stops accepting ?token=. Harmless duplication.
-            .addHeader("Authorization", "Bearer ${settings.authToken}")
-            .build()
-        webSocket = client.newWebSocket(request, listener)
+        // EVERY failure path here must leave a status a human can act on.
+        //
+        // This block used to be unguarded, and both statements can throw before a
+        // socket exists: Request.Builder().url() throws IllegalArgumentException
+        // on a URL OkHttp cannot parse (a missing scheme being the common case),
+        // and addHeader throws on a token containing a newline or a non-ASCII
+        // character. Either one propagated out through connect() with _status
+        // already set to CONNECTING and webSocket still null — so the UI showed
+        // "LINKING" indefinitely, _lastError stayed empty, and because no socket
+        // was ever created, no listener callback existed to call
+        // scheduleReconnect(). The link did not fail; it stopped, permanently,
+        // and the only visible difference from a healthy connection was that
+        // nothing ever arrived.
+        //
+        // settings.isConfigured() now rejects the scheme-less URL up front, so
+        // this is the backstop rather than the primary guard — which is the point:
+        // the state machine must not depend on validation being complete.
+        val request = try {
+            Request.Builder()
+                .url(settings.webSocketUrl())
+                // Also sent as a header, for the HTTP routes and in case a future
+                // MYTHOS stops accepting ?token=. Harmless duplication.
+                .addHeader("Authorization", "Bearer ${settings.authToken}")
+                .build()
+        } catch (t: Throwable) {
+            val detail = t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
+            _lastError.value = settings.serverUrlProblem()
+                ?: "Could not build the connection request — $detail"
+            _status.value = Status.DISCONNECTED
+            // Retried on the normal backoff rather than abandoned. It re-reads
+            // settings on every attempt, so correcting the field in the UI
+            // recovers the link on its own; and no radio is involved in a failure
+            // that never reaches the network, so the retry costs essentially
+            // nothing while it waits for the operator.
+            scheduleReconnect()
+            return
+        }
+        webSocket = try {
+            client.newWebSocket(request, listener)
+        } catch (t: Throwable) {
+            val detail = t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
+            _lastError.value = "Could not open the socket — $detail"
+            _status.value = Status.DISCONNECTED
+            scheduleReconnect()
+            null
+        }
     }
 
     /**

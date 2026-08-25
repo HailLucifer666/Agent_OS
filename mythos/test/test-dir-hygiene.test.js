@@ -27,6 +27,7 @@ const TEST_DIR = path.join(__dirname);
 const ALLOWLIST = new Set([
   'helpers.js',
   'helpers/mock-spawn-enoent.js',
+  'helpers/leash-fixture.js',
   'fixtures/stub-mcp-server.js',
   'eval/routing.eval.js',
   'eval/memory-impact.eval.js',

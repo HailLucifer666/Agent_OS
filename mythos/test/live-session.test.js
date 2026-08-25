@@ -159,6 +159,13 @@ describe('live-session (Phase 1, V2 §6)', () => {
     assert.equal(anomalies[0].payload.turnId, 1, 'BUG-124: joinable to the turn it happened during');
     assert.match(anomalies[0].payload.reason, /operator/,
       'AD-5: the payload carries the reason, so the spoken line does not have to invent one');
+    // Wave 0 (2026-08-13): audioIn + scFields ride on the anomaly itself now,
+    // not just in a separate live.turn-parts log line — one record must be a
+    // complete diagnosis without a manual vault cross-reference.
+    assert.equal(anomalies[0].payload.audioIn, 0,
+      'no sendAudio() calls happened in this turn — candidate 1 (client mic gate) is distinguishable from candidate 2 by this field alone');
+    assert.match(anomalies[0].payload.scFields, /outputTranscription/);
+    assert.doesNotMatch(anomalies[0].payload.scFields, /inputTranscription/);
 
     // And the instrumentation that answers WHY: which serverContent fields the
     // turn actually carried, by name. inputTranscription absent here is the
@@ -167,6 +174,148 @@ describe('live-session (Phase 1, V2 §6)', () => {
     assert.ok(turnLine, 'every turn logs live.turn-parts');
     assert.match(turnLine.fields.scFields, /outputTranscription/);
     assert.doesNotMatch(turnLine.fields.scFields, /inputTranscription/);
+    session.close();
+  });
+
+  // Wave 2 (2026-08-13, resume-on-activity watchdog): the SAME half-blind turn
+  // above must also fire a direct per-connection callback — not a bus event,
+  // for the exact reason onInterrupted's own comment gives (the shared bus has
+  // no connectionId, so a bus.subscribe in server/index.js would clear every
+  // OTHER connection's mic-suspend gate too).
+  test('a half-blind turn also fires onSuspendedTurnAnomaly directly, once, alongside the anomaly', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    let fired = 0;
+    const { deps, sockets } = fakeDeps({ onSuspendedTurnAnomaly: () => { fired += 1; } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'Alright, the recipe is staged.' },
+        turnComplete: true,
+      },
+    });
+
+    assert.equal(fired, 1);
+    session.close();
+  });
+
+  test('a turn WE provoked (no anomaly) never fires onSuspendedTurnAnomaly', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    let fired = 0;
+    const { deps, sockets } = fakeDeps({ onSuspendedTurnAnomaly: () => { fired += 1; } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    session.sendText('[SYSTEM] something finished.');
+    sockets[0].serverFrame({ serverContent: { outputTranscription: { text: 'Noted.' }, turnComplete: true } });
+
+    assert.equal(fired, 0, 'a system-initiated turn is not the shape this watchdog exists for');
+    session.close();
+  });
+
+  test('a throwing onSuspendedTurnAnomaly never breaks turn completion', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const { deps, sockets } = fakeDeps({ onSuspendedTurnAnomaly: () => { throw new Error('boom'); } });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    assert.doesNotThrow(() => {
+      sockets[0].serverFrame({ serverContent: { outputTranscription: { text: 'ok' }, turnComplete: true } });
+    });
+    session.close();
+  });
+
+  // ...and the other half, later the same day. The check above fired 5 times in
+  // one six-minute conversation (turns 1, 3, 8, 13, 15 of 16) and every one was a
+  // FALSE alarm: those turns were provoked by us — the proactive greeting and
+  // replies to [SYSTEM] late tool outcomes — so there was no operator utterance to
+  // transcribe. scFields carried no inputTranscription for exactly those turns,
+  // which is what proved it.
+  //
+  // It is not a cosmetic false positive. An unplaybooked anomaly gets SPOKEN, so
+  // each one interrupted the conversation it was misreporting to recite an event
+  // name at the operator. A monitor that cries wolf on a third of its samples
+  // teaches everyone to ignore the real one.
+  test('a turn WE provoked with sendText is not reported as half-blind (the operator never spoke)', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const busEvents = [];
+    const logged = [];
+    const { deps, sockets } = fakeDeps({
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+      logger: { warn() {}, info: (msg, fields) => logged.push({ msg, fields }) },
+    });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    // Exactly what reportLateOutcome() and proactiveSpeak() do: inject text and
+    // let the model answer it.
+    session.sendText('[SYSTEM] screen_look finished. Result: {"description":"a screen"}');
+
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'I can see your screen now.' },
+        modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: 'QUJD' } }] },
+        turnComplete: true,
+      },
+    });
+
+    const anomalies = busEvents.filter((e) => e.name === 'health.anomaly');
+    assert.equal(anomalies.length, 0,
+      'a turn the operator was never expected to speak in is not evidence of a missing transcript');
+    // The log still says which kind of turn it was, so the next investigation does
+    // not have to infer it from scFields again.
+    const turnLine = logged.find((l) => l.msg === 'live.turn-parts');
+    assert.equal(turnLine.fields.systemInitiated, true);
+    session.close();
+  });
+
+  test('the NEXT turn after a system-initiated one is judged normally again', async () => {
+    process.env.GOOGLE_API_KEY = 'test-key';
+    const busEvents = [];
+    const { deps, sockets } = fakeDeps({
+      bus: { emit: (name, payload) => busEvents.push({ name, payload }) },
+    });
+    const session = createLiveSession(deps);
+    const openPromise = session.open();
+    sockets[0].simulateOpen();
+    sockets[0].serverFrame({ setupComplete: {} });
+    await openPromise;
+
+    session.sendText('[SYSTEM] something finished.');
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'Noted.' },
+        modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: 'QUJD' } }] },
+        turnComplete: true,
+      },
+    });
+    // Turn two: nobody injected anything, so a missing user transcript IS the
+    // real bug again. The flag must not latch.
+    sockets[0].serverFrame({
+      serverContent: {
+        outputTranscription: { text: 'Here you go.' },
+        modelTurn: { parts: [{ inlineData: { mimeType: 'audio/pcm;rate=24000', data: 'QUJD' } }] },
+        turnComplete: true,
+      },
+    });
+
+    const anomalies = busEvents.filter((e) => e.name === 'health.anomaly');
+    assert.equal(anomalies.length, 1, 'the suppression must apply to ONE turn, not latch for the session');
+    assert.equal(anomalies[0].payload.kind, 'live-turn-no-user-transcript');
+    assert.equal(anomalies[0].payload.turnId, 2);
     session.close();
   });
 

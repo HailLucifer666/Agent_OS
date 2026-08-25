@@ -14,6 +14,12 @@
 const path = require('path');
 const express = require('express');
 
+// Client-facing error text goes through sanitizeRestError: a raw err.message
+// here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
+// while the WS path had been sanitizing the same errors all along. Validation
+// messages this route raises itself still pass through unchanged.
+const { sanitizeRestError } = require('../sanitize-error');
+
 function mountMediaRoutes(app, deps) {
   const { pcChild, leash, dispatchAction } = deps;
 
@@ -44,7 +50,7 @@ function mountMediaRoutes(app, deps) {
         res.json({ ok: false, error: result.error });
       }
     } catch (err) {
-      res.json({ ok: false, error: err.message });
+      res.json({ ok: false, error: sanitizeRestError(err) });
     }
   });
 
@@ -71,8 +77,34 @@ function mountMediaRoutes(app, deps) {
     try {
       const key = req.body && req.body.key;
       if (!MEDIA_KEYS.includes(key)) return res.status(400).json({ ok: false, error: 'invalid media key' });
-      const decision = leash.check({ tool: 'media_key', args: { key } }, { goalId: null });
-      if (!decision.allow) return res.status(403).json({ ok: false, error: decision.reason });
+      // A click on the dashboard transport IS a present operator — the same
+      // standing as a voice turn. Without a connectionId the leash cannot
+      // apply operator-present trust and every button 403s in silence.
+      //
+      // CAUTION: this connectionId is a synthetic constant, not a real WS
+      // session — every request through this route shares the one identity.
+      // That is fine for operator-present trust, which only asks "is a human
+      // here". It is NOT a scope. If media_key (or anything else reachable
+      // here) is ever added to SESSION_GRANTABLE, a grant recorded against
+      // this literal would apply to EVERY request hitting this route rather
+      // than to one operator's session — thread a real connection id first.
+      const decision = leash.check(
+        { tool: 'media_key', args: { key } },
+        { goalId: null, connectionId: 'dashboard-media-widget' },
+      );
+      if (!decision.allow) {
+        return res.status(403).json({
+          ok: false,
+          // error + reason carry the same value on purpose: `error` is the
+          // conventional key every other route's failure body uses,
+          // `reason` is what the plan asked this route to add. Keep both —
+          // a future cleanup that drops one silently breaks whichever
+          // client only reads the other.
+          error: decision.reason,
+          reason: decision.reason,
+          requireConfirm: !!decision.requireConfirm,
+        });
+      }
       // AD-1: dispatchAction is always wired by the real server (server/index.js
       // passes it into mountMediaRoutes' deps) — the raw effectors.invoke
       // fallback this used to have was dead in production and bypassed the
@@ -80,7 +112,7 @@ function mountMediaRoutes(app, deps) {
       const result = await dispatchAction({ tool: 'media_key', args: { key } }, { tier: decision.tier, channel: 'dashboard-media-widget' });
       res.json({ ok: !!result.ok });
     } catch (err) {
-      res.status(502).json({ ok: false, error: err.message });
+      res.status(502).json({ ok: false, error: sanitizeRestError(err) });
     }
   });
 }

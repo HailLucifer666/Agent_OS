@@ -447,6 +447,63 @@ describe('BUG-026 (3rd attempt): spotify_play clicks the play control via click_
   });
 });
 
+// Wave 3 (2026-08-13): a REAL play control was located this time — the failure
+// mode this guards is different from "no play control was found" below.
+// click_at is a real SendInput mouse click at a physical screen coordinate
+// (Handle-ClickAt -> Click-AtScreenCoords), not a background-posted click like
+// cua-driver's — there is no foreground delivery mode to retry into. When that
+// real click fails, falling back to a blind Tab+Enter keystroke guess (the
+// exact unreliable behavior BUG-026's 3rd-attempt comment already explains)
+// is worse than an honest failure naming the real click error.
+describe('Wave 3: spotify_play fails honestly when click_at fails on a LOCATED play control (no blind keystroke fallback)', () => {
+  let dir, fs, hub, bus, callOrder;
+
+  before(() => {
+    dir = tempVaultDir();
+    fs = createFsStore(() => dir, null);
+    bus = fakeBus();
+    hub = createEffectorHub({ bus, config: {} });
+    callOrder = [];
+
+    const mockPcEffectors = {
+      invoke: async (tool, args) => {
+        callOrder.push(tool);
+        if (tool === 'launch_app') return { ok: true, result: { launched: true } };
+        if (tool === 'list_windows') {
+          return { ok: true, result: { windows: [{ pid: 4242, processName: 'Spotify.exe', title: 'Spotify' }] } };
+        }
+        if (tool === 'focus_window') return { ok: true, result: { focused: true, pid: args.pid } };
+        if (tool === 'ui_elements') {
+          return {
+            ok: true,
+            result: {
+              elements: [
+                { name: 'Play', type: 'ControlType.Button', automationId: 'play-button',
+                  rect: { x: 100, y: 200, width: 40, height: 40 } },
+              ],
+            },
+          };
+        }
+        if (tool === 'click_at') return { ok: false, result: 'Click failed: input blocked by UIPI' };
+        if (tool === 'send_key') return { ok: true, result: { sent: true, key: args.key } };
+        return { ok: false, result: `unknown tool: ${tool}` };
+      },
+    };
+
+    registerFromSpotify(hub, { effectors: mockPcEffectors });
+  });
+
+  after(() => cleanupVaultDir(dir));
+
+  it('fails honestly and never calls send_key when a located play control could not be clicked', async () => {
+    const result = await hub.invoke('spotify_play', { query: 'Bohemian Rhapsody' }, {});
+    assert.equal(result.ok, false);
+    assert.match(String(result.result), /click_at failed on the located play control/);
+    assert.match(String(result.result), /input blocked by UIPI/, 'the real click error must reach the caller');
+    assert.ok(!callOrder.includes('send_key'), 'a real click target was found and failed — guessing via keystrokes must not run');
+  });
+});
+
 describe('BUG-026 (3rd attempt): spotify_play falls back to the keystroke path when ui_elements finds no play control', () => {
   let dir, fs, hub, bus, sendKeyCalls, clickAtCalled;
 

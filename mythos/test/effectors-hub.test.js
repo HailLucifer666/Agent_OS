@@ -200,8 +200,28 @@ describe('gate: 100 registered count', () => {
     // + get_app_volume/set_app_mute (from-pc, BUG-161 2026-08-07 — the read
     // oracle and the mute flag for that same per-app audio session, so a
     // relative step ("turn Spotify down a bit") reads the real level first
-    // instead of firing global media keys and claiming success) = 102.
-    assert.equal(hub.count(), 102);
+    // instead of firing global media keys and claiming success) = 102,
+    // + camera_on (from-dashboard, 2026-08-10 — the confirm-gated opener for the
+    // webcam camera_look reads from. With the camera off and no way to ask for it,
+    // "can you see me?" had no honest path at all, and the model substituted a
+    // desktop screenshot and described that instead) = 103,
+    // + read_system_specs (from-dashboard, E5 2026-08-12 — CPU/RAM already
+    // existed at GET /api/system and the dashboard widget rendered them, but
+    // NO tool exposed any of it, so screen_look was the model's only option
+    // and it screenshotted a screen that happened to be showing MYTHOS's own
+    // dashboard) = 104,
+    // + think_deeply (from-computer, 2026-08-14 — the ONLY route from a
+    // conversation to a strong reasoning model. The Live voice path makes zero
+    // brain.think calls and its own model is capped at Flash tier on a free key,
+    // so re-ranking lanes could not change a spoken answer by one word; a tool
+    // is the only mechanism) = 105,
+    // + open_file (from-computer, 2026-08-21 — MYTHOS could reveal a folder and
+    // serve a vault build over HTTP, but had no way to open an ordinary file in
+    // its associated app. open_folder refused files and pointed at
+    // open_artifact, which only serves builds out of the vault, and launch_app
+    // takes an app name and refuses paths. The operator asked twice in the
+    // 2026-08-20 transcript and got "I can't access the...") = 106.
+    assert.equal(hub.count(), 106);
   });
 });
 

@@ -90,7 +90,7 @@ file adds the invariants specific to this layer.
 
   `NEVER_TRUSTABLE` is un-overridable: sending (`gmail_send`,
   `whatsapp_send`, `phone_*`), running/installing (`run_command`,
-  `install_from_github`, `hermes_task`, `mcp_call_tool`, `security_scan`,
+  `install_from_github`, `dsh_task`, `mcp_call_tool`, `security_scan`,
   the build/pipeline tools), deleting (`delete_file`, `delete_goal`,
   `delete_artifact`), `reminder_approve_action`, and `browser_evaluate`/
   `kill_session`. `TRUSTED_TOOLS` (env) can add T3 tools but cannot add

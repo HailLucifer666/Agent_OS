@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes Weekly AI Digest - August 19-25, 2026</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --secondary: #f8fafc;
+            --text: #1e293b;
+            --text-light: #64748b;
+            --border: #e2e8f0;
+            --white: #ffffff;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background-color: var(--secondary);
+            margin: 0;
+            padding: 0;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: var(--white);
+            padding: 40px 0;
+            text-align: center;
+            border-radius: 0 0 20px 20px;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin: 0;
+            font-weight: 800;
+        }
+
+        .subtitle {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-top: 10px;
+        }
+
+        .date-range {
+            font-size: 1rem;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+
+        .hero {
+            background: var(--white);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 40px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            display: flex;
+            align-items: center;
+            gap: 30px;
+        }
+
+        .hero-content {
+            flex: 1;
+        }
+
+        .hero h2 {
+            color: var(--primary);
+            margin-top: 0;
+            font-size: 1.8rem;
+        }
+
+        .hero p {
+            color: var(--text-light);
+            font-size: 1.1rem;
+        }
+
+        .hero-image {
+            width: 200px;
+            height: 200px;
+            border-radius: 12px;
+            object-fit: cover;
+        }
+
+        .section {
+            margin-bottom: 50px;
+        }
+
+        .section h2 {
+            color: var(--primary);
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 10px;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+        }
+
+        .article-card {
+            background: var(--white);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .article-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+        }
+
+        .article-meta {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 15px;
+            font-size: 0.9rem;
+            color: var(--text-light);
+        }
+
+        .article-tag {
+            background-color: var(--primary);
+            color: var(--white);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .article-title {
+            font-size: 1.3rem;
+            margin: 15px 0;
+            color: var(--text);
+            line-height: 1.4;
+        }
+
+        .article-excerpt {
+            color: var(--text-light);
+            margin-bottom: 20px;
+        }
+
+        .read-more {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .read-more:hover {
+            text-decoration: underline;
+        }
+
+        .newsletter-signup {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: var(--white);
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            margin: 50px 0;
+        }
+
+        .newsletter-signup h2 {
+            margin-top: 0;
+            font-size: 1.8rem;
+        }
+
+        .newsletter-signup p {
+            opacity: 0.9;
+            margin-bottom: 30px;
+        }
+
+        .signup-form {
+            display: flex;
+            gap: 10px;
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        .signup-form input {
+            flex: 1;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+
+        .signup-form button {
+            background: var(--white);
+            color: var(--primary);
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .signup-form button:hover {
+            transform: translateY(-1px);
+        }
+
+        footer {
+            text-align: center;
+            padding: 30px 0;
+            color: var(--text-light);
+            border-top: 1px solid var(--border);
+            margin-top: 50px;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 15px;
+        }
+
+        .footer-links a {
+            color: var(--text-light);
+            text-decoration: none;
+        }
+
+        .footer-links a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            .hero {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .hero-image {
+                width: 150px;
+                height: 150px;
+            }
+
+            .signup-form {
+                flex-direction: column;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>Hermes Weekly AI Digest</h1>
+            <p class="subtitle">Your curated update on the latest in artificial intelligence</p>
+            <p class="date-range">August 19 - 25, 2026</p>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="hero">
+            <div class="hero-content">
+                <h2>This Week in AI</h2>
+                <p>From breakthroughs in multimodal models to shifts in the open-source landscape, this week's digest covers the most impactful developments shaping the future of AI. Stay informed with concise summaries and expert analysis.</p>
+            </div>
+            <img src="https://images.unsplash.com/photo-1677442136019-21780ecad995?q=80&w=800&auto=format&fit=crop" alt="AI neural network visualization" class="hero-image">
+        </div>
+
+        <div class="section">
+            <h2>Headlines</h2>
+
+            <div class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Research</span>
+                    <span>August 22, 2026</span>
+                </div>
+                <h3 class="article-title">OpenAI Releases o1-Preview: A Leap in Reasoning Capabilities</h3>
+                <p class="article-excerpt">OpenAI's new o1 model family introduces advanced reasoning techniques, demonstrating significant improvements in complex problem-solving tasks such as mathematics, coding, and scientific research. The model exhibits chain-of-thought reasoning before responding, leading to more accurate and explainable outputs.</p>
+                <a href="https://openai.com/index/introducing-openai-o1-preview/" class="read-more">Read more →</a>
+            </div>
+
+            <div class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Open Source</span>
+                    <span>August 20, 2026</span>
+                </div>
+                <h3 class="article-title">Stability AI Launches Stable Diffusion 3.5 Turbo</h3>
+                <p class="article-excerpt">The latest iteration of Stable Diffusion introduces faster inference times and improved image quality, particularly for photorealistic and stylized outputs. The model is available under a non-commercial license, with enterprise options for commercial use.</p>
+                <a href="https://stability.ai/news/stable-diffusion-3-5-turbo" class="read-more">Read more →</a>
+            </div>
+
+            <div class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Policy</span>
+                    <span>August 21, 2026</span>
+                </div>
+                <h3 class="article-title">EU AI Act Enters Full Enforcement Phase</h3>
+                <p class="article-excerpt">The European Union's comprehensive AI regulation is now fully enforceable, introducing risk-based classification for AI systems and stringent requirements for high-risk applications. Companies have a 12-month grace period to comply with the new rules.</p>
+                <a href="https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai" class="read-more">Read more →</a>
+            </div>
+
+            <div class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Multimodal</span>
+                    <span>August 23, 2026</span>
+                </div>
+                <h3 class="article-title">Google DeepMind Unveils Gemini 2.0 with 1M Token Context Window</h3>
+                <p class="article-excerpt">Gemini 2.0 expands its context window to 1 million tokens, enabling unprecedented long-form document analysis, video understanding, and multi-modal reasoning. The model is now available in Google Cloud and via API for enterprise users.</p>
+                <a href="https://deepmind.google/technologies/gemini/" class="read-more">Read more →</a>
+            </div>
+
+            <div class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Hardware</span>
+                    <span>August 19, 2026</span>
+                </div>
+                <h3 class="article-title">NVIDIA Announces Blackwell Ultra GPUs for AI Workloads</h3>
+                <p class="article-excerpt">The new Blackwell Ultra architecture delivers 2.5x performance improvement for training and inference tasks, with a focus on energy efficiency. Pre-orders are open for data center and workstation configurations.</p>
+                <a href="https://nvidianews.nvidia.com/news/nvidia-announces-blackwell-ultra" class="read-more">Read more →</a>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Notable Releases & Updates</h2>
+
+            <div class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Tools</span>
+                    <span>August 24, 2026</span>
+                </div>
+                <h3 class="article-title">Hugging Face Introduces SafeTensor 2.0 for Secure Model Deployment</h3>
+                <p class="article-excerpt">SafeTensor 2.0 enhances security for model deployment with improved sandboxing, runtime protection, and compliance features. The update is backward-compatible with existing SafeTensor models.</p>
+                <a href="https://huggingface.co/blog/safetensor-2" class="read-more">Read more →</a>
+            </div>
+
+            <div class="article-card">
+                <div class="article-meta">
+                    <span class="article-tag">Frameworks</span>
+                    <span>August 25, 2026</span>
+                </div>
+                <h3 class="article-title">PyTorch 2.5 Released with Native Quantization Support</h3>
+                <p class="article-excerpt">PyTorch 2.5 introduces native support for 4-bit and 8-bit quantization, reducing model size and improving inference speed with minimal accuracy loss. The update also includes performance optimizations for AMD GPUs.</p>
+                <a href="https://pytorch.org/blog/pytorch-2-5/" class="read-more">Read more →</a>
+            </div>
+        </div>
+
+        <div class="newsletter-signup">
+            <h2>Stay Updated with Hermes</h2>
+            <p>Get the latest AI news delivered to your inbox every week. No spam, no noise—just the most important developments in AI.</p>
+            <form class="signup-form">
+                <input type="email" placeholder="Your email address" required>
+                <button type="submit">Subscribe</button>
+            </form>
+        </div>
+    </div>
+
+    <footer>
+        <div class="container">
+            <p>© 2026 Hermes AI Digest. All rights reserved.</p>
+            <div class="footer-links">
+                <a href="#">Privacy Policy</a>
+                <a href="#">Terms of Service</a>
+                <a href="#">Contact</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

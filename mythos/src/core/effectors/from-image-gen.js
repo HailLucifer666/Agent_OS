@@ -85,7 +85,11 @@ function buildTools(ctx) {
     throw new Error('from-image-gen buildTools requires a vault fs-store (vault.vaultPath)');
   }
 
-  async function generate_image({ prompt, title }) {
+  // GAP-ANALYSIS-2026-08-24 H1: this fetch previously had no signal, so a hung
+  // Gemini call ignored dispatch-action's 30s budget entirely (hub now enforces
+  // it structurally, but forwarding the signal still cancels the actual socket
+  // instead of orphaning it).
+  async function generate_image({ prompt, title }, ctx) {
     if (!prompt || !String(prompt).trim()) {
       return fail('A prompt describing the image is required.');
     }
@@ -99,6 +103,7 @@ function buildTools(ctx) {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: ctx && ctx.signal,
         body: JSON.stringify({
           contents: [{ parts: [{ text: String(prompt).trim() }] }],
           generationConfig: { responseModalities: ['TEXT', 'IMAGE'] },

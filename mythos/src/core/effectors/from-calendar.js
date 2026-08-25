@@ -14,6 +14,11 @@
 // as from-gmail.js. Write-side (creating/editing events) is still not built
 // — calendar_upcoming only reads.
 
+// BUG-296: shared with from-gmail.js. Gmail and Calendar authenticate with the
+// SAME refresh token, so a dead grant breaks both at once — one classifier and
+// one remedy, not two, and not one-plus-a-gap.
+var { googleAuthFailure } = require('./google-auth-failure');
+
 var FILE = 'Calendar/reminders.json';
 var READ_FAILED = 'Could not read the reminder store (it may be locked by another process) — refusing to overwrite it. Try again in a moment.';
 
@@ -66,7 +71,12 @@ function createCalendarEffector({ fs, bus, goals }) {
     if (!text.trim()) return { ok: false, error: 'text required' };
 
     var when = parseWhen(opts.when || opts.due || '');
-    if (!when) return { ok: false, error: 'Could not parse that time. Try ISO date, "in 20 minutes", "tomorrow 9am", or "HH:MM".' };
+    // BUG-289: this used to name four formats and not one of them could express
+    // seconds, so a caller that had just been refused "in 30 seconds" read it as
+    // "you phrased it wrong" rather than "that unit does not exist" — and went
+    // looking for a workaround instead of reporting the limit. Seconds are named
+    // first now because they are the case that used to be impossible.
+    if (!when) return { ok: false, error: 'Could not parse that time. Try "in 30 seconds", "in 20 minutes", "tomorrow 9am", "HH:MM", or an ISO date.' };
 
     // Track B5 — fire-action field. `action` is optional: {tool, args} to run
     // when the reminder fires (e.g. phone_whatsapp_send/whatsapp_send at 9am).
@@ -132,6 +142,10 @@ function createCalendarEffector({ fs, bus, goals }) {
     };
     reminders.push(record);
     save(reminders);
+    // F2: lets reminder-sensor's precise wake timer reschedule immediately
+    // instead of waiting for its safety-poll cadence to notice a reminder
+    // that was added while it was idle — see sensors/reminder-sensor.js.
+    if (bus) bus.emit('calendar.reminder-added', { id: record.id, dueAt: record.dueAt });
     var result = { reminder: record };
     if (action && !actionApproved) {
       result.needsApproval = true;
@@ -238,8 +252,23 @@ function createCalendarEffector({ fs, bus, goals }) {
   function parseWhen(str, now) {
     if (!str || typeof str !== 'string') return null;
     str = str.trim().toLowerCase();
+    // Wave 7 (2026-08-13): a leading "at " is common, ordinary phrasing
+    // ("set a timer at 5pm", "remind me at 9:30") that every pattern below
+    // required the caller to have already stripped — none of them tolerated
+    // it. Stripped once, up front, so every existing pattern gains it for
+    // free instead of duplicating "(at )?" into each regex.
+    str = str.replace(/^at\s+/, '');
     now = now || Date.now();
     var d = new Date(now);
+
+    // "noon" / "midnight" — same next-occurrence semantics as bare "HH:MM"
+    // below (today if still ahead, else tomorrow), not a special case of it.
+    if (str === 'noon' || str === 'midnight') {
+      var noonHour = str === 'noon' ? 12 : 0;
+      d.setHours(noonHour, 0, 0, 0);
+      if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+      return d.getTime();
+    }
 
     // ISO datetime: 2026-07-12T15:30:00 or 2026-07-12 15:30
     // BUG-100: `str` was lowercased two lines up, so an uppercase-only `[T ]`
@@ -253,15 +282,47 @@ function createCalendarEffector({ fs, bus, goals }) {
       if (d.getTime() > now) return d.getTime();
     }
 
-    // "in N minutes/hours/days"
-    var rel = str.match(/^in\s+(\d+)\s+(minute|minutes|hour|hours|day|days)$/);
+    // "in N seconds/minutes/hours/days", N optionally fractional.
+    //
+    // BUG-289 (2026-08-21): this was `(\d+)` over (minute|hour|day), and BOTH
+    // halves of that cost the operator a working timer on 2026-08-20.
+    //
+    //   timer_add {minutes: 0.5}  builds "in 0.5 minutes" -> \d+ cannot match it,
+    //                             so the tool could not read its own output and
+    //                             every sub-minute timer was unsettable.
+    //   reminder_add "in 30 seconds"  no seconds unit existed at all.
+    //
+    // Both failed within 20 seconds of each other and the model, out of routes,
+    // claimed it had counted the half-minute internally. The hallucination is
+    // downstream of this regex.
+    //
+    // The decimal is `\d+(?:\.\d+)?` and not `[\d.]+` on purpose: ".5", "5." and
+    // "0..5" stay refused rather than being coerced into a number nobody asked
+    // for. Widening a parser is how "in a few minutes" becomes a silent guess,
+    // so this widens the NUMBER and the UNIT LIST and nothing else.
+    //
+    // Sub-minute is honoured end to end, not just accepted: reminder-sensor.js
+    // arms a precise setTimeout against the next due time and re-arms on
+    // calendar.reminder-added, so a 30s reminder fires at 30s and not on its 30s
+    // safety-poll boundary. Verified before this was widened — a parser that
+    // accepts a duration the scheduler rounds up just moves the lie.
+    var rel = str.match(/^in\s+(\d+(?:\.\d+)?)\s+(second|seconds|minute|minutes|hour|hours|day|days)$/);
     if (rel) {
       var n = +rel[1];
       var unit = rel[2];
-      if (unit.indexOf('minute') === 0) return now + n * 60000;
-      if (unit.indexOf('hour') === 0) return now + n * 3600000;
-      if (unit.indexOf('day') === 0) return now + n * 86400000;
+      if (unit.indexOf('second') === 0) return Math.round(now + n * 1000);
+      if (unit.indexOf('minute') === 0) return Math.round(now + n * 60000);
+      if (unit.indexOf('hour') === 0) return Math.round(now + n * 3600000);
+      if (unit.indexOf('day') === 0) return Math.round(now + n * 86400000);
     }
+
+    // Wave 7 (2026-08-13): "in an hour" / "in half an hour" — ordinary
+    // phrasing the numeric-only pattern above cannot match at all (no digit
+    // to capture). Deliberately just these two, not a general word-number
+    // parser — "in a couple minutes"/"in a few hours" are genuinely
+    // ambiguous durations, not worth guessing at.
+    if (str === 'in an hour' || str === 'in one hour') return now + 3600000;
+    if (str === 'in half an hour' || str === 'in a half hour') return now + 1800000;
 
     // "today HH:MM" or "tomorrow HH:MM" or "tomorrow HH:MMam/pm"
     // also "today 9am" / "tomorrow 3pm" (no minutes)
@@ -286,6 +347,25 @@ function createCalendarEffector({ fs, bus, goals }) {
       if (bampm === 'pm' && bh < 12) bh += 12;
       if (bampm === 'am' && bh === 12) bh = 0;
       d.setHours(bh, bm, 0, 0);
+      if (d.getTime() <= now) d.setDate(d.getDate() + 1);
+      return d.getTime();
+    }
+
+    // Wave 7 (2026-08-13): bare "5pm" / "9am" — an hour with NO colon and NO
+    // today/tomorrow prefix. The dayTime pattern above requires the day
+    // word; the bare-HH:MM pattern above requires a colon. Neither matches
+    // this, and it is exactly as ordinary a phrasing as either ("set a timer
+    // for 5pm"). ampm is REQUIRED here (unlike the colon form) — a bare "5"
+    // with no am/pm and no colon is genuinely ambiguous (5am? 5pm? 05:00?)
+    // and guessing is worse than the honest "could not parse" the caller
+    // already reports.
+    var bareHour = str.match(/^(\d{1,2})(am|pm)$/);
+    if (bareHour) {
+      var oh = +bareHour[1];
+      var oampm = bareHour[2];
+      if (oampm === 'pm' && oh < 12) oh += 12;
+      if (oampm === 'am' && oh === 12) oh = 0;
+      d.setHours(oh, 0, 0, 0);
       if (d.getTime() <= now) d.setDate(d.getDate() + 1);
       return d.getTime();
     }
@@ -323,9 +403,26 @@ function ensureGoogleAdapter(logger) {
   return _googleAdapter;
 }
 
+// BUG-296 (2026-08-21): Calendar had none of the dead-token handling Gmail has
+// had since BUG-273 C2, despite sharing the token with it. The catch below
+// returned a bare 'Calendar fetch failed: invalid_grant: Token has been expired
+// or revoked.' — no remedy for the operator, and no `terminal` flag, so hub.js's
+// isTerminalResult never fired and the breaker retried a token that could never
+// succeed. It read like a network blip and was nothing of the sort.
+//
+// `err.message` is also the wrong reader: some adapter failures carry the reason
+// in an object, which stringifies to '[object Object]'. googleAuthFailure goes
+// through reasonText, the same normalisation dispatch-action.js uses.
 async function calendarUpcoming(args, ctx) {
   var logger = (ctx && ctx.logger) || { warn: function() {} };
-  var a = ensureGoogleAdapter(logger);
+  // Injectable adapter. Without this seam a test either reaches the operator's
+  // REAL Google account (the module caches _googleAdapter from live env
+  // credentials) or cannot exercise this path at all — and a test that calls a
+  // third party turns someone else's rate limit into a blocked commit. `null`
+  // passed explicitly means 'no adapter', which is a different case from absent.
+  var a = (ctx && Object.prototype.hasOwnProperty.call(ctx, 'googleAdapter'))
+    ? ctx.googleAdapter
+    : ensureGoogleAdapter(logger);
   if (!a) {
     return { ok: false, result: { error: 'Google Calendar is not configured — set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN.' } };
   }
@@ -334,18 +431,54 @@ async function calendarUpcoming(args, ctx) {
     var events = await a.listUpcomingEvents(max);
     return { ok: true, result: { events: events } };
   } catch (err) {
-    return { ok: false, result: { error: 'Calendar fetch failed: ' + err.message } };
+    return googleAuthFailure('Calendar fetch failed', err);
   }
 }
 
 function buildCalendarTools(ctx) {
   var cal = createCalendarEffector(ctx);
+  var toolBus = ctx && ctx.bus;
+
+  // 2026-08-21, operator request: "add a timer widget when asked for a
+  // countdown / timer". timer_add rang and spoke but put nothing on screen.
+  // The HUD already renders a declarative 'dynamic' widget off ui.open-web, so
+  // this sends the same DATA-ONLY payload the spawn_widget effector does, with
+  // layout 'countdown' and the deadline the reminder was actually given — the
+  // reminder record is the source of truth, so the face on screen and the bell
+  // cannot disagree.
+  //
+  // Emitted from the TIMER only, never from reminder_add: a reminder is silent
+  // by contract, and throwing a ticking face on screen for one would be a new
+  // behaviour nobody asked for. Best-effort and fully guarded — a HUD that is
+  // not listening must never turn a successfully-set timer into a failure.
+  function emitCountdownWidget(res, label) {
+    try {
+      if (!toolBus || typeof toolBus.emit !== 'function') return;
+      var record = res && res.ok && res.result && res.result.reminder;
+      var dueAt = record && record.dueAt;
+      var endsAt = typeof dueAt === 'number' ? dueAt : Date.parse(dueAt);
+      if (!isFinite(endsAt)) return;
+      toolBus.emit('ui.open-web', {
+        widgetType: 'dynamic',
+        title: label || 'Timer',
+        layout: 'countdown',
+        endsAt: endsAt,
+        items: [{ label: label || 'Timer', value: '' }],
+      });
+    } catch (err) { /* the timer is set; the widget is a courtesy, never a failure */ }
+  }
+
   return [
-    { name: 'reminder_add', description: 'Set a reminder with a time. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Optionally carries an action ({tool, args}) to run when it fires (e.g. sending a WhatsApp message) — outward-facing actions need a one-time approval via reminder_approve_action before they can fire. Returns the reminder ID.', params: { text: 'string', when: 'string', action: 'object (optional) - {tool, args} to run when the reminder fires. OMIT this entirely for a plain reminder; do not pass an empty object' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
+    { name: 'reminder_add', description: 'Set a reminder to be told about a note or task at a later time — silent, no audible alert. The time can be a relative phrase like "in 10 minutes" or "tomorrow at 9am", or an ISO date string. Do NOT use this for a timer/countdown/alarm ("set a timer for N minutes", "wake me in an hour") — use timer_add for those instead; it rings, this tool never does. Optionally carries an action ({tool, args}) to run when it fires (e.g. sending a WhatsApp message) — outward-facing actions need a one-time approval via reminder_approve_action before they can fire. Returns the reminder ID.', params: { text: 'string', when: 'string', action: 'object (optional) - {tool, args} to run when the reminder fires. OMIT this entirely for a plain reminder; do not pass an empty object' }, danger: false, fn: async function(args) { return cal.addReminder(args); } },
     { name: 'reminder_list', description: 'List upcoming reminders. Shows all pending reminders with their scheduled times and text.', params: {}, danger: false, fn: async function(args) { return cal.listReminders(args); }, needs_result: true },
     { name: 'reminder_cancel', description: 'Cancel a pending reminder by its ID or text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'reminder_approve_action', description: 'Approve, once, the outward-facing action attached to a reminder (e.g. a scheduled WhatsApp send) so it can fire later without asking again. Match by reminder ID or text.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.approveReminderAction(args); } },
-    { name: 'timer_add', description: 'Set a timer that rings an audible alert when it goes off (in addition to speaking). Use for "set a timer for N minutes" style requests, not date-based reminders.', params: { minutes: 'number', label: 'string (optional)' }, danger: false, fn: async function(args) { return cal.addReminder({ text: (args && args.label) || 'Timer', when: 'in ' + ((args && args.minutes) || 0) + ' minutes', alertSound: true }); } },
+    { name: 'timer_add', description: 'Set a TIMER: it rings an audible alert AND speaks when it goes off. Use this — never reminder_add — for ANY "set a timer for N minutes", "countdown", or "alarm" request; those are timers, not date-based reminders, and only this tool rings.', params: { minutes: 'number', label: 'string (optional)' }, danger: false, fn: async function(args) {
+      var label = (args && args.label) || 'Timer';
+      var res = await cal.addReminder({ text: label, when: 'in ' + ((args && args.minutes) || 0) + ' minutes', alertSound: true });
+      emitCountdownWidget(res, label);
+      return res;
+    } },
     { name: 'timer_cancel', description: 'Cancel a pending timer by its label/text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'calendar_upcoming', description: 'List upcoming events from the connected Google Calendar (read-only). Requires GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN to be configured — degrades honestly with a clear setup message otherwise.', params: { max: 'number (optional) - max events to return, default 10' }, danger: false, fn: async function(args) { return calendarUpcoming(args, ctx); }, needs_result: true },
   ];
@@ -387,7 +520,25 @@ var COMMITMENT_PATTERNS = [
     // commitment shape. Requires "i'll"/"i will" directly followed by one of
     // a small, closed list of action verbs — NOT a bare "I will be ..." or
     // any other generic future-tense sentence.
-    regex: /\bi\s*(?:'ll|will)\s+(check|look into|follow up on|follow up with|take care of|handle|find out|dig into|sort out|get|pull up|review|investigate|work on|fix|reach out to|circle back on)\b/i
+    // B6 (2026-08-14): `get` was the one over-broad verb in this list, and it
+    // produced exactly the false entry the operator decision above forbids. A
+    // goal titled "Commitment: I'll get it right" exists in vault/Goals with
+    // MYTHOS's whole apology as its reason ("I hear you loud and clear, boss, my
+    // wires are definitely crossed today..."). "I'll get it right", "I'll get to
+    // it" and "I'll get that wrong again" all matched a bare `get`.
+    //
+    // Narrowed to phrasal forms rather than deleted: "I'll get those numbers" is a
+    // real commitment and the ledger should keep it. `get` now needs an object
+    // that makes it a fetch — a determiner ("those/that/the/your"), "you", or
+    // "back to you" — so an adverbial completion ("get it right", "get to it")
+    // no longer qualifies. `it` is deliberately excluded: "I'll get it" is
+    // ambiguous between fetching and succeeding, and the operator decision says a
+    // miss costs less than a false entry.
+    //
+    // The hedge list is NOT the place for this (isHedgedCommitment exists to
+    // cancel "I'll check, but..."); an apology was never a commitment to begin
+    // with, so the verb is what was wrong.
+    regex: /\bi\s*(?:'ll|will)\s+(check|look into|follow up on|follow up with|take care of|handle|find out|dig into|sort out|get\s+(?:back\s+to\s+you|you\b|those\b|that\b|the\b|your\b|a\b|an\b|us\b|my\b|some\b)|pull up|review|investigate|work on|fix|reach out to|circle back on)\b/i
   },
   {
     // "Let me check on that", "Let me get those numbers for you" — "let me"
@@ -398,6 +549,18 @@ var COMMITMENT_PATTERNS = [
     regex: /\blet\s+me\s+(check|look into|get|find out|pull up|grab|dig up|follow up on|sort out)\b/i
   }
 ];
+
+// B6: phrases that use a commitment verb adverbially — a statement about quality
+// of performance, not an undertaking to fetch or do a thing. "I'll get that
+// sorted" and "I'll get that done" ARE commitments and must keep matching, so this
+// cannot be a blanket rule about what follows the verb; it is a short explicit
+// list, deliberately, in the spirit of this section's operator decision (a
+// readable pattern list, never a classifier).
+//
+// Measured: the false ledger entry was "I'll get it right" inside an apology.
+// Narrowing `get` to phrasal forms already rejects that one; "I'll get that
+// wrong" still slipped through on `get that`, which is the same class.
+var NON_COMMITMENT_RE = /\bget\s+(?:it|that|this|them)\s+(?:right|wrong)\b/i;
 
 // Hedges that turn an apparent commitment back into a non-commitment. Kept
 // separate from the verb list above so that list stays readable.
@@ -426,6 +589,7 @@ function detectCommitment(text) {
     var stop = rest.search(/[.!?\n]/);
     var clause = (stop === -1 ? rest : rest.slice(0, stop)).trim();
     if (!clause) continue;
+    if (NON_COMMITMENT_RE.test(clause)) continue;
     if (isHedgedCommitment(text, m.index, clause)) continue;
     return clause;
   }
@@ -450,7 +614,14 @@ function logCommitmentIfPresent(text, opts) {
     title: COMMITMENT_TITLE_PREFIX + phrase,
     drive: 'user-service',
     status: 'proposed',
-    reason: text
+    // B6 (2026-08-14): was the ENTIRE reply. The false "Commitment: I'll get it
+    // right" entry carried MYTHOS's whole apology as its reason — "I hear you loud
+    // and clear, boss, my wires are definitely crossed today..." — which is 300
+    // characters of context nobody can act on, in a field read back as the reason
+    // a commitment exists. The matched clause IS the reason; a bounded slice of the
+    // surrounding turn is kept separately for context.
+    reason: phrase,
+    context: String(text).slice(0, 300)
   });
 }
 

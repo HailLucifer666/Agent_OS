@@ -5,7 +5,7 @@
 // and there is exactly one place this rule lives (both the batch utterance
 // path and the Live tool adapter fed the same closure before this move).
 //
-// THE DEFECT THIS CLOSES: a WAVE 3 slow tool (spotify_play, hermes_task, the
+// THE DEFECT THIS CLOSES: a WAVE 3 slow tool (spotify_play, dsh_task, the
 // cua_* tools) gets an in-progress "started" entry committed with `ok:false`
 // (see live-tool-adapter.js's SLOW_TOOLS branch) so the turn doesn't wait on
 // it. The OLD version of this function read only `a.ok`, so that in-progress

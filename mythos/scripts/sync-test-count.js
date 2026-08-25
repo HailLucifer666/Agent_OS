@@ -48,19 +48,25 @@ function runSuite() {
 }
 
 function readStdin() {
-  try {
-    return fs.readFileSync(0, 'utf8');
-  } catch {
-    return '';
-  }
+  return new Promise((resolve) => {
+    const chunks = [];
+    process.stdin.on('data', (chunk) => chunks.push(chunk));
+    process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    process.stdin.resume();
+  });
 }
 
 function getSuiteOutput() {
-  if (!process.stdin.isTTY) {
-    const piped = readStdin();
-    if (piped.trim()) return piped;
+  if (process.argv.includes('--no-stdin') || process.argv.includes('--run') || process.env.SYNC_TEST_COUNT_NO_STDIN === '1') {
+    return Promise.resolve(runSuite());
   }
-  return runSuite();
+  if (!process.stdin.isTTY) {
+    return readStdin().then((piped) => {
+      if (piped.trim()) return piped;
+      return runSuite();
+    });
+  }
+  return Promise.resolve(runSuite());
 }
 
 function parseCounts(out) {
@@ -141,8 +147,21 @@ function computeEffectorCount() {
     let mod;
     try {
       mod = require(path.join(dir, file));
-    } catch {
-      continue; // not a requirable module in isolation — contributes 0, not a crash
+    } catch (err) {
+      // A SyntaxError means the file does not PARSE. Swallowing that made the
+      // effector count quietly drop by however many tools the file declared,
+      // and the gate then compared docs against the smaller number and passed
+      // — a broken effector shipping behind a green commit hook. Anything
+      // else (a module that needs real deps at load time) stays tolerated,
+      // but is now announced instead of vanishing: as of 2026-08-19 every
+      // file in this directory requires cleanly, so any line here is news.
+      if (err instanceof SyntaxError) {
+        throw new Error('sync-test-count: ' + file + ' does not parse — ' + err.message
+          + '. Refusing to report an effector count that silently excludes it.');
+      }
+      console.warn('sync-test-count: ' + file + ' is not requirable in isolation ('
+        + (err.code || err.message) + ') — counted as 0 tools');
+      continue;
     }
     if (Array.isArray(mod.TOOLS)) {
       total += mod.TOOLS.length;
@@ -177,7 +196,16 @@ function readmeSlots(counts) {
   const file = path.join(REPO_ROOT, 'README.md');
   return [
     { file, pattern: /(immune system, and )(\d+)( tests\.)/, value: counts.tests },
-    { file, pattern: /(tests-)(\d+)(%20pass-)/, value: counts.pass },
+    // The README "tests" badge carries the PASS count — and pass is the one
+    // number that legitimately varies BY MACHINE: honest fixture-skips (BYO
+    // edge-tts .venv, per-machine model weights — see their t.skip guards)
+    // run as passes on a provisioned machine and as skips on a fresh clone or
+    // CI runner. Strict equality here made --check impossible to satisfy on
+    // the operator's machine and CI at the same time (found 2026-08-16, the
+    // last layer of the CI-red-for-three-days chain). Tolerant slot: the
+    // pattern must still exist; the ROADMAP block's pass+fail+skipped==tests
+    // invariant is what still catches real drift.
+    { file, pattern: /(tests-)(\d+)(%20pass-)/, value: counts.pass, tolerant: true },
     { file, pattern: /(Linear history on `main`\. )(\d+)( tests green\.)/, value: counts.tests },
     // The README hero also states the count inside the readme-typing-svg URL's
     // `lines=` query param, where the text is URL-encoded ("N+tests+green.") and
@@ -217,6 +245,12 @@ function readmeSlots(counts) {
     // actually identifies the slot.
     { file, pattern: /(## [^\n]*?)(\d+)(-Tool Effectors)/, value: counts.effectors },
     { file, pattern: /(\]\(#-?)(\d+)(-tool-effectors\))/, value: counts.effectors },
+    // The LINK TEXT of the same anchor. Found stale on 2026-08-19 reading
+    // "[142-Tool Effectors](#146-tool-effectors)" — the href was a slot and the
+    // words in front of it were not, so the two halves of one link disagreed by
+    // four. The heading slot above is anchored on "## " and cannot reach this,
+    // which is exactly why it needs its own.
+    { file, pattern: /(\[)(\d+)(-Tool Effectors\]\(#)/, value: counts.effectors },
     { file, pattern: /(badge\/effectors-)(\d+)(%20tools)/, value: counts.effectors },
     { file, pattern: /(\[\*\*)(\d+)( Tools\*\*\]\(#)/, value: counts.effectors },
     { file, pattern: /(EFF\[")(\d+)( Effectors"\])/, value: counts.effectors },
@@ -244,6 +278,12 @@ function applySlots(counts, mode, report) {
     if (matches.length === 0) {
       report.push(`MISSING PATTERN in ${path.relative(REPO_ROOT, slot.file)}: ${slot.pattern}`);
       staleCount++;
+      continue;
+    }
+    if (slot.tolerant) {
+      // Presence-only (see the slot's own comment): the value legitimately
+      // varies by machine, so a mismatch is not staleness.
+      byFile.set(slot.file, content);
       continue;
     }
     const stale = matches.filter((m) => parseInt(m[2], 10) !== slot.value);
@@ -296,7 +336,16 @@ function syncRoadmap(counts, mode, report) {
   }
 
   const [, tests, pass, fail, skipped] = m;
-  const matches = +tests === counts.tests && +pass === counts.pass && +fail === counts.fail && +skipped === counts.skipped;
+  // tests and fail are machine-stable (same test files everywhere; failures
+  // are gated to 0 by the hook/CI). pass/skipped are NOT machine-stable:
+  // honest fixture-skips (BYO edge-tts .venv, per-machine model weights) run
+  // as passes on a provisioned machine and as skips on a fresh clone or CI
+  // runner, so strict equality could never be green on both at once
+  // (2026-08-16 — same chain as the tolerant README badge slot). The
+  // invariant below is what still catches real drift: the three states must
+  // partition the whole suite exactly.
+  const invariantHolds = (+pass) + (+fail) + (+skipped) === (+tests);
+  const matches = +tests === counts.tests && +fail === counts.fail && invariantHolds;
   if (matches) return false;
 
   report.push(`ROADMAP.md: sync block stale (found ${tests}/${pass}/${fail}/${skipped}, expected ${counts.tests}/${counts.pass}/${counts.fail}/${counts.skipped})`);
@@ -307,7 +356,7 @@ function syncRoadmap(counts, mode, report) {
   return true;
 }
 
-function main() {
+async function main() {
   const mode = process.argv.includes('--write') ? 'write' : process.argv.includes('--check') ? 'check' : null;
   if (!mode) {
     console.error('Usage: node scripts/sync-test-count.js --check | --write');
@@ -315,7 +364,7 @@ function main() {
     return;
   }
 
-  const counts = parseCounts(getSuiteOutput());
+  const counts = parseCounts(await getSuiteOutput());
   // AD-10: docs match reality — tool/provider/sensor/dep counts ride along with
   // the test count as generated values, not hand-typed ones.
   counts.deps = computeDepsCount();

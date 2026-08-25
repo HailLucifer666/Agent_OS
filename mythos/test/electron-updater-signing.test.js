@@ -38,6 +38,14 @@ test('build.publish targets GitHub Releases for this repo, and never carries sec
   assert.ok(github, 'the chosen host is GitHub Releases (provider "github")');
   assert.equal(github.owner, 'HailLucifer666', 'owner must match the repo remote');
   assert.equal(github.repo, 'Agent_OS', 'repo must match the repo remote');
+  // v0.1.4 (2026-08-11) went green and shipped NOTHING anyone could install:
+  // electron-builder's GitHub publisher defaults to releaseType 'draft', and
+  // electron-updater only ever sees PUBLISHED releases. The failure was silent in
+  // both directions — the workflow logged "creating GitHub release", and a
+  // read-only token reported no releases at all.
+  assert.equal(github.releaseType, 'release',
+    'releaseType must be explicit: the default is "draft", and a draft release is one every ' +
+    'installed app reports "no update" against, forever');
   const serialized = JSON.stringify(build.publish);
   assert.doesNotMatch(serialized, /(GH_TOKEN|token|password|secret|CSC_)/i,
     'a publish config must never carry a credential — publishing reads GH_TOKEN from the environment');
@@ -77,7 +85,22 @@ function readMainJs() {
   return fs.readFileSync(path.join(REPO_ROOT, 'electron', 'main.js'), 'utf8');
 }
 
-test('electron/main.js wires the update check: packaged default, env override, never auto-installs', () => {
+// REVERSED 2026-08-11 (operator): this used to assert autoDownload === false and
+// that quitAndInstall appeared nowhere, on the stated grounds that an unsigned
+// build "gives electron-updater nothing to verify against". Reading
+// node_modules/electron-updater rather than repeating the claim:
+//   * NsisUpdater.verifySignature() RETURNS NULL — passes — when app-update.yml
+//     carries no publisherName (out/NsisUpdater.js:84-99). Unsigned means the
+//     signature check is skipped, not failed, so refusing to download bought no
+//     verification at all; it only cost every release a manual reinstall.
+//   * DownloadedUpdateHelper still hashes the download and compares it to the
+//     sha512 in latest.yml, fetched from GitHub over HTTPS. Tampering in transit
+//     fails today, signed or not.
+// The residual risk — a compromised release host serving a validly-hashed
+// installer — is accepted, not disproven: anyone able to publish a release on
+// this public repo can already publish the source. A cert would still close it.
+// What must NOT regress is the operator's consent, so that is what is pinned.
+test('electron/main.js downloads updates but installs only on an explicit operator action', () => {
   const text = readMainJs();
   assert.match(text, /require\(['"]electron-updater['"]\)/, 'main.js must require electron-updater');
   assert.match(text, /app\.isPackaged/,
@@ -85,10 +108,85 @@ test('electron/main.js wires the update check: packaged default, env override, n
     'electron-updater\'s unpackaged rejection');
   assert.match(text, /MYTHOS_UPDATE_URL/,
     'the feed must stay overridable at runtime via MYTHOS_UPDATE_URL (self-hosted generic feeds)');
-  assert.match(text, /autoDownload\s*=\s*false/,
-    'auto-update must not silently download/install — see CLAUDE.md\'s honest-inert house style');
-  assert.doesNotMatch(text, /autoUpdater\.quitAndInstall/,
-    'nothing should force-install an update without an explicit, logged operator action');
+  assert.match(text, /autoDownload\s*=\s*true/,
+    'downloading in the background is the whole point — a notice-only updater made every fix a reinstall');
+  assert.match(text, /autoInstallOnAppQuit\s*=\s*false/,
+    'quitting must never become an install: an operator who closes the app would return to a version ' +
+    'they never agreed to');
+  assert.match(text, /autoUpdater\.quitAndInstall|updaterRef\.quitAndInstall/,
+    'the update must actually be installable from inside the app');
+  assert.match(text, /showMessageBox/,
+    'quitAndInstall must be gated behind a modal choice — a notification is dismissable by accident, ' +
+    'and this one exits the app');
+  assert.match(text, /MYTHOS_AUTO_UPDATE/,
+    'there must be an escape hatch that turns the whole thing off');
+  assert.match(text, /disableWebInstaller\s*=\s*true/,
+    'this build publishes only the full NSIS installer, so the web installer must stay disabled — ' +
+    'NsisUpdater otherwise logs a "disableWebInstaller is not set" warning on every single download');
+});
+
+// Reported by the operator on v0.1.5: "it's taking me through that whole
+// installation process where it's asking me where you want to install this...
+// it does not mention updates." build.nsis is oneClick:false +
+// allowToChangeInstallationDirectory:true, so a NON-silent quitAndInstall showed
+// the full first-install wizard — which reads as "reinstall the whole app", the
+// exact experience in-app updates exist to end.
+//
+// SILENT WAS THE WRONG CURE, and this test used to pin it (operator,
+// 2026-08-13). /S suppresses every page including the PROGRESS BAR, and this
+// installer takes minutes — 8+ on the 0.1.8 -> 0.1.9 upgrade. The operator
+// clicked "Restart now", saw the installer window flash for a second, and then
+// had no window and no progress for eight minutes. The update had actually
+// succeeded; nothing said so, so it read as a dead app.
+//
+// The wizard was never caused by visibility, only by the PAGES. Those are now
+// suppressed one by one — the template guards its licence and directory pages
+// with skipPageIfUpdated, and build/installer.nsh guards this repo's component
+// page on ${isUpdated} — so an update can be visible without being a wizard.
+// What is asserted here is therefore the inverse of what it once was.
+// See test/update-visible-and-restarts.test.js for the rest of that fix.
+test('an update shows its progress bar, and still no wizard page', () => {
+  // Comment-stripped: main.js's prose NAMES quitAndInstall() several times to
+  // explain the policy, and a test that reads prose as code fails for the
+  // opposite of the reason it exists (same trap as release-script.test.js).
+  const code = readMainJs().split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  const calls = code.match(/quitAndInstall\(([^)]*)\)/g) || [];
+  // Both install paths (the modal and the HUD button) now funnel through
+  // beginInstall(), which is the ONE quitAndInstall call site — that funnel is
+  // what makes the pre-install handover (moving the tool dirs out of the tree,
+  // recording the attempt) impossible to have on one path and not the other.
+  // See test/electron-update-handoff.test.js, which pins the funnel itself.
+  assert.ok(calls.length >= 1, 'there must be an install path at all');
+  assert.ok((code.match(/beginInstall\(/g) || []).length >= 3,
+    'both install paths must reach it: the definition plus the modal and the HUD button');
+  for (const call of calls) {
+    assert.match(call, /quitAndInstall\(false,\s*true\)/,
+      `every install path must pass isSilent=false and forceRunAfter=true — found ${call}. ` +
+      'isSilent=true hides the progress bar too, which is what made an 8-minute update look like a dead app');
+  }
+  // The half of the original guarantee that still holds: an update must not put
+  // a wizard page on screen. The page that could is this repo's own, and it is
+  // guarded inside its page function (a raw `Page custom` ignores the
+  // template's skipPageIfUpdated).
+  const nsh = fs.readFileSync(path.join(__dirname, '..', '..', 'build', 'installer.nsh'), 'utf8');
+  const page = nsh.slice(nsh.indexOf('Function mythosComponentsPage'));
+  assert.match(page.slice(0, page.indexOf('nsDialogs::Create')), /\$\{If\} \$\{isUpdated\}[\s\S]{0,80}Abort/,
+    'the component page must abort on an update, or a visible install becomes the reinstall wizard again');
+});
+
+test('the update state reaches the HUD as strings on one named channel, and installing takes no renderer input', () => {
+  const text = readMainJs();
+  assert.match(text, /mythos:update-status/,
+    'the HUD renders an Update button, so main must push the updater state to it (js/update-banner.js)');
+  assert.match(text, /ipcMain\.handle\('mythos:install-update'/,
+    'the HUD button needs a channel to install through');
+  const handler = /ipcMain\.handle\('mythos:install-update'[\s\S]*?\n\}\);/.exec(text);
+  assert.ok(handler, 'the install handler must exist');
+  assert.match(handler[0], /isHudContents\(event\.sender\)/,
+    'only the real HUD window may trigger an install — media-window.js loads caller-supplied URLs ' +
+    'through the same preload (see the B2/H6 comment in main.js)');
+  assert.doesNotMatch(handler[0], /event,\s*\w+/,
+    'the handler must not accept a renderer-supplied argument: which version is installed is main-process state');
 });
 
 // electron-updater exports `autoUpdater` as a getter that CONSTRUCTS the
@@ -182,15 +280,19 @@ test('Notification is required at its use site, never destructured at module sco
     'it must be required at the use site instead');
 });
 
-test('the notification never claims something was downloaded or offers to install it', () => {
+test('the notification says what is actually happening and never installs by itself', () => {
   const text = readMainJs();
-  // CONTRIBUTING.md's release gate: do not enable automatic download before the
-  // build is signed, because an unsigned installer gives electron-updater
-  // nothing to verify against. So the notification must not imply either.
-  assert.doesNotMatch(text, /autoUpdater\.downloadUpdate/,
-    'nothing may start a download off the back of the notification while builds are unsigned');
-  assert.match(text, /Nothing has been downloaded/,
-    'the body must say plainly that nothing was downloaded, or the operator will assume it was');
+  // It used to have to say "Nothing has been downloaded". Now something IS being
+  // downloaded, so the body must say THAT — and must still promise that nothing
+  // installs without being asked, which promptInstall() is what keeps true.
+  assert.match(text, /Downloading it in the background/,
+    'the body must describe the real behaviour; the old "nothing has been downloaded" is now a lie');
+  assert.match(text, /you will be asked before anything is installed/i,
+    'the operator must be told the install is still their call');
+  const notify = /function notifyUpdateAvailable\([\s\S]*?\n}/.exec(text);
+  assert.ok(notify, 'notifyUpdateAvailable must exist');
+  assert.doesNotMatch(notify[0], /quitAndInstall/,
+    'the notification path must not be able to install anything on its own');
 });
 
 test('a failed notification cannot take down the update check or boot', () => {

@@ -20,6 +20,12 @@
   pointer-events: auto;
 }
 
+/* Idle hint (turn ended, nothing being said) — reduced opacity so it reads
+   as an affordance ("click to talk") rather than as leftover output. */
+#compose-bar .mic-caption[data-kind="idle"] {
+  opacity: 0.55;
+}
+
 /* Example prompt chips — show when input is empty and conversation hasn't
    started. flex-wrap: nowrap + a horizontal scroll (masked at the edges)
    keeps this to one quiet row instead of wrapping into a cluttered block. */
@@ -206,6 +212,69 @@
 }
 .compose-mic-settings-btn svg { width: 16px; height: 16px; }
 .compose-mic-settings-btn:hover { color: var(--text-dim); }
+
+/* Voice button (speaker — which voice the entity SPEAKS in, as opposed to the
+   gear beside it, which is the mic it LISTENS with). Same 34px circle idiom. */
+.compose-voice-settings-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.compose-voice-settings-btn svg { width: 16px; height: 16px; }
+.compose-voice-settings-btn:hover { color: var(--text-dim); }
+
+/* Setup button (provider keys + local PIN) — same 34px circle idiom as the gear
+   and cam buttons on purpose, so the pill keeps one rhythm instead of growing a
+   differently-shaped control. */
+.compose-setup-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+.compose-setup-btn svg { width: 16px; height: 16px; }
+.compose-setup-btn:hover { color: var(--text-dim); }
+
+/* Transcript toggle (full-session chat log) — same 34px circle idiom as the
+   gear/cam/setup buttons on purpose, so the pill's icon rhythm stays one
+   size instead of growing a differently-shaped control per feature (F7). */
+.compose-transcript-btn {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.compose-transcript-btn svg { width: 16px; height: 16px; }
+.compose-transcript-btn:hover { color: var(--text-dim); }
+.compose-transcript-btn.transcript-open {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 
 /* Send button (right side of pill) */
 .compose-send-btn {

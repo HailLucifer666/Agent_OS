@@ -97,3 +97,93 @@
    backend sends no expiry, so nothing here ticks). */
 .pin-overlay.pin-locked-out .pin-modal { border-color: var(--status-warn); }
 .pin-overlay.pin-locked-out .pin-orb { border-color: var(--status-warn); }
+
+/* ---------------------------------------------------------------------------
+   PIN creation (js/pin/pin-setup-screen.js)
+
+   Separate classes from .pin-* above on purpose: that block is the LOCK screen
+   (verify, one field, cannot be dismissed), this one CONFIGURES a PIN (two or
+   three fields, dismissible). They shared nothing but the token palette, and
+   coupling them would mean every future change to the lock had to be safe for
+   the setup form too.
+
+   The same form is embedded, unstyled-by-overlay, as step 2 of the first-run
+   wizard — which is why the field styles live outside .pinset-overlay.
+   --------------------------------------------------------------------------- */
+
+.pinset-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pinset-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* A visible label per field, never a placeholder standing in for one: these are
+   password inputs, so a placeholder disappears the moment typing starts and the
+   operator loses track of which of two identical boxes they are in. */
+.pinset-label {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.pinset-input {
+  /* 38px, not the 44px touch minimum: this is a desktop Electron window driven
+     by a keyboard, and the field is in a focus-trapped dialog. */
+  min-height: 38px;
+  padding: 8px 11px;
+  font-size: 15px;
+  letter-spacing: 0.35em;
+  color: var(--text);
+  background: var(--bg-hover);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+}
+
+.pinset-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+.pinset-help {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.pinset-submit {
+  min-height: 34px;
+  padding: 8px 16px;
+  font-size: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.pinset-submit:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.pinset-submit:disabled { opacity: 0.55; cursor: default; }
+
+/* role="alert" in the markup, colour here. Success is green, failure is the warn
+   colour, and the text always states the cause — never a bare "invalid". */
+.pinset-status {
+  margin: 0;
+  min-height: 16px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--status-ok);
+}
+
+.pinset-status.is-error { color: var(--status-warn); }
+
+.pinset-form.is-done .pinset-input { opacity: 0.5; }
+

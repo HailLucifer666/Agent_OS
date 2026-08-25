@@ -1,6 +1,8 @@
 // pipeline.js — Pipeline surface: capture bar + 4-stage board (Capture, Human Gate, Execute, Shipped),
 // wired to /api/pipeline*. Gallery toggle shows shipped cards as a grid.
 
+import { safeSameOriginUrl, escapeAttr } from '/js/url.js';
+
 const STAGES = [
   {
     key: 'capture',
@@ -39,6 +41,9 @@ let state = {
   jobs: {}, // cardId -> latest job record (pipeline-execute builds)
 };
 
+// escapeHtml() leaves `"` intact, so anything reaching an ATTRIBUTE goes
+// through escapeAttr instead, and anything becoming a live navigation target
+// goes through the scheme gate first.
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str ?? '';
@@ -118,7 +123,7 @@ function shippedCard(card) {
       </div>
       <div class="pipeline-card-actions">
         ${card.artifact && card.artifact.path
-          ? `<a class="pipeline-btn pipeline-btn-view" href="${escapeHtml(card.artifact.path)}" target="_blank" rel="noopener">&#9655; View what was built</a>`
+          ? `<a class="pipeline-btn pipeline-btn-view" href="${escapeAttr(safeSameOriginUrl(card.artifact.path) || '')}" target="_blank" rel="noopener">&#9655; View what was built</a>`
           : `<button class="pipeline-btn pipeline-btn-view" type="button" disabled title="Shipped before the build agent existed — no artifact on file">&#9655; View what was built</button>`}
         <button class="pipeline-btn-icon pipeline-btn-delete" data-action="delete" type="button" aria-label="Delete" title="Delete artifact and card">&#128465;</button>
       </div>

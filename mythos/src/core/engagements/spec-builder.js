@@ -7,7 +7,7 @@ function createSpecBuilder({ config, brain, buildEngine }) {
   if (!config) throw new Error('config required');
   // V6 (Phase 4): brain is optional. When absent or offline, build() falls
   // back to the deterministic markdown template (honest-inert).
-  // Phase B: buildEngine (Hermes-Agent) is now the preferred generator for
+  // Phase B: buildEngine (DeepSeek Harness) is now the preferred generator for
   // buildBrain() below — brain.think was a second, independent generator with
   // no queue/verifier/review behind it, same reasoning as executor.js's build
   // stage. buildEngine.generate() returns a brain.think-compatible shape

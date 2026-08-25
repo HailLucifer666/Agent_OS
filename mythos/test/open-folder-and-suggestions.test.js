@@ -36,10 +36,11 @@ const originalRequire = Module.prototype.require;
 
 // from-computer reaches from-pc for the window oracle; stub pc-child under both.
 //
-// MUST await fn before restoring. open_folder requires './from-pc' LAZILY, after a
-// 700ms wait for Explorer to title its window — with a synchronous try/finally the
-// stub was already gone by then, from-pc loaded the real (OFFLINE) pc-child, and
-// the oracle silently returned nothing. The test failed while the code was right.
+// MUST await fn before restoring. open_folder requires './from-pc' LAZILY, and
+// polls the oracle for up to ~1.6s (4 × 400ms, fix-plan 2.2) — with a
+// synchronous try/finally the stub was already gone by then, from-pc loaded the
+// real (OFFLINE) pc-child, and the oracle silently returned nothing. The test
+// failed while the code was right.
 async function withPc(mock, fn) {
   const spawned = [];
   Module.prototype.require = function (id) {
@@ -101,6 +102,64 @@ describe('WAVE 6 — open_folder proves a window opened', () => {
     });
   });
 
+  // fix-plan 2.2 — the old single check after a fixed 700ms reported real
+  // successes as unverified whenever Explorer was slow to title the window, and
+  // the exact-only title match missed special/localized folders whose Explorer
+  // title carries more than the bare leaf.
+
+  it('a window titled with MORE than the leaf still verifies (title-match: contains)', async () => {
+    await withPc(pcWithWindows([{ pid: 5150, title: LEAF + ' — File Explorer', process: 'explorer.exe' }]), async (m) => {
+      const res = await m.open_folder({ path: REAL_DIR });
+      if (!res.ok) return;
+      assert.equal(evidence.isVerified(res), true, 'a title that contains the leaf is the same window');
+      assert.match(res.evidence.observed, /title-match: contains/);
+    });
+  });
+
+  it('a window appearing LATE (second poll attempt) still verifies', async () => {
+    // First list_windows answers empty, the second carries the window — the
+    // exact race the bounded poll exists for.
+    let calls = 0;
+    const late = {
+      getStatus: () => ({ state: 'ONLINE' }),
+      sendCommand: async (c) => {
+        if (c.cmd !== 'list_windows') return { ok: true, result: {} };
+        calls += 1;
+        return calls < 2
+          ? { ok: true, result: { windows: [] } }
+          : { ok: true, result: { windows: [{ pid: 77, title: LEAF, process: 'explorer' }] } };
+      },
+    };
+    await withPc(late, async (m) => {
+      const res = await m.open_folder({ path: REAL_DIR });
+      if (!res.ok) return;
+      assert.equal(evidence.isVerified(res), true, 'the poll must still be polling when the window shows up late');
+      assert.ok(calls >= 2);
+    });
+  });
+
+  it('pc-child OFFLINE and no-window are DISTINCT unverified reasons', async () => {
+    const offline = {
+      getStatus: () => ({ state: 'OFFLINE', hint: 'not running' }),
+      sendCommand: async () => { throw new Error('unreachable'); },
+    };
+    await withPc(offline, async (m) => {
+      const res = await m.open_folder({ path: REAL_DIR });
+      if (!res.ok) return;
+      assert.equal(res.unverified, true);
+      assert.match(res.reason, /pc-child is not running/i,
+        'the operator/model must be told the CHECKER is down, not that the window is missing');
+      assert.ok(!/reused a window/i.test(res.reason));
+    });
+    await withPc(pcWithWindows([]), async (m) => {
+      const res = await m.open_folder({ path: REAL_DIR });
+      if (!res.ok) return;
+      assert.equal(res.unverified, true);
+      assert.match(res.reason, /reused a window/i);
+      assert.ok(!/pc-child is not running/i.test(res.reason));
+    });
+  });
+
   it('a path outside the sandbox is refused', async () => {
     await withPc(pcWithWindows([]), async (m) => {
       const res = await m.open_folder({ path: 'C:\\Windows\\System32' });
@@ -109,7 +168,19 @@ describe('WAVE 6 — open_folder proves a window opened', () => {
     });
   });
 
-  it('a file rather than a folder is refused with a usable alternative', async () => {
+  // CHANGED by BUG-283 (2026-08-20), deliberately, and the old assertion is
+  // recorded here rather than deleted quietly. This used to require
+  // `res.ok === false` — a file path was refused with a message naming
+  // open_artifact. That refusal was measured failing in production: the model
+  // received it, ignored the named remedy, and later told the operator that
+  // opening a saved file was a "system limitation" while open_artifact sat
+  // declared and unused for the whole session. Prose remediation had already
+  // lost once on this tool (the launch_app history at the top of this file), so
+  // the dead end was removed instead of re-worded a third time.
+  //
+  // The invariant that survives unchanged: the result must still name
+  // open_artifact. Opening the folder is not opening the file.
+  it('a file rather than a folder is revealed in its folder, still naming open_artifact', async () => {
     const tmpFile = path.join(REAL_DIR, 'wave6-open-folder-probe.tmp');
     let made = false;
     try { fs.writeFileSync(tmpFile, 'x'); made = true; } catch (_) { /* read-only env */ }
@@ -117,10 +188,10 @@ describe('WAVE 6 — open_folder proves a window opened', () => {
     try {
       await withPc(pcWithWindows([]), async (m) => {
         const res = await m.open_folder({ path: tmpFile });
-        assert.equal(res.ok, false);
-        if (/not a folder/i.test(String(res.result))) {
-          assert.match(String(res.result), /open_artifact/, 'name the tool that does handle files');
-        }
+        if (!res.ok && /outside|sandbox|not allowed/i.test(String(res.result))) return;
+        assert.equal(res.ok, true, 'a file path is no longer a dead end');
+        assert.match(JSON.stringify(res.result), /open_artifact/,
+          'name the tool that does handle files');
       });
     } finally {
       try { fs.unlinkSync(tmpFile); } catch (_) {}

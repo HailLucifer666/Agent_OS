@@ -1,0 +1,139 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Snake Game</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        #game-container {
+            position: relative;
+            width: 400px;
+            height: 400px;
+            border: 1px solid #000;
+        }
+        #snake {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: #00f;
+        }
+        #food {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background-color: #f00;
+        }
+        #score {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="score">Score: 0</div>
+        <div id="snake"></div>
+        <div id="food"></div>
+    </div>
+    <script>
+        const gameContainer = document.getElementById('game-container');
+        const snake = document.getElementById('snake');
+        const food = document.getElementById('food');
+        const scoreElement = document.getElementById('score');
+
+        let score = 0;
+        let snakeX = 200;
+        let snakeY = 200;
+        let foodX = Math.floor(Math.random() * 380);
+        let foodY = Math.floor(Math.random() * 380);
+        let direction = 'right';
+        let snakeBody = [];
+
+        function updateGame() {
+            if (direction === 'right') snakeX += 20;
+            if (direction === 'left') snakeX -= 20;
+            if (direction === 'up') snakeY -= 20;
+            if (direction === 'down') snakeY += 20;
+
+            if (snakeX < 0 || snakeX >= 400 || snakeY < 0 || snakeY >= 400) {
+                alert('Game Over!');
+                resetGame();
+                return;
+            }
+
+            snake.style.left = snakeX + 'px';
+            snake.style.top = snakeY + 'px';
+
+            if (snakeX === foodX && snakeY === foodY) {
+                score++;
+                scoreElement.textContent = 'Score: ' + score;
+                foodX = Math.floor(Math.random() * 380);
+                foodY = Math.floor(Math.random() * 380);
+                food.style.left = foodX + 'px';
+                food.style.top = foodY + 'px';
+                snakeBody.push(document.createElement('div'));
+                snakeBody[snakeBody.length - 1].style.position = 'absolute';
+                snakeBody[snakeBody.length - 1].style.width = '20px';
+                snakeBody[snakeBody.length - 1].style.height = '20px';
+                snakeBody[snakeBody.length - 1].style.backgroundColor = '#00f';
+                gameContainer.appendChild(snakeBody[snakeBody.length - 1]);
+            }
+
+            for (let i = snakeBody.length - 1; i > 0; i--) {
+                snakeBody[i].style.left = snakeBody[i - 1].style.left;
+                snakeBody[i].style.top = snakeBody[i - 1].style.top;
+            }
+
+            if (snakeBody.length > 0) {
+                snakeBody[0].style.left = snakeX + 'px';
+                snakeBody[0].style.top = snakeY + 'px';
+            }
+
+            for (let i = 1; i < snakeBody.length; i++) {
+                if (snakeX === parseInt(snakeBody[i].style.left) && snakeY === parseInt(snakeBody[i].style.top)) {
+                    alert('Game Over!');
+                    resetGame();
+                    return;
+                }
+            }
+
+            setTimeout(updateGame, 100);
+        }
+
+        function resetGame() {
+            score = 0;
+            snakeX = 200;
+            snakeY = 200;
+            direction = 'right';
+            snakeBody.forEach(segment => gameContainer.removeChild(segment));
+            snakeBody = [];
+            scoreElement.textContent = 'Score: ' + score;
+            foodX = Math.floor(Math.random() * 380);
+            foodY = Math.floor(Math.random() * 380);
+            food.style.left = foodX + 'px';
+            food.style.top = foodY + 'px';
+        }
+
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'ArrowRight' && direction !== 'left') direction = 'right';
+            if (event.key === 'ArrowLeft' && direction !== 'right') direction = 'left';
+            if (event.key === 'ArrowUp' && direction !== 'down') direction = 'up';
+            if (event.key === 'ArrowDown' && direction !== 'up') direction = 'down';
+        });
+
+        updateGame();
+    </script>
+</body>
+</html>
+```

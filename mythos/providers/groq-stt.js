@@ -9,6 +9,14 @@
 
 const BASE = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1';
 const MODEL = process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo';
+// The transcription POST has to be bounded, and not only for latency: this
+// provider is the FIRST link in providers/stt.js's chain, and that chain only
+// walks to local-whisper-stt.js when this one THROWS. An unbounded fetch on a
+// stalled connection never throws, so the documented on-device fallback is
+// never reached and the whole voice turn hangs instead. Generous by design —
+// whisper-large-v3-turbo answers a normal utterance in ~1-2s, so this only
+// trips on a genuinely dead connection, never on a slow-but-working one.
+const TIMEOUT_MS = Number(process.env.GROQ_STT_TIMEOUT_MS) || 20000;
 
 // Whisper hallucinates plausible-sounding phrases from near-silent or noisy
 // audio instead of reporting nothing was said. verbose_json exposes per-segment
@@ -71,11 +79,32 @@ async function transcribe(buffer, mimeType) {
   // the persona/UI locale.
   form.append('temperature', '0');
   form.append('language', 'en');
+  // RECOGNITION HINTS (2026-08-22). Whisper takes an optional `prompt` that
+  // biases decoding toward the vocabulary it contains, and this provider was
+  // sending none — so every MYTHOS-specific word competed against ordinary
+  // English on equal terms, which is why "MYTHOS" came back as "methos" and
+  // "mythos" in the same session.
+  //
+  // The idea is lifted from Claude Code's published voice-dictation behaviour
+  // ("your current project name and git branch name are added as recognition
+  // hints automatically"), not its implementation — that service is unavailable
+  // outside a Claude.ai session. See providers/stt-hints.js for what the prompt
+  // contains, why it is a bare term list rather than a sentence, and why it is
+  // length-bounded.
+  //
+  // Opt-out rather than opt-in, because the failure mode is mild (a slightly
+  // more confident recognizer) while the defect it fixes is constant. Set
+  // VOICE_STT_HINTS=off to disable and compare.
+  if (String(process.env.VOICE_STT_HINTS || '').toLowerCase() !== 'off') {
+    var hint = require('./stt-hints').buildPrompt(null);
+    if (hint) form.append('prompt', hint);
+  }
 
   const res = await fetch(`${BASE}/audio/transcriptions`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form,
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   if (!res.ok) {
     let detail = res.statusText;

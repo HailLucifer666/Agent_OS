@@ -23,7 +23,7 @@
 // Input/output tensor NAMES are also read from each loaded ONNX session at
 // runtime (session.inputNames/outputNames) rather than assumed, since the
 // exact exported name isn't recoverable from the Python source alone.
-import { getMicDeviceId, buildAudioConstraints } from './mic-device.js';
+import { openMicWithFallback, micErrorMessage, micConstraintShape, trackSettingsOf } from './mic-device.js';
 
 // Shared with createWakeWord below AND exported for tests. openWakeWord's mel
 // bin count is fixed by the model, so these are module constants, not
@@ -34,6 +34,52 @@ export const MEL_BINS = 32;
 // or be mistaken for magic numbers.
 export const MEL_SCALE_DIV = 10;
 export const MEL_SCALE_ADD = 2;
+
+// BUG-273 A3 — these three moved from createWakeWord()'s body to module scope so
+// the receptive-field helpers below can be pure and testable. They are fixed by the
+// ONNX models, which is exactly the reason this file already gives for MEL_BINS
+// living out here.
+export const EMBED_WINDOW = 76;   // mel frames per embedding window
+export const EMBED_STRIDE = 8;    // mel-frame stride between successive embedding windows
+export const DEFAULT_CLASSIFIER_WINDOW = 16; // openWakeWord's get_features() default n_feature_frames
+
+// openWakeWord's melspectrogram uses hop_length 160 at 16kHz, i.e. one mel frame
+// per 10ms of audio. Stated with its source rather than derived: the frame count
+// per audio chunk comes out of the ONNX model at runtime and is not readable from
+// this file, so inventing a derivation here would be a guess wearing arithmetic.
+export const MEL_FRAME_MS = 10;
+
+// HOW MUCH AUDIO A SINGLE SCORE IS COMPUTED FROM — and why anything outside this
+// file needs to know.
+//
+// BUG-273 A3, 2026-08-18 11:33. gemini-tts returned 503, TTS failed over to
+// edge-tts at 11:33:17.978, and at 11:33:19.591 the wake word fired at 0.9797 in a
+// room that had been scoring 5e-6 for the previous twenty seconds. All five
+// suppression guards in app.js's onWake evaluated false, so the log records
+// 'detected' rather than 'detected-suppressed'.
+//
+// The reason a guard can be correct and still miss is here. One classifier score
+// is computed from classifierWindow feature frames; the first covers EMBED_WINDOW
+// mel frames and each subsequent one advances EMBED_STRIDE. At the defaults that is
+// 76 + 15*8 = 196 mel frames, i.e. very close to TWO SECONDS of audio. A detection
+// reported at time T is therefore evidence about the interval [T - ~2s, T], while
+// every guard in app.js asks a question about T alone: "is MYTHOS speaking NOW?".
+// A greeting that finished playing 300ms before the score crossed the threshold is
+// invisible to all of them, and that is the shape of this bug.
+//
+// Exported so the suppression window in app.js is derived from the detector rather
+// than hardcoded next to it. A constant copied into the consumer drifts the first
+// time a model changes classifierWindow, and this repo's own rule about the preroll
+// cap ("must stay a derived expression") exists for the same reason.
+export function receptiveFieldMelFrames(classifierWindow) {
+  const w = Number.isFinite(classifierWindow) && classifierWindow > 0
+    ? Math.floor(classifierWindow) : DEFAULT_CLASSIFIER_WINDOW;
+  return EMBED_WINDOW + (w - 1) * EMBED_STRIDE;
+}
+
+export function receptiveFieldMs(classifierWindow) {
+  return receptiveFieldMelFrames(classifierWindow) * MEL_FRAME_MS;
+}
 
 // Python does `spec = np.squeeze(outputs[0])`, producing a 2D (frames, 32)
 // array. onnxruntime-web gives us flat data + dims instead of squeeze — this
@@ -75,10 +121,10 @@ export function reshapeMelOutput(out) {
 export function createWakeWord({ threshold, onWake, onStatus }) {
   const THRESHOLD = typeof threshold === 'number' ? threshold : 0.5;
   const REFRACTORY_MS = 2000;
-  const EMBED_WINDOW = 76;   // mel frames per embedding window
-  const EMBED_STRIDE = 8;    // mel-frame stride between successive embedding windows
   const EMBED_DIM = 96;      // speech-embedding output dimension
-  const DEFAULT_CLASSIFIER_WINDOW = 16; // openWakeWord's get_features() default n_feature_frames
+  // BUG-273 A3: EMBED_WINDOW, EMBED_STRIDE and DEFAULT_CLASSIFIER_WINDOW are now
+  // module constants — see receptiveFieldMs above, which app.js derives its
+  // own-audio suppression window from.
   const MEL_COMPACT_AT = 200;     // compact the mel-frame ring once the consumed prefix grows this large
   const FEATURE_BUFFER_MAX = 200; // cap embedding history — only the last classifierWindow ever gets used
 
@@ -110,6 +156,17 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   let framesAtLastReport = 0;
   let metricsTimer = null;
   let ctxStateAtStart = null; // AudioContext.state as measured, not as assumed
+  // BUG-272 W1: the 2026-08-17 session could not tell WHY getUserMedia threw
+  // OverconstrainedError, because nothing recorded what was requested. These
+  // carry shape flags and real track settings, never the device id itself.
+  let micFallbackFired = false;
+  let micConstraintsRequested = null;
+  let micTrackSettings = null;
+
+  // BUG-274 W1: trackSettingsOf now lives in mic-device.js and is shared with the
+  // Live capture path, which had no readback of its own. Deliberately NOT a
+  // re-export or a local alias — a second name for it is how the two paths
+  // drifted in the first place.
   // Generous: ~18 frames (1280 samples / 80ms each) are expected in this window,
   // so zero means genuinely no audio rather than a slow machine.
   const FIRST_FRAME_TIMEOUT_MS = 3000;
@@ -259,7 +316,23 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   }
 
   async function ensureAudio() {
-    stream = await navigator.mediaDevices.getUserMedia(buildAudioConstraints(getMicDeviceId()));
+    // BUG-272 W1: a stale MYTHOS_MIC_DEVICE id used to end the wake word for the
+    // whole session here — deviceId:{exact} is a hard constraint, so
+    // OverconstrainedError repeated on every arm attempt and nothing re-armed.
+    // openMicWithFallback clears the proven-bad id and retries on the OS
+    // default, reporting the degrade rather than hiding it.
+    // Recorded BEFORE the attempt so a rejection still reports what was asked
+    // for — that is the fact the 2026-08-17 session was missing.
+    micConstraintsRequested = micConstraintShape();
+    const opened = await openMicWithFallback();
+    stream = opened.stream;
+    micFallbackFired = opened.fallbackFired;
+    micConstraintsRequested = opened.requested;
+    micTrackSettings = trackSettingsOf(stream);
+    if (opened.fallbackFired) {
+      status('degraded', 'Saved microphone was unavailable — fell back to the system default. '
+        + micErrorMessage(opened.originalError), { fallbackFired: true });
+    }
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     // BUG-150: Chromium creates an AudioContext 'suspended' unless it is made
     // during a user gesture, and a suspended context wires its whole graph
@@ -284,7 +357,20 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       }
     });
     const source = audioCtx.createMediaStreamSource(stream);
-    await audioCtx.audioWorklet.addModule('/js/voice/wakeword-worklet.js');
+    // addModule() rejects with the same generic "Unable to load a worklet's
+    // module" for every cause — a 404, a script that throws, or an AudioContext
+    // whose render thread never started. On a packaged 0.1.7 install that message
+    // was the whole diagnosis available, and it was not enough: the file serves
+    // HTTP 200 as application/javascript and contains no import, so the fetch was
+    // never the problem (operator, 2026-08-13). Re-throw with the state that
+    // actually distinguishes the causes.
+    try {
+      await audioCtx.audioWorklet.addModule('/js/voice/wakeword-worklet.js');
+    } catch (err) {
+      const detail = `${err && err.name ? err.name : 'Error'}: ${err && err.message ? err.message : String(err)}`
+        + ` [ctx.state=${audioCtx.state} sampleRate=${audioCtx.sampleRate} baseLatency=${audioCtx.baseLatency}]`;
+      throw new Error(`addModule(wakeword-worklet) failed — ${detail}`);
+    }
     workletNode = new AudioWorkletNode(audioCtx, 'wakeword-frame-processor');
     workletNode.port.onmessage = (e) => {
       if (!e.data || e.data.type !== 'frame') return;
@@ -316,7 +402,17 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       await loadSessions();
       await ensureAudio();
     } catch (err) {
-      status('error', 'Wake-word failed to start: ' + ((err && err.message) || err));
+      // BUG-272 W1: this used to surface the raw error ("OverconstrainedError"),
+      // which told the operator nothing actionable. micErrorMessage already maps
+      // every getUserMedia error name to operator-readable text — reuse it
+      // rather than adding a second mapper. constraintsRequested says whether an
+      // exact-device constraint was in play, which is the one fact that
+      // separates a stale saved device from a genuinely missing mic.
+      status('error', 'Wake word could not start: ' + micErrorMessage(err), {
+        errorName: (err && err.name) || null,
+        constraintsRequested: micConstraintsRequested,
+        fallbackFired: micFallbackFired,
+      });
       stop();
       return false;
     }
@@ -345,6 +441,11 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       ctxStateAtStart: ctxStateAtStart,
       framesToFirstAudio: framesSeen,
       threshold: THRESHOLD,
+      // BUG-272 W1: requested-vs-actual on the success line too, so a session
+      // that armed can still be compared against one that did not.
+      constraintsRequested: micConstraintsRequested,
+      constraintsActual: micTrackSettings,
+      fallbackFired: micFallbackFired,
     });
     metricsTimer = setInterval(reportMetrics, METRICS_INTERVAL_MS);
     return true;
@@ -379,5 +480,8 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
     start,
     stop,
     isRunning: () => running,
+    // BUG-273 A3: the REAL window, using the classifierWindow read out of the
+    // model's own input shape at load time rather than the default.
+    receptiveFieldMs: () => receptiveFieldMs(classifierWindow),
   };
 }

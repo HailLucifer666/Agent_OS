@@ -62,17 +62,35 @@ export function cleanupBag() {
 // place (no rebuild -> no lost focus/scroll/hover/in-flight screen-reader
 // announcements), removes nodes whose key disappeared, inserts new nodes at
 // the right position, reorders via insertBefore when key order changed.
+// keyFn(item, index) may use the item's index in the items array (map-style);
 // updateFn(node, item) is called on every existing node so it can patch
 // text/classes in place; renderFn(item) builds a brand-new node the first
 // time a key appears (and is the only place event listeners get bound —
 // existing nodes are patched, never rebuilt, so listeners never accumulate).
 export function keyedList(container, items, keyFn, renderFn, updateFn) {
   const existing = new Map(); // key -> node
-  for (const node of container.children) existing.set(node.dataset.key, node);
+  // Observability only — a duplicate key still overwrites in the map and a
+  // keyless child still collapses to "undefined" (reconciliation semantics are
+  // deliberately unchanged; throwing here would blank a widget on a data
+  // hiccup). Warns are bounded to one per offending key per reconcile pass:
+  // this is a 24/7 HUD, no warn storms.
+  const warned = new Set();
+  const warnOnce = (key, msg) => {
+    if (warned.has(key)) return;
+    warned.add(key);
+    console.warn(msg);
+  };
+  for (const node of container.children) {
+    const key = node.dataset.key;
+    if (key === undefined || key === '') warnOnce('keyless', '[keyedList] child with no data-key — keyless children all collapse to one "undefined" key');
+    existing.set(key, node);
+  }
   let prev = null;
   const seen = new Set();
-  for (const item of items) {
-    const key = String(keyFn(item));
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const key = String(keyFn(item, i));
+    if (seen.has(key)) warnOnce('dup:' + key, `[keyedList] duplicate key "${key}" — the first node with this key is orphaned and never removed`);
     seen.add(key);
     let node = existing.get(key);
     if (!node) {

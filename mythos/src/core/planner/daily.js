@@ -71,8 +71,16 @@ function createDailyPlanner({ bus, config, memory, goals, brain, identity, logge
 
   // ---- day-file persistence ----
 
+  // Read-mutate-write: every saveDay() below writes back a day object that
+  // loadDay() produced. readJSON() cannot tell a CORRUPT day file from a MISSING
+  // one — both come back as the null fallback — so the next write would commit a
+  // fresh empty day over the real one, silently erasing the morning brief, every
+  // check-in and the evening review, and return as though nothing was wrong.
+  // readJSONStrict throws (and emits health.anomaly) instead, so the corruption
+  // surfaces and the write never happens. Same fix as memory/documents.js's
+  // registerDocument and leash/checkpoints.js.
   function loadDay(dateKey) {
-    var data = fs.readJSON(dayFilePath(dateKey), null);
+    var data = fs.readJSONStrict(dayFilePath(dateKey), null);
     if (!data) {
       data = {
         date: dateKey, focus: [], checkins: [], review: null,

@@ -1,0 +1,91 @@
+/* voice-picker.css — the voice picker, in the VOICE panel and (compact) in the
+   first-run wizard. Token vars only, same house style as mic-settings.css. The
+   compact variant only changes density: one component, two mounts, so the two
+   surfaces cannot drift apart visually either. */
+
+.vpick {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 560px;
+}
+
+.vpick-status {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+  margin: 0;
+}
+.vpick-status.is-error { color: var(--status-warn); }
+
+.vpick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.vpick-engine {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vpick-engine-name {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 0 0 2px;
+}
+
+.vpick-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+.vpick-row.is-current { border-color: var(--text-gold, var(--text-dim)); }
+
+.vpick-voice {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.vpick-detail {
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+.vpick-play,
+.vpick-use {
+  flex-shrink: 0;
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.vpick-play:hover:not(:disabled),
+.vpick-use:hover:not(:disabled) { color: var(--text-bright, var(--text-dim)); border-color: var(--text-dim); }
+.vpick-play:disabled,
+.vpick-use:disabled { opacity: 0.45; cursor: default; }
+
+.vpick-empty {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+  margin: 0;
+}
+
+/* Compact (wizard): the same rows, tighter, inside a step that already has its
+   own heading — so no engine group headings competing with it. */
+.vpick-compact { gap: 8px; max-width: none; }
+.vpick-compact .vpick-list { gap: 8px; }
+.vpick-compact .vpick-row { padding: 4px 6px; }

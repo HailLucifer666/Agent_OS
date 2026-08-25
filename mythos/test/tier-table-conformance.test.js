@@ -45,7 +45,7 @@ const { registerFromGmail } = require('../src/core/effectors/from-gmail');
 const { registerFromSkills } = require('../src/core/effectors/from-skills');
 const { registerFromMemory } = require('../src/core/effectors/from-memory');
 const { registerFromPersona } = require('../src/core/effectors/from-persona');
-const { registerFromHermes } = require('../src/core/effectors/from-hermes');
+const { registerFromDsh } = require('../src/core/effectors/from-dsh');
 const { registerFromRunner } = require('../src/core/effectors/from-runner');
 const { registerFromInstaller } = require('../src/core/effectors/from-installer');
 const { registerFromMcp } = require('../src/core/effectors/from-mcp');
@@ -145,7 +145,7 @@ describe('anti-drift: TIER_TABLE <-> effector hub conformance', () => {
     registerFromSkills(hub);
     registerFromMemory(hub, { semantic: {}, fs: vault, identity: {}, memory: {} });
     registerFromPersona(hub, { identity: {} });
-    registerFromHermes(hub);
+    registerFromDsh(hub);
     registerFromRunner(hub, { vault, config });
     registerFromInstaller(hub, { vault, config });
     // MCP client. config.MCP_SERVERS stays empty here on purpose: registration

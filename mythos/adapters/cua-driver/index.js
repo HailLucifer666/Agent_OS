@@ -122,6 +122,16 @@ function handleStderrChunk(chunk) {
   }
 }
 
+// Diagnostic tail. The child's stderr has always been captured into the ring
+// buffer above and then never looked at, so every handshake failure read as
+// "startup handshake timed out." and nothing else — the same undiagnosable
+// shape pc-child had before BUG-167, and the same fix.
+function recentStderr(maxLines = 20) {
+  return ringBuffer
+    .filter((line) => line.startsWith('[stderr]'))
+    .slice(-maxLines);
+}
+
 // ---- JSON-RPC dispatch (one in flight at a time, like pc-child) ----
 function processQueue() {
   if (commandInFlight || commandQueue.length === 0 || !child) return;
@@ -266,7 +276,9 @@ function spawnChild() {
   }).catch((err) => {
     if (state !== 'OFFLINE') {
       state = 'OFFLINE';
-      hint = `cua-driver MCP initialize failed: ${err.message}`;
+      const tail = recentStderr(5);
+      hint = `cua-driver MCP initialize failed: ${err.message}`
+        + (tail.length ? ` — last stderr: ${tail.join(' | ')}` : '');
     }
   });
 
@@ -274,7 +286,9 @@ function spawnChild() {
   setTimeout(() => {
     if (state === 'STARTING') {
       state = 'OFFLINE';
-      hint = 'cua-driver startup handshake timed out.';
+      const tail = recentStderr(5);
+      hint = 'cua-driver startup handshake timed out.'
+        + (tail.length ? ` Last stderr: ${tail.join(' | ')}` : ' The child printed nothing to stderr.');
     }
   }, STARTUP_TIMEOUT_MS);
 }

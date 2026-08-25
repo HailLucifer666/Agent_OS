@@ -7,6 +7,7 @@
 // see Spec Ambiguities Resolved #4. `createBreaker` comes from immune/breakers.js (Phase 6).
 
 const { createBreaker } = require('../immune/breakers');
+const { reasonText } = require('../util/reason-text');
 
 function createBreakerRegistry() {
   var byName = new Map();
@@ -40,10 +41,70 @@ function createBreakerRegistry() {
   };
 }
 
+// F1 (2026-08-15): the breaker FSM models ONE kind of failure — a transient one
+// that a cooldown might fix. A revoked OAuth grant is not that. In the 2026-08-14
+// session gmail_unread failed five times with `invalid_grant` ("this is NOT a
+// network problem and will not recover on its own", says the effector's own
+// message), tripped the flapping breaker, served its 60s suppression, was
+// dispatched again, and failed again — with the HUD pinned to DEGRADED for the
+// whole session (core-orb.js reads `state !== 'closed'` over every breaker) and
+// naming no cause.
+//
+// A terminal failure is therefore NOT routed through the breaker at all. The tool
+// is disabled for the process, the breaker is reset to CLOSED (so the orb stops
+// reporting a flap that will never resolve), and every later call returns the
+// stored remedy text without touching the provider.
+//
+// Deliberately an explicit allow-list of signatures at the effector, never a
+// broad `4xx === terminal` rule (rules/core.md §11.1): a 401/403 from a rate
+// limiter and one from a dead credential look alike, and getting that wrong turns
+// a transient outage into a session-long dead tool. Effectors opt in by returning
+// `terminal: true` beside the existing ok/unverified/reason fields — it travels
+// alongside them and is never folded into `ok` (dispatch-action.js's evidence
+// contract).
+function isTerminalResult(result) {
+  return !!(result && result.ok === false && result.terminal === true);
+}
+
+// Same normalization dispatch-action.js uses for audit lines — some effectors'
+// failure shape is `{error: msg}`, not a string, and the stored remedy must not
+// become the literal "[object Object]".
+function reasonOf(result) {
+  return reasonText(result && result.result) || reasonText(result && result.error)
+    || 'terminal failure';
+}
+
+// H1 (2026-08-24): race an effector's promise against the caller's abort signal.
+// Resolves with {__toolTimeout:true} when the signal fires first; resolves with the
+// effector's own value otherwise. A signal that is ALREADY aborted resolves
+// immediately — 'abort' does not re-fire, so checking aborted here is required,
+// not defensive. Pure control flow, no I/O: module scope so it stays testable
+// without a hub.
+function raceSignal(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.resolve({ __toolTimeout: true });
+  return new Promise(function (resolve, reject) {
+    var settled = false;
+    function settle(fn, value) {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      fn(value);
+    }
+    function onAbort() { settle(resolve, { __toolTimeout: true }); }
+    signal.addEventListener('abort', onAbort);
+    // Rejections propagate as REJECTIONS — resolving with the error here would
+    // bypass hub.invoke's own throw-handling catch and let an Error object flow
+    // downstream as if it were a tool result.
+    promise.then(function (v) { settle(resolve, v); }, function (e) { settle(reject, e); });
+  });
+}
+
 function createEffectorHub({ bus, config }) {
   var effectors = new Map();               // tool name -> effector (the 45 gate-counted ones)
   var namedServices = new Map();            // synthetic id -> service object (goals/kanban/pipeline bridges)
   var breakers = createBreakerRegistry();   // name -> breaker (see wrapper above)
+  var terminal = new Map();                 // tool name -> { reason, at } (F1, see above)
 
   function register(effector) {
     if (!effector || !effector.id || typeof effector.invoke !== 'function') {
@@ -96,6 +157,35 @@ function createEffectorHub({ bus, config }) {
   // Prefix and substring first (they catch the real cases: a truncated or
   // pluralised name), then a bounded edit distance for typos. Cheap: this runs
   // only on the failure path.
+  //
+  // BUG-323 — the containment test used to be a RAW bidirectional substring
+  // (`lower.indexOf(wanted) !== -1 || wanted.indexOf(lower) !== -1`), which is
+  // the same defect class as BUG-309's 'typo' matching inside "typography".
+  // score 1 is the best non-exact tier and ties break toward the shorter name,
+  // so any short tool name occurring anywhere inside a longer requested name was
+  // promoted to the head of the list: asking for `essay_write` suggested `say`.
+  //
+  // Measured before changing it (2026-08-23, 12 probes against the real
+  // registry): 10 of the suggestions the raw rule produced were genuinely
+  // useful, so the reverse direction is NOT dropped — it is bounded. Tool names
+  // here are snake_case identifiers, so the honest boundary is the segment: a
+  // containment counts only where it begins the string or follows an underscore.
+  // 'drag' inside 'draggable_reorder' begins at 0 and survives; 'say' inside
+  // 'essay_write' begins at index 2 and does not.
+  //
+  // Not keyword-match.js (BUG-309's module) on purpose: that does English
+  // morphology for prose specs, and stemming an identifier answers a different
+  // question. Scope note — this function only writes the "did you mean" text on
+  // a failure invoke() has already decided; it selects nothing and dispatches
+  // nothing, so a wrong entry here misleads a reader, it does not misroute a call.
+  function containsAtSegmentBoundary(haystack, needle) {
+    if (!needle) return false;
+    for (var at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+      if (at === 0 || haystack.charAt(at - 1) === '_') return true;
+    }
+    return false;
+  }
+
   function nearestToolNames(name, limit) {
     var wanted = String(name || '').toLowerCase();
     if (!wanted) return [];
@@ -106,7 +196,8 @@ function createEffectorHub({ bus, config }) {
       var lower = candidate.toLowerCase();
       var score = null;
       if (lower === wanted) score = 0;
-      else if (lower.indexOf(wanted) !== -1 || wanted.indexOf(lower) !== -1) score = 1;
+      else if (containsAtSegmentBoundary(lower, wanted)
+            || containsAtSegmentBoundary(wanted, lower)) score = 1;
       else {
         var d = editDistance(wanted, lower);
         // Only near-misses; beyond a third of the name it is a different word.
@@ -164,13 +255,39 @@ function createEffectorHub({ bus, config }) {
       };
     }
 
+    // F1: a tool that already failed terminally is not dispatched again this
+    // process. The stored text is the effector's own remedy line, so the model
+    // still has something actionable to say instead of a bare refusal.
+    var dead = terminal.get(resolvedName);
+    if (dead) {
+      return { ok: false, terminal: true, result: dead.reason };
+    }
+
     if (!breakers.allow(resolvedName)) {
       return { ok: false, result: 'circuit-open' };
     }
 
     var result;
     try {
-      result = await effector.invoke(params, ctx);
+      // GAP-ANALYSIS-2026-08-24 finding H1 (fixed 2026-08-24): until now this
+      // merely FORWARDED the caller's signal and awaited the effector. An
+      // effector that dropped ctx.signal on the floor (confirmed instance:
+      // from-image-gen.js:99, fetch with no signal) hung this await forever,
+      // making dispatch-action's ACTION_TIMEOUT_MS advisory only — the repo's
+      // own "unbounded call on the Live path is permanent silence" class.
+      // Now the race makes an EXPLICIT caller budget binding. Deliberately no
+      // new default timeout is invented here: tools invoked without a caller
+      // signal (long builds carrying their own 10-minute budget, direct calls)
+      // keep today's behaviour — Q8 disposition pinned by the negative control
+      // in test/hub-enforces-caller-abort.test.js.
+      result = await raceSignal(effector.invoke(params, ctx), ctx && ctx.signal);
+      if (result && result.__toolTimeout) {
+        // Announce before shaping: a wrong classification that also swallowed
+        // the reason it happened would be strictly worse than the hang.
+        if (bus) bus.emit('health.anomaly', { kind: 'tool-timeout', target: resolvedName });
+        breakers.recordFailure(resolvedName);
+        return { ok: false, result: 'tool-timeout' };
+      }
     } catch (err) {
       // invoke() contract says effectors never throw, but hub must not trust that —
       // an uncaught throw here must still count as a breaker failure, not crash Cortex.
@@ -179,7 +296,40 @@ function createEffectorHub({ bus, config }) {
       result = { ok: false, result: err.message };
     }
 
-    if (result && result.ok) {
+    if (isTerminalResult(result)) {
+      // F1: record, reset the breaker (it may already be OPEN from the failures
+      // that led here — leaving it open pins the HUD's DEGRADED badge forever on
+      // a tool that will never be retried), and announce ONCE with the remedy.
+      var reason = reasonOf(result);
+      if (!terminal.has(resolvedName)) {
+        terminal.set(resolvedName, { reason: reason, at: Date.now() });
+        breakers.reset(resolvedName);
+        if (bus) {
+          bus.emit('health.anomaly', {
+            kind: 'effector-terminal', target: resolvedName, reason: reason
+          });
+        }
+      }
+      return result;
+    }
+
+    // BUG-272 T2: `unverified` is NOT a success for breaker purposes.
+    //
+    // evidence.unverified() always sets ok:true (it means "I did the thing but
+    // cannot prove the world changed"), and this branch read result.ok alone — so
+    // open_web(browser:true) failing seven consecutive times under Electron, with
+    // no surface capable of rendering it, was recorded as seven successes. The
+    // breaker exists precisely to stop a tool being retried into the ground, and
+    // the one shape it could not see was the one that repeated.
+    //
+    // A tool that never proves anything therefore trips its breaker after the
+    // usual run of attempts, which is the correct outcome: repeatedly doing
+    // something unprovable is indistinguishable, from here, from repeatedly
+    // failing. It stays ok:true to every OTHER consumer — the evidence contract
+    // (dispatch-action.js) is explicit that unverified/reason must not be
+    // flattened into ok/fail, and this does not flatten it, it only stops the
+    // breaker treating "unproven" as "proven".
+    if (result && result.ok && result.unverified !== true) {
       breakers.recordSuccess(resolvedName);
     } else {
       breakers.recordFailure(resolvedName);
@@ -196,6 +346,14 @@ function createEffectorHub({ bus, config }) {
     catalog: catalog,
     get effectors() { return effectors; },
     get breakers() { return breakers; },
+    // F1: read by the healer's terminal playbook and by anything that wants to
+    // explain WHY a tool is missing from the planner's catalog.
+    terminalFailures: function() {
+      var out = {};
+      for (var entry of terminal) out[entry[0]] = { reason: entry[1].reason, at: entry[1].at };
+      return out;
+    },
+    clearTerminal: function(name) { return terminal.delete(name); },
     count: function() { return effectors.size; }
   };
 }

@@ -55,7 +55,73 @@ function createLeash(deps) {
     throw new Error('createLeash requires effectors with get() — inject a stub until Phase 7 ships, never omit this dependency');
   }
 
-  var confirmRegistry = createConfirmRegistry({ config: config });
+  // Wave 1 (2026-08-13): a confirm that times out with nobody answering used
+  // to vanish silently — no audit row, no anomaly, and the caller (e.g. the
+  // Live session waiting to tell the model what happened) never heard about
+  // it either. onExpire runs the two things this module already owns
+  // (auditWriter/bus) and ALSO emits a routable bus event — 'confirm-expired'
+  // — carrying the entry's connectionId, so server/index.js (which owns the
+  // per-connection liveAdapter this module has no reach into) can route an
+  // EXPIRED verdict back to the exact Live session that raised the confirm,
+  // the same way it already routes confirm-request/confirm-resolved over the
+  // bus rather than through a constructor-time callback.
+  var confirmRegistry = createConfirmRegistry({
+    config: config,
+    onExpire: function(confirmId, entry) {
+      var action = entry && entry.action;
+      // BUG-119-class shape mismatch (same bug the accept() wrapper below
+      // already documents and fixes): every production caller stores an
+      // ENVELOPE — confirm.create(summary, {decision, goalId, tier},
+      // connectionId) — not a bare {tool, args}. Reading action.tool/
+      // action.tier directly is only ever non-undefined for the test
+      // fixtures that pass the bare shape; in production it silently wrote
+      // tool:undefined into both the audit deny row and the anomaly,
+      // defeating the entire point of making expiry loud (live-verified
+      // 2026-08-13 — see BUGS.md). Unwrap .decision when present, exactly
+      // like confirmApi.accept() does, so the SAME shape rule holds at both
+      // resolution paths of a confirm (accepted or expired).
+      var decision = action && action.decision ? action.decision : action;
+      var expiredTool = decision && decision.tool;
+      var expiredTier = (action && action.tier !== undefined) ? action.tier : (decision && decision.tier);
+      try {
+        auditWriter.write({
+          actor: (action && action.goalId) ? 'cortex' : 'voice',
+          tool: expiredTool, tier: expiredTier,
+          decision: 'deny', reason: 'confirm-ttl-expired', confirmId: confirmId,
+        });
+      } catch (_) { /* audit failure must not block the rest of expiry handling */ }
+      // BUG-324: the audit row three lines above already records WHY this
+      // expired. The anomaly — the only one of the two the operator ever hears
+      // about — did not carry it, so immune/explainer.js reached its honest
+      // fallback and said "I do not yet know the cause" about a timeout this
+      // very function had just written down. Measured on the wired chain
+      // 2026-08-23. Same class as BUG-278: the field exists one line away.
+      //
+      // needsOperator is the truthful flag here, not a convenience. The remedy
+      // is a person answering the prompt (or re-issuing the command); every
+      // mechanical remedy in the explainer's menu is a wrong answer that also
+      // sounds like a right one, which is precisely what BUG-273 C2 added the
+      // flag to prevent. It also spares a brain round-trip mid-conversation.
+      try {
+        bus.emit('health.anomaly', {
+          kind: 'confirm-expired-silently', tool: expiredTool, target: expiredTool,
+          needsOperator: true,
+          // The TTL is read from config, not from confirmRegistry.stats(): this
+          // callback is constructed as an argument to createConfirmRegistry, so
+          // reaching back through the variable being assigned would work only
+          // because a timer cannot fire before the assignment completes. Same
+          // number, no temporal coupling.
+          reason: 'A confirmation prompt' + (expiredTool ? ' for ' + expiredTool : '')
+            + ' timed out' + (config.LEASH_CONFIRM_TTL_MS ? ' after ' + config.LEASH_CONFIRM_TTL_MS + 'ms' : '')
+            + ' with no answer, so the action was denied and nothing ran.'
+            + ' Re-issue it if you still want it.',
+        });
+      } catch (_) {}
+      try {
+        bus.emit('confirm-expired', { confirmId: confirmId, connectionId: entry && entry.connectionId, tool: expiredTool });
+      } catch (_) {}
+    },
+  });
 
   // BUG-012: session-scoped T3 grants for GOAL-LESS actions. The per-goal grant
   // check below (goal.grants['3']) can never engage on the voice/conversation
@@ -144,13 +210,19 @@ function createLeash(deps) {
   var NEVER_TRUSTABLE = {
     gmail_send: 1, compose_email: 1, whatsapp_send: 1,
     phone_call: 1, phone_sms_send: 1, phone_whatsapp_send: 1, phone_file_push: 1,
-    run_command: 1, install_from_github: 1, mcp_call_tool: 1, hermes_task: 1,
+    run_command: 1, install_from_github: 1, mcp_call_tool: 1, dsh_task: 1,
     security_scan: 1,
     build_project: 1, revise_project: 1, pipeline_execute: 1,
     kanban_assemble: 1, kanban_build_card: 1, start_project: 1, run_mission: 1,
     delete_file: 1, delete_goal: 1, delete_artifact: 1,
     reminder_approve_action: 1,
-    browser_evaluate: 1, kill_session: 1
+    browser_evaluate: 1, kill_session: 1,
+    // Opening the operator's camera. Not destructive, not outward-facing — but it
+    // turns on a sensor pointed at a person, and the trust list exists to skip
+    // confirms on things whose worst case is a wasted click. Its worst case is a
+    // misheard sentence filming a room, so it stays un-trustable by construction
+    // (see leash/tiers.js's camera_on entry).
+    camera_on: 1
   };
 
   // TRUSTED_TOOLS is parsed ONCE here so a bad entry is reported at boot rather
@@ -165,10 +237,10 @@ function createLeash(deps) {
     .forEach(function(name) {
       var why = null;
       if (NEVER_TRUSTABLE[name]) why = 'never-trustable: this tool sends, runs, deletes or executes arbitrary code';
-      else if (TIER_TABLE[name] !== 3) {
+      else if (TIER_TABLE[name] !== 2 && TIER_TABLE[name] !== 3) {
         why = TIER_TABLE[name] === undefined
           ? 'not a known tool — check the spelling against leash/tiers.js'
-          : 'not tier 3 (it is tier ' + TIER_TABLE[name] + ') — trust is T3-only';
+          : 'not tier 2 or 3 (it is tier ' + TIER_TABLE[name] + ') — trust is T2/T3-only';
       }
       if (why) {
         bus.emit('health.anomaly', {
@@ -188,11 +260,13 @@ function createLeash(deps) {
     return !!(ctx && ctx.connectionId && ctx.connectionId !== 'system');
   }
 
-  // TIER_TABLE[name] === 3 is required, mirroring the accept() wrapper below:
-  // T4 stays structurally ineligible, and an unknown tool that fell back to the
-  // T3 fail-safe never matches because it is not in the table at all.
+  // TIER_TABLE[name] === 2 or 3 is required (Tier 2 shares Tier 3's escape
+  // hatches — see the combined grant block below). T4 stays structurally
+  // ineligible, and an unknown tool that fell back to the T3 fail-safe never
+  // matches because it is not in the table at all.
   function isTrusted(name) {
-    return !!trustedTools[name] && !NEVER_TRUSTABLE[name] && TIER_TABLE[name] === 3;
+    return !!trustedTools[name] && !NEVER_TRUSTABLE[name] &&
+      (TIER_TABLE[name] === 2 || TIER_TABLE[name] === 3);
   }
 
   // Keyed by connectionId + ':' + tool (BUG-012 follow-up, security HIGH):
@@ -307,14 +381,19 @@ function createLeash(deps) {
     // the whole tier, which meant approving a single Forge build plan gave the
     // goal a standing pass for every T3 tool that later carried the same
     // goalId — gmail_send, delete_file, run_command, phone_call, phone_sms_send,
-    // browser_click, install_from_github, hermes_task. Two live consumers made
+    // browser_click, install_from_github, dsh_task. Two live consumers made
     // that reachable with no external attacker: engagements/executor.js checks
     // LLM-authored {tool,args} stages against this gate with goalId set (so any
     // untrusted text reaching the spec could steer it), and cortex/index.js
     // passes its own activeGoalId on every autonomous tick. See
     // test/leash-grant-scope.test.js.
-    if (tier === 3) {
-      var goal = (goalCtx && goalCtx.goalId) ? goals.get(goalCtx.goalId) : null;
+    // Tier 2 shares Tier 3's escape hatches. Before this, tier 2 matched no
+    // branch — not the ceiling allow above, not this block — and fell through
+    // to the T4 tail, which refused it with reason 'tier-4-always-confirm' and
+    // gave it no way to ever be granted. That is what made the media widget's
+    // buttons inert and made "play a song" confirm every single time.
+    if (tier === 2 || tier === 3) {
+      var goal = (tier === 3 && goalCtx && goalCtx.goalId) ? goals.get(goalCtx.goalId) : null;
       var goalGrant = (goal && goal.grants) ? goal.grants['3'] : undefined;
       // A legacy pre-scoping grant (bare `true` persisted by an older build) is
       // deliberately NOT honoured: there is no way to recover which tools the
@@ -352,6 +431,18 @@ function createLeash(deps) {
       // (autonomous/cortex calls pass none) -> never matches any grant, which
       // is the desired containment — only the WS connection that actually
       // accepted the confirm gets the session grant.
+      //
+      // This read sits in the tier === 2 || 3 block now, but the WRITE side
+      // (confirmApi.accept() below) still requires TIER_TABLE[grantedTool] ===
+      // 3 before it will ever record a grant. That is deliberate, not
+      // leftover from before the tier-2 widening: session grants are staying
+      // T3-only until an operator decides otherwise, the same way T2's new
+      // reach into operator-present-trust was a decision, not a side effect.
+      // Every current SESSION_GRANTABLE entry is T3, so this read is
+      // unreachable-but-harmless for T2 today. If a T2 tool is ever added to
+      // SESSION_GRANTABLE, this read will start checking a grant accept()
+      // will never write — widen accept()'s tier check in the same change,
+      // or the new entry silently never grants.
       if (SESSION_GRANTABLE[toolName] && goalCtx && goalCtx.connectionId) {
         var sessionExpiry = sessionGrants.get(goalCtx.connectionId + ':' + toolName);
         if (sessionExpiry && Date.now() < sessionExpiry) {
@@ -359,8 +450,9 @@ function createLeash(deps) {
           return failClosedIfUnwritable(tier, sessionWrite, { allow: true, requireConfirm: false, tier: tier, reason: 'session-granted' });
         }
       }
-      var confirm3Write = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'confirm', { reason: 'tier-3-requires-confirm' });
-      return failClosedIfUnwritable(tier, confirm3Write, { allow: false, requireConfirm: true, tier: tier, reason: 'tier-3-requires-confirm' });
+      var confirmReason = 'tier-' + tier + '-requires-confirm';
+      var confirmWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'confirm', { reason: confirmReason });
+      return failClosedIfUnwritable(tier, confirmWrite, { allow: false, requireConfirm: true, tier: tier, reason: confirmReason });
     }
 
     // 5. T4 -> always confirm, never cached
@@ -389,6 +481,13 @@ function createLeash(deps) {
       // bare {tool, args} unchanged. One shape rule, both call sites.
       var granted = acceptedAction && acceptedAction.decision ? acceptedAction.decision : acceptedAction;
       var grantedTool = granted && granted.tool;
+      // TIER_TABLE[grantedTool] === 3 is deliberately NOT widened to 2 here
+      // even though check()'s read side above now sits in a tier === 2 || 3
+      // block. Session grants stay T3-only on purpose — that is an operator
+      // safety decision, not a gap this fix is meant to close. If a T2 tool
+      // is ever added to SESSION_GRANTABLE, this line must widen too, in the
+      // same change, or check() will spend forever looking for a grant this
+      // line will never write.
       if (grantedTool && connectionId &&
           SESSION_GRANTABLE[grantedTool] && TIER_TABLE[grantedTool] === 3) {
         // BUG-142: opportunistic eviction, piggybacked on the one path that grows

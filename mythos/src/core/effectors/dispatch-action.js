@@ -5,6 +5,28 @@
 // Consolidates: breaker check → effectors.invoke → episodic write → budget debit → event emit.
 // Prevents drift between the two dispatch surfaces.
 
+// Channels whose actions are PLUMBING, not experience. They still get a full
+// audit row — the audit trail is what an investigation reads — but they are kept
+// out of episodic memory, which is what the brain recalls when composing a
+// reply.
+//
+// WHY (operator, 2026-08-11): the packaged build ducked system volume at every
+// mic-hot boundary, which with music playing oscillated — 58 set_volume rows in
+// one session, all channel:'voice-ducking'. Each one was also an episodic entry,
+// and server/index.js recalls the 12 most relevant recent memories per turn, so
+// those rows crowded out everything else. The entity then answered "how's it
+// going" with "Volume's at 15 now" and, asked about it, said "because you keep
+// setting it there" — it was reading its own microphone plumbing as if it were
+// something the operator had done. Hysteresis (server/index.js) stops the
+// oscillation; this stops the plumbing from being remembered as events at all.
+//
+// 'boot-briefing' (TASK B2 code review, 2026-08-13): the boot briefing dispatches
+// get_weather/reminder_list through this same sequence every boot for the exact
+// same reason set_volume did — the reads are plumbing for a spoken greeting, not
+// an experience, and an episodic row per boot for "checked the weather" would
+// crowd the same recall window this exception was created to protect.
+const INTERNAL_CHANNELS = new Set(['voice-ducking', 'boot-briefing']);
+
 function humanizeArgs(args) {
   const entries = Object.entries(args || {});
   if (!entries.length) return '';
@@ -15,18 +37,27 @@ function humanizeArgs(args) {
 // (e.g. from-runner.js's run_command: fail(m, extra) -> {error: m, ...extra}),
 // so a plain String(result.result) produced the useless literal
 // "[object Object]" in the audit trail — confirmed in the 2026-07-29 audit's
-// own Audit/2026-07-29.jsonl. Extract a real message when there is one,
-// falling back to a truncated JSON dump instead of toString's default.
-function reasonText(raw) {
-  if (raw == null) return '';
-  if (typeof raw === 'string') return raw;
-  if (typeof raw === 'object') {
-    if (typeof raw.error === 'string') return raw.error;
-    if (typeof raw.message === 'string') return raw.message;
-    try { return JSON.stringify(raw); } catch (_) { /* fall through */ }
-  }
-  return String(raw);
-}
+// own Audit/2026-07-29.jsonl. Extracted to util/reason-text.js (2026-08-13,
+// Wave 0) so effectors' own catch blocks can share it instead of re-deriving
+// the same fallback ad hoc.
+const { reasonText } = require('../util/reason-text');
+
+// REVIEW-of-a0c82fe (2026-08-24): hub.invoke now ENFORCES the caller signal
+// (GAP-ANALYSIS-2026-08-24 H1), so this dispatcher's default ACTION_TIMEOUT_MS
+// became a hard kill for tools whose effectors carry their own, larger,
+// documented budgets. Intentionally narrow: an ordinary tool over budget is
+// still killed (pinned by the negative control in
+// test/dispatch-self-timed-tools.test.js). Adding to this set requires naming
+// the effector's own budget in the comment.
+const SELF_TIMED_TOOLS = new Set([
+  // build-engine path — DSH_TEXT_BUILD_TIMEOUT_MS defaults to 600000 (10 min)
+  'build_project', 'revise_project', 'start_project', 'dsh_task',
+  'kanban_build_card', 'kanban_assemble',
+  // ingestion / scanning — unbounded multi-item work with no internal budget yet
+  'index_project', 'document_ingest', 'security_scan',
+  // orchestration — each stage dispatches its own bounded actions
+  'run_mission', 'pipeline_execute',
+]);
 
 async function dispatchAction(decision, ctx) {
   const { effectors, bus, goals, memory, config } = ctx;
@@ -36,7 +67,13 @@ async function dispatchAction(decision, ctx) {
   // via working.spendThisTick) pass it through here. Voice/confirm-accept
   // callers omit it → defaults to 0, preserving their existing behavior.
   const spentTokens = ctx.spentTokens || 0;
-  const signal = ctx.signal || AbortSignal.timeout((config && config.ACTION_TIMEOUT_MS) || 30000);
+  const signal = ctx.signal || (SELF_TIMED_TOOLS.has(decision.tool)
+    ? undefined // REVIEW-of-a0c82fe fix: these effectors carry their own larger
+                // budgets (DSH builds: DSH_TEXT_BUILD_TIMEOUT_MS=600000); hub
+                // enforcement made the dispatcher's default binding, killing
+                // legitimate builds at 30s. Their internal budget governs; an
+                // explicit caller signal still applies.
+    : AbortSignal.timeout((config && config.ACTION_TIMEOUT_MS) || 30000));
 
   // 1. Breaker check
   if (effectors.breakers && typeof effectors.breakers.allow === 'function') {
@@ -55,8 +92,10 @@ async function dispatchAction(decision, ctx) {
   // — audit/episodic previously recorded neither, only ever the tool+outcome.
   const traceId = ctx.traceId || null;
 
-  // 3. Record outcome in episodic memory
-  if (memory && memory.episodic && typeof memory.episodic.write === 'function') {
+  // 3. Record outcome in episodic memory — unless this channel is plumbing
+  // (see INTERNAL_CHANNELS above; the audit write below is unconditional).
+  const isInternal = INTERNAL_CHANNELS.has(ctx.channel);
+  if (!isInternal && memory && memory.episodic && typeof memory.episodic.write === 'function') {
     try {
       await memory.episodic.write({
         kind: 'action', channel: ctx.channel || 'cortex',
@@ -77,6 +116,7 @@ async function dispatchAction(decision, ctx) {
   if (goalId && goals && typeof goals.debitBudget === 'function') {
     goals.debitBudget(goalId, { tokens: spentTokens, actions: 1 });
   }
+
 
   // 4.5 V2 (Phase 4): close the execution→learning loop.
   //   (a) skills.recordUse — feeds the EMA successRate the planner consults
@@ -116,6 +156,27 @@ async function dispatchAction(decision, ctx) {
   //                     the first *pending* step every tick, so a step left
   //                     unresolved re-runs a real world-changing action
   //                     (ui_type, ui_click) forever.
+  // F9 (2026-08-15): promote a repeated action into a durable fact.
+  //
+  // "MYTHOS did not remember previously requested songs" — a track played three
+  // times in one session left 18 episodic records and produced nothing in
+  // Semantic, because the ONLY route into Semantic was the model choosing to
+  // call `remember`. Behaviour is the more reliable signal and it was being
+  // thrown away entirely. See memory/habit-promoter.js for why the watch list is
+  // narrow and why this is a count rather than a brain call.
+  //
+  // Sits with the other post-dispatch bookkeeping and is guarded the same way:
+  // it observes an action that already happened and can never change its result.
+  // `actionOk && !actionUnverified` deliberately — an action that only MIGHT
+  // have landed is not evidence of a habit, which is exactly the distinction the
+  // evidence contract in src/core/CLAUDE.md exists to keep alive this far down.
+  if (memory && memory.habits && typeof memory.habits.observe === 'function') {
+    try {
+      memory.habits.observe(decision.tool, decision.args || decision.params,
+        actionOk && !actionUnverified);
+    } catch (_) { /* memory bookkeeping must never affect an action's result */ }
+  }
+
   if (decision.skillRef && !actionUnverified && memory && memory.skills && typeof memory.skills.recordUse === 'function') {
     try {
       // FIX-2: recordUse is async and was previously fire-and-forget with no
@@ -179,6 +240,23 @@ async function dispatchAction(decision, ctx) {
         // specific turn (voice reqId / confirmId / cortex tick) that caused it.
         actor: ctx.channel || 'cortex',
         traceId: traceId,
+        // G4 (unattributable-consent finding): actor above is a hardcoded
+        // per-code-path literal (server/index.js's handleConfirmReply always
+        // passes channel: 'confirm-accept'), so every accept looked identical
+        // in the audit no matter which surface produced it — a spoken "no"
+        // could not have caused an accept (show_desktop isn't in SEND_TOOLS,
+        // AFFIRMATIVE_RE/NEGATIVE_RE are anchored and reject-checked first,
+        // and accept() is single-use per confirm), but that could not be
+        // PROVEN from the audit trail either. `surface` carries the actual
+        // client-reported origin of a confirm-reply ('click' vs 'gesture'),
+        // defaulting to 'unknown' for anything that didn't report one — never
+        // 'click', which would be inventing an attribution, the exact defect
+        // this fixes. `acceptedScope` records which of the two accept()
+        // scopes tried in handleConfirmReply actually resolved the confirm
+        // ('connection' vs the T0-T2-only 'system' fallback), which is
+        // material to attribution and was previously indistinguishable too.
+        surface: ctx.surface || 'unknown',
+        acceptedScope: ctx.acceptedScope || undefined,
       });
     } catch (_) {}
   }
@@ -193,7 +271,12 @@ async function dispatchAction(decision, ctx) {
     bus.emit('ui.navigate', { route: result.result.route });
   }
   if (decision.tool === 'open_web' && result && result.ok && result.result) {
-    bus.emit('ui.open-web', result.result);
+    // BUG-273 B3: skip when the effector already dispatched the render itself in
+    // order to collect a mount ack. Emitting here as well would render the widget
+    // twice, which is BUG-166 (one open_web, two players) from the other direction.
+    // Every other producer of this event (from-pc.js, from-widgets.js) is untouched
+    // and still relies on this relay.
+    if (!result.result.renderDispatched) bus.emit('ui.open-web', result.result);
   }
 
   return result;

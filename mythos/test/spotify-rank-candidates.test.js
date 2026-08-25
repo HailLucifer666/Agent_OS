@@ -50,8 +50,14 @@ describe('rankCuaPlayCandidates — first-in-tree order, not bag-of-words re-sor
   });
 
   it('preserves original relative order among surviving candidates (no re-sort)', () => {
+    // NOTE (2026-08-11): the first fixture label used to read "Play Queen Live
+    // Album Rhapsody". The alternate-version filter added for incident 2 now
+    // rejects it on the word "live", which made this order test fail for a
+    // reason that had nothing to do with ordering. Relabelled so it still
+    // exercises exactly what it is named for; the live-rejection behaviour has
+    // its own suite below.
     const elements = [
-      { role: 'button', label: 'Play Queen Live Album Rhapsody', element_index: 1 },
+      { role: 'button', label: 'Play Queen Greatest Hits Rhapsody', element_index: 1 },
       { role: 'button', label: 'Play Bohemian Rhapsody by Queen', element_index: 2 },
       { role: 'button', label: 'Play Queen Rhapsody Remix', element_index: 3 },
     ];
@@ -72,5 +78,72 @@ describe('rankCuaPlayCandidates — first-in-tree order, not bag-of-words re-sor
     const ranked = rankCuaPlayCandidates(elements, 'Bohemian Rhapsody Queen');
     assert.equal(ranked.length, 1);
     assert.equal(ranked[0].element_index, 3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Incident 2 (operator, 2026-08-11): "play Highway to Hell" played the LIVE
+// version instead of the studio original. Since e1bd8f2 the play path takes
+// Spotify's first result unconditionally, so when Spotify's own top hit is a
+// live cut, a live cut plays.
+//
+// Operator's decision was a NEGATIVE FILTER ONLY — the term-count re-ranking
+// e1bd8f2 removed stays removed (it is what let podcasts outrank real tracks).
+// So these tests assert three things: alternate versions are dropped, the
+// operator's own wording re-enables them, and a result set that is ENTIRELY
+// alternate versions still plays something rather than reporting nothing found.
+// ---------------------------------------------------------------------------
+describe('alternate-version filter (incident 2 — live vs studio)', () => {
+  const { rejectAlternateVersions } = fromSpotify._internal;
+
+  it('drops the live cut and keeps the studio original, order intact', () => {
+    const elements = [
+      { role: 'button', label: 'Play Highway to Hell - Live', element_index: 1 },
+      { role: 'button', label: 'Play Highway to Hell', element_index: 2 },
+      { role: 'button', label: 'Play Highway to Hell (Remastered)', element_index: 3 },
+    ];
+    const ranked = rankCuaPlayCandidates(elements, 'Highway to Hell');
+    assert.deepEqual(ranked.map(b => b.element_index), [2],
+      'a live and a remastered cut must both be skipped when the operator asked for neither');
+  });
+
+  it('honours the operator asking for the live version explicitly', () => {
+    const elements = [
+      { role: 'button', label: 'Play Highway to Hell - Live', element_index: 1 },
+      { role: 'button', label: 'Play Highway to Hell', element_index: 2 },
+    ];
+    const ranked = rankCuaPlayCandidates(elements, 'the live version of Highway to Hell');
+    assert.deepEqual(ranked.map(b => b.element_index), [1, 2],
+      'a pattern the operator named in their own utterance must not be filtered at all');
+  });
+
+  it('falls back to the unfiltered list when EVERY result is an alternate version', () => {
+    const elements = [
+      { role: 'button', label: 'Play Some Song - Live at Wembley', element_index: 1 },
+      { role: 'button', label: 'Play Some Song (Live)', element_index: 2 },
+    ];
+    const out = rejectAlternateVersions(elements, 'Some Song');
+    assert.equal(out.fellBack, true, 'filtering everything out must fail OPEN, not return nothing');
+    assert.deepEqual(out.candidates.map(b => b.element_index), [1, 2]);
+    assert.equal(out.rejected.length, 2);
+  });
+
+  it('covers karaoke / cover / tribute / sped-up / instrumental too', () => {
+    for (const bad of ['Karaoke Version', 'Cover', 'Tribute', 'Sped Up', 'Instrumental']) {
+      const elements = [
+        { role: 'button', label: `Play Some Song ${bad}`, element_index: 1 },
+        { role: 'button', label: 'Play Some Song', element_index: 2 },
+      ];
+      const ranked = rankCuaPlayCandidates(elements, 'Some Song');
+      assert.deepEqual(ranked.map(b => b.element_index), [2], `"${bad}" must be skipped`);
+    }
+  });
+
+  it('reads .name as well as .label, for the older pc-child ui_elements path', () => {
+    const out = rejectAlternateVersions(
+      [{ name: 'Highway to Hell (Live)' }, { name: 'Highway to Hell' }],
+      'Highway to Hell'
+    );
+    assert.deepEqual(out.candidates.map(c => c.name), ['Highway to Hell']);
   });
 });

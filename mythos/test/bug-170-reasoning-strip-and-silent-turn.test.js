@@ -33,8 +33,7 @@ describe('BUG-170 — stripReasoningLead strips the label, never the reply', () 
   it('strips the labels actually observed leaking', () => {
     for (const lead of ['Reasoning: ', 'reasoning:', 'Thinking: ', 'THOUGHT: ', 'Chain-of-thought: ', '**Reasoning:** ']) {
       const r = stripReasoningLead(lead + 'the volume is now 40 percent');
-      assert.equal(r.stripped, true, 'must strip: ' + JSON.stringify(lead));
-      assert.equal(r.text, 'the volume is now 40 percent');
+      assert.equal(r, 'the volume is now 40 percent', 'must strip: ' + JSON.stringify(lead));
     }
   });
 
@@ -48,19 +47,18 @@ describe('BUG-170 — stripReasoningLead strips the label, never the reply', () 
     ];
     for (const text of keep) {
       const r = stripReasoningLead(text);
-      assert.equal(r.stripped, false, 'must NOT strip: ' + text);
-      assert.equal(r.text, text);
+      assert.equal(r, text, 'must NOT strip: ' + text);
     }
   });
 
   it('removes only the label, never the content behind it', () => {
     const r = stripReasoningLead('Reasoning: I should check the window title first.');
-    assert.equal(r.text, 'I should check the window title first.');
+    assert.equal(r, 'I should check the window title first.');
   });
 
   it('tolerates empty and non-string input', () => {
-    assert.deepEqual(stripReasoningLead(''), { text: '', stripped: false });
-    assert.deepEqual(stripReasoningLead(null), { text: null, stripped: false });
+    assert.equal(stripReasoningLead(''), '');
+    assert.equal(stripReasoningLead(null), null);
   });
 });
 
@@ -71,6 +69,7 @@ function makeHarness(overrides) {
   const transcripts = [];
   const logs = [];
   const anomalies = [];
+  const busEvents = [];
   const silentTurns = [];
   const audioOut = [];
 
@@ -86,7 +85,16 @@ function makeHarness(overrides) {
 
   const session = createLiveSession(Object.assign({
     config: { GEMINI_LIVE_MODEL: 'models/test', LIVE_IDLE_TIMEOUT_MS: 600000 },
-    bus: { emit: (type, payload) => { if (type === 'health.anomaly') anomalies.push(payload); } },
+    // B3 (2026-08-14): busEvents captures EVERY emit, not just health.anomaly, so
+    // the reasoning strip can be asserted on its own channel after it was moved
+    // off the fault channel. `anomalies` still holds only health.anomaly, which is
+    // what the other tests in this file legitimately assert on.
+    bus: {
+      emit: (type, payload) => {
+        busEvents.push({ type, payload });
+        if (type === 'health.anomaly') anomalies.push(payload);
+      },
+    },
     logger: {
       info: (msg, data) => logs.push({ level: 'info', msg, data }),
       warn: (msg, data) => logs.push({ level: 'warn', msg, data }),
@@ -112,7 +120,7 @@ function makeHarness(overrides) {
   socket.emit('message', Buffer.from(JSON.stringify({ setupComplete: {} })));
 
   const frame = (msg) => socket.emit('message', Buffer.from(JSON.stringify(msg)));
-  return { session, opened, frame, transcripts, logs, anomalies, silentTurns, audioOut };
+  return { session, opened, frame, transcripts, logs, anomalies, busEvents, silentTurns, audioOut };
 }
 
 describe('BUG-170 — a leaked reasoning label never reaches the transcript', () => {
@@ -130,7 +138,19 @@ describe('BUG-170 — a leaked reasoning label never reaches the transcript', ()
     assert.equal(stripLog.data.channel, 'outputTranscription');
     assert.equal(stripLog.data.spokenAnyway, true,
       'outputTranscription mirrors the AUDIO — the operator already heard it, and the log must say so');
-    assert.ok(h.anomalies.some((a) => a.kind === 'live-reasoning-leak'));
+    // B3 (2026-08-14): the strip is still announced on the bus — BUG-170's "a
+    // strip is never silent" rule is intact — but NOT on health.anomaly. It fired
+    // 24 times in one session and produced 24 no-match heal round trips while
+    // being a report that the filter WORKED, i.e. that the leak never reached the
+    // operator. Same reasoning and same remedy as voice.live.idle-closed
+    // (2026-08-10), where the explainer narrated a normal socket close as a fault.
+    const filtered = h.busEvents.find((e) => e.type === 'voice.live.reasoning-filtered');
+    assert.ok(filtered, 'a strip must never be silent — it moved channel, it did not disappear');
+    assert.equal(filtered.payload.channel, 'outputTranscription');
+    assert.equal(filtered.payload.spokenAnyway, true,
+      'the one fact that decides whether a text filter could ever have been enough must survive the move');
+    assert.equal(h.anomalies.some((a) => a.kind === 'live-reasoning-leak'), false,
+      'and it must no longer reach the fault channel, or the immune system keeps diagnosing a success');
   });
 
   it('strips it from an unflagged modelTurn text part — the case BUG-118\'s thought filter misses', async () => {

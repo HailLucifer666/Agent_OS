@@ -1,0 +1,95 @@
+/* security.css — SECURITY panel (PIN set/change). Token vars only (house
+   style: see semantic.css). Mirrors mic-settings.css's structure so the two
+   diagnostic panels read as siblings. */
+
+.security {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 520px;
+}
+
+.security-intro {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-faint);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.security-status {
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 18px;
+}
+.security-status-error { color: var(--status-warn); }
+
+.security-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.security-label {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--text-faint);
+}
+
+.security-input {
+  width: 100%;
+  background: var(--bg-raised-2);
+  color: var(--text);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  padding: 9px 11px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  letter-spacing: 0.35em;
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.security-input:hover { border-color: var(--accent-dim); }
+.security-input:focus-visible { border-color: var(--accent); }
+.security-input::placeholder { letter-spacing: 0.08em; color: var(--text-faint); }
+
+.security-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.security-save {
+  padding: 8px 22px;
+  border: 1px solid var(--accent-dim);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.security-save:hover {
+  background: rgba(79, 216, 255, 0.1);
+}
+.security-save:active { transform: scale(0.97); }
+.security-save:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.security-save:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .security-input,
+  .security-save {
+    transition: none;
+  }
+}
+
+.security-msg {
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 18px;
+}
+.security-msg.is-error { color: var(--status-warn); }

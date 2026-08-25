@@ -1,0 +1,41 @@
+{
+  "batchcomplete": "",
+  "continue": {
+    "sroffset": 3,
+    "continue": "-||"
+  },
+  "query": {
+    "searchinfo": {
+      "totalhits": 420
+    },
+    "search": [
+      {
+        "ns": 0,
+        "title": "Ada Lovelace",
+        "pageid": 974,
+        "size": 98024,
+        "wordcount": 10102,
+        "snippet": "Augusta <span class=\"searchmatch\">Ada</span> King, Countess of <span class=\"searchmatch\">Lovelace</span> (née Byron; 10 December 1815 – 27 November 1852), also known as <span class=\"searchmatch\">Ada</span> <span class=\"searchmatch\">Lovelace</span>, was an English mathematician and",
+        "timestamp": "2026-08-19T11:48:44Z"
+      },
+      {
+        "ns": 0,
+        "title": "Ada Lovelace Day",
+        "pageid": 26688680,
+        "size": 7188,
+        "wordcount": 602,
+        "snippet": "<span class=\"searchmatch\">Ada</span> <span class=\"searchmatch\">Lovelace</span> Day <span class=\"searchmatch\">is</span> an annual event held on the second Tuesday of October to celebrate and raise awareness of the contributions of women to STEM fields",
+        "timestamp": "2026-08-20T00:05:51Z"
+      },
+      {
+        "ns": 0,
+        "title": "William King-Noel, 1st Earl of Lovelace",
+        "pageid": 3214889,
+        "size": 10261,
+        "wordcount": 876,
+        "snippet": "was the husband of Lord Byron&#039;s daughter <span class=\"searchmatch\">Ada</span>, today remembered as a pioneering computer scientist. <span class=\"searchmatch\">Lovelace</span> was the eldest son of Peter King, 7th Baron",
+        "timestamp": "2025-12-30T21:27:13Z"
+      }
+    ]
+  }
+}

@@ -4,18 +4,20 @@
 
 const path = require('path');
 const { createLogger } = require('./core/logger');
+const { installCrashHandlers } = require('./core/crash-handlers');
 const { createBus } = require('./core/bus');
 const { loadConfig, SCHEMA } = require('./core/config');
 const { createLifecycle } = require('./core/lifecycle');
 const { createMemory } = require('./core/memory');
 const { createBrain } = require('./core/brain');
 const { createIdentity } = require('./core/identity');
+const { seedBoundaries } = require('./core/identity/boundaries-seed');
 const { createGoalSystem } = require('./core/goals');
 const { createCortex } = require('./core/cortex');
 const { createLeash } = require('./core/leash');
 const { createCheckpointRegistry } = require('./core/leash/checkpoints');
 const { createForge } = require('./core/effectors/forge');
-const { createHermesRunner } = require('./core/effectors/hermes-runner');
+const { createForgeRunner } = require('./core/effectors/forge-runner');
 const { registerFromForge } = require('./core/effectors/from-forge');
 const { createEngagementStore } = require('./core/engagements/store');
 const { createEngagementManager } = require('./core/engagements');
@@ -48,7 +50,8 @@ const { createAgentActions } = require('./core/effectors/agent-actions');
 const { createGoalsMdBridge } = require('./core/effectors/goals');
 const { createEdgeTtsChild } = require('./core/effectors/edge-tts-child');
 const { createPiperChild } = require('./core/effectors/piper-child');
-const { registerFromComputer, allowedRoots } = require('./core/effectors/from-computer');
+const { createWebSearchChild } = require('./core/effectors/websearch-child');
+const { registerFromComputer, allowedRoots, setOpenPathProvider } = require('./core/effectors/from-computer');
 const { registerFromPc, KNOWN_DESKTOP_APPS } = require('./core/effectors/from-pc');
 const { registerFromCua } = require('./core/effectors/from-cua');
 const { registerFromAndroid } = require('./core/effectors/from-android');
@@ -59,7 +62,7 @@ const { registerFromPersona } = require('./core/effectors/from-persona');
 const { createReflection } = require('./core/identity/reflection');
 const capabilities = require('./core/identity/capabilities');
 const { createExplainer } = require('./core/immune/explainer');
-const { registerFromHermes } = require('./core/effectors/from-hermes');
+const { registerFromDsh } = require('./core/effectors/from-dsh');
 const { registerFromRunner } = require('./core/effectors/from-runner');
 const { registerFromInstaller } = require('./core/effectors/from-installer');
 const { registerFromMcp } = require('./core/effectors/from-mcp');
@@ -100,13 +103,27 @@ async function main() {
   // mythos/.env whenever MYTHOS is launched from anywhere other than the
   // mythos/ directory itself (a service, a shortcut, `node src/main.js` from
   // the repo root, etc.), degrading providers/adapters with no error.
+  //
+  // INSTALLER PARITY (operator, 2026-08-11): mythos/.env is excluded from
+  // package.json build.files, so in the packaged .exe this load finds nothing
+  // and ~140 keys fall to their schema defaults — the root cause behind all
+  // four incidents logged on the freshly installed build (volume oscillation,
+  // Tier-2 approval prompts, dead wake word, the wrong TTS voice). The remedy
+  // is a second config source a packaged install CAN write:
+  // core/config/settings-store.js. For config.json to be able to outrank .env,
+  // loadConfig has to know which keys exist ONLY because of this load — so
+  // snapshot the environment before it and diff afterwards. process.env still
+  // ends up carrying .env exactly as before, so every direct process.env
+  // reader elsewhere in the tree is untouched.
+  const envKeysBeforeDotenv = new Set(Object.keys(process.env));
   try { process.loadEnvFile(path.join(__dirname, '..', '.env')); } catch (_) {}
+  const envFileKeys = new Set(Object.keys(process.env).filter((k) => !envKeysBeforeDotenv.has(k)));
 
   // Render / cloud injects PORT; promote it to MYTHOS_PORT if not explicitly set.
   if (!process.env.MYTHOS_PORT && process.env.PORT) process.env.MYTHOS_PORT = process.env.PORT;
 
   // Step 1: Config
-  const configResult = loadConfig();
+  const configResult = loadConfig({ envFileKeys });
   if (!configResult.ok) {
     console.error('Config errors:', configResult.errors.join(', '));
     process.exit(1);
@@ -118,7 +135,23 @@ async function main() {
 
   // Step 2: Logger
   const logger = createLogger(config.LOG_LEVEL);
+  // BUG-308: armed here, immediately after the logger exists and BEFORE any
+  // subsystem is built. Node already terminates this process on an escaped
+  // promise rejection or an uncaught throw; until now it did so with no line
+  // anywhere saying why. Order is the point — a net strung up at the end of boot
+  // catches nothing thrown during boot, which is when a young process is most
+  // likely to throw. See core/crash-handlers.js for why it exits rather than
+  // carrying on.
+  installCrashHandlers({ logger });
   logger.info('config.loaded', { name: config.MYTHOS_NAME, port: config.MYTHOS_PORT });
+  // Started as early as there is a logger to report through, because the stall
+  // being chased (see loop-lag.js) happened right after boot — a probe armed at
+  // the END of boot would have missed the only window that matters. Silent on a
+  // healthy run; not started under node --test, where an unref'd interval in
+  // every boot-spawning test buys nothing.
+  if (!process.env.NODE_TEST_CONTEXT) {
+    require('./core/loop-lag').startLoopLagProbe({ logger });
+  }
 
   // Step 3: Bus
   const bus = createBus({
@@ -127,6 +160,60 @@ async function main() {
     storm: { windowMs: 1000, maxPerWindow: config.BUS_STORM_MAX }
   });
   logger.info('bus.created', bus.stats());
+
+  // The settings overlay reports itself ONCE, here, now that there is a bus to
+  // report on. A key the operator typed into config.json that MYTHOS does not
+  // recognise is otherwise the quietest possible failure: the file looks right,
+  // the value is never applied, and nothing anywhere says so. Same for a file
+  // that failed to parse — settings-store.js deliberately treats that as empty
+  // rather than fatal, which is only defensible if it is also loud.
+  if (configResult.settingsError) {
+    logger.warn('config.settings.unreadable', { file: configResult.settingsFile, error: configResult.settingsError });
+    bus.emit('health.anomaly', {
+      kind: 'config-settings-unreadable',
+      file: configResult.settingsFile,
+      detail: configResult.settingsError,
+    });
+  }
+  if (configResult.settingsUnknown.length || configResult.settingsDropped.length) {
+    logger.warn('config.settings.ignored', {
+      file: configResult.settingsFile,
+      unknown: configResult.settingsUnknown,
+      dropped: configResult.settingsDropped,
+    });
+    bus.emit('health.anomaly', {
+      kind: 'config-settings-ignored',
+      file: configResult.settingsFile,
+      unknown: configResult.settingsUnknown,
+      dropped: configResult.settingsDropped,
+    });
+  }
+  logger.info('config.settings.loaded', {
+    file: configResult.settingsFile,
+    // Which layer won, counted. A packaged install reporting "config.json: 0"
+    // is the parity failure this whole change exists to make visible.
+    origins: Object.values(configResult.origins).reduce((acc, o) => {
+      acc[o] = (acc[o] || 0) + 1;
+      return acc;
+    }, {}),
+  });
+
+  // 2026-08-20: a raised default that the machine never gets. BUG-274 T1 was
+  // fixed in config/voice-defaults.js, shipped, recorded as done — and stayed
+  // inert here for a day because this machine's .env carried the pre-fix chain,
+  // and an explicit override beats a derived default silently. The counted
+  // origins above could show "3 keys came from .env"; they could never show
+  // WHICH key, or that its value was the one a fix had just replaced.
+  //
+  // Warn, not info: this is a fix that is not in effect. Both values are named
+  // because "overridden" alone does not tell the operator whether theirs is the
+  // stale one. No committed test can read a gitignored .env, so this log line is
+  // the only place the override is observable — see
+  // test/derived-default-override-visibility.test.js for the tracked-template
+  // half and its stated limit.
+  if (configResult.derivedOverridden && configResult.derivedOverridden.length > 0) {
+    logger.warn('config.derived.overridden', { keys: configResult.derivedOverridden });
+  }
 
   // Step 4: Ensure vault directories
   const vaultDirs = ['Episodic', 'Semantic', 'Skills', 'Identity', 'Audit', 'Checkpoints'];
@@ -192,6 +279,7 @@ async function main() {
   let jobSensor = null;
   let edgeTtsChild = null;
   let piperChild = null;
+  let webSearchChild = null;
   let calendarWiring = null;
   let gmailUnread = null;         // bound fn — goes through the hub, wired to gmail-sensor in the 'sensors' step
   let serverHandle = null;        // BUG-111: hoisted so the later 'sensors' step can wire setGmailPollCountGetter
@@ -248,7 +336,13 @@ async function main() {
         bus: bus, config: config, memory: memory,
         getCortex: function() { return cortex; },
         getGoals: function() { return goals; },
-        getEffectors: function() { return effectors; }
+        getEffectors: function() { return effectors; },
+        // Wave 7 (2026-08-13): same getter-thunk pattern as getCortex/getGoals
+        // above — healer boots before scannerProxy exists (§13 boot order),
+        // so this closes over the `let scannerProxy` binding and reads
+        // whatever it points to WHEN a retry actually fires, not at
+        // construction time.
+        getScannerProxy: function() { return scannerProxy; }
       });
       const watchdog = createWatchdog({ bus: bus, config: config, getCortex: function() { return cortex; } });
       const announcer = createAnnouncer({
@@ -301,10 +395,33 @@ async function main() {
       // leash, cortex) sees a brain wired with real persona injection. memory's
       // own internal `brain` reference (captured by value when createMemory()
       // ran) is unaffected and keeps working exactly as before.
+      // Installer parity (2026-08-11): seed Identity/boundaries.md BEFORE
+      // identity.init() reads it. A fresh install has no boundaries file, and
+      // identity.init() used to treat absent as malformed — clamping the
+      // autonomy ceiling to tier 1 so every Tier-2 tool asked for approval,
+      // which is exactly what the operator's new install did while dev did not.
+      // The seed writes the operator's OWN configured ceiling and never touches
+      // an existing file; see core/identity/boundaries-seed.js for why the write
+      // lives in its own module rather than in identity/ or memory/identity.js.
+      const seeded = seedBoundaries({ fs: memory.fs, config, logger });
+      if (seeded.status === 'failed') {
+        // Not fatal. identity.init()'s absent-file branch still applies the
+        // configured ceiling; the vault is just read-only for this file.
+        logger.warn('identity.boundaries.seed-failed', { error: seeded.error });
+      }
       identity = createIdentity({ bus, config, fs: memory.fs, identityStore: memory.identity });
       await identity.init();
       brain = createBrain({ config, bus, identity });
-      logger.info('identity.ready', {});
+      // The effective autonomy ceiling and WHERE it came from, at boot, in the
+      // log. leash/index.js takes the most restrictive of the two numbers below,
+      // and nothing anywhere used to say what they were — so a ceiling silently
+      // clamped to 1 looked exactly like MYTHOS being cautious.
+      logger.info('identity.ready', {
+        maxAutonomousTier: Math.min(config.AUTONOMOUS_MAX_TIER, identity.getMaxAutonomousTier()),
+        configCeiling: config.AUTONOMOUS_MAX_TIER,
+        boundariesCeiling: identity.getMaxAutonomousTier(),
+        boundariesSource: identity.boundariesSource(),
+      });
     }},
 
     { name: 'goals', fail: 'degraded', fn: async function() {
@@ -314,7 +431,7 @@ async function main() {
     }},
 
     { name: 'leash', fn: function() {
-      // [Phase 7 — NEW] Real effector hub + all 45 tool effectors + the goals-effector
+      // [Phase 7 — NEW] Real effector hub + the full tool-effector set + the goals-effector
       // bridge + voice effector, built here (immediately before leash, which requires
       // it) rather than inline in the cortex step — createNullEffectors (Phase 5 stub)
       // is deleted wholesale, not patched, per its own header comment. Boot order stays
@@ -326,19 +443,35 @@ async function main() {
       var hub = createEffectorHub({ bus: bus, config: config });
 
       var riskClassifier = createRiskClassifier();
-      var evidenceValidator = createEvidenceValidator();
+      // BUG-304: the gate needs the vault to confirm an artifact file exists
+      // rather than trusting that its path is a non-empty string. memory.fs is
+      // the same handle the two lines below already use.
+      var evidenceValidator = createEvidenceValidator({ fs: memory.fs });
       var pipelineEffector = createPipelineEffector({ fs: memory.fs, classifier: riskClassifier });
       var kanbanEffector = createKanbanEffector({ fs: memory.fs, bus: bus });
       // Integration 3: build verifier (needs brain)
       var verifier = require('./core/design/verify').createVerifier({ brain: brain });
-      // Single build-content engine (Hermes-Agent). Passed to BOTH the build
+      // Single build-content engine (DeepSeek Harness). Passed to BOTH the build
       // runner and the engagement executor so the three formerly-independent
       // generators collapse to one. With buildEngine present, build-runner
       // never calls brain.think for content — there is no fallback by design
       // (see build-engine.js). brain is still passed for the verifier/review
       // machinery that legitimately uses it.
-      buildEngine = createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus, brain: brain });
-      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier, buildEngine: buildEngine });
+      buildEngine = createBuildEngine({ engine: require('../adapters/dsh-agent'), vault: memory.fs, bus: bus });
+      // Refine loop (2026-08-14): renders the built artifact in real headless
+      // Chrome, screenshots it, and critiques it through the vision lane before
+      // it can be called done. CONSTRUCTED INSIDE the flag check on purpose —
+      // an opt-out flag protects nothing that runs before it is read, which is
+      // exactly how the cursor-overlay slice killed boot for everyone including
+      // the operators who had it disabled. Absent refiner = feature off, and
+      // build-runner records the skip on the job rather than hiding it.
+      var buildRefiner = null;
+      if (config.BUILD_REFINE_ENABLED) {
+        buildRefiner = require('./core/effectors/build-refine').createBuildRefiner({
+          vault: memory.fs, brain: brain, logger: logger,
+        });
+      }
+      buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier, buildEngine: buildEngine, refiner: buildRefiner });
 
       // Integration 2 + 4: agent actions with design system + persona dispatch
       agentActionsEffector = createAgentActions({
@@ -348,7 +481,7 @@ async function main() {
         brain: brain,  // P22: for visual verification + reviewer/reality-check
         // Content generation goes through the SAME single engine as build-runner.
         // Without this, the research-grounded regeneration and the review-retry
-        // below silently fell back to brain.think and overwrote Hermes's output
+        // below silently fell back to brain.think and overwrote the engine's output
         // with it — see the comment at those call sites in agent-actions.js.
         buildEngine: buildEngine,
         webSearch: require('./core/effectors/web-search').web_search,  // P22: research gate
@@ -379,8 +512,16 @@ async function main() {
       hub.registerNamed('kanban-effector', kanbanEffector);
       hub.registerNamed('pipeline-effector', pipelineEffector);
 
-      registerFromComputer(hub);
-      pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs });
+      // brain/config/logger are for think_deeply (effectors/deep-think.js) — the
+      // only route from a conversation to the reasoning lane. Passing brain here
+      // is load-bearing: without it think_deeply registers but can only decline.
+      // Same wiring gap that left camera_look's brain null for weeks, so
+      // test/think-deeply.test.js asserts this call keeps passing it.
+      registerFromComputer(hub, { brain: brain, config: config, logger: logger });
+      // config + logger are for screen_look's vision call (effectors/vision-call.js):
+      // VISION_CALL_TIMEOUT_MS bounds it, and the logger is what emits the
+      // `vision.call` provider/model/ms line that did not exist before 2026-08-10.
+      pcToolsWiring = registerFromPc(hub, { brain: brain, fs: memory.fs, config: config, logger: logger });
       // CUA driver tools (cua_list_windows / cua_bring_to_front / cua_get_window_state
       // / cua_click) — the Chromium-capable click path that complements pc-child's
       // ui_click (which fails on apps exposing no named UIA leaf: Spotify, YouTube
@@ -405,14 +546,24 @@ async function main() {
         agentActions: agentActionsEffector, buildRunner: buildRunner,
         probes: immune.probes, config: config, fs: memory.fs, bus: bus,
         goals: goals, // BUG-113: raw GoalSystem — read_status surfaces open commitments
+        logger: logger, // camera_look's `vision.call` instrumentation (vision-call.js)
+        identity: identity, // A4: read_status surfaces current persona trait levels
+        // Wave 5 (2026-08-13): camera_look's `var brain = (ctx && ctx.brain) || null`
+        // was ALWAYS null — this key was simply never passed, unlike from-pc.js's
+        // registerFromPc() call above which does pass it for screen_look. Reported
+        // as "no vision brain" (sounding like lane exhaustion) but was a wiring
+        // gap the whole time; NIM_API_KEY being present never mattered.
+        brain: brain,
       });
       // Wire ask_agent dispatch — routes (seat, prompt) through brain.think so the
       // cortex autonomous loop, dashboard REST, AND voice can all delegate to subagents.
       // Previously setAskAgentDispatch was never called, so ask_agent always failed.
       if (dashboardWiring && typeof dashboardWiring.setAskAgentDispatch === 'function') {
         dashboardWiring.setAskAgentDispatch(async function(seat, prompt) {
+          // lane 'reasoning' (2026-08-14): a delegated agent seat is asked to
+          // think, not to format. It was on 'simple' — the trivial lane.
           var result = await brain.think({
-            lane: 'simple',
+            lane: 'reasoning',
             messages: [{ role: 'user', content: String(prompt || '') }],
             source: 'ask_agent:' + (seat || 'unknown'),
           });
@@ -432,6 +583,13 @@ async function main() {
       });
       orchestrator.init();
       registerFromMission(hub, { orchestrator: orchestrator });
+      // Task B3 (code review FIX 1): system_status deliberately does NOT take
+      // immune.probes here — probes.getStatus() emits health.anomaly/
+      // health.healed on provider state transitions, which would let a T0
+      // voice-invoked read trigger real healer.js remediation. It reads
+      // brain/registry.js + quota.js directly instead (see from-system.js's
+      // header); those, spend.getStats(), and the adapter ONLINE/OFFLINE
+      // reads are all side-effect-free requires inside from-system.js itself.
       registerFromSystem(hub, { config: config });
       registerFromGmail(hub, { logger: logger });
       // Gmail triage sensor's bound fn — MUST go through the hub (breaker-gated),
@@ -450,9 +608,9 @@ async function main() {
         );
       };
       registerFromSkills(hub);
-      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory });
+      registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory, notes: memory.notes });
       registerFromPersona(hub, { identity: identity });
-      registerFromHermes(hub);
+      registerFromDsh(hub);
       // Phase 3 (V7): allow-listed shell runner for engagement/Forge verify-stages.
       // Fail-closed when RUN_COMMAND_ALLOWLIST is empty — honest-inert.
       registerFromRunner(hub, { vault: memory.fs, config: config });
@@ -496,15 +654,15 @@ async function main() {
 
       // P22 Forge — multi-file agentic build pipeline + its checkpoint approval
       // registry. checkpoints needs memory.audit + goals (both exist by now).
-      // Phase 3 of the Hermes orchestration change: Forge now drives the
-      // hermes-agent CLI (via hermes-runner.js) instead of brain.think —
-      // hermesRunner is the only thing forge.js knows how to call to build.
+      // Forge drives the build-engine adapter (via forge-runner.js) instead of
+      // brain.think. The engine is INJECTED here rather than required inside the
+      // runner (W6), so both build paths resolve the engine from one place.
       checkpoints = createCheckpointRegistry({ config: config, bus: bus, auditWriter: memory.audit, goals: goals, fs: memory.fs });
       checkpoints.init();
       checkpointSweepTimer = setInterval(function() { checkpoints.sweep(); }, config.CHECKPOINT_SWEEP_MS);
       if (checkpointSweepTimer.unref) checkpointSweepTimer.unref();
-      const hermesRunner = createHermesRunner({ config: config, vault: memory.fs });
-      forge = createForge({ config: config, runner: hermesRunner, bus: bus, vault: memory.fs, checkpoints: checkpoints });
+      const forgeRunner = createForgeRunner({ config: config, vault: memory.fs, engine: require('../adapters/dsh-agent') });
+      forge = createForge({ config: config, runner: forgeRunner, bus: bus, vault: memory.fs, checkpoints: checkpoints });
       // A degraded init means the project-state file was unreadable, so Forge
       // loaded no history AND latched persistence off for this whole process —
       // builds still run but nothing is written to disk. That must be visible in
@@ -702,6 +860,10 @@ async function main() {
 
       serverHandle = createServer({
         bus: bus, config: config, logger: logger, memory: memory,
+        // Installer parity — which layer set each key, for /api/config/settings
+        // and scripts/parity-check.js. See src/core/config/settings-store.js.
+        configOrigins: configResult.origins,
+        settingsFile: configResult.settingsFile,
         pinLock: pinLock,
         goalsEffector: goalsEffector,
         kanbanEffector: kanbanEffector,
@@ -733,6 +895,12 @@ async function main() {
       if (dashboardWiring && typeof dashboardWiring.setCameraFrameProvider === 'function' && typeof serverHandle.requestCameraFrame === 'function') {
         dashboardWiring.setCameraFrameProvider(serverHandle.requestCameraFrame);
       }
+      // camera_on — the confirm-gated opener for the camera camera_look reads
+      // from. Same request/ack round-trip; unwired means camera_on says it cannot
+      // reach a dashboard, which is the honest answer.
+      if (dashboardWiring && typeof dashboardWiring.setCameraPowerProvider === 'function' && typeof serverHandle.requestCameraPower === 'function') {
+        dashboardWiring.setCameraPowerProvider(serverHandle.requestCameraPower);
+      }
       // REMEDIATION P1-5: wire close_panel — same server-initiated request/ack
       // round-trip pattern as camera_look above, so close_panel can report
       // what actually closed instead of a hardcoded closed:true.
@@ -744,6 +912,29 @@ async function main() {
       // 'ui.open-web' relayed over the fork IPC channel).
       if (dashboardWiring && typeof dashboardWiring.setMediaWindowCloser === 'function' && typeof serverHandle.requestCloseMediaWindow === 'function') {
         dashboardWiring.setMediaWindowCloser(serverHandle.requestCloseMediaWindow);
+      }
+      // BUG-272 T2 — same wiring shape again, for open_web(browser:true). Left
+      // unset outside the Electron shell, which is exactly what open_web needs in
+      // order to say "there is no browser to hand this to" instead of reporting a
+      // success nothing performed.
+      if (dashboardWiring && typeof dashboardWiring.setExternalOpener === 'function' && typeof serverHandle.requestOpenExternal === 'function') {
+        dashboardWiring.setExternalOpener(serverHandle.requestOpenExternal);
+      }
+      // 2026-08-21 — the same wiring shape for open_file. Wired HERE rather than
+      // beside registerFromComputer() because serverHandle does not exist yet at
+      // that point (it is created ~340 lines later); wiring it there would be a
+      // call that silently never fires. Left unset outside the Electron shell on
+      // purpose, so open_file reports the shell as absent instead of an open that
+      // nothing performed.
+      if (typeof setOpenPathProvider === 'function' && typeof serverHandle.requestOpenPath === 'function') {
+        setOpenPathProvider(serverHandle.requestOpenPath);
+      }
+      // BUG-273 B3 — the same wiring shape once more, for the DASHBOARD half of
+      // open_web. With this set, a widget that never mounts is a FAILURE instead of
+      // an unverified success. Without it, open_web keeps saying "the dashboard has
+      // not confirmed it rendered this", which is exactly what it always said.
+      if (dashboardWiring && typeof dashboardWiring.setWidgetRenderer === 'function' && typeof serverHandle.requestWidgetRender === 'function') {
+        dashboardWiring.setWidgetRenderer(serverHandle.requestWidgetRender);
       }
       logger.info('server.ready', { port: config.MYTHOS_PORT, bind: config.MYTHOS_BIND });
     }},
@@ -803,8 +994,7 @@ async function main() {
         }
       }
 
-      // Start PC child (PowerShell automation daemon) for desktop control tools.
-      pcChild.startPcChild();
+      pcChild.startPcChild({ lateCompletionSink: (i) => bus.emit('health.anomaly', Object.assign({ kind: 'action-completed-after-timeout', adapter: 'pc-child', summary: 'action completed after its caller timed out - it may have executed twice if retried' }, i)) }); // BUG-335: see adapters/pc-child stale-response bell
       logger.info('pc-child.starting', {});
 
       // BUG-026 (4th attempt) part B — optional cua-driver adapter for the Spotify click path.
@@ -823,7 +1013,7 @@ async function main() {
       });
       logger.info('android-child.starting', {});
 
-      // BUG-168: hermes-agent is the ONLY build-content engine (there is no
+      // BUG-168: dsh-agent is the ONLY build-content engine (there is no
       // brain fallback by design), yet it was the one adapter nobody probed at
       // boot — it has no start*() of its own, so its first probe happened
       // inside the first build. A live session on 2026-08-07 therefore
@@ -832,20 +1022,25 @@ async function main() {
       // claimed nothing was wrong the whole time. Probe once here, announce
       // the result, and let it into adapterStatuses() below. Never fatal and
       // never awaited: a slow probe must not hold boot.
-      require('../adapters/hermes-agent').probe(true).then(function(online) {
-        var s = require('../adapters/hermes-agent').getStatus();
+      require('../adapters/dsh-agent').probe(true).then(function(online) {
+        var s = require('../adapters/dsh-agent').getStatus();
         if (online) {
-          logger.info('hermes-agent.online', { mode: s.mode, slots: (s.slots || []).length });
+          // `evidence` rather than a bare "online": the probe runs dsh --version
+          // and nothing else, so ONLINE from a version banner is not the same
+          // claim as ONLINE from a completed build. A log that cannot tell those
+          // two apart is how BUG-168's predecessor stayed invisible for six
+          // consecutive failed builds.
+          logger.info('dsh-agent.online', { version: s.version, evidence: s.evidence });
         } else {
-          logger.warn('hermes-agent.offline', {
+          logger.warn('dsh-agent.offline', {
             hint: s.hint,
-            cliProbeDiagnostic: s.cliProbeDiagnostic,
+            probeDiagnostic: s.probeDiagnostic,
             impact: 'every build will fail — there is no brain fallback by design',
           });
         }
         if (refreshCapabilities) refreshCapabilities();
       }).catch(function(err) {
-        logger.warn('hermes-agent.probe-failed', { error: err && err.message });
+        logger.warn('dsh-agent.probe-failed', { error: err && err.message });
       });
     }},
 
@@ -864,7 +1059,7 @@ async function main() {
         // BUG-168: the build engine belongs in the honest capability report
         // like every other adapter. Its probe settles async (above), which is
         // exactly what the 10s re-write below already exists for.
-        try { out.push(Object.assign({ name: 'hermes-agent' }, require('../adapters/hermes-agent').getStatus())); } catch (_) {}
+        try { out.push(Object.assign({ name: 'dsh-agent' }, require('../adapters/dsh-agent').getStatus())); } catch (_) {}
         return out;
       }
       function writeIt() {
@@ -1082,6 +1277,18 @@ async function main() {
       // VOICE_TTS_CHAIN reports unavailable and the chain uses the next one.
       piperChild = createPiperChild({ logger: logger, config: config });
       piperChild.start();
+    }},
+
+    { name: 'websearch', fail: 'degraded', fn: function() {
+      // Local open-webSearch daemon — the only keyless provider in the web_search
+      // chain that still works. Started here rather than left to the operator
+      // because BUG-280 shipped the rung, documented the launch in a comment, and
+      // search then answered every query from Wikipedia for a day: the daemon was
+      // never running on the machine that needed it. Degraded by design — not
+      // installed means the rung reports the refused connection and the chain
+      // carries on to the keyed providers.
+      webSearchChild = createWebSearchChild({ logger: logger, config: config });
+      webSearchChild.start();
     }}
   ]);
 
@@ -1102,6 +1309,7 @@ async function main() {
     if (mcpWiring && mcpWiring.shutdown) { try { mcpWiring.shutdown(); } catch (_) { /* best-effort */ } }
     if (edgeTtsChild) edgeTtsChild.stop();
     if (piperChild) piperChild.stop();
+    if (webSearchChild) webSearchChild.stop();
     if (timerSensor) timerSensor.stop();
     if (metricSensor) metricSensor.stop();
     if (screenSensor) screenSensor.stop();

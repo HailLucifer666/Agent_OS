@@ -370,6 +370,18 @@ export function mountHud(canvas, ctx) {
     if (bursts.length > 80) bursts.shift();
   }
 
+  // Capped at push time, exactly like spawnBurst above and core-orb.js's sparks.
+  // The ONLY drain for this buffer lives inside frame(), and frame() stops being
+  // scheduled while document.hidden (see the visibilitychange handler at the
+  // bottom of this file) — but the WS subscription keeps running, and a tick
+  // arrives every second. A HUD left in a background tab therefore grew this
+  // array without bound, for as long as the tab stayed hidden. bursts and sparks
+  // were already guarded; this was the one FX buffer that was not.
+  const MAX_RIPPLES = 64;   // far above anything that can be on screen at once
+  function spawnRipple(alpha) {
+    ripples.push({ r: 0, alpha: alpha });
+    if (ripples.length > MAX_RIPPLES) ripples.shift();
+  }
   function flashEdge(fromId, toId) {
     flashes.set(`${fromId}->${toId}`, 1);
   }
@@ -377,11 +389,11 @@ export function mountHud(canvas, ctx) {
   // ---- live event wiring (WS-only, no polling) ----
   const unsub = ctx.subscribe(['tick', 'perception', 'action', 'health', 'goal-update', 'audit', 'entity-state'], (msg) => {
     if (msg.type === 'tick') {
-      ripples.push({ r: 0, alpha: 0.3 });
+      spawnRipple(0.3);
       if (msg.payload.tick % RESYNC_EVERY_TICKS === 0) resyncStats();
     } else if (msg.type === 'perception') {
       const target = CHANNEL_TARGET[msg.payload.channel] || 'core';
-      if (target === 'core') ripples.push({ r: 0, alpha: 0.45 });
+      if (target === 'core') spawnRipple(0.45);
       else spawnBurst('core', target);
     } else if (msg.type === 'action') {
       const target = toolTarget(msg.payload.tool);

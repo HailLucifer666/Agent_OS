@@ -24,7 +24,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const MAIN = fs.readFileSync(path.join(__dirname, '..', '..', 'electron', 'main.js'), 'utf8');
+const PRELOAD = fs.readFileSync(path.join(__dirname, '..', '..', 'electron', 'preload.js'), 'utf8');
 const APP_JS = fs.readFileSync(path.join(__dirname, '..', 'ui', 'public', 'js', 'app.js'), 'utf8');
+const VOICE_LOOP = fs.readFileSync(path.join(__dirname, '..', 'ui', 'public', 'js', 'voice', 'voice-loop.js'), 'utf8');
 
 describe('Electron push-to-talk hotkey', () => {
   it('imports globalShortcut and registers a talk accelerator', () => {
@@ -68,5 +70,54 @@ describe('Electron push-to-talk hotkey', () => {
   it('degrades silently in a plain browser tab, where window.mythos is absent', () => {
     assert.match(APP_JS, /window\.mythos\s*&&\s*typeof window\.mythos\.onHotkey === 'function'/,
       'the wiring must be feature-detected, since only Electron exposes this bridge');
+  });
+
+  // ---- BUG-269 defect 1: the lost-IPC race --------------------------------
+  // The accelerator is claimed right after loadURL(), but the renderer's
+  // onHotkey listener does not exist until app.js evaluates — Electron does
+  // not queue IPC for unregistered listeners, so a press in that window was
+  // lost forever. The fix: the renderer announces itself ready, and presses
+  // before that are latched (behaviour pinned in electron-hotkey-latch.test.js).
+  it('main.js latches presses until the renderer reports ready (BUG-269)', () => {
+    assert.match(MAIN, /hotkey-latch/, 'main.js must use the extracted hotkey-latch module');
+    assert.match(MAIN, /mythos:renderer-ready/, 'main.js must listen for the renderer-ready signal');
+    assert.match(MAIN, /did-start-loading/,
+      'a reload destroys the renderer listeners — the latch must re-arm or the bug returns after every refresh');
+  });
+
+  it('preload exposes notifyReady and app.js calls it after registering onHotkey (BUG-269)', () => {
+    assert.match(PRELOAD, /notifyReady/, 'preload must expose a ready signal');
+    assert.match(PRELOAD, /ipcRenderer\.send\('mythos:renderer-ready'\)/,
+      'notifyReady must be a payload-free send on one named channel, same narrow style as onHotkey');
+    const block = APP_JS.slice(APP_JS.indexOf('onHotkey('));
+    const window = block.slice(0, 600);
+    assert.match(window, /notifyReady\(\)/,
+      'app.js must announce ready immediately after registering the hotkey listener');
+  });
+
+  // ---- BUG-269 defect 2: no re-entrancy guard ------------------------------
+  it('app.js wraps toggleVoice in the in-flight guard and awaits the batch start (BUG-269)', () => {
+    assert.match(APP_JS, /toggle-guard/, 'app.js must use the extracted toggle-guard module');
+    assert.match(APP_JS, /createToggleGuard\(/);
+    assert.match(APP_JS, /await ensureVoice\(\)\.start\(\)/,
+      'the un-awaited start() let two presses interleave their async re-entry');
+  });
+
+  // ---- BUG-269 defect 3: variable lag --------------------------------------
+  it('voice-loop start() gives instant feedback: synchronous arming state + immediate first VAD tick (BUG-269)', () => {
+    const startIdx = VOICE_LOOP.indexOf('async function start()');
+    assert.ok(startIdx !== -1, 'voice-loop.js must define an async start()');
+    const startBody = VOICE_LOOP.slice(startIdx, startIdx + 1400);
+    assert.match(startBody, /setState\('arming'\)/,
+      "start() must flip the visible state to 'arming' synchronously — a slow press must not look like a lost one");
+    // The arming flip must precede the first await in start(): compare their
+    // positions directly (no fixed-width window, which a longer comment could
+    // silently break).
+    const armingAt = startBody.indexOf("setState('arming')");
+    const firstAwait = startBody.indexOf('await');
+    assert.ok(firstAwait === -1 || armingAt < firstAwait,
+      "setState('arming') must precede the first await in start()");
+    assert.match(startBody, /setInterval\(vadTick, VAD_TICK_MS\);\s*\n\s*vadTick\(\);/,
+      'the first VAD tick must run immediately, not up to a full 100ms tick later');
   });
 });

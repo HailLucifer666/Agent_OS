@@ -131,7 +131,18 @@ export function mountWeather(el) {
 
   async function load(lat, lon, label) {
     try {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weather_code`;
+      // BUG-286 (2026-08-20): this requested two fields while formatConditions()
+      // and formatForecast() below sat uncalled, reading fields nobody asked
+      // for. BUG-176 is recorded in BUGS.md as having shipped the richer card;
+      // what shipped was the formatters, with no call site, no test, and a
+      // daily block that was never requested. The card was never rendered once.
+      // Field list kept in step with the other open-meteo call sites — see
+      // test/bug-281-weather-enrichment.test.js, which fails if they diverge.
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}`
+        + '&current=temperature_2m,apparent_temperature,weather_code,relative_humidity_2m,'
+        + 'wind_speed_10m,wind_gusts_10m,cloud_cover,is_day'
+        + '&daily=weather_code,temperature_2m_max,temperature_2m_min,'
+        + 'precipitation_probability_max&forecast_days=5&timezone=auto';
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -139,10 +150,16 @@ export function mountWeather(el) {
       const cur = data.current || {};
       tempEl.textContent = cur.temperature_2m !== undefined ? `${Math.round(cur.temperature_2m)}°C` : '--';
       descEl.textContent = `${WMO[cur.weather_code] || '—'}${label ? ' · ' + label : ''}`;
+      condEl.textContent = formatConditions(cur);
+      renderForecast(formatForecast(data.daily, new Date()));
     } catch {
       if (disposed) return;
       tempEl.textContent = '--';
       descEl.textContent = 'weather offline';
+      // Clear the enriched rows too: a stale feels-like reading sitting under
+      // "weather offline" is worse than an empty row, because it reads as live.
+      condEl.textContent = '';
+      renderForecast([]);
     }
   }
 

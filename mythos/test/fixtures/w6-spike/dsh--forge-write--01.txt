@@ -1,0 +1,1 @@
+The small static web project has been created successfully. The files index.html, styles.css, and app.js have been written to disk.

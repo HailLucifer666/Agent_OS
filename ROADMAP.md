@@ -20,7 +20,7 @@ Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-c
 ---
 
 <!-- SYNC:TEST-COUNT:START -->
-**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-09): **3471 tests, 3471 passing, 0 failing, 0 skipped.**
+**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-25): **6226 tests, 6226 passing, 0 failing, 0 skipped.**
 <!-- SYNC:TEST-COUNT:END -->
 ## Go-live proof plan (F1–F9) — 2026-08-08
 
@@ -291,7 +291,7 @@ cognitive loop — see D-04)
 | D-02 | CRITICAL | `mythos/src/main.js` | `.env` loaded at boot | `require('dotenv').config()` never called; config reads raw `process.env` only |
 | D-03 | CRITICAL | `mythos/src/core/lifecycle/index.js:50` | naming always via `config.MYTHOS_NAME`, never hardcoded | `logger.info('lifecycle.alive', { name: 'MYTHOS' })` — literal string, and `createLifecycle` doesn't even receive `config` |
 | D-04 | CRITICAL | ~~`mythos/src/main.js:46-61`~~ `mythos/src/main.js:166-773` (line numbers drifted as the file grew) | 14-18 named FAIL-FAST/DEGRADED boot steps incl. episodic, audit, immune, cortex, stores, identity, brain-probe, goals, recovery, sensors, effectors, server, cortex-tick | ~~only 5 empty-body steps registered (`config`,`logger`,`bus`,`vault-dirs`,`idle-beat`); memory/brain/cortex/goals modules exist but are never booted~~ — ✅ **RESOLVED** (Phase 4.5, 2026-07-10, remediation #4; reconfirmed 2026-07-27): `lifecycle.setSteps([...])` now registers 24 named steps, each with a real body — `memory` (constructs+inits brain/memory), `immune` (fail:'fast'), `brain-probe`, `identity`, `goals` (fail:'degraded', `goals.init()`), `leash` (builds the real effector hub + effectors + leash), `engagement-store`/`engagement-manager`/`conversation-gateway`/`engagement-immune-hooks`, `recovery` (`recoverFromCrash()`), `server` (fail:'fast', `createServer()`, throws if P7 effectors missing), `browser-automation`, `capabilities-manifest`, `immune-explainer`, `cortex` (`createCortex()`+`cortex.start()`), `sensors` (subscribes `perception.*` into working memory and starts timer/metric/file/job/ws/screen/window sensors), `planner`, `edge-tts`. `stopRunningLoops()` (main.js:777-800) tears all of these back down on shutdown, confirming they are live subsystems, not stubs. Step count (24) exceeds the spec's 14-18 because later phases (engagement layer, browser-automation, planner, edge-tts) added steps beyond the original spec — a superset, not a shortfall. Matches the ✅ already recorded in the Phase 4.5 remediation table below. |
-| D-05 | MAJOR | `mythos/src/core/config/schema.js:12` | `MYTHOS_VAULT_ROOT` REQUIRED | has a default (`./vault`), never errors when missing |
+| D-05 | MAJOR — ✅ **RESOLVED** (fixed 2026-08-08 as security-audit item B3; ticked 2026-08-16) | `mythos/src/core/config/schema.js:12` | `MYTHOS_VAULT_ROOT` REQUIRED | has a default — but no longer the literal `./vault` resolved against `process.cwd()`: the default is now absolute, anchored to `mythos/`, stable regardless of cwd (`schema.js:9-22`'s B3-remainder note), and Electron resolves the vault under `userData` via `vault-migration.js` with a copy-and-verify migration that never touches the source. This was the "factory-reset MYTHOS" incident's actual root cause, and the spec's REQUIRED demand was about that risk, not the key's existence. The synthesis plan's 2026-08-08 security section recorded "D-05 can be ticked"; re-verified against the code above before ticking. |
 | D-06 | MAJOR | `mythos/src/core/bus/index.js` | built-in middleware `auditTap`/`historyTap`/`redactSecrets` wired into every bus | none of the three exist or are registered anywhere |
 | D-07 | MAJOR | `mythos/src/core/lifecycle/index.js:54-84` | 7-step shutdown (sensors stop → cortex drain → episodic flush → checkpoint write → audit flush → exit 0 → SHUTDOWN_MS hard-exit) | only the hard-exit timer exists; comment admits "nothing to stop yet — this is the scaffold" — ✅ **RESOLVED** (Phase 1, 2026-07-16): `registerShutdownStep()` added to lifecycle/index.js; main.js registers `stop-loops → episodic-flush → checkpoint-write → audit-flush` in order after server-close, duplicate `process.on('SIGINT'/'SIGTERM', stopRunningLoops)` removed (lifecycle.registerShutdown() is now the sole signal path); `SHUTDOWN_MS` schema key backs the hard-exit backstop (closes D-13 too). Tests: `test/lifecycle.test.js` (16/16), `test/config.test.js`, `test/p9-diffs.test.js` (6/6, unmodified) all pass; live boot smoke confirmed "MYTHOS ALIVE". |
 | D-08 | MAJOR | `mythos/src/core/bus/event.js:18` | `depth = cause.depth+1` or `1` for root | root events get `depth: 0` |
@@ -474,10 +474,13 @@ Phase 4.5. Does not block P5–P8, but must be resolved (or explicitly re-accept
 into the spec) before the P9 NOVA→MYTHOS cutover, since several of these affect
 data integrity and observability that the P10 chaos drills will exercise.
 
-**MAJOR** (10 total, tracked by ID above, re-verified 2026-07-27): D-01 (reopened —
-see Phase 4.5 row above), D-05, D-06, D-08, D-19 (partially resolved — audit-writer
+**MAJOR** (9 total, tracked by ID above; re-verified 2026-07-27, with D-05
+individually re-verified and ticked 2026-08-16 — the rest still carry the
+2026-07-27 stamp): D-01 (reopened —
+see Phase 4.5 row above), D-06, D-08, D-19 (partially resolved — audit-writer
 still missing `recall()`/`get()`, see row above), D-20, D-22, D-31, D-40, D-42.
-Resolved and removed from this count since the last listing: D-07, D-21, D-23,
+Resolved and removed from this count since the last listing: D-05 (B3 fix,
+2026-08-08; ticked 2026-08-16 — see row above), D-07, D-21, D-23,
 D-29, D-30, D-41, D-47, D-48, D-49 (each confirmed fixed in code — see their rows
 above). The former D-06/D-07 overlap note is superseded now that D-07 is resolved —
 only D-06 (bus middleware `auditTap`/`historyTap`/`redactSecrets` still unwired,

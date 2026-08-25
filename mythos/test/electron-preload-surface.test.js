@@ -3,8 +3,28 @@
 // test/electron-preload-surface.test.js — §14 phase-8 gate (V2 spine).
 //
 // Asserts the Electron preload's contextBridge surface is EXACTLY
-// { getKeyNames, setKey, hasKey } — no more, no fewer — and that each
-// function forwards to its named IPC channel with the right args.
+// { getKeyNames, setKey, hasKey, onHotkey, notifyReady, restartServer,
+// onUpdateStatus, installUpdate, getSettings, setSetting } — no more, no
+// fewer — and that each function forwards to its named IPC channel with the
+// right args.
+//
+// restartServer was added with the first-run wizard: a key stored via setKey()
+// only reaches the server at fork(), so the wizard's last step re-forks the
+// child. It takes no arguments and resolves to a status object, which is why it
+// can join this surface without weakening AD-8 (the sibling gate,
+// anti-drift-no-key-to-client.test.js, still forbids anything value-shaped).
+//
+// onUpdateStatus/installUpdate were added 2026-08-11 with in-app updates, after
+// the operator asked for a visible "Update" control rather than an OS
+// notification that is easy to miss. Same reasoning, and the two properties that
+// keep them AD-8-safe are asserted below: onUpdateStatus subscribes to ONE named
+// channel and re-derives all payload fields as plain primitives (nothing
+// structured crosses), and installUpdate takes NO arguments — which version is
+// installed is decided in the main process, so a page loaded in a renderer
+// cannot nominate an executable. onUpdateStatus's callback gained a third
+// argument, percent, when live download progress started reaching the HUD —
+// still a plain primitive (coerced with Number()), never forwarded as an
+// object.
 //
 // Method: the repo's require-cache module-stubbing idiom (see
 // test/from-calendar-google.test.js lines ~94-111), generalised so it works
@@ -49,11 +69,12 @@ function installElectronStub(stubExports) {
 }
 
 describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
-  it('exposes exactly { getKeyNames, setKey, hasKey, onHotkey }, each forwarding to its named IPC channel', async () => {
+  it('exposes exactly { getKeyNames, setKey, hasKey, onHotkey, restartServer, onUpdateStatus, installUpdate }, each forwarding to its named IPC channel', async () => {
     let exposedName = null;
     let exposedApi = null;
     const invokeCalls = [];
     const onCalls = [];
+    const sendCalls = [];
     const restore = installElectronStub({
       contextBridge: {
         exposeInMainWorld: (name, api) => { exposedName = name; exposedApi = api; },
@@ -61,6 +82,7 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       ipcRenderer: {
         invoke: async (...args) => { invokeCalls.push(args); return { ok: true }; },
         on: (channel, handler) => { onCalls.push({ channel, handler }); },
+        send: (...args) => { sendCalls.push(args); },
       },
     });
     try {
@@ -71,10 +93,30 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       assert.ok(exposedApi && typeof exposedApi === 'object', 'surface object must be exposed');
 
       // EXACT surface shape — sorted deep-equal, no more, no fewer.
+      // getSettings/setSetting were added by the installer-parity work
+      // (2026-08-11): the packaged build had no way to set a NON-SECRET schema
+      // key, which is what left ~140 keys at their defaults in the install. They
+      // carry configuration, never credentials — settings-store.js refuses
+      // secret-shaped names and the main-process handler filters them again.
+      // notifyReady was added by BUG-269 (2026-08-17): the renderer→main signal
+      // that the onHotkey listener is registered, so the push-to-talk
+      // ready-latch may flush. It is the surface's only renderer→main function:
+      // a payload-free send, so it widens no inbound (AD-8) surface at all.
       assert.deepEqual(
         Object.keys(exposedApi).sort(),
-        ['getKeyNames', 'hasKey', 'onHotkey', 'setKey'],
-        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey',
+        ['getKeyNames', 'getSettings', 'hasKey', 'installUpdate', 'notifyReady', 'onHotkey', 'onUpdateStatus', 'restartServer', 'setKey', 'setSetting'],
+        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey/notifyReady/restartServer/onUpdateStatus/installUpdate/getSettings/setSetting',
+      );
+
+      // restartServer() → ipcRenderer.invoke('mythos:restart-server'), no args.
+      // The no-args part is the assertion that matters: a channel that accepted
+      // a caller-supplied payload would be a way for the renderer to influence
+      // how the privileged main process re-forks the server.
+      await exposedApi.restartServer();
+      assert.deepEqual(
+        invokeCalls[invokeCalls.length - 1],
+        ['mythos:restart-server'],
+        'restartServer must invoke channel mythos:restart-server with no arguments',
       );
 
       // setKey(name, value) → ipcRenderer.invoke('mythos:set-key', name, value)
@@ -123,6 +165,54 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       // registering a second listener.
       exposedApi.onHotkey('not-a-function');
       assert.equal(onCalls.length, 1);
+
+      // notifyReady() → ipcRenderer.send('mythos:renderer-ready'), NO args.
+      // BUG-269: the renderer announces its onHotkey listener is registered so
+      // the main-process ready-latch may flush. The no-args part is the
+      // assertion that matters: a payload here would be a way for the renderer
+      // to influence the privileged main process, and the latch needs nothing.
+      exposedApi.notifyReady();
+      assert.deepEqual(
+        sendCalls[sendCalls.length - 1],
+        ['mythos:renderer-ready'],
+        'notifyReady must send channel mythos:renderer-ready with no arguments',
+      );
+
+      // installUpdate() → ipcRenderer.invoke('mythos:install-update'), NO args.
+      // The no-args part is the security property: the main process decides what
+      // gets installed from state it owns. A version/path argument here would let
+      // a page in the renderer choose an executable.
+      await exposedApi.installUpdate();
+      assert.deepEqual(
+        invokeCalls[invokeCalls.length - 1],
+        ['mythos:install-update'],
+        'installUpdate must invoke channel mythos:install-update with no arguments',
+      );
+
+      // onUpdateStatus(cb) — the second and last main->renderer listener, built
+      // like onHotkey: one named channel, payload re-derived as plain
+      // primitives. The callback is now a 3-tuple: state, version, percent —
+      // the live-download-percent addition.
+      const statuses = [];
+      exposedApi.onUpdateStatus((state, version, percent) => statuses.push([state, version, percent]));
+      assert.equal(onCalls.length, 2, 'onUpdateStatus must subscribe to exactly one further channel');
+      assert.equal(onCalls[1].channel, 'mythos:update-status');
+      onCalls[1].handler({ senderId: 1 }, 'ready', '0.1.5', 0);
+      assert.deepEqual(statuses[0], ['ready', '0.1.5', 0]);
+
+      // percent must be coerced to a number so an object slipped into that
+      // slot can never reach the renderer as an object (AD-8 applies to
+      // inbound events too), and a real numeric percent must forward intact.
+      onCalls[1].handler({ senderId: 1 }, 'downloading', '0.1.6', 42);
+      assert.deepEqual(statuses[1], ['downloading', '0.1.6', 42]);
+
+      onCalls[1].handler({}, { leak: 'a-secret-object' }, { leak: 'another-secret' }, { leak: 'a-third-secret' });
+      assert.equal(typeof statuses[2][0], 'string');
+      assert.equal(typeof statuses[2][1], 'string');
+      assert.equal(typeof statuses[2][2], 'number', 'a non-number percent must coerce to a number, never forward as an object');
+      assert.doesNotMatch(statuses[2].slice(0, 2).join('|'), /secret/, 'object payloads must not leak their contents');
+      exposedApi.onUpdateStatus('not-a-function');
+      assert.equal(onCalls.length, 2, 'a non-function argument must be ignored, not registered');
     } finally {
       restore();
     }
