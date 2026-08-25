@@ -41,6 +41,84 @@ it is committed.
 
 ---
 
+## BUG-360 — every deep link in the HUD 404'd when the install path contained a dot-segment, while `/` kept working (✅ FIXED 2026-08-26, live-verified in-suite)
+
+Found by accident: the full suite failed `express-5-compat.test.js`'s "the SPA fallback serves the
+HUD at / and at an unknown deep path" in a git worktree under `.claude/worktrees/`, and passed on
+the identical commit in the main checkout. Same HEAD, same `node_modules` junction, one variable —
+where the tree sits on disk.
+
+**Mechanism.** `server/index.js`'s SPA fallback called
+`res.sendFile(path.join(__dirname, '..', 'ui', 'public', 'index.html'))` with no options.
+`res.sendFile`'s `dotfiles` option defaults to `'ignore'`, and `send` applies it to **every
+segment of the absolute path it is handed**, not only to the part beneath a `root`. Any segment
+beginning with a dot therefore made `send` raise `NotFoundError` for a file that plainly exists;
+the error middleware turned that into `{"error":"Not Found"}` with status 404. Measured directly
+on express 5.2.1: the same absolute path returns 404 with the default and 200 with
+`{ dotfiles: 'allow' }`.
+
+**Why it hid.** `/` never broke. `express.static` served the root from its own `index.html`, and
+static's dotfiles check runs on the **request** path relative to its root — never on the root
+itself. So the HUD loaded, looked healthy, and only deep links were dead. Under the
+open-source-portability rule this is a real user-facing bug, not a worktree artefact: anyone
+installing under `~/.local/share/mythos`, `~/.config/…`, or any other dot-directory got the same
+half-working HUD.
+
+**The fix.** `{ dotfiles: 'allow' }` on that one `sendFile`, and the path now comes from the
+existing `UI_PUBLIC_DIR` const instead of a second hand-built copy of it. No user input reaches
+the path — it is `UI_PUBLIC_DIR` plus a fixed basename — so `'allow'` adds no traversal surface.
+`UI_PUBLIC_DIR` also became injectable (`deps.uiPublicDir`), the same seam shape as
+`routes/config.js`'s `wakewordModelsDir`, because the property could not otherwise be tested
+anywhere except from a dotted checkout.
+
+**Tests.** `test/spa-fallback-dot-path.test.js` builds a `<tmpdir>/.dotted/ui/public/index.html`,
+serves from it, and asserts the deep link is a 200 `text/html` while pinning that the root still
+works. A second test guards the seam itself — that production still falls back to the real
+`ui/public`, and that the `sendFile` still carries `dotfiles: 'allow'` — the same
+guard-the-injected-path precedent the wakeword fix set. Mutation-proved both ways: removing the
+option reddens the behavioural test with the 404 body quoted in the message; typo'ing the fallback
+default reddens the seam guard.
+
+**Not covered.** Only this one `sendFile` existed in the tree; `express.static` and the gzip
+handler were never affected and are unchanged. A path segment that is dotted *and* attacker-chosen
+would be a different problem — there is no such path here.
+
+---
+
+## BUG-334-F — the event-loop starvation guard was a wall-clock throughput floor, so a busy host failed a correct fix (✅ FIXED 2026-08-26, live-verified under synthetic load)
+
+Follow-up to BUG-334, whose fix (async device poll) is correct and unchanged. Only its **proof**
+was wrong. `test/android-child-poll-starvation.test.js` property 1 asserted that a 10 ms
+`setInterval` fired at least 15 times in 300 ms of wall clock. Observed 2026-08-25: the same tree
+reported `ok 59` in a standalone `node --test` run and `not ok 59` from the pre-commit hook minutes
+later, while a 1.3 GB installer was being written and scanned on the same machine. A throughput
+floor measures the host at least as much as it measures the code, so the gate blocked commits for
+reasons that had nothing to do with the repo.
+
+**Replaced with a structural proof.** The property is that `refreshDevices()` hands control back
+to the event loop **before** the device probe settles — a `spawnSync` body cannot do that at all,
+because no window exists in which the probe is outstanding and the loop is still turning. The test
+now asserts the existence of that window (the injected runner was invoked, the probe is unsettled,
+and control is back in the test), that control came back within a ceiling rather than after a
+floor, and that a fixed, test-chosen number of awaited loop turns all complete with the probe
+still outstanding. Wall clock appears only as a 2 s ceiling — far above load jitter, far below the
+10 s adb timeout this pins.
+
+**Measured, both directions.** Under 16 CPU-saturating processes on 8 cores: the old assertion
+fails (`only 3 ticks in 300ms`) and the new one passes. Under the mutation that reverts the poll to
+a blocking `spawnSync` body, the new assertion fails deterministically on
+`the poll started 0 device probes through the injected runner`. The new assertion is also strictly
+stronger, not merely steadier: against a mutation that starts the async probe and *then* blocks
+synchronously for 3 s before yielding, the old assertion passed (the block completes inside
+`startAndroidChild`, before the 300 ms window opens) while the new one fails on
+`the poll held the event loop for 3075ms after starting the device probe`.
+
+**Not covered.** The test cannot detect a runner that itself blocks synchronously — nothing inside
+`refreshDevices()` can defend against that, and production's runner is `runAdb`, which spawns.
+Properties 2 and 3 of that file are untouched.
+
+---
+
 ## BUG-359 — WhatsApp window resolution probed exactly once during a cold start, so approved sends failed for seconds-old timing, not capability (✅ FIXED 2026-08-25, not yet live-verified)
 
 Third round of the BUG-273 C1 family. MEASURED LIVE ON THIS MACHINE 2026-08-25: the desktop
