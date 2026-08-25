@@ -157,6 +157,35 @@ function createEffectorHub({ bus, config }) {
   // Prefix and substring first (they catch the real cases: a truncated or
   // pluralised name), then a bounded edit distance for typos. Cheap: this runs
   // only on the failure path.
+  //
+  // BUG-323 — the containment test used to be a RAW bidirectional substring
+  // (`lower.indexOf(wanted) !== -1 || wanted.indexOf(lower) !== -1`), which is
+  // the same defect class as BUG-309's 'typo' matching inside "typography".
+  // score 1 is the best non-exact tier and ties break toward the shorter name,
+  // so any short tool name occurring anywhere inside a longer requested name was
+  // promoted to the head of the list: asking for `essay_write` suggested `say`.
+  //
+  // Measured before changing it (2026-08-23, 12 probes against the real
+  // registry): 10 of the suggestions the raw rule produced were genuinely
+  // useful, so the reverse direction is NOT dropped — it is bounded. Tool names
+  // here are snake_case identifiers, so the honest boundary is the segment: a
+  // containment counts only where it begins the string or follows an underscore.
+  // 'drag' inside 'draggable_reorder' begins at 0 and survives; 'say' inside
+  // 'essay_write' begins at index 2 and does not.
+  //
+  // Not keyword-match.js (BUG-309's module) on purpose: that does English
+  // morphology for prose specs, and stemming an identifier answers a different
+  // question. Scope note — this function only writes the "did you mean" text on
+  // a failure invoke() has already decided; it selects nothing and dispatches
+  // nothing, so a wrong entry here misleads a reader, it does not misroute a call.
+  function containsAtSegmentBoundary(haystack, needle) {
+    if (!needle) return false;
+    for (var at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+      if (at === 0 || haystack.charAt(at - 1) === '_') return true;
+    }
+    return false;
+  }
+
   function nearestToolNames(name, limit) {
     var wanted = String(name || '').toLowerCase();
     if (!wanted) return [];
@@ -167,7 +196,8 @@ function createEffectorHub({ bus, config }) {
       var lower = candidate.toLowerCase();
       var score = null;
       if (lower === wanted) score = 0;
-      else if (lower.indexOf(wanted) !== -1 || wanted.indexOf(lower) !== -1) score = 1;
+      else if (containsAtSegmentBoundary(lower, wanted)
+            || containsAtSegmentBoundary(wanted, lower)) score = 1;
       else {
         var d = editDistance(wanted, lower);
         // Only near-misses; beyond a third of the name it is a different word.

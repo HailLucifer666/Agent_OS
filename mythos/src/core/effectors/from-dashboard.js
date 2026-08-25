@@ -23,7 +23,7 @@ const { effectorFromTool } = require('./adapter');
 const { reasonText } = require('../util/reason-text');
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
-const { vaultRelativePath, vaultUrl } = require('./vault-url');
+const { vaultRelativePath, vaultUrl, vaultAgeHours } = require('./vault-url');
 const { visionThink } = require('./vision-call');
 const evidence = require('./evidence');
 // BUG-113: surface open spoken commitments in read_status so "where are we
@@ -32,7 +32,7 @@ const { listOpenCommitments } = require('./from-calendar');
 // C1: job_status is the pull-side counterpart of the announcer's push-side
 // fix — same defect (a review-failed or fallback-engine build reading as
 // "done"), arriving by voice query instead of by proactive speech.
-const { deriveCompletionPayload } = require('./completion-status');
+const { completionForJob } = require('./completion-status');
 
 // The ONE fetcher. See web_fetch below for why this file no longer has its own.
 const { web_fetch: sharedWebFetch } = require('./web-fetch');
@@ -674,7 +674,9 @@ function buildTools(ctx) {
         if (!fs || typeof fs.exists !== 'function' || !fs.exists(vaultRelPath)) {
           return fail(unknownPathMessage(rawPath));
         }
-        targetUrl = vaultUrl(vaultRelPath, config);
+        // BUG-317: signed, because this URL is about to be handed to a browser
+        // that sends no Authorization header.
+        targetUrl = vaultUrl(vaultRelPath, config, { sign: true });
         // REMEDIATION P1-6 (incident 2026-07-29, live smoke-test): the file
         // existing on disk is not sufficient — this URL is only real if
         // THIS process's own HTTP server is actually listening and serving
@@ -685,14 +687,14 @@ function buildTools(ctx) {
         // before ever spawning anything, so a server that isn't up gets an
         // honest failure instead of a fabricated opened:true.
         try {
-          // /vault/builds is behind requireToken (server/index.js:856). This
-          // pre-flight exists to prove the URL will load, so it must ask the
-          // same question the browser will — credential included. Without it,
-          // configuring a token silently made every artifact unopenable.
-          const headers = config && config.MYTHOS_AUTH_TOKEN
-            ? { Authorization: `Bearer ${config.MYTHOS_AUTH_TOKEN}` }
-            : undefined;
-          const head = await fetch(targetUrl, { method: 'HEAD', headers, signal: AbortSignal.timeout(2000) });
+          // BUG-317: preflight EXACTLY what the browser will send — no headers.
+          // This used to attach `Authorization: Bearer <token>`, which made the
+          // CHECK pass while the browser's own header-less request 401'd, so
+          // open_artifact reported opened:true for a page the operator could not
+          // open. The URL is signed above; if the signature is what admits it,
+          // this request proves that, and if nothing admits it we find out here
+          // instead of the operator finding out in the browser.
+          const head = await fetch(targetUrl, { method: 'HEAD', signal: AbortSignal.timeout(2000) });
           if (!head.ok) {
             return fail(`Artifact exists but the dashboard server returned ${head.status} for ${targetUrl}.`);
           }
@@ -729,7 +731,7 @@ function buildTools(ctx) {
       });
       child.unref();
       const display = title || rawPath;
-      return ok({ opened: true, url: targetUrl, display });
+      return ok({ opened: true, url: targetUrl, display, ageHours: vaultRelPath === null ? null : vaultAgeHours(vaultRelPath, fs) }); // BUG-319
     } catch (err) {
       return fail(`Could not open artifact: ${err.message}`);
     }
@@ -806,10 +808,7 @@ function buildTools(ctx) {
   // buildRunner's map is never mutated.
   function withCompletionStatus(job) {
     if (!job) return job;
-    var reviewStatus = job.reviewVerdict === 'reject' ? 'failed'
-      : job.reviewVerdict === 'approve' ? 'approved'
-      : undefined;
-    var completion = deriveCompletionPayload({ reviewStatus: reviewStatus, buildEngine: job.engine });
+    var completion = completionForJob(job);   // BUG-316 — see completion-status.js
     return Object.assign({}, job, { completionStatus: completion.status });
   }
 

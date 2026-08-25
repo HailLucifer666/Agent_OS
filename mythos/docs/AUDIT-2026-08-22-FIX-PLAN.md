@@ -642,6 +642,124 @@ happened?). That turns a shrug into a decision the next auditor can build on.
 *One item. Last, because it is the largest and riskiest, and because everything
 above should be locked in by tests before this much code moves.*
 
+**STATUS: PARTLY DONE, and the main instruction cannot be carried out as
+written.** Two commits: `d909d6d` (electron/main.js decision + 4 tests),
+`6bc8145` (the file-size ratchet, 6 tests, all six mutated and caught).
+
+### The routes this phase says to move are already moved
+
+The instruction is "move whole groups of related web routes out into
+`mythos/server/routes/*.js`". That extraction already happened — it is labelled
+"W9 god-file decomposition" in the file's own comments, and `server/routes/`
+holds **17 modules**. What is left inside `server/index.js` is:
+
+| | |
+| --- | --- |
+| `app.get/post/use(...)` calls remaining | **20**, of which 13 are middleware or static mounts |
+| actual route handlers left | **three**: `/health`, `/api/status`, `/api/voice/transcribe` (plus a 14-line history read) |
+| lines those three occupy | about 336 |
+| lines in the file | 4,680 |
+
+So the prescribed move addresses roughly **7%** of the file, and it cannot reach
+the "under 800 lines" target. The plan's own *Done when* anticipates this and
+allows the alternative: "or has a written plan for the remainder". This is that
+plan.
+
+### What the other 93% actually is
+
+`server/index.js` is not a router. It is **one function** — `createServer(deps)`,
+lines 193 to 4,680 — holding the WebSocket layer and the entire voice runtime in
+a single closure with **185 names declared directly inside it**. Measured
+coupling, counting names each region would have to be handed if it moved out:
+
+| region | lines | names it needs |
+| --- | --- | --- |
+| Voice Nodes (Stage 3) | 175 | **5** — `bus config logger leash proactiveSpeak()` |
+| WS v2 upgrade + auth | 206 | 12 |
+| Boot greeting | 486 | 19 |
+| Wake arbitration (Stage 4) | 398 | 26 |
+| the three remaining routes | 336 | **35** |
+| Bus → WS OUT relay | 563 | 37 |
+| everything from WS v2 down | 3,110 | 51 |
+
+Two things follow. First, **the three "easy" routes are the most tangled thing
+in the file** (35 names, including `pinSessionRequired()`, `extractCookieToken()`
+and `expensiveLimit`) — the obvious move is the worst one. Second, the big
+regions need mutable closure state, not just functions: `activeSpeech`,
+`lastActiveWs`, `bootGreetingFired`, `replayBuffers`, `aetherOwner`. Mutable
+variables cannot be passed by value, so extracting them means introducing a
+shared state object. **That is a rewrite, not a move** — and the plan's own rule
+for this phase is "move code, never edit it in the same commit", which such a
+change cannot honour.
+
+### What this is code for, and why that matters
+
+It is the voice path: WebSocket sessions, which device speaks, wake-word
+arbitration between devices, the boot greeting, Gemini Live wiring, and the
+bus→socket relay. `BUGS.md` is dominated by regressions in exactly this code,
+and much of it cannot be verified by the suite at all — the same reason
+`electron/main.js` is being left whole. A structural change here is high risk
+with a weak safety net.
+
+### The recommended remainder, in order of value
+
+1. ~~**Voice Nodes → `server/ws/voice-nodes.js`** (175 lines, 5 dependencies, no
+   mutable shared state). The one genuinely clean extraction.~~ **WITHDRAWN the
+   same day — see the correction below. The 5 was an inbound-only count; the
+   region also has an outbound surface of 11, one of which is a mutable variable
+   assigned from outside and therefore not movable at all.**
+2. **Leave the three routes where they are** unless their 35-name surface is
+   reduced first. Moving them would mean exporting the auth helpers, which
+   spreads the token-handling logic across more files rather than fewer — worse
+   than the size problem it solves.
+3. **Treat the WS/voice runtime as its own project, not as a file split.** It
+   needs an explicit session-state object before any code moves; doing it as a
+   "move" is how a green suite ships a broken voice path.
+4. **The ratchet holds the line meanwhile.** `server/index.js` is recorded at
+   4,680 and cannot grow. That is what stops this getting worse while the real
+   work is scheduled.
+
+### Correction, same day: Voice Nodes is NOT a clean extraction either
+
+Recommendation 1 above was written from **half a measurement** and is withdrawn.
+The coupling table counts what each region *reads* — its inbound dependencies.
+An extracted module also has to hand back everything the rest of the file reads
+*from* it, and that side was never counted. Measured properly, the Voice Nodes
+region declares 15 names and **11 of them are read from outside it**:
+
+| name | reads from outside |
+| --- | --- |
+| `voiceNodes` | 10 |
+| `activeSpeech` | 7 |
+| `nodeSpeechTarget()` | 6 |
+| `sendSpeechChunk()` | 5 |
+| `liveAdaptersByConnection` | 3 |
+| `voiceNodeDupAnomalyLast`, `serializeSpeech()`, `aetherOwner` | 2 each |
+| `VOICE_NODE_DUP_ANOMALY_MIN_INTERVAL_MS`, `noteTtsChainDown()`, `moveActiveSpeechToCurrentOwner()` | 1 each |
+
+Most of those are objects and functions, which pass by reference and would
+survive a move. **`aetherOwner` does not.** It is a plain `let` that is
+*reassigned from outside the region* — the Aether sensor writes the current
+election owner into it. A moved module cannot expose a variable someone else
+assigns; the call site has to change to a setter first.
+
+So the "clean move" needs a behaviour-preserving edit to the voice path before
+any code can move, which under this phase's own rule ("if a group needs changing
+to move, that is a separate commit") makes it two commits and a test, in the
+code area with the worst regression history in `BUGS.md` and the weakest
+automated coverage — to remove **175 lines from 4,680, about 3.7%**.
+
+**That is not worth doing, and the honest conclusion for Phase 6 is that there
+is no cheap win left in this file.** What was delivered is the ratchet and the
+`electron/main.js` decision; the remainder is a scheduled rewrite of the
+WebSocket/voice runtime behind an explicit session-state object, not a file
+split, and it should be planned as its own piece of work rather than smuggled in
+under a size target.
+
+The general lesson, which cost nothing here because the second measurement
+happened before the code moved: **coupling has two directions, and measuring one
+of them reads as encouraging.**
+
 ### Item 13 — two files are far over the size limit
 
 **Plain English.** The house rule is under 800 lines per file. `server/index.js`

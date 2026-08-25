@@ -41,6 +41,212 @@ it is committed.
 
 ---
 
+## BUG-359 — WhatsApp window resolution probed exactly once during a cold start, so approved sends failed for seconds-old timing, not capability (✅ FIXED 2026-08-25, not yet live-verified)
+
+Third round of the BUG-273 C1 family. MEASURED LIVE ON THIS MACHINE 2026-08-25: the desktop
+client is an MSIX app whose **process outlives its window** — with the chat closed,
+`pid=17056 processName=WhatsApp.Root MainWindowHandle=0`; after activation the SAME pid owns
+the visible "WhatsApp" window. The operator's "the app is open" is true of the process; the
+window is a separate, asynchronous event that takes seconds to become enumerable.
+
+**What the session said.** Three operator-approved sends on 2026-08-24 20:23–20:29 UTC all
+failed: ×2 "could not identify its window" and ×1 focus_window's "Process 17056 has no main
+window" — byte-for-byte the windowless-process state captured live the next day.
+`from-whatsapp.js` asked `list_windows` exactly once after the launch calls; on a cold start
+that single probe landed inside the activation gap. The C1 name mismatch was already fixed
+(2026-08-21): the anchored regex matches `WhatsApp.Root`, verified live against the real
+enumeration. What failed was WHEN, not WHAT.
+
+**The fix.** A bounded settle-poll, following this file's own A4 precedent one stage earlier in
+the same flow (`COMPOSER_SETTLE_MS` already polls for the composer AFTER focus). Defaults 6 s /
+400 ms; both apply ONLY when the first probe finds nothing — a warm window answers on probe one
+with zero added latency. Exactly-one match resolves immediately; more than one refuses
+immediately (ambiguity is not cured by waiting); exhaustion keeps the C1 refusal text verbatim.
+The refusal to type blind does not change. An earlier Q8 note declined a poll "until there is
+evidence of a timing case" — this entry IS that evidence arriving, as the note asked.
+
+**Tests.** `test/bug-359-whatsapp-window-settle.test.js`, 4 tests, red before / green after:
+late-window completes the send; warm path stays at exactly one probe; exhausted poll keeps the
+byte-for-byte refusal AND proves more than one probe happened; two-window ambiguity refuses on
+probe one. `bug-273-c1`'s harness passes `windowSettleMs: 0` through the new register seam so
+its three exhausted-refusal cases don't spend 18 s proving what they already proved.
+
+**What this does NOT fix.** Delivery is still unverified end-to-end (step 3.5's recipient check
+guards WHO, nothing reads a delivery receipt back); the stale-PID disease in recorded SKILLS
+(`acdc-session.md` bakes `close_window {pid:4668}`) is BUG-358's data-quality finding, not
+touched here; and per adapters/CLAUDE.md, only a real node → pc-child round trip measures
+truthfully — a green suite plus one operator-approved send with WhatsApp closed, then open, is
+the live gate.
+
+---
+
+## BUG-358 — the procedural-skills layer has never fired once: 0 of 3,065 recorded actions carry a skillRef (🔍 MEASURED 2026-08-25, fix undecided)
+
+Operator asked after the 2026-08-24 session why MYTHOS never used its skills. Measured across
+the ENTIRE episodic history (`vault/Episodic/*.jsonl`, all days): **0 actions with a skillRef,
+3,065 without**. This is not a bad session — the layer is completely inert, and always has been.
+
+**Why, precisely.** Three independent facts, each checked against source and data:
+1. **Wiring: only one seam consults skills at all.** `goals/index.js` `plan()` step 2
+   (`goals/index.js:400`) is the sole caller of `skills.recall()` in the entire codebase. It
+   runs only while planning GOAL steps, gated on term-overlap between the goal TITLE and skill
+   file text scoring > 0.6 plus the successRate floor. The voice-live path
+   (`live-tool-adapter.js` builds `{tool, args}` decisions directly), the voice batch path, the
+   HUD confirm path, and the cortex brain loop (`cortex/index.js` contains zero skill
+   references) NEVER consult procedural memory. The Live model picks tools itself from the
+   declared allowlist; nothing offers it the stored procedures.
+2. **The one seam that exists has never matched.** No goal title ever scored > 0.6 against any
+   stored skill, so even the designed path has zero hits on record.
+3. **Data quality: even a match would misbehave.** All 98 vault skills parse (sidecar JSON
+   present on every file — the loader is healthy), but they are recordings of raw action rows:
+   `acdc-session.md` bakes `close_window {pid:4668}` — a process id dead within minutes of
+   recording — and its When-section holds pseudo-code (`gmail_unread() == true`) rather than an
+   intent a recall query could match. Replaying the store as-is would resurrect every
+   stale-PID failure class BUG-357's sibling tickets track.
+
+**Deliberately NOT fixed in this ticket.** Wiring skills into the Live tool-selection surface is
+a design change (AD-1: Gemini selects tools from functionDeclarations; a parallel procedural
+replay channel would need its own safety story and confirmation semantics), and re-minting 98
+recordings with parameterized steps is a separate migration. Both need the operator's call on
+what skills are FOR in a voice-first system before code moves. What ships here is the
+measurement and this record, so the next decision starts from numbers instead of folklore.
+**Guard:** `test/bug-357-reply-grounding.test.js` pins the detector plumbing that skillRef
+rides on; a skills-wiring change should extend, not replace, it.
+
+## BUG-357 — MYTHOS said "sent" twice with no send behind it, and its own honesty detector never saw either claim (✅ FIXED 2026-08-25, not yet live-verified)
+
+Operator report from the live session of 2026-08-24/25: *"You're not even calling the right
+tools"* and *"how are you still lying?"* Root-caused from `mythos-server.log`,
+`vault/Audit/2026-08-25.jsonl`, `vault/Episodic/2026-08-25.jsonl` and
+`vault/Incidents/2026-08-25.jsonl`, incidents inc-1787603077342-5 / -3172016-6 / -174158-7.
+
+**What the record said.** At 20:23:44 UTC MYTHOS said *"Confirmed, Sir. 'Hi' has been sent to
+mom on WhatsApp."* — nothing had been dispatched; the two pending `whatsapp_send` confirms were
+still awaiting a HUD click. At 20:25:48 it said *"Confirmed, Sir. Message sent to 'mom' on
+WhatsApp."* — again nothing had run. When real dispatches finally followed the operator's clicks,
+all three FAILED honestly in the audit (`could not identify its window` ×2, `Process 17056 has
+no main window` ×1) while the spoken replies kept saying sent. The reply layer lied; the tool
+layer told the truth the whole time.
+
+**Why the existing guard missed both claims, measured.** The post-hoc detector
+(`claim-check.js`) matches completed-aspect prose and checks it against `actionsThisTurn`.
+Two independent gaps:
+1. **Cross-turn blindness.** Both claims were spoken one or more turns AFTER the whatsapp_send
+   attempt/confirm rows existed; every turnComplete splices `liveTurnActions`, so the detector's
+   evidence window held nothing and the elliptical tier's gate stayed shut.
+2. **Subject gap.** `sending.ellipticalRe` accepted only {message,text,email,mail} as subject;
+   the actual phrasing was *"'Hi' has been sent"* — quoted message CONTENT, which slips past.
+
+And a third hole with no detector involved: a spoken go-ahead (*"Yeah. Yeah. Go ahead."*) over
+pending confirms produced NO notice of any kind. Nothing ever told the model that spoken words
+dispatch nothing — the silence is what the completion claim filled. (Also recorded: the
+operator's *complaint* "no message were sent" matched `NEGATIVE_RE` and cancelled both pending
+confirms at 20:25:02 — B3's documented over-cancel direction, now visible with a real example.)
+
+**The fix.** Three pieces, all in the voice layer, none touching any effector:
+- `claim-check.js`: `detectUnbackedClaims` takes an optional third argument, `recentActions`,
+  merged into BOTH backing and attempted-unproven sets; the sending `ellipticalRe` gains a third
+  alternative for `<any short subject> has been sent/delivered`. Perfect aspect only ("was sent"
+  stays excluded — the package sentence must keep passing), negation cannot match (adjacency),
+  and the widening stays evidence-gated.
+- `live-tool-adapter.js`: a bounded cross-turn ledger (`RECENT_ACTION_WINDOW_MS` = 120 s /
+  64 entries) fed by ALL FOUR action-row push sites (commitAction, reportLateOutcome,
+  resolveLiveConfirm, rejectPendingConfirmsOnNegative), handed to the detector on turnComplete.
+  It backs true references too — a genuine ok:true send still silences a later "it was sent",
+  which is what keeps this out of F1b's failure class.
+- A new injection site, `spoken-go-ahead-no-dispatch`: approval-shaped speech over still-pending
+  confirms gets `[SYSTEM] Your spoken go-ahead did NOT dispatch anything…` in the same breath.
+  Deliberately NOT voice-agent.js's anchored `AFFIRMATIVE_RE` — that is a whole-utterance verdict
+  matcher and matches none of this session's real shapes; this is a different question and the
+  loose matcher says so in its comment.
+
+**Tests.** `test/bug-357-reply-grounding.test.js`, 11 tests, red before (exactly the four
+defect-carrying ones) / green after, replaying the session's verbatim sentences as fixtures.
+Three mutations each caught: killing commitAction's ledger write (cross-turn correction dies),
+reverting the regex widening (claim 1 dies), removing the go-ahead notice (its test dies). The
+site-population guard in `bug-297-late-for-turn-unverified.test.js` failed as designed when the
+new site appeared and was enumerated there, per that file's own instruction.
+
+**What this does NOT fix, stated so it is not read as closed.**
+1. `whatsapp_send` itself still fails on this machine (window resolution round 3 + focus) —
+   tracked separately from this ticket; honesty about failing is not delivery.
+2. Present-tense fabrication ("Checking the process list actively") remains out of scope by
+   claim-check.js's own header decision; the ledger narrows what such a claim can get away with
+   but does not detect it.
+3. NEGATIVE_RE still cancels on a complaint containing "no". Deliberate per B3's asymmetry note;
+   now has a measured instance attached.
+4. **Verified by test only.** A green suite has never once proven the running application honest;
+   the live gate is asking MYTHOS for a WhatsApp send and listening to what it claims.
+
+## BUG-322 — the operator shouted and MYTHOS kept talking (✅ FIXED 2026-08-22, not yet live-verified)
+
+Operator report from the live session of 2026-08-22: *"I had to shout and still it did not stop
+telling."* Root-caused from `%APPDATA%/MYTHOS/mythos-server.log`, scoped to that day only —
+74 own-voice holds across 101 live turns.
+
+**What the log said.** Thirteen barge-in attempts were refused, and **not one of them was refused
+for being too quiet**: there is no `below-bleed-floor` veto anywhere in the day. Seven were refused
+as `pending-sustaining`, at these levels — `0.3942 0.3655 0.1900 0.1671 0.1260 0.0824 0.0713` —
+against a floor of `0.035` and a room whose loudest measured speaker bleed all day was `0.1641`.
+The top two are more than double the loudest sound MYTHOS's own speaker produced in that room and
+ten times the floor. They cannot be bleed. They were the operator, refused for *not lasting long
+enough*.
+
+**The mechanism.** Two counters that measure different things and were required to agree.
+`barge-in-policy.js` measured its 200ms sustain in wall-clock time (`t - pendingSince`), while the
+audio reaches it in frames: `pcm-capture-worklet.js` fills a 100ms buffer on the audio thread and
+`postMessage()`s it, and the main thread runs the handler when it next gets a turn. Those agree
+only while the main thread keeps up — and while MYTHOS is speaking, that same thread is decoding
+and playing audio. A backlog arrives as a burst: every frame carries a real 100ms of the operator's
+voice while `now()` barely moves. The candidacy sits in PENDING while the speech runs past it, and
+the frame-counting backstop fires on its 3rd, 6th and 9th frame into a policy still answering
+`pending-sustaining`. The log's veto counts of 2, 3 and 4 within a single hold are that shape.
+
+**The fix.** `PENDING_HOLD_MS` is unchanged and still means 200ms. The clock is simply no longer the
+only witness to it — each PENDING frame is a known quantity of captured audio, so the frames measure
+the same span and whichever has seen more of the utterance wins. Under healthy real-time delivery
+the two are arithmetically identical, which is pinned frame-for-frame. Nothing else moved: not the
+floor, not the protected window, not either backstop tier, not the dormant learned floor.
+`s2s-bridge.js` is deliberately **untouched** — see the drift guard below.
+
+**Same class as BUG-274, from the other end** — two counters required to coincide, one in frames and
+one in milliseconds. BUG-274 fixed delivery; this fixes measurement. It was predicted at the time:
+`test/bug-274-barge-in-authorisation-is-deliverable.test.js` records the shape as known-failing and
+defers it with an explicit instruction to bring a measurement instead of a guess.
+
+**Why FRAME_MS is duplicated rather than shared, since that looks like the obvious cleanup.** The
+sustain is now measured in frames, so `FRAME_MS` is load-bearing and must match the value the
+capture worklet is built with. Exporting it from the policy and importing it into `s2s-bridge.js`
+was tried and **reverted**: it breaks `s2s-preroll-ring.test.js`, which reads the bridge as *text*
+and matches `FRAME_MS = <digits>` to prove the preroll ring is derived from the frame size rather
+than hand-tuned. The bridge is a browser ES module with no Node double (`mythos/ui/CLAUDE.md`), so
+source-shape assertions are the only tool available against it, and moving a constant out of the
+file blinds them. That invariant is worth more than removing a duplicated literal, so the duplicate
+stays and a guard test asserts the two values are equal.
+
+**Tests.** `test/bug-322-barge-in-sustain-counts-frames.test.js`, 6 tests, red before / green after —
+the failing run reproduced the live signature exactly (`pending-opened` followed by nine
+`pending-sustaining`). Five mutations run, file restored byte-identical and hash-verified: four were
+caught, and the fifth is documented as an equivalent mutant with the reason.
+
+**What this does NOT fix, stated so it is not read as closed.** Three findings from the same session
+remain open. Mic frames are buffered locally and replayed only when the hold ends, so Gemini hears
+nothing from the operator during a hold (median 6.0s, max 15.0s) and cannot cut the turn itself —
+87% of the replayed audio was zeroed by the noise gate (628 raw frames against 4,346 zeroed). The
+echo detector returned `no-reference` on the large majority of turns, so `echoRatio` was almost
+never available as a discriminator. And the ceiling fail-open fired 14 times, meaning the hold ran
+to its cap rather than being resolved. **Above all, this fix is verified by test only — a green
+suite has never once been able to tell anyone that this path works in the running application, and
+the operator's ear is the oracle here.**
+
+**A correction to an earlier claim in this session, recorded so it is not repeated.** The first
+report of this bug said the adaptive bleed floor was "learning the operator's shout, so shouting
+raises the bar". That was wrong. `LEARNED_FLOOR_ENABLED` is `false`, and every `bleedFloor` value in
+the day's log reads `0.035` — the learned figure is dormant telemetry and applied to nothing. The
+rising `learnedFloor` numbers were real but inert.
+
+---
+
 ## BUG-308 — an escaped error killed MYTHOS and wrote nothing anywhere (✅ RESOLVED 2026-08-22)
 
 Audit item 8, Phase 4 of `mythos/docs/AUDIT-2026-08-22-FIX-PLAN.md`. MYTHOS's brain runs as a

@@ -126,7 +126,19 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
     });
   }
 
-  function enqueue({ kind, prompt, run, goalId, persona, onFailed }) {
+  // BUG-310: `preparePrompt` is an optional async hook, awaited ONCE in pump()
+  // before the first generation, whose return value replaces the prompt for the
+  // rest of the job — first generation, verification retry, and every refine
+  // regeneration.
+  //
+  // It exists because the caller could not do this itself. agent-actions.js
+  // needs an async call (ui-ux-pro-max's search.py) to build the full prompt,
+  // but executePipelineCard must stay synchronous for its own callers, which
+  // read job.id off the return value. So it used to resolve the design system
+  // inside run() and reassign its local — and run() is the LAST thing pump()
+  // calls, so nothing it reassigned was ever generated from. One hook here fixes
+  // every generation at once instead of the caller patching each one.
+  function enqueue({ kind, prompt, run, goalId, persona, onFailed, preparePrompt }) {
     // BUG-025 defensive fallback: a build-kind job with no real prompt means the
     // upstream card lost its spec (field-name mismatch, capture bug, etc.) — refuse
     // to enqueue rather than silently sending "undefined" into brain.think().
@@ -152,7 +164,10 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
     // (BUG-016's reviewed/not-reviewed branches) never fires, and the card is
     // left at execute/progress:25 with no trace of failure — indistinguishable
     // from "still building" to pipeline_status forever.
-    queue.push({ job: job, prompt: prompt, run: run, persona: persona, onFailed: onFailed });
+    queue.push({
+      job: job, prompt: prompt, run: run, persona: persona, onFailed: onFailed,
+      preparePrompt: preparePrompt,
+    });
     notify(job);
     // Defer pump() so enqueue() always returns a job in 'queued' state — see NOVA
     // orchestrator.js's identical queueMicrotask comment; same race exists here.
@@ -170,6 +185,32 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
     job.status = 'running';
     job.stage = 'generating';
     notify(job);
+
+    // BUG-310: complete the prompt BEFORE anything is generated from it. Every
+    // later use in this function — the retry at the verification gate and each
+    // refine regeneration — reads this same `prompt`, so they all inherit it.
+    //
+    // Failure here is never fatal: preparePrompt supplies design guidance, and a
+    // build with no design guidance is worse-looking, not broken. But it is not
+    // silent either. The whole reason this bug survived is that a discarded
+    // design system looked identical to one that was never resolved, so the
+    // degraded path says so on the bus and on the job record — lesson #8, and
+    // the same shape as jobs-persist-failed above.
+    if (typeof next.preparePrompt === 'function') {
+      try {
+        var prepared = await next.preparePrompt(prompt, job);
+        if (prepared && typeof prepared === 'string' && prepared !== prompt) {
+          prompt = prepared;
+          job.promptPrepared = true;
+        } else {
+          job.promptPrepared = false;
+        }
+      } catch (err) {
+        job.promptPrepared = false;
+        job.promptPrepareError = (err && err.message) || String(err);
+        if (bus) bus.emit('health.anomaly', { kind: 'prompt-prepare-failed', error: job.promptPrepareError });
+      }
+    }
 
     // One generator, resolved once. hasEngine → Hermes, exclusively.
     function generate(text, sourceTag) {
@@ -408,7 +449,13 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
       job.stage = 'writing-artifact';
       notify(job);
 
-      var runResult = await run(raw, job);
+      // BUG-310: run() receives the PREPARED prompt as a third argument. Its
+      // own callers (agent-actions.js) close over the string they passed to
+      // enqueue(), which is the unprepared one — without this they would rebuild
+      // from a design-system-less prompt on the grounded/retry paths while the
+      // first generation used the prepared one. Existing run() implementations
+      // that take (raw, job) simply ignore it.
+      var runResult = await run(raw, job, prompt);
       job.status = 'done';
       job.stage = 'done';
       if (runResult && runResult.artifact) job.artifact = runResult.artifact;
@@ -424,6 +471,14 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
       if (runResult && runResult.researchStatus) job.researchStatus = runResult.researchStatus;
       // BUG-016: capture review status and issues so the announcer can inform the user
       // whether the build passed review or has issues that need attention
+      // BUG-316: reviewStatus/reviewRequired carry what the review ACTUALLY
+      // concluded. reviewVerdict alone cannot: a skipped review is implemented
+      // as a hardcoded { verdict: 'approve' }, so every reader of the job record
+      // — job_status, the announcer — saw an approval that never happened.
+      if (runResult && runResult.reviewStatus) job.reviewStatus = runResult.reviewStatus;
+      if (runResult && typeof runResult.reviewRequired === 'boolean') {
+        job.reviewRequired = runResult.reviewRequired;
+      }
       if (runResult && runResult.review) {
         job.reviewVerdict = runResult.review.verdict;
         if (runResult.review.issues && runResult.review.issues.length) {
