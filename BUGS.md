@@ -41,6 +41,128 @@ it is committed.
 
 ---
 
+## BUG-363 — the SPA fallback 404s from any git worktree, because send inspects the whole absolute path and every worktree lives under a dot-directory (✅ FIXED 2026-08-26)
+
+**Status:** ✅ FIXED 2026-08-26 — narrow, environment-scoped, and NOT a defect on a normal checkout.
+
+**READ THIS FIRST IF YOU ARE CHASING A RED `express-5-compat.test.js`.** It fails
+in a worktree and passes in the main checkout, at the same commit, with the same
+express, send and node. That is not flakiness and it is not a routing bug.
+
+`res.sendFile(absolutePath)` hands the WHOLE path to `send@1`, whose `dotfiles`
+option defaults to `'ignore'` — so any path containing a segment that starts with
+a dot is refused with send's own `Error('Not Found')`, which the 4xx branch of the
+error handler turns into `{"error":"Not Found"}`. CLAUDE.md tells every concurrent
+session to work from `git worktree add .claude/worktrees/<name>`, so **every
+worktree checkout has a `.claude` segment in its absolute path** and the HUD
+fallback 404s there. Measured with one file, same express 5.2.1 / send 1.2.1 /
+node v26.1.0, only the directory differing:
+
+```
+.../Agent_OS-main/mythos/ui/public                 /  200    /a/b/c  200
+.../.claude/worktrees/<name>/mythos/ui/public      /  404    /a/b/c  404
+```
+
+**The fix** is the documented form — a RELATIVE name plus `{ root }`. send then
+dot-checks only the part BELOW root (`index.html`), which is what the `dotfiles`
+option is actually for; the root itself is trusted. Immune to wherever the repo is
+checked out. `server/index.js` sits at its 4680-line ratchet ceiling, so the
+explanation lives here and the code carries a one-line pointer.
+
+**A WRONG EXPLANATION WAS NEARLY COMMITTED HERE, and how it failed is the lesson.**
+The first version of this entry asserted that the fallback "had never served a
+single request", including `/`, and blamed Express 5 `encodeURI()`-ing paths that
+contain spaces. Both claims were false. The isolation behind them looked sound —
+four probes, a real file rather than `node -e`, and a `{root}` control proving the
+target existed — but every probe ran from inside the worktree, so the one variable
+that mattered was held constant across all four and never became a suspect. A
+second session could not reproduce it, pushed back with its own measurements, and
+was right.
+
+Two rules out of it. When two machines disagree about the same commit, the
+difference is **a variable neither of you varied** — enumerate the environment
+before theorising about the code. And a confident mechanism written into a tracked
+file is worse than no entry at all, because it misdirects every later reader for
+as long as it survives; this repo already says that about legal conclusions, and
+it is just as true of technical ones.
+
+Worth keeping despite being environment-scoped: `{ root }` is the documented form,
+it removes the absolute-path question permanently, and it makes the suite honest
+under the worktree workflow this repo mandates for concurrent sessions.
+
+---
+
+## BUG-361 — the search chain paid a full timeout per call for providers that could not answer, and the daemon's own error report was parsed straight past (✅ FIXED 2026-08-26, live-verified)
+
+**Status:** ✅ FIXED 2026-08-26 — live-verified on this machine, tests + mutation-proved.
+
+MEASURED: `web_search({query:'who is the CEO of Anthropic'})` took **32.4 seconds**
+and answered from Wikipedia. Per-rung timings that day: ddg-html 10,014ms/0 results,
+ddg-lite 10,010ms/0, jina 459ms/0 (HTTP 401 — the keyless tier is gone), exa-mcp
+1,029ms/0 (HTTP 429 — free 150/day spent), local daemon 6ms/0, wikipedia answered.
+
+**Two root causes, and neither is "DuckDuckGo is blocked".** That was the first
+theory and it was WRONG — worth recording, because the evidence for it looked
+strong. All three DDG hostnames resolved to 20.204.244.192 through the local
+resolver AND through Cloudflare DoH (ruling out a DNS hijack), and TCP :443
+blackholed at 8s with no RST, including to the raw IP. Four hours later the same
+host answered in 137ms with HTTP 202. **It was transient.** A permanent-block
+conclusion would have shipped a hardcoded disable list encoding one machine's bad
+afternoon into a tracked file, on an open-source project.
+
+*Root cause 1 — nothing remembered a failure between calls.* healer.js's
+`suppress-search-provider` playbook rests a provider for a flat **30 seconds**, in
+memory, and it is driven by a `search-provider-failed` anomaly on the BUS — while
+most callers of `web_search` pass no bus. So on the autonomous path it never fired
+at all: an inert mechanism that read as coverage. Every call re-paid every timeout.
+
+*Root cause 2 — the daemon reports its failures and we discarded them.* The
+contract comment was captured 2026-08-20 and had gone stale; the daemon also
+returns `partialFailures`, `error` and `hint`. Measured against the healthy running
+daemon (HTTP 200 every time): `bing` returned 0 results and said exactly why
+(`engine_error`, `Request failed with status code 301`), while `startpage` — the
+configured default — and `duckduckgo` returned 0 with an EMPTY partialFailures
+array. `status:'ok'` describes the REQUEST, not the search. So a total scrape
+failure arrived indistinguishable from "your query matched nothing".
+
+**THE FIX.** New `src/core/effectors/provider-cooldown.js`: a provider that
+*faults* is skipped for progressively longer (1 min → 5 min → 1 hour → 1 day), and
+a single success clears the ladder outright. Behavioural, not geographic — a
+machine where DDG works never triggers it. An expired window permits one retry but
+KEEPS the count, so a permanently dead endpoint escalates instead of ping-ponging
+at the first rung forever. `WEB_SEARCH_DISABLED_PROVIDERS` is the explicit
+override, deliberately empty by default. localWebSearch now reads
+`partialFailures` and names the engine that failed.
+
+**The trap, caught by an existing test rather than by me.** The first version
+cooled down on ANY empty outcome — including Wikipedia correctly matching nothing
+for a shopping query, which would have removed the chain's last honest rung after
+four ordinary queries. `bug-276-f4`'s "distinguishes a provider that
+answered-and-matched-nothing from one that failed" caught it. Only a real fault
+(`seen[provider]`, set by a transport error/non-200/timeout) now cools a provider.
+
+**SCOPE — deliberately not done.** A second, provenance-based caution on the
+Wikipedia rung was written and then REVERTED: `bug-280`'s "an encyclopaedia
+answering an encyclopaedia question is not a defect" is a deliberate, tested
+contract, and Wikipedia's Anthropic article does in fact name the CEO. Recorded as
+a non-change in `succeed()` so it is not "fixed" again. The chain-degradation
+signal it was reaching for belongs on the health channel, where root cause 2 now
+puts it. Also untouched: adding new free providers (Google CSE needs an operator-
+created engine ID; Gemini grounding 429s on the existing key today).
+
+LIVE, same machine, same query: **32.4s → 4.2s cold, ~2.2s warm.** A freshness
+query went 11s → 1.4s, because the news rung's DuckDuckGo corroboration call went
+straight to `ddgHtml` around `skipReason` and is now gated like every other
+attempt. Note the honest caveat: the network recovered between the two
+measurements, so the cold-call figure is mostly the network and the cold→warm
+delta (4.2s → 2.2s) is the part this fix owns.
+
+Tests: `test/provider-cooldown.test.js` (10), `test/bug-361-search-stops-paying-
+for-dead-providers.test.js` (7). Both mutation-proved — 3 mutations each, every
+one caught by the intended assertion.
+
+---
+
 ## BUG-359 — WhatsApp window resolution probed exactly once during a cold start, so approved sends failed for seconds-old timing, not capability (✅ FIXED 2026-08-25, not yet live-verified)
 
 Third round of the BUG-273 C1 family. MEASURED LIVE ON THIS MACHINE 2026-08-25: the desktop

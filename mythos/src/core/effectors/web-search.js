@@ -33,7 +33,7 @@ var DDG_LITE_URL = 'https://lite.duckduckgo.com/lite/?q='
 // using OpenSearch.
 var WIKI_SEARCH_URL = 'https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&srlimit='
 var WIKI_ARTICLE_URL = 'https://en.wikipedia.org/wiki/'
-var PROVIDER_TIMEOUT = 10000
+var PROVIDER_TIMEOUT = require('./local-search-daemon').PROVIDER_TIMEOUT
 
 // BUG-280, second half — 2026-08-20. A STALE answer returned as a fresh one.
 //
@@ -81,114 +81,60 @@ var STALE_SOURCE_CAUTION = 'These results carry NO publication date, so none of 
 // themselves, which is exactly why a signal like the caution below could be
 // added to none of them — Q3: the model reads `result`, so the caution has to
 // ride there, on every provider, or it is a mechanism that covers one rung.
+// DELIBERATE NON-CHANGE (2026-08-26), recorded so it is not "fixed" again.
+//
+// This rung was nearly given a second, provenance-based caution: with every
+// general provider dead on this network, 'who is the CEO of Anthropic' returns
+// ok:true from Wikipedia, and that looked like the same missing-signal class as
+// the staleness bug above.
+//
+// It is not, and bug-280-search-has-a-working-provider.test.js says so in a test
+// written before this attempt: "an encyclopaedia answering an encyclopaedia
+// question is not a defect". Two things settled it. Wikipedia's Anthropic
+// article DOES name the CEO, so the rung answered the question and the snippet
+// merely did not show it — the chain was not wrong. And a caution keyed on "the
+// rest of the chain is down" would fire on every timeless query on a degraded
+// machine, which is precisely the over-warning that trains an operator to ignore
+// cautions.
+//
+// The real gap it was reaching for — nobody could tell the chain had silently
+// lost every general provider — belongs on the HEALTH channel, not in a success
+// payload, and localWebSearch's partialFailures reporting below now puts it
+// there. The caution contract is unchanged: staleness only.
 function succeed(q, results, source) {
   var payload = { query: q, results: results, source: source }
   if (isTimeSensitive(q) && !carriesPublicationDates(results)) payload.caution = STALE_SOURCE_CAUTION
   return { ok: true, result: payload }
 }
 
-// BUG-280: the adopted local search daemon (open-webSearch, Apache-2.0). Treated
-// exactly like cua-driver — an OPTIONAL external binary the operator installs and
-// runs. Absent daemon means this rung records why and the chain continues; it is
-// never fatal and never silent. Install/run instructions live in .env.example.
-//
-// Loopback only, and validated rather than trusted: this rung takes a URL from
-// configuration and fetches it, which is an SSRF-shaped surface. A non-loopback
-// value is refused by name instead of being defaulted away, because a wrong
-// default that quietly 404s makes a broken install look like "no results".
-var WEB_SEARCH_LOCAL_URL_DEFAULT = 'http://127.0.0.1:3100'
-var WEB_SEARCH_ENGINES_DEFAULT = 'startpage'
-
-// The loopback test is the SHARED classifier, not a list local to this file.
-// This rung originally carried its own four-entry exact-match array while
-// web-fetch.js already held a full one — IPv6 expansion, IPv4-mapped-IPv6
-// unwrapping, zone-id stripping, two recorded bypasses closed. That is one
-// invariant with two implementations, which is the defect class this repo hits
-// most often. Note the POLICY here is the inverse of web-fetch's: that one
-// refuses private addresses, this one REQUIRES loopback, and 'private' is
-// strictly larger than 'loopback' — so they share the classification and keep
-// their own policies. See net-address.js.
-var isLoopbackHost = require('./net-address').isLoopbackHost
+// The open-webSearch daemon rung lives in its own module: it owns a configured
+// URL, an SSRF-shaped validation of that URL, an engine list and a response
+// parser, which is more surface than any other rung here. Moved out on
+// 2026-08-26 when the file-size ratchet refused BUG-361 — see that file.
+var daemon = require('./local-search-daemon')
+var WEB_SEARCH_LOCAL_URL_DEFAULT = daemon.WEB_SEARCH_LOCAL_URL_DEFAULT
+var WEB_SEARCH_ENGINES_DEFAULT = daemon.WEB_SEARCH_ENGINES_DEFAULT
+var localSearchBase = daemon.localSearchBase
+var resolveLocalSearchUrl = daemon.resolveLocalSearchUrl
+var localSearchEngines = daemon.localSearchEngines
+var localWebSearch = daemon.localWebSearch
 var newsRung = require('./news-rung')
 
-function localSearchBase() {
-  return String(process.env.WEB_SEARCH_LOCAL_URL || WEB_SEARCH_LOCAL_URL_DEFAULT).trim()
-}
+// Stop paying a full PROVIDER_TIMEOUT for a provider that is gone. Measured
+// 2026-08-26: of a 32.4s web_search call, 20s was ddg-html + ddg-lite each
+// timing out against a host this network cannot reach (both resolve to
+// 20.204.244.192 via the local resolver AND Cloudflare DoH, and TCP :443
+// blackholes). healer.js's suppression could not help — it is a flat 30s AND it
+// is driven by a bus anomaly, while most callers here pass no bus, so on the
+// autonomous path it never fired at all. See provider-cooldown.js for why this
+// is behavioural rather than a hardcoded disable list: MYTHOS is open source and
+// DuckDuckGo is reachable from most networks.
+//
+// Module-level on purpose. The point is memory ACROSS calls — a per-call
+// instance would forget the timeout it just paid and pay it again.
+var providerCooldown = require('./provider-cooldown').createProviderCooldown()
 
-// Returns { ok:true, url } or { ok:false, reason } — never throws, so a typo in
-// the operator's .env cannot take out the whole chain.
-function resolveLocalSearchUrl() {
-  var raw = localSearchBase()
-  var parsed
-  try { parsed = new URL(raw) } catch (_) {
-    return { ok: false, reason: 'WEB_SEARCH_LOCAL_URL is not a URL: "' + raw + '"' }
-  }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return { ok: false, reason: 'WEB_SEARCH_LOCAL_URL must be http or https, got ' + parsed.protocol }
-  }
-  if (!isLoopbackHost(parsed.hostname)) {
-    return { ok: false, reason: 'WEB_SEARCH_LOCAL_URL must point at loopback (127.0.0.1 or localhost), got "' + parsed.hostname + '"' }
-  }
-  return { ok: true, url: parsed.origin + '/search' }
-}
-
-function localSearchEngines() {
-  return String(process.env.WEB_SEARCH_ENGINES || WEB_SEARCH_ENGINES_DEFAULT)
-    .split(',').map(function(s) { return s.trim() }).filter(Boolean)
-}
-
-// Local open-webSearch daemon. Its REST contract, captured from the running
-// daemon on 2026-08-20 (test-fixtures/web-search/local-daemon-search.json):
-//   POST /search {query, limit, engines[]}
-//   -> {status:'ok', data:{query, engines, totalResults,
-//        results:[{title, url, description, source, engine}]}}
-// Note the field name: 'description', not 'snippet'. Every other provider in this chain returns
-// 'snippet' and the widget reads 'snippet', so the rename below is load-bearing:
-// passing the daemon's shape straight through would render a blank line under
-// every result while every count assertion still passed.
-async function localWebSearch(q, maxResults, bus) {
-  var target = resolveLocalSearchUrl()
-  if (!target.ok) {
-    if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: target.reason })
-    return null
-  }
-  var controller = new AbortController()
-  var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
-  try {
-    var res = await fetch(target.url, {
-      method: 'POST',
-      signal: controller.signal,
-      // No redirect following: this is a loopback daemon, and a redirect is the
-      // one way a validated loopback URL can still reach somewhere else.
-      redirect: 'error',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: q, limit: maxResults, engines: localSearchEngines() })
-    })
-    clearTimeout(timer)
-    if (!res.ok) {
-      if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: 'HTTP ' + res.status })
-      return null
-    }
-    var body = await res.json()
-    if (!body || body.status !== 'ok' || !body.data || !Array.isArray(body.data.results)) {
-      var why = body && body.error && body.error.message ? body.error.message : 'unexpected response shape'
-      if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: why })
-      return null
-    }
-    return body.data.results.slice(0, maxResults).map(function(r) {
-      return {
-        title: r.title || '',
-        url: r.url || '',
-        snippet: String(r.description || '').slice(0, 300)
-      }
-    })
-  } catch (err) {
-    clearTimeout(timer)
-    if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: err.message })
-    return null
-  }
-}
-
+var disabledProviders = require('./provider-cooldown').disabledProviders
 // --- helpers (exported for testing) ---
 
 // stripTags moved to html-text.js on 2026-08-20. web-fetch.js had a weaker
@@ -589,6 +535,7 @@ async function web_search({ query, maxResults, bus }) {
     // already knew all of this and threw it away at the last line. Now it is in the
     // failure string, so the next four-miss session is diagnosable from its own log.
     var tried = []
+    var disabled = disabledProviders()
     function note(provider, cause) { tried.push(provider + ' ' + cause) }
     function outcome(provider) { return seen[provider] || 'no results' }
 
@@ -605,8 +552,46 @@ async function web_search({ query, maxResults, bus }) {
     // working self-heal gets read as a broken chain.
     function skipReason(provider, keyEnv) {
       if (keyEnv && !process.env[keyEnv]) return 'no ' + keyEnv + ' set'
+      if (disabled.indexOf(provider) !== -1) return 'disabled by WEB_SEARCH_DISABLED_PROVIDERS'
       if (isSearchProviderSuppressed(provider)) return 'suppressed by the immune system'
+      // Reported as its own cause, NOT merged with the immune system's. Those two
+      // mean different things to an operator: one is a deliberate rest, the other
+      // is this chain's own memory that the provider has failed N times running.
+      // See provider-cooldown.js.
+      var cooling = providerCooldown.reason(provider)
+      if (cooling) return cooling
       return null
+    }
+
+    // Called instead of `note(provider, outcome(provider))` on every path where a
+    // provider was actually ATTEMPTED and produced nothing. Kept separate from
+    // note() because note() is also used for SKIPS, and charging a skip as a
+    // failure would let a provider escalate its own cooldown while never once
+    // being tried — a cooldown that feeds itself.
+    function failed(provider) {
+      var cause = outcome(provider)
+      note(provider, cause)
+      // ONLY A REAL FAULT COOLS A PROVIDER DOWN. `seen[provider]` is populated
+      // exclusively by a `search-provider-failed` anomaly — a transport error, a
+      // non-200, a timeout. Its absence means the provider answered correctly and
+      // simply matched nothing, which is not a fault and must not be punished:
+      // Wikipedia returning zero rows for a shopping query is CORRECT behaviour,
+      // and this file's own comment at the wikipedia rung says so.
+      //
+      // The first version of this function cooled down on any empty outcome. That
+      // is the exact trap bug-276-f4's test was written to catch — "flattening
+      // every empty outcome into failed would then suppress a healthy provider"
+      // — and it duly caught it here. Charging a correct empty answer as a
+      // failure would have taken the last honest rung out of the chain for an
+      // hour after four ordinary queries.
+      if (seen[provider]) providerCooldown.recordFailure(provider, cause)
+    }
+
+    // Every `return succeed(...)` is preceded by this. It takes the provider KEY
+    // rather than the source label because the two differ ('ddg-html' vs
+    // 'duckduckgo-html') and the cooldown is keyed on the former.
+    function worked(provider) {
+      providerCooldown.recordSuccess(provider)
     }
 
     var seen = {}
@@ -658,14 +643,33 @@ async function web_search({ query, maxResults, bus }) {
             // merged, RSS first so the dated answer still wins (BUG-294). It is
             // additive: if the second provider has nothing, this rung answers
             // alone exactly as before, and the source label says which happened.
+            // 2026-08-26: this corroboration call went STRAIGHT to ddgHtml,
+            // around skipReason. So on a machine where DuckDuckGo is
+            // unreachable it charged every freshness query a full 10s
+            // PROVIDER_TIMEOUT for a merge partner that could never arrive —
+            // measured as the bulk of an 11s news query here. Corroboration is
+            // additive by design ("if the second provider has nothing, this rung
+            // answers alone"), so skipping it costs nothing but the merge.
+            //
+            // Routed through the SAME gate as every other attempt, and its
+            // failure charged to the same cooldown, so one dead endpoint is
+            // learned once rather than once per rung.
             var corroborating = []
-            try { corroborating = await ddgHtml(q, max, traceBus) || [] } catch (_) { corroborating = [] }
+            var corroborateSkip = skipReason('ddg-html')
+            if (corroborateSkip) note('ddg-html', corroborateSkip + ' (news corroboration)')
+            else {
+              try {
+                corroborating = await ddgHtml(q, max, traceBus) || []
+                if (corroborating.length) worked('ddg-html')
+                else failed('ddg-html')
+              } catch (_) { corroborating = []; failed('ddg-html') }
+            }
             var merged = newsRung.mergeSearchResults(newsResults, corroborating, max)
-            return succeed(q, merged,
+            worked('google-news-rss'); return succeed(q, merged,
               corroborating.length ? 'google-news-rss+duckduckgo-html' : 'google-news-rss')
           }
         } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'google-news-rss', error: err.message }); }
-        note('google-news-rss', outcome('google-news-rss'))
+        failed('google-news-rss')
       }
     }
 
@@ -678,10 +682,10 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var localResults = await localWebSearch(q, max, traceBus)
         if (localResults && localResults.length) {
-          return succeed(q, localResults.slice(0, max), 'local-websearch')
+          worked('local-websearch'); return succeed(q, localResults.slice(0, max), 'local-websearch')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'local-websearch', error: err.message }); }
-      note('local-websearch', outcome('local-websearch'))
+      failed('local-websearch')
     }
 
     // 1a. Exa REST API — only if EXA_API_KEY is configured (higher rate limits)
@@ -715,11 +719,11 @@ async function web_search({ query, maxResults, bus }) {
                 snippet: (r.text || '').slice(0, 300)
               }
             })
-            return succeed(q, results.slice(0, max), 'exa')
+            worked('exa'); return succeed(q, results.slice(0, max), 'exa')
           }
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa', error: err.message }); }
-      note('exa', outcome('exa'))
+      failed('exa')
     }
 
     // 1b. Exa MCP free tier — zero-config default (no key needed, 150 calls/day)
@@ -729,10 +733,10 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var mcpResults = await exaMcpSearch(q, max, traceBus)
         if (mcpResults.length) {
-          return succeed(q, mcpResults.slice(0, max), 'exa-mcp')
+          worked('exa-mcp'); return succeed(q, mcpResults.slice(0, max), 'exa-mcp')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message }); }
-      note('exa-mcp', outcome('exa-mcp'))
+      failed('exa-mcp')
     }
 
     // 2. DuckDuckGo HTML direct (+ fallback parser if primary returns nothing).
@@ -757,10 +761,10 @@ async function web_search({ query, maxResults, bus }) {
           } catch (_) { /* fallback parse failed — continue to next provider */ }
         }
         if (ddgResults.length) {
-          return succeed(q, ddgResults, 'duckduckgo-html')
+          worked('ddg-html'); return succeed(q, ddgResults, 'duckduckgo-html')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'ddg-html', error: err.message }); }
-      note('ddg-html', outcome('ddg-html'))
+      failed('ddg-html')
     }
 
     // 3. DuckDuckGo Lite (suppression key: 'ddg-lite', matching the anomaly's provider field)
@@ -770,10 +774,10 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var liteResults = await ddgLite(q, max, traceBus)
         if (liteResults.length) {
-          return succeed(q, liteResults, 'duckduckgo-lite')
+          worked('ddg-lite'); return succeed(q, liteResults, 'duckduckgo-lite')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'ddg-lite', error: err.message }); }
-      note('ddg-lite', outcome('ddg-lite'))
+      failed('ddg-lite')
     }
 
     // 4. Jina AI search — NOT key-free any more; measured HTTP 401 on 2026-08-20.
@@ -783,10 +787,10 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var jinaResults = await jinaSearch(q, max, traceBus)
         if (jinaResults.length) {
-          return succeed(q, jinaResults, 'jina')
+          worked('jina'); return succeed(q, jinaResults, 'jina')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'jina', error: err.message }); }
-      note('jina', outcome('jina'))
+      failed('jina')
     }
 
     // NO SECOND NEWS POSITION HERE, AND THAT IS THE SAFETY PROPERTY — not an
@@ -815,10 +819,10 @@ async function web_search({ query, maxResults, bus }) {
       try {
         var wikiResults = await wikiSearch(q, max, traceBus)
         if (wikiResults.length) {
-          return succeed(q, wikiResults, 'wikipedia')
+          worked('wikipedia'); return succeed(q, wikiResults, 'wikipedia')
         }
       } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'wikipedia', error: err.message }); }
-      note('wikipedia', outcome('wikipedia'))
+      failed('wikipedia')
     }
 
     // The failure now carries the evidence instead of discarding it. Note the shape: the
@@ -834,6 +838,13 @@ async function web_search({ query, maxResults, bus }) {
 module.exports = {
   web_search: web_search,
   // Exports for testing
+  // The cooldown is module-level because its whole purpose is memory ACROSS
+  // calls. That makes web_search order-dependent inside one process, so a test
+  // that wants a known starting state has to be able to say so — a module with
+  // hidden cross-call state and no way to clear it is untestable by
+  // construction. Production never calls this.
+  _resetProviderCooldown: function() { providerCooldown.reset() },
+  _providerCooldownSnapshot: function() { return providerCooldown.snapshot() },
   _stripTags: stripTags,
   _unwrapDdgHref: unwrapDdgHref,
   _ddgHtml: ddgHtml,

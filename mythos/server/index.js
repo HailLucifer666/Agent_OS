@@ -1538,7 +1538,7 @@ function createServer(deps) {
 
   app.get(/.*/, (req, res, next) => { // NOT '*' — Express 5's path-to-regexp 8 throws on it at registration, and '*splat' would not match '/'. test/express-5-compat.test.js
     if (req.path.startsWith('/api')) return next();
-    res.sendFile(path.join(__dirname, '..', 'ui', 'public', 'index.html'));
+    res.sendFile('index.html', { root: path.join(__dirname, '..', 'ui', 'public') }); // BUG-363: {root} + RELATIVE name. An absolute path 404s EVERY path incl. '/' — Express 5 encodeURI()s it before send@1 resolves it, and this repo's path has spaces. See BUGS.md.
   });
 
   // eslint-disable-next-line no-unused-vars

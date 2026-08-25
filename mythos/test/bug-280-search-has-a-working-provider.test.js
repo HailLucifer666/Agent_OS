@@ -55,7 +55,7 @@
 // Fixtures are captured wire responses from the running daemon and from
 // Wikipedia, not hand-written.
 
-const { describe, it, afterEach } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -91,6 +91,10 @@ function stubChain({ local, wiki }) {
 }
 
 describe('BUG-280: the adopted local daemon answers first', () => {
+  // Reset the chain's provider cooldown between tests. It is module-level by
+  // design (its purpose is memory ACROSS calls, see provider-cooldown.js), so a
+  // fault stubbed in one test would otherwise skip that provider in the next.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   it('returns the daemon results and labels the source', async () => {
@@ -145,6 +149,10 @@ describe('BUG-280: the adopted local daemon answers first', () => {
 });
 
 describe('BUG-280: Wikipedia answers a natural-language query', () => {
+  // Reset the chain's provider cooldown between tests. It is module-level by
+  // design (its purpose is memory ACROSS calls, see provider-cooldown.js), so a
+  // fault stubbed in one test would otherwise skip that provider in the next.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   it('uses full-text search, not title-prefix matching', async () => {
@@ -178,6 +186,10 @@ describe('BUG-280: the loopback guard on WEB_SEARCH_LOCAL_URL', () => {
   // not for it.
   const realEnv = process.env.WEB_SEARCH_LOCAL_URL;
   const realEngines = process.env.WEB_SEARCH_ENGINES;
+  // Same reason as the other blocks: the chain's provider cooldown is
+  // module-level, so a fault stubbed earlier would skip local-websearch here and
+  // the misconfiguration under test would never get the chance to be reported.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => {
     if (realEnv === undefined) delete process.env.WEB_SEARCH_LOCAL_URL;
     else process.env.WEB_SEARCH_LOCAL_URL = realEnv;
@@ -286,6 +298,10 @@ describe('BUG-280: deliberate non-changes', () => {
 // one is a body from the wrong decade.
 // ---------------------------------------------------------------------------
 describe('BUG-280: a stale source is labelled stale', () => {
+  // Reset the chain's provider cooldown between tests. It is module-level by
+  // design (its purpose is memory ACROSS calls, see provider-cooldown.js), so a
+  // fault stubbed in one test would otherwise skip that provider in the next.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   const LIVE_QUERY = 'Durand Cup East Bengal vs Mohun Bagan result August 20 2026';

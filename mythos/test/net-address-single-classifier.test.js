@@ -112,9 +112,20 @@ describe('the classifier exists in exactly one place', () => {
   // against is a SECOND definition appearing somewhere — which no behavioural
   // test can see, since both copies would agree on the day they were written.
   const REPO = path.join(__dirname, '..');
+  // 2026-08-26: the loopback-requiring caller MOVED. The open-webSearch daemon
+  // rung was extracted from web-search.js into local-search-daemon.js when the
+  // file-size ratchet refused BUG-361, and it took the `isLoopbackHost` call with
+  // it — so this list named a file that no longer does any address checking, and
+  // the negative control below caught exactly that.
+  //
+  // The list is updated; the INVARIANT is untouched. There is still one
+  // classifier, still required rather than re-implemented, and the two callers
+  // still want opposite answers from it (web-fetch REFUSES private addresses,
+  // the daemon rung REQUIRES loopback). If the rung moves again, move this entry
+  // — do not delete it, and do not relax the assertions to make a move painless.
   const CALLERS = [
     'src/core/effectors/web-fetch.js',
-    'src/core/effectors/web-search.js',
+    'src/core/effectors/local-search-daemon.js',
   ];
 
   function strippedCode(rel) {
