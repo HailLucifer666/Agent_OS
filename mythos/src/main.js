@@ -994,8 +994,7 @@ async function main() {
         }
       }
 
-      // Start PC child (PowerShell automation daemon) for desktop control tools.
-      pcChild.startPcChild();
+      pcChild.startPcChild({ lateCompletionSink: (i) => bus.emit('health.anomaly', Object.assign({ kind: 'action-completed-after-timeout', adapter: 'pc-child', summary: 'action completed after its caller timed out - it may have executed twice if retried' }, i)) }); // BUG-335: see adapters/pc-child stale-response bell
       logger.info('pc-child.starting', {});
 
       // BUG-026 (4th attempt) part B — optional cua-driver adapter for the Spotify click path.

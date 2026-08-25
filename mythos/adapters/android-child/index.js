@@ -23,7 +23,7 @@
 
 const { spawn, spawnSync } = require('child_process');
 const { createLogger } = require('../../src/core/logger');
-const log = createLogger(process.env.LOG_LEVEL || 'info');
+let log = createLogger(process.env.LOG_LEVEL || 'info'); // let: startAndroidChild({log}) may inject a capture logger
 
 const DEFAULT_ADB_BIN = 'adb';
 const DEFAULT_POLL_MS = 8000;
@@ -43,6 +43,14 @@ let pollTimer = null;
 let devices = new Map();
 // serial -> { queue: [{args, timeoutMs, resolve}], inFlight: boolean }
 let deviceQueues = new Map();
+// BUG-334 (2026-08-24): the devices poll must never hold the event loop.
+// One in-flight guard so a slow tick cannot stack, a failure streak so a
+// persistently broken adb logs once instead of every tick, an injectable
+// runner so tests can simulate hung adb without shipping a fake binary
+// (same rationale as exported buildAdbArgs), and an injectable logger.
+let refreshInFlight = false;
+let refreshFailStreak = 0;
+let devicesRunner = null;
 
 function getStatus() {
   let queueDepth = 0;
@@ -113,17 +121,26 @@ function runAdb(args, timeoutMs) {
   });
 }
 
-function refreshDevices() {
-  let r;
+async function refreshDevices() {
+  // BUG-334: this used to be spawnSync(adb, ['devices','-l'], timeout 10s)
+  // on the poll interval — a hung adb held the ENTIRE event loop per tick,
+  // stuttering voice/WS and tripping cortex-stall -> healer restart ->
+  // active goals paused. runAdb() is the async form and kills on timeout;
+  // its own comment (above) already said why spawn-not-spawnSync mattered.
+  if (!devicesRunner || refreshInFlight) return;
+  refreshInFlight = true;
   try {
-    r = spawnSync(adbBin, ['devices', '-l'], { encoding: 'utf8', timeout: ADB_DEVICES_TIMEOUT_MS, windowsHide: true });
-  } catch (err) {
-    log.warn('android-child.refresh-failed', { error: err.message });
-    return;
-  }
-  if (!r || r.status !== 0) return; // best-effort — keep the last-known device list
+    const r = await devicesRunner();
+    if (!r || !r.ok) {
+      refreshFailStreak += 1;
+      if (refreshFailStreak === 1 || refreshFailStreak % 15 === 0) {
+        log.warn('android-child.devices-poll-failing', { error: r && r.error, streak: refreshFailStreak });
+      }
+      return; // deliberate: keep last-known list — but no longer silently
+    }
+    refreshFailStreak = 0;
 
-  const lines = String(r.stdout || '').split(/\r?\n/).slice(1); // skip "List of devices attached"
+    const lines = String((r && r.stdout) || '').split(/\r?\n/).slice(1); // skip "List of devices attached"
   const seen = new Set();
   const now = Date.now();
   for (let i = 0; i < lines.length; i++) {
@@ -147,6 +164,13 @@ function refreshDevices() {
   Array.from(devices.keys()).forEach(function(serial) {
     if (!seen.has(serial)) devices.delete(serial);
   });
+  } catch (err) {
+    // A throwing runner must not become an unhandledRejection (the host
+    // process dies on those) and must not strand refreshInFlight.
+    log.warn('android-child.refresh-crashed', { error: err && err.message });
+  } finally {
+    refreshInFlight = false;
+  }
 }
 
 // `-s <serial>` MUST precede the subcommand (adb -s <serial> shell ...), not
@@ -222,6 +246,12 @@ function startAndroidChild(opts) {
   adbBin = o.adbBin || DEFAULT_ADB_BIN;
   pollMs = o.pollMs || DEFAULT_POLL_MS;
   cmdTimeoutMs = o.cmdTimeoutMs || DEFAULT_CMD_TIMEOUT_MS;
+  // BUG-334 seam: tests inject devicesRunner/log; production gets the real
+  // async runAdb probe (never a blocking one — see refreshDevices comment).
+  devicesRunner = o.devicesRunner || function () { return runAdb(['devices', '-l'], ADB_DEVICES_TIMEOUT_MS); };
+  if (o.log) log = o.log;
+  refreshInFlight = false;
+  refreshFailStreak = 0;
 
   hint = null;
   clearPollTimer();
@@ -230,7 +260,11 @@ function startAndroidChild(opts) {
 
   let probe;
   try {
-    probe = spawnSync(adbBin, ['version'], { encoding: 'utf8', timeout: ADB_PROBE_TIMEOUT_MS, windowsHide: true });
+    // BUG-334 seam: tests inject a successful probe so they can reach the
+    // ONLINE polling path without a real adb binary on the machine.
+    probe = o.versionProbe
+      ? o.versionProbe()
+      : spawnSync(adbBin, ['version'], { encoding: 'utf8', timeout: ADB_PROBE_TIMEOUT_MS, windowsHide: true });
   } catch (err) {
     probe = { error: err };
   }
@@ -277,6 +311,9 @@ function shutdownAndroidChild() {
   devices.clear();
   state = 'OFFLINE';
   hint = null;
+  refreshInFlight = false;
+  refreshFailStreak = 0;
+  devicesRunner = null;
 }
 
 module.exports = {

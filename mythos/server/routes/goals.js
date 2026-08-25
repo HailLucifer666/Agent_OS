@@ -57,6 +57,25 @@ function mountGoalsRoutes(app, deps) {
     const list = goalsEffector.toggleGoal(req.params.id);
     respondGoals(res, list, 'rest.goals.toggle', { id: req.params.id });
   });
+  // BUG-342: the resume path crash recovery never had. A paused goal comes
+  // back active; anything else is a 409 naming its current status — the
+  // operator learns WHY, instead of a bare toggle that silently did nothing.
+  app.post('/api/goals/:id/resume', (req, res) => {
+    if (!goalsEffector || typeof goalsEffector.resumeGoal !== 'function' || typeof goalsEffector.getGoal !== 'function') {
+      return res.status(404).json({ error: 'goals unavailable' });
+    }
+    // Pre-check on the LIVE status: after resumeGoal a formerly-active goal
+    // would also read 'active', so the mutation alone cannot distinguish
+    // "resumed" from "was never paused".
+    const current = goalsEffector.getGoal(req.params.id);
+    if (!current || current.status !== 'paused') {
+      const status = current ? current.status : 'unknown';
+      auditRest('rest.goals.resume', { id: req.params.id }, 'rejected');
+      return res.status(409).json({ error: `goal is not paused (status: ${status})`, goal: current });
+    }
+    const list = goalsEffector.resumeGoal(req.params.id);
+    respondGoals(res, list, 'rest.goals.resume', { id: req.params.id });
+  });
   app.delete('/api/goals/:id', (req, res) => {
     const list = goalsEffector.deleteGoal(req.params.id);
     respondGoals(res, list, 'rest.goals.delete', { id: req.params.id });

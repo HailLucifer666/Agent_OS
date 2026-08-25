@@ -85,9 +85,17 @@ describe('BUG-276 F3: a site-scoped query never enters the news rung', () => {
     // Pins the guard narrow at the source level: the site: check may only ever
     // appear as an AND-clause on the freshness gate, never as a standalone
     // early-return that could starve plain news queries.
-    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'effectors', 'web-search.js'), 'utf8');
-    assert.match(src, /isTimeSensitive\(q\) && !\/\\bsite:\\S\+\/i?\.test\(q\)/,
+    //
+    // BUG-350-sibling extraction (2026-08-24): the predicate now lives in
+    // search-intent.js as entersNewsRung() — same conjunction, single source —
+    // and web-search.js calls it at the rung. Both halves are pinned.
+    const intentSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'effectors', 'search-intent.js'), 'utf8');
+    assert.match(intentSrc, /return isTimeSensitive\(q\) && !\/\\bsite:\\S\+\/i\.test\(q\)/,
       'the site: exemption must be conjoined with the freshness gate, not separate');
+
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'effectors', 'web-search.js'), 'utf8');
+    assert.match(src, /if \(entersNewsRung\(q\)\) \{/,
+      'the news-rung gate must go through the shared predicate, not a local re-derivation');
   });
 
   it('NEGATIVE CONTROL, behavioural: plain news query reaches news.google.com', async () => {

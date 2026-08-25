@@ -123,6 +123,9 @@ function extractJsonBlock(raw) {
 }
 
 var riskClassifierLib = require('./risk-classifier');
+// BUG-329: the research gate and its live-data rule. Extracted because
+// adding it here pushed this file past its one-directional size ratchet.
+var buildResearch = require('./build-research');
 var completionStatusLib = require('./completion-status');
 
 function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, buildEngine, webSearch, webFetch, browserAgent, evidenceValidator, bus }) {
@@ -188,54 +191,14 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     return job;
   }
 
-  // ---- P22: Research gate — grounds the builder with real web data ----
-  // Calls web_search for the topic, then web_fetch on top results to get real
-  // content. Returns a condensed brief injected into the builder's prompt so
-  // it works with actual data instead of hallucinating from training memory.
-  async function researchForBuild(topic, maxResults) {
-    if (!webSearch) return null;
-    try {
-      var searchRes = await webSearch({ query: topic, maxResults: maxResults || 5 });
-      if (!searchRes || !searchRes.ok || !searchRes.result || !searchRes.result.results) return null;
-      var results = searchRes.result.results.slice(0, maxResults || 5);
-      if (!results.length) return null;
-
-      // Fetch the top 2-3 results for deeper content
-      var briefs = [];
-      var fetchCount = Math.min(results.length, 3);
-      for (var i = 0; i < fetchCount; i++) {
-        if (!webFetch) break;
-        try {
-          var fetched = await webFetch({ url: results[i].url });
-          if (fetched && fetched.ok && fetched.result && fetched.result.content) {
-            var content = String(fetched.result.content).slice(0, 800);
-            briefs.push({ title: results[i].title, url: results[i].url, snippet: results[i].snippet || '', content: content });
-          }
-        } catch (_) { /* best-effort — snippet alone is still useful */ }
-      }
-
-      // Build the research brief (max 2000 chars to stay within context budget)
-      var lines = ['RESEARCH BRIEF (real web data — use this, do not hallucinate):'];
-      for (var j = 0; j < results.length; j++) {
-        var r = results[j];
-        lines.push((j + 1) + '. ' + (r.title || 'Untitled') + ' — ' + (r.url || ''));
-        if (r.snippet) lines.push('   ' + String(r.snippet).slice(0, 200));
-      }
-      if (briefs.length) {
-        lines.push('');
-        lines.push('KEY CONTENT EXTRACTS:');
-        for (var k = 0; k < briefs.length; k++) {
-          lines.push('— ' + briefs[k].title + ': ' + briefs[k].content.slice(0, 400));
-        }
-      }
-      var brief = lines.join('\n');
-      if (brief.length > 2000) brief = brief.slice(0, 2000) + '\n[...truncated]';
-      return brief;
-    } catch (_) {
-      return null; // research is best-effort — don't block builds on network issues
-    }
-  }
-
+  // ---- P22/BUG-329: the research gate lives in effectors/build-research.js --
+  // It runs in build-runner's preparePrompt hook, before the first generation,
+  // rather than inside run(), which is downstream of the verifier. Its header
+  // carries the measurement. Constructed here because it needs this factory's
+  // injected webSearch/webFetch/bus.
+  var research = buildResearch.createBuildResearch({
+    webSearch: webSearch, webFetch: webFetch, bus: bus,
+  });
   // ---- A3: social-media research via agent-reach — REMOVED 2026-08-20 ----
   //
   // This block shelled out to two commands that do not exist and never did:
@@ -523,9 +486,18 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       // regenerations, grounded rebuild — works from the real design system.
       // `card.text` and not basePrompt: the resolver keyword-matches its whole
       // argument, so prompt boilerplate would choose the design.
-      preparePrompt: designSystem
-        ? function(p) { return designSystemPrompt.prependDesignSystem(p, card.text); }
-        : undefined,
+      // BUG-329: research joins the design system in this hook, so BOTH reach
+      // the FIRST generation. It is no longer conditional on `designSystem`: a
+      // deployment without the design skill still needs its research, and the
+      // old shape skipped the hook entirely in that case.
+      preparePrompt: async function(p, job) {
+        var out = p;
+        if (designSystem) out = await designSystemPrompt.prependDesignSystem(out, card.text);
+        // fatalOnMissing: true preserves this path's existing policy — the
+        // pipeline already refused to ship a feature build with no research,
+        // it just refused AFTER paying for a generation and a verification.
+        return research.researchIntoPrompt(out, job, card.text, card.risk || 'feature', true);
+      },
       // REMEDIATION P0-2: a job that fails before run() ever executes (e.g.
       // the build engine itself is offline) previously left the card at
       // execute/progress:25 forever with no trace of failure —
@@ -562,32 +534,25 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // that read it was the grounded rebuild below, and a build that skipped
         // research read it nowhere. It now rides the preparePrompt hook.
 
-        // P22: Research gate — gather real web data before committing to the build.
-        // The initial `raw` was generated without grounding; if research returns
-        // a brief, regenerate with the grounded prompt for a properly sourced build.
-        // P23: skip for tiny-fix and quick-win (low-risk work doesn't need web grounding)
-        // A4: track researchStatus — never fail silently. If research was required
-        // but returned nothing, flag the artifact so the model/operator knows it
-        // was built ungrounded. Previously this was invisible.
-        var researchStatus = needsResearch ? 'pending' : 'not-required';
-        if (needsResearch) {
-          var researchBrief = await researchForBuild(card.text, 5);
-
-          // FOR FEATURE/ARCH-CHANGE: research is mandatory - throw if failed
-          if (!researchBrief) {
-            throw new Error('Research gate failed: unable to fetch live data for "' + card.text + '" (required for risk=' + risk + ')');
-          }
-
-          if (researchBrief) {
-            researchStatus = 'grounded';
-            try {
-              var grounded = await generateContent(basePrompt + '\n\n' + researchBrief, 'pipeline-grounded:' + j.id);
-              if (grounded && !grounded.offline && grounded.content) {
-                raw = grounded.content;
-              }
-            } catch (_) { /* research/rebuild failed — use original raw */ }
-          }
-        }
+        // BUG-329: the research gate MOVED to the preparePrompt hook, which
+        // build-runner awaits before the first generation. It used to live right
+        // here, and here is after the first generation AND after the verifier —
+        // so a brief that could not be satisfied without live data was rejected
+        // by the verifier and this code never ran. The gate that supplies the
+        // data ran after the gate that checks for it.
+        //
+        // Two consequences beyond the obvious one. The first draft is now
+        // grounded, so the "generate ungrounded, then regenerate with the brief"
+        // pair that used to sit here is gone — one whole generation removed from
+        // the happy path. And the fatal-if-missing refusal is now raised before
+        // anything is generated rather than after, so a doomed job stops costing
+        // a build.
+        //
+        // These are read off the job record rather than recomputed: repeating
+        // the search here would pay for it twice and could disagree with what
+        // the model was actually given.
+        var researchStatus = j.researchStatus || (needsResearch ? 'pending' : 'not-required');
+        var researchBrief = j.researchBrief || null;
 
         var artifact = saveDeliverable(raw, card.text, 'pipeline');
 
@@ -732,11 +697,22 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       persona: builderPersona,
       // BUG-310: see executePipelineCard's preparePrompt. Same hook, same
       // reason; the topic here is title + detail, as it always was.
-      preparePrompt: designSystem
-        ? function(p) {
-          return designSystemPrompt.prependDesignSystem(p, card.title + ' ' + (card.detail || ''));
-        }
-        : undefined,
+      // BUG-329: as in executePipelineCard — design system AND research, both
+      // before the first generation, and no longer skipped entirely when the
+      // design skill is absent.
+      //
+      // fatalOnMissing: false keeps this path's existing tolerance. A kanban
+      // card is frequently something the web cannot help with ("build a snake
+      // game" classifies as a feature, so research is nominally required), and
+      // failing every such build when the network is down would be a worse
+      // outcome than building it ungrounded and saying so. researchIntoPrompt
+      // still refuses outright when the brief itself names live data.
+      preparePrompt: async function(p, job) {
+        var topic = card.title + ' ' + (card.detail || '');
+        var out = p;
+        if (designSystem) out = await designSystemPrompt.prependDesignSystem(out, topic);
+        return research.researchIntoPrompt(out, job, topic, riskClassifierLib.classify(topic), false);
+      },
       // REMEDIATION P0-2: same fix as executePipelineCard's onFailed above —
       // a job that fails before run() ever executes otherwise leaves the
       // card with no trace of failure at all.
@@ -761,25 +737,12 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var needsResearch = riskClassifierLib.requiresResearch(risk);
         var needsReview = riskClassifierLib.requiresReview(risk);
 
-        // P22: Research gate — gather real web data before committing to the build.
-        // A4: track researchStatus for observability (never fail silently).
-        var researchStatus = needsResearch ? 'pending' : 'not-required';
-        if (needsResearch) {
-          var researchTopic = card.title + ' ' + (card.detail || '');
-          var researchBrief = await researchForBuild(researchTopic, 5);
-          if (researchBrief) {
-            researchStatus = 'grounded';
-            try {
-              var grounded = await generateContent(basePrompt + '\n\n' + researchBrief, 'kanban-grounded:' + j.id, builderPersona);
-              if (grounded && !grounded.offline && grounded.content) {
-                raw = grounded.content;
-              }
-            } catch (_) { /* research/rebuild failed — use original raw */ }
-          } else {
-            researchStatus = 'skipped';
-            if (bus) bus.emit('health.anomaly', { kind: 'research-skipped', cardId: card.id, topic: String(researchTopic).slice(0, 100) });
-          }
-        }
+        // BUG-329: moved to the preparePrompt hook — see the long note on the
+        // same change in executePipelineCard above. The first draft is grounded
+        // now, so the ungrounded-then-regenerate pair that used to sit here is
+        // gone, and the anomaly for a skipped search is emitted from the hook.
+        var researchStatus = j.researchStatus || (needsResearch ? 'pending' : 'not-required');
+        var researchBrief = j.researchBrief || null;
 
         var artifact = saveDeliverable(raw, slug + '-' + j.id, 'kanban');
 
@@ -872,7 +835,9 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
   return {
     saveDeliverable: saveDeliverable,
     extractJsonBlock: extractJsonBlock,
-    researchForBuild: researchForBuild,
+    // BUG-329: now implemented in build-research.js. Re-exported under the same
+    // name so existing callers and tests do not have to care where it lives.
+    researchForBuild: research.researchForBuild,
     verifyBuildVisually: verifyBuildVisually,
     fullReview: fullReview,
     executePipelineCard: executePipelineCard,

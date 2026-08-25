@@ -3,13 +3,13 @@
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f0c29,50:302b63,100:24243e&height=220&section=header&text=MYTHOS&fontSize=80&fontColor=43e5a0&fontAlignY=35&desc=Autonomous%20Entity%20OS&descSize=24&descAlignY=58&descColor=4fd8ff&animation=fadeIn" width="100%" alt="MYTHOS header"/>
 
 <a href="https://github.com/HailLucifer666/Agent_OS">
-  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;6073+tests+green.+Zero+build+step." alt="Typing SVG" />
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;6226+tests+green.+Zero+build+step." alt="Typing SVG" />
 </a>
 
 <br/>
 
-[![Node](https://img.shields.io/badge/node-%3E%3D18-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-4716%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
+[![Tests](https://img.shields.io/badge/tests-6139%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9?style=for-the-badge)](ROADMAP.md)
 [![Effectors](https://img.shields.io/badge/effectors-147%20tools-eab308?style=for-the-badge)](#-147-tool-effectors)
 [![Deploy](https://img.shields.io/badge/deploy-render-4fc08d?style=for-the-badge&logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
@@ -31,7 +31,7 @@
 > [!IMPORTANT]
 > **Honest-inert by design.** Missing keys, dead providers, failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you *see* that it doesn't work.
 
-A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 6073 tests.
+A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 6226 tests.
 
 <div align="center">
 
@@ -543,7 +543,7 @@ services:
 2. Set env vars in Render dashboard (API keys, model configs)
 3. Live at `https://agent-xxxx.onrender.com`
 
-**Dockerfile included** — Node 20 Alpine + edge-tts + zero build step.
+**Dockerfile included** — Node 22 Alpine, zero build step. TTS is BYO — edge-tts is never bundled (LGPL boundary; see mythos/THIRD_PARTY_NOTICES.md).
 
 > [!IMPORTANT]
 > **Environment variables** (set in Render dashboard, NOT in the repo):
@@ -589,7 +589,7 @@ Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any key
 
 ## 📈 Build History
 
-**20 phases shipped.** Linear history on `main`. 6073 tests green.
+**20 phases shipped.** Linear history on `main`. 6226 tests green.
 
 ```mermaid
 gantt
@@ -663,7 +663,7 @@ Full history: [ROADMAP.md](ROADMAP.md) · [MYTHOS-ARCHITECTURE.md](MYTHOS-ARCHIT
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 5 gestures: confirm, deny, mute, unmute, vision |
-| **Tests** | Built-in `node:test` | 6073 tests, zero test framework deps |
+| **Tests** | Built-in `node:test` | 6226 tests, zero test framework deps |
 | **Deps** | 9 total | `@huggingface/transformers` · `@mediapipe/tasks-vision` · `exceljs` · `express` · `kokoro-js` · `onnxruntime-web` · `playwright-core` · `pptxgenjs` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
@@ -677,7 +677,7 @@ Agent_OS/
 ├── mythos/                      # MYTHOS entity runtime
 │   ├── Dockerfile               # Docker image for cloud deploy
 │   ├── .env.example             # All config knobs (documented)
-│   ├── package.json             # 9 deps, 6073 tests
+│   ├── package.json             # 9 deps, 6226 tests
 │   ├── src/
 │   │   ├── main.js              # Boot sequence (13 lifecycle steps)
 │   │   └── core/
@@ -707,7 +707,7 @@ Agent_OS/
 │   ├── ui/public/               # JARVIS HUD (canvas + widgets)
 │   │   ├── js/                  # app.js, ws.js, voice, neural-map
 │   │   └── css/                 # 10 stylesheets, design tokens
-│   ├── test/                    # 6073 tests (node --test)
+│   ├── test/                    # 6226 tests (node --test)
 │   └── vault/                   # Persistent data (gitignored)
 ├── render.yaml                  # Render Blueprint (cloud deploy)
 ├── Start Agent OS.bat           # Windows launcher
@@ -749,7 +749,7 @@ Agent_OS/
 
 ## ⚖️ License
 
-Personal / hobby use. The bundled **edge-tts** integration reverse-engineers Microsoft Edge's Read Aloud endpoint and is **not licensed for commercial deployment**. Provider integrations require their respective API keys and are subject to those providers' terms. No warranty.
+Personal / hobby use. The bring-your-own **edge-tts** integration reverse-engineers Microsoft Edge's Read Aloud endpoint and is **not licensed for commercial deployment**. Provider integrations require their respective API keys and are subject to those providers' terms. No warranty.
 
 ---
 

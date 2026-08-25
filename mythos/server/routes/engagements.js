@@ -55,6 +55,12 @@ function mountEngagementsRoutes(app, deps) {
     const { event, payload } = req.body || {};
     if (!event) return res.status(400).json({ error: 'event required' });
     try {
+      // BUG-343 (found LIVE 2026-08-24): transitioning an id that does not
+      // exist threw deep in the manager and surfaced as a sanitized 500
+      // ("internal error") — wrong status AND zero information. A missing
+      // engagement is a 404, same as the GET above it.
+      const existing = await engagementManager.engagement.findById(req.params.id);
+      if (!existing) return res.status(404).json({ error: 'not found' });
       const result = await engagementManager.engagement.transition(req.params.id, event, payload);
       res.json(result.record);
       auditRest('rest.engagements.transition', { id: req.params.id, event }, 'ok');

@@ -1,5 +1,7 @@
 'use strict';
 
+const { isTimeSensitive, entersNewsRung } = require('./search-intent.js');
+
 // effectors/web-search.js — web search effector with a provider chain.
 // 0. Local open-webSearch daemon (BUG-280) — POST http://127.0.0.1:3100/search
 // 1. Exa (only when EXA_API_KEY is set) — POST with x-api-key header
@@ -65,10 +67,10 @@ function carriesPublicationDates(results) {
   return Array.isArray(results) && results.some(function(r) { return r && r.published })
 }
 
-// Freshness vocabulary (marker list, over-matching rationale, BUG-276-F3
-// site:-exemption) lives in search-freshness.js — moved for the size ratchet.
-const { isTimeSensitive } = require('./search-freshness')
-
+// Q1 — WHAT ELSE MATCHES THIS? A word list over the operator's transcribed
+// Freshness markers + the news-rung gate live in ./search-intent.js
+// (single source; ratchet-ceiling extraction). _isTimeSensitive below is
+// that module's function, re-exported for its existing tests.
 var STALE_SOURCE_CAUTION = 'These results carry NO publication date, so none of them can be shown '
   + 'to be current — they may describe a different year entirely. Say plainly that you could not '
   + 'find dated, current information, and do NOT state, guess or infer an answer that is not '
@@ -635,20 +637,8 @@ async function web_search({ query, maxResults, bus }) {
     // A timeless query does not enter this block at all and the chain below is
     // byte-for-byte the order it always had.
     //
-    // BUG-276 F3 (2026-08-24): a SITE-SCOPED query never enters this rung either.
-    // from-dashboard.js's open_web(type:'youtube') asks for "<q> site:youtube.com"
-    // and from-installer.js asks for "<name> site:github.com"; when the title
-    // carries any freshness word ("Breaking Bad trailer" matches /breaking/,
-    // "score-board" matches /score/), the old gate handed those queries to Google
-    // News RSS, which ignores the site: operator entirely — so a video embed got
-    // news articles with zero youtube.com URLs and failed as "could not extract a
-    // YouTube video ID", and repo lookups were answered by newspapers. The scope
-    // IS the intent statement; the marker list's deliberate over-matching (see
-    // Q1 above) was only ever acceptable for queries with no narrower intent.
-    // Intentionally narrow: only the site: operator exempts a query. Every other
-    // over-match ("the result of the French Revolution") keeps existing behaviour,
-    // because there the worst case remains one wasted request plus an honest hedge.
-    if (isTimeSensitive(q) && !/\bsite:\S+/i.test(q)) {
+    // Freshness + BUG-276 F3 site-scope gate: see search-intent.js (single source).
+    if (entersNewsRung(q)) {
       var newsSkip = skipReason('google-news-rss')
       if (newsSkip) note('google-news-rss', newsSkip)
       else {

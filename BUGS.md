@@ -13276,3 +13276,108 @@ MYTHOS is speaking, and zero incidents of the "tools are lying" class.
 
 Capture the terminal this time:
 `npm start 2>&1 | tee "$env:TEMP\mythos-terminal.log"`.
+
+---
+
+## OPEN WORK filed 2026-08-24 (post-audit batch, commits da86fba..fcb31ae)
+
+Numbered so grep-by-number keeps working. Each is scoped enough to start
+without re-deriving context; file:line anchors are from the 2026-08-24 tree.
+
+### Live verification status for BUG-332..342
+
+Headless live pass done 2026-08-24 against a real boot on :4799
+(long-form TEMP mandatory - see the fs-event note below): foreign Host on
+/health -> 403, loopback -> 200 (337); resume unknown goal -> 409 naming
+"status: unknown" (342); unknown-id engagement transition -> 404 post-343
+(pre-fix it leaked a sanitized 500, which is how 343 was found). Still
+operator-required: mic/speaker session for 333/340 speech paths and
+BUG-322 barge-in sustain, real wedged-adb trial for 334, real provider
+wording drift for 336.
+
+### Environment trigger re-confirmed
+
+Two boot aborts today matched src\win\fs-event.c line 72 exactly; both
+happened when MYTHOS_VAULT_ROOT/os.tmpdir() derived from this tool shell's
+8.3 TEMP (ARGHYA~1). Long-form TEMP boots clean. Any agent shell must set
+TEMP/TMP long-form before spawning MYTHOS or the suite.
+
+### Small (spoken-UX / wiring)
+
+- BUG-344 - websearch absence already announces its remedy at boot.
+  VERIFIED-SATISFIED 2026-08-24: live boot logged websearch.not-installed
+  with "node mythos/scripts/setup-websearch.js --install". Remaining
+  (optional): promote to health.anomaly if HUD visibility is wanted.
+- BUG-345 - adblock silence caveat. FIXED 639200c: When browser_launch_debug starts
+  chrome/edge with extensionsLoaded [] (no Brave, no BROWSER_EXTENSIONS),
+  append a spoken caveat ("pages will show ads - ...") to buildLaunchResult
+  (src/core/effectors/from-browser.js ~985). Today the empty array is
+  reported but never warned about; operator asked for ad-blocking three
+  times in July-August with zero signal that nothing was blocking.
+- BUG-346 - wake-word suspended state must feed the re-arm ladder.
+  wakeword.js reports status 'degraded' on AudioContext suspend (~:349) but
+  app.js invokes scheduleWakewordRearm (~:707) only on start/load failure.
+  Sustained 'degraded'/'silent' should schedule re-arm; likeliest survivor
+  of "listener ceases spontaneously".
+- BUG-347 - mute-listener needs an audible recovery. voice-loop.js refuses
+  transcription while _brainOnline is false (~:380) with no signal when it
+  flips back; operator sees an armed mic that never reacts. Speak/caption
+  one line on entity-state recovery.
+
+### Medium (each needs its own design pass)
+
+- BUG-348 - media_status reads ONE SMTC session (ps-automation.ps1
+  Handle-MediaStatus ~:4275). Enumerate GetSessions(), report primary owner;
+  kills "song playing but says paused" when another app owns the session.
+- BUG-349 - see_and_click occluded-click refusal. FIXED 3ce6c8e:
+- BUG-350 - verifier retry-guidance mapping. FIXED 1adad59. Original: hard-fails cta/title-overlap killed most of the 11
+  failed builds (design/verify.js :167-169,:236-247). Keep rules HARD
+  (operator decision pending D-C) but map rule names onto OUTPUT_CONTRACT
+  clauses inside the retry prompt (build-runner.js :278-281); measured
+  @media data shows upfront contracts work.
+- BUG-351 - Aether proxy :4480 war. Healer playbook rebinds forever against
+  an orphaned listener (bind-failed-again x336, Jul->Aug). Add terminal
+  condition after N attempts -> OFFLINE + hint running a new
+  scripts/diagnose-aether-port.ps1 that names the squatter PID.
+- BUG-352 - catalog truth. sync-test-count.js counts effectors against an
+  inert ctx and silently zeroes factories needing deps: headline says 147,
+  real registrations are 179. Fix counter, regenerate pie/table rows, delete
+  dead claims (hermes_task, speak), document Phone/WhatsApp/CUA/OKF/MCP/
+  doc-RAG modules. Badges node>=18 vs engines>=22 and tests 4716 were fixed
+  in BUG-332; effectors badge remains.
+- BUG-353 - lastLaunchedPid is a process-wide default for pid-less
+  ui_type/ui_click (from-pc.js :47); any intervening launch_app retargets
+  typing. Bind per conversation/goal with TTL, clear on launch.
+- BUG-354 - cua-driver shares pc-child's reject-on-timeout shape for
+  cua_click (adapters/cua-driver/index.js :146) with no kill/budget split.
+  Mirror BUG-335's toucher/looker split with its own budget; honest
+  verified:false reporting lowers harm meanwhile.
+
+### Product decisions (not code tickets)
+
+- Cross-surface T3 approval: dashboard cannot approve a voice-raised
+  confirm (by design since A3). Relaxing needs a pairing mechanism, never a
+  widening of the tier<=2 'system' fallback.
+- Widget redesign approvals have no writer: designs are static source files
+  (widget-registry.js + kinds/*.js). Either state the boundary in persona
+  instructions or persist approved declarative specs through the validated
+  dynamic.js pipeline.
+
+### Registry hygiene carried from the audit
+
+BUGS.md headers stop at BUG-322; BUG-323..342 live in commit messages and
+mythos/docs/AUDIT-2026-08-22-build-gate-collapse.md. Pointer stubs back to
+those records remain owed (this section is the index until then).
+
+- BUG-356 - LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js,
+  the promoted one-shot brief driver): the full pipeline now works up to the
+  engine - real web_search returned five fresh dated AI headlines into the
+  first generation (BUG-329 ordering proven live) - and then dsh exited 1 on
+  mistral/codestral-latest after 72s with EMPTY stderr, so no artifact ships.
+  MISTRAL_API_KEY is present in mythos/.env, so credentials are not the
+  obvious cause; the harness swallowed its own error output. Next diagnostic:
+  run the dsh CLI directly with a trivial task at log-level debug to surface
+  the real failure (provider route? model id? cordon patch?), and consider
+  teaching dsh-agent to capture child stderr instead of reporting null.
+  Evidence: EVIDENCE lines + JOB failed line in the 2026-08-24 session log;
+  runner kept at mythos/scripts/live-ai-digest-brief.js for re-runs.

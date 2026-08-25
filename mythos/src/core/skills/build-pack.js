@@ -107,6 +107,50 @@ var STYLE_WORDS = [
 ];
 var MAX_QUERY_CHARS = 160;
 
+// BUG-327 — WHAT THIS FUNCTION DELIBERATELY DOES NOT STRIP, and the numbers
+// behind that. Pinned in test/bug-327-design-query-non-fix.test.js so it is a
+// decision rather than an oversight, and so nobody re-runs the measurement.
+//
+// The 2026-08-23 proposal was to also strip (a) the product name in quotes and
+// `called "X"`, (b) layout nouns — cards, grid, hero, section, header, footer —
+// and (c) to pass the brief's light/dark mode explicitly so the palette could
+// not contradict it. Measured against the real skill on the real brief:
+//
+//   query                                                  style              type
+//   Build a premium dark AI-digest landing page called
+//     "MYTHOS Digest" with five story cards                Bento Box Grid     Inter/Inter
+//   ...same, product name removed                          Bento Box Grid     Inter/Inter
+//   ...same, "cards" removed                               Vibrant & Block-based
+//   ...both removed                                        Vibrant & Block-based
+//
+// (a) IS INERT. The quoted name changed nothing, in either pair. Same for the
+//     hyphen in "AI-digest": "AI digest" and "AI-digest" resolve identically,
+//     as do "dark-themed e-commerce" and "dark themed e commerce".
+//
+// (b) IS HARMFUL HERE. "cards" is what selects Bento Box Grid — a card-grid
+//     style, for a five-card digest. Removing it yields "Vibrant &
+//     Block-based", whose own keywords are "bold, energetic, playful... gaming,
+//     social media, youth-focused". The incidental noun was choosing the design
+//     language, and on this brief it was choosing better than we would.
+//
+// (c) HAS NOWHERE TO GO. search.py takes no mode flag (its options are --domain,
+//     --stack, --design-system, --project-name, --format, --persist, --page,
+//     --output-dir), and the palette ignores the word: six of seven realistic
+//     dark briefs came back with a light Background (#F8FAFC / #FAFAFA /
+//     #FEF2F2). Only the bare query "dark mode" returns a dark one (#020617),
+//     and a two-word query throws away every other piece of intent. The
+//     contradiction is already handled one layer down, in prose the model
+//     demonstrably followed: both DELIVERABLE_PREAMBLE and BUILDER_PREAMBLE
+//     instruct it to derive a near-black ramp rather than invert the light
+//     palette, and the artifact shipped #0A0A0A surfaces with the block's own
+//     accent. That instruction is the load-bearing part, so the test guards its
+//     presence instead of adding a second mechanism beside it.
+//
+// The one lever that DID move typography was the word "editorial": with it, the
+// pairing is Newsreader/Roboto; without it, Inter/Inter, and "news" alone does
+// not recover it. Injecting "editorial" into a brief that never said it would be
+// this function choosing the design — the exact thing it exists to stop.
+
 function designQuery(brief) {
   var text = String(brief == null ? '' : brief).replace(/\s+/g, ' ').trim();
   if (!text) return 'web landing page';
@@ -225,6 +269,71 @@ function classifyDeliverable(text) {
   return 'code';
 }
 
+// ---- OUTPUT CONTRACT (BUG-325) -------------------------------------------
+//
+// The essences above are TASTE. This is COMPLIANCE: five things a page build
+// must do, each one a defect measured coming out of this pipeline rather than
+// a style preference. Precedent for the shape: one OUTPUT_CONTRACT paragraph
+// in build-engine.js took a build score from 2/9 to 8/9 on unchanged models,
+// so explicit requirement is known to buy more here than another 1.5 KB of
+// advice.
+//
+// WHY IT IS EMITTED BEFORE THE COMPOSITION LOOP AND CHARGED FIRST AGAINST THE
+// BUDGET. packBlockFor() drops essences when it reaches the cap. A contract
+// appended after that loop is the shape this repo keeps re-finding: it reads
+// as coverage, and on exactly the largest pack it is silently absent. So it is
+// charged first and the essences compete for what is left -- PACKS.ui already
+// orders diagram-design last precisely so the cap drops that one first.
+//
+// SCOPED TO 'ui' DELIBERATELY. Every rule here is about a rendered page. A
+// backend or CLI build handed five irrelevant requirements is how a contract
+// stops being read at all. 'app' is excluded because an app build is often
+// server-side only; when a page-emitting app build is measured to need this,
+// add the kind here rather than weakening the rules to fit both.
+//
+// RULE 4 IS PHRASED AROUND A CONTRADICTION THAT ALREADY EXISTS, and this is the
+// one place to record it. agent-actions.js's DELIVERABLE_PREAMBLE instructs the
+// model to fetch photographs from picsum.photos ("a page with no imagery reads as
+// unfinished"), and this block is prepended ABOVE that preamble. A flat "no
+// external images" here would therefore hand the build model two orders that
+// cannot both be obeyed, which is worse than either alone. grounding-check.js
+// already declined to ban that host for the same reason. So rule 4 bans remote
+// DECORATION — the part the preamble never asked for — and leaves the sanctioned
+// photo host alone.
+var OUTPUT_CONTRACTS = {
+  ui: [
+    'OUTPUT CONTRACT (a deliverable that breaks any of these is defective, not merely imperfect):',
+    '',
+    '1. A FONT YOU NAME MUST BE A FONT YOU LOAD. Every font-family naming anything other',
+    '   than a generic CSS family (serif, sans-serif, monospace, system-ui, ui-serif,',
+    '   ui-sans-serif) or an OS-resident face (Arial, Helvetica, Georgia, Times New Roman,',
+    '   Segoe UI, -apple-system) REQUIRES a matching <link rel="stylesheet"> or @import for',
+    '   that family, carrying display=swap. When the design system you were given includes',
+    '   a CSS Import line, copy it in verbatim. Naming a webfont you did not load is not a',
+    '   small miss: the page renders entirely in a fallback face and every type decision',
+    '   above it is discarded, silently.',
+    '',
+    '2. THE HERO HEADLINE IS THE LARGEST TEXT ON THE PAGE. Size it with clamp() and no',
+    '   smaller than 40px at desktop width. If any other text on the page is larger, the',
+    '   headline is wrong.',
+    '',
+    '3. A LANDING-PAGE HERO SPANS THE FULL VIEWPORT WIDTH. The hero section is full-bleed;',
+    '   constrain its inner content if you like, never the section itself. Do not nest the',
+    '   hero inside the same max-width container as the body copy.',
+    '',
+    '4. EVERY DECORATIVE ASSET IS INLINE. Logos, icons, patterns, dividers, backgrounds and',
+    '   textures are inline <svg> or CSS — never a remote file. The only remote resources a',
+    '   page may hold are the font stylesheet and, where the brief names a photo host, a',
+    '   photograph from that host. Never invent a specific image URL.',
+    '',
+    '5. NEVER MAKE TEXT VISIBILITY DEPEND ON JAVASCRIPT OR ON AN ANIMATION COMPLETING.',
+    '   No opacity:0 that only a scroll observer, a timer or a keyframe removes. A',
+    '   backgrounded tab throttles observers and timers, and a paused animation holds its',
+    '   FIRST frame -- both leave the reader a blank page. If you animate an entrance, the',
+    '   visible state is the default and the animation may only depart from it.',
+  ].join('\n'),
+};
+
 // Composed essence block for an explicit pack kind ('ui' | 'code'), or '' if
 // nothing is available. Callers prepend it to the build prompt. SYNC only —
 // this is the discipline layer, present on every build regardless of whether
@@ -239,7 +348,12 @@ function packBlockFor(kind, maxChars) {
   var sep = '\n\n---\n\n';
   var parts = [];
   var dropped = [];
-  var used = header.length;
+  // BUG-325: the contract is charged FIRST and is never a candidate for the
+  // dropped list. It is this repo's own requirement rather than vendored
+  // advice, and a budget that can delete it is a budget that can delete the
+  // reason the block exists.
+  var contract = OUTPUT_CONTRACTS[kind] || '';
+  var used = header.length + (contract ? contract.length + sep.length : 0);
   // Compose in pack order (highest-priority essence first) and stop before the
   // cap rather than emitting an oversized block. Anything dropped is named in
   // the output — a silently shortened discipline block reads as "the model was
@@ -252,8 +366,9 @@ function packBlockFor(kind, maxChars) {
     parts.push(essence);
     used += cost;
   });
-  if (!parts.length) return '';
-  var block = header + parts.join(sep);
+  if (!parts.length && !contract) return '';
+  var body = contract ? [contract].concat(parts) : parts;
+  var block = header + body.join(sep);
   if (dropped.length) {
     block += '\n\n[build-pack: omitted for prompt budget — ' + dropped.join(', ') + ']';
   }
@@ -316,6 +431,7 @@ module.exports = {
   _PACKS: PACKS,
   _ROUTES: ROUTES,
   _MAX_PACK_CHARS: MAX_PACK_CHARS,
+  _OUTPUT_CONTRACTS: OUTPUT_CONTRACTS,
   // Exported so a test can assert the honest degradation path instead of
   // depending on whether this machine happens to have agent-reach installed.
   _agentReachAvailable: isAgentReachAvailable,

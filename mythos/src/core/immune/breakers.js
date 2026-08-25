@@ -23,7 +23,7 @@ const BREAKER_STATES = { CLOSED: 'closed', OPEN: 'open', HALF_OPEN: 'half-open' 
 // "nim:nvidia/nemotron-nano-12b-v2-vl", which is not an effector at all. Naming
 // the kind at construction keeps the two populations of breakers from sharing a
 // remediation that only makes sense for one of them. Default unchanged.
-function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, maxResetMs, anomalyKind }) {
+function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, maxResetMs, anomalyKind, halfOpenIdleDecayMs }) {
   if (!bus) throw new Error('createBreaker requires bus');
   if (!name) throw new Error('createBreaker requires name');
 
@@ -42,6 +42,28 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
   let resetAt = 0;
   let currentResetMs = RESET_MS;
   let halfOpenAttempts = 0;
+  let halfOpenSince = 0;      // BUG-338: when we entered HALF_OPEN (0 = never)
+  let lastTransitionAt = 0;   // BUG-338: every state change, for the HUD's "since"
+  const HALF_OPEN_IDLE_DECAY_MS = halfOpenIdleDecayMs || 30 * 60 * 1000;
+
+  // BUG-338: a HALF_OPEN breaker that never sees traffic again stayed
+  // HALF_OPEN forever — recordSuccess() is traffic-driven, and the tool the
+  // breaker gates may simply not be called again. The HUD reads stats every
+  // few seconds to derive "ENTITY DEGRADED", so decaying lazily ON READ is
+  // sufficient: no timer, and if the tool is still broken its next real call
+  // re-trips through the normal FSM exactly like a probe would.
+  function decayIdleHalfOpen(now) {
+    if (state === BREAKER_STATES.HALF_OPEN && now - halfOpenSince >= HALF_OPEN_IDLE_DECAY_MS) {
+      state = BREAKER_STATES.CLOSED;
+      failCount = 0;
+      resetAt = 0;
+      currentResetMs = RESET_MS;
+      halfOpenAttempts = 0;
+      lastTransitionAt = now;
+      return true;
+    }
+    return false;
+  }
 
   function allow() {
     const now = Date.now();
@@ -51,6 +73,8 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
       if (now >= resetAt) {
         state = BREAKER_STATES.HALF_OPEN;
         halfOpenAttempts = 0;
+        halfOpenSince = now;      // BUG-338: idle-decay clock starts here
+        lastTransitionAt = now;
         return true; // allow exactly one probe
       }
       return false; // caller must synthesize { ok:false, result:'circuit-open' } itself
@@ -67,6 +91,7 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
     if (state === BREAKER_STATES.HALF_OPEN) {
       state = BREAKER_STATES.CLOSED; // recovered
       currentResetMs = RESET_MS;     // backoff resets on real recovery
+      lastTransitionAt = Date.now(); // BUG-338
     }
     failCount = 0;
   }
@@ -98,6 +123,7 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
       currentResetMs = Math.min(currentResetMs * 2, MAX_RESET_MS);
       resetAt = now + currentResetMs;
       state = BREAKER_STATES.OPEN;
+      lastTransitionAt = now; // BUG-338
       return;
     }
 
@@ -105,6 +131,7 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
       currentResetMs = RESET_MS; // fresh trip restarts backoff at the base delay
       state = BREAKER_STATES.OPEN;
       resetAt = now + currentResetMs;
+      lastTransitionAt = now; // BUG-338
       // 'health.anomaly' — exact string, do not paraphrase.
       bus.emit('health.anomaly', { kind: ANOMALY_KIND, target: name, failCount: failCount, state: state });
     }
@@ -112,7 +139,12 @@ function createBreaker({ name, bus, config, failThreshold, windowMs, resetMs, ma
 
   return {
     get state() { return state; },
-    get stats() { return { name: name, state: state, failCount: failCount, resetAt: resetAt }; },
+    // BUG-338: every read is a decay opportunity — no timer needed.
+    get stats() { return this.statsAt(Date.now()); },
+    statsAt: function (now) {
+      const decayed = decayIdleHalfOpen(now);
+      return { name: name, state: state, failCount: failCount, resetAt: resetAt, since: lastTransitionAt || undefined, decayReason: decayed ? 'half-open-idle-decay' : undefined };
+    },
     allow: allow,
     recordSuccess: recordSuccess,
     recordFailure: recordFailure,
