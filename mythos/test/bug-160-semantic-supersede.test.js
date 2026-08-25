@@ -129,6 +129,85 @@ describe('BUG-160: semantic.forget() and the forget_fact effector', () => {
   });
 });
 
+// Wave 4 (2026-08-13), incident from BUGS.md: forget_fact's exact-substring
+// match was the ONLY mode, so a paraphrased correction ("forget that I said
+// kids come first") never matched the stored fact it was meant to retire
+// ("children/family priority") — reported as "no stored fact" even though the
+// fact was right there. A normalized token-overlap fallback closes that,
+// auto-resolving a single plausible match and asking "which one?" on more
+// than one instead of guessing.
+describe('Wave 4: forget() falls back to a fuzzy match when exact substring finds nothing', () => {
+  const ctx = makeStore();
+  after(() => cleanupVaultDir(ctx.dir));
+
+  it('a single fuzzy match auto-resolves exactly like an exact match would', () => {
+    ctx.semantic.write('user-facts-fuzzy1', ['The operator says children and family come first'], { append: true });
+    const res = ctx.semantic.forget('kids and family are the priority');
+    assert.equal(res.removed.length, 1, 'a single plausible fuzzy match must be removed, not just reported');
+    assert.match(res.removed[0], /children and family/);
+    assert.equal(res.matchedBy, 'fuzzy', 'the raw result marks how it matched, so callers can distinguish exact from paraphrase');
+    const raw = ctx.fs.readText('Semantic/user-facts-fuzzy1.md', '');
+    assert.ok(!raw.includes('children and family'), 'the fact must actually be gone from disk');
+  });
+
+  it('more than one plausible fuzzy match returns candidates instead of deleting anything', () => {
+    ctx.semantic.write('user-facts-fuzzy2', [
+      'The operator prefers tea over coffee in the morning',
+      'The operator prefers tea over coffee at work',
+    ], { append: true });
+    const before = ctx.fs.readText('Semantic/user-facts-fuzzy2.md', '');
+    const res = ctx.semantic.forget('coffee preference in the morning at work');
+    assert.equal(res.removed.length, 0, 'ambiguous — nothing may be deleted');
+    assert.ok(Array.isArray(res.candidates) && res.candidates.length >= 2, 'must report the candidates it found');
+    const after_ = ctx.fs.readText('Semantic/user-facts-fuzzy2.md', '');
+    assert.equal(after_, before, 'the file must be byte-identical — ambiguity never writes');
+  });
+
+  it('a genuinely unrelated query still reports no match, not a low-confidence guess', () => {
+    ctx.semantic.write('user-facts-fuzzy3', ['The operator likes jazz piano'], { append: true });
+    const res = ctx.semantic.forget('the quarterly financial report is due');
+    assert.equal(res.removed.length, 0);
+    assert.equal(res.candidates, undefined, 'no shared vocabulary at all must not manufacture a candidate');
+  });
+
+  it('the exact-substring path still wins outright when it matches — fuzzy is a fallback, not a replacement', () => {
+    ctx.semantic.write('user-facts-fuzzy4', ['The wrong URL is https://example.com/mock'], { append: true });
+    const res = ctx.semantic.forget('example.com/mock');
+    assert.equal(res.removed.length, 1);
+    assert.equal(res.candidates, undefined);
+  });
+});
+
+describe('Wave 4: forget_fact effector surfaces "which one?" on ambiguity, and names a paraphrase match', () => {
+  const ctx = makeStore();
+  after(() => cleanupVaultDir(ctx.dir));
+
+  it('asks which fact on multiple fuzzy candidates, without deleting either', async () => {
+    ctx.semantic.write('user-facts-fx1', [
+      'The operator prefers tea over coffee in the morning',
+      'The operator prefers tea over coffee at work',
+    ], { append: true });
+    const tools = buildTools({ semantic: ctx.semantic, fs: ctx.fs });
+    const forgetTool = tools.find((t) => t.name === 'forget_fact');
+    const res = await forgetTool.fn({ query: 'coffee preference in the morning at work', topic: 'user-facts-fx1' });
+    assert.equal(res.ok, false);
+    assert.match(String(res.result.error), /Found 2 similar facts/);
+    assert.match(String(res.result.error), /which one/i);
+    const raw = ctx.fs.readText('Semantic/user-facts-fx1.md', '');
+    assert.ok(raw.includes('morning') && raw.includes('at work'), 'nothing may be deleted while ambiguous');
+  });
+
+  it('a single fuzzy match succeeds and the note says it was a paraphrase, not an exact hit', async () => {
+    ctx.semantic.write('user-facts-fx2', ['The operator says children and family come first'], { append: true });
+    const tools = buildTools({ semantic: ctx.semantic, fs: ctx.fs });
+    const forgetTool = tools.find((t) => t.name === 'forget_fact');
+    const res = await forgetTool.fn({ query: 'kids and family are the priority', topic: 'user-facts-fx2' });
+    assert.equal(res.ok, true, JSON.stringify(res));
+    assert.match(res.result.evidence, /paraphrase match/);
+    assert.match(res.result.forgot[0], /children and family/);
+  });
+});
+
 describe('BUG-160: wiring — voice reach and tier row', () => {
   it('forget_fact is on the Live voice allowlist (registering an effector does NOT reach voice by itself)', () => {
     const { DEFAULT_ALLOWLIST } = require('../src/core/voice/live-tools');

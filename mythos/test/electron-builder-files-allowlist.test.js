@@ -16,6 +16,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 
@@ -106,13 +107,41 @@ test('build.files excludes the vendored edge-tts LGPLv3 package under mythos/.ve
     'the installed edge_tts LGPLv3 package under mythos/.venv must never be packaged');
 });
 
-test('build.files excludes the openWakeWord CC BY-NC-SA pretrained weights', () => {
+test('build.files excludes the openWakeWord CC BY-NC-SA pretrained weights', (t) => {
+  const target = path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'models', 'wakeword', 'hey_jarvis_v0.1.onnx');
+  // The weights are gitignored and fetched per-machine (scripts/setup-wakeword.js),
+  // so a fresh clone or CI runner doesn't have them — this used to HARD-FAIL on
+  // existsSync there while passing on every machine that had ever fetched the
+  // models (the BUG-258/259 environment-dependence class; CI red 2026-08-13..16).
+  // Skip, don't fake the fixture — same discipline as the edge-tts .venv test
+  // above and the wakeword rename-race rule: faking model state is how weights
+  // get destroyed. Machines that ran the setup script still run the real check.
+  if (!fs.existsSync(target)) return t.skip('fixture absent: openWakeWord weights not fetched on this machine (scripts/setup-wakeword.js)');
   const { files } = loadBuildConfig();
   const filterFn = buildRealFilter(files);
-  const target = path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'models', 'wakeword', 'hey_jarvis_v0.1.onnx');
-  assert.ok(fs.existsSync(target), 'fixture path must exist: ' + target);
   assert.equal(isIncluded(filterFn, target), false,
     'openWakeWord .onnx weights (CC BY-NC-SA, non-commercial) must never be packaged');
+});
+
+// The exclusion above is the distribution half of step-6.5's wake-word
+// decision; the informed-consent half lives in the setup wizard. The weights
+// are never bundled and WAKEWORD_ENABLED defaults false, so the moment a user
+// chooses to fetch them is the components step — and that row's note is the
+// only surface where the licence terms reach them. Assert the note still names
+// all three load-bearing facts (non-commercial, CC BY-NC-SA 4.0, and that the
+// download is the user's own action) so a future tidy-up cannot silently drop
+// the notice — the same silent-drop failure mode this whole file exists to
+// make loud.
+test('setup wizard wakeword note states the CC BY-NC-SA non-commercial terms at download time', () => {
+  const { findComponent } = require('../src/core/setup/components.js');
+  const wakeword = findComponent('wakeword');
+  assert.ok(wakeword, 'the setup components catalog must have a wakeword entry');
+  assert.match(wakeword.note, /CC BY-NC-SA 4\.0/,
+    'the wakeword note must name the CC BY-NC-SA 4.0 licence');
+  assert.match(wakeword.note, /non-commercial/i,
+    'the wakeword note must state the weights are non-commercial');
+  assert.match(wakeword.note, /your action/i,
+    'the wakeword note must state that downloading the weights is the user\'s own action (BYO)');
 });
 
 // The three assets below were found by walking a REAL dist/win-unpacked, after
@@ -136,7 +165,7 @@ test('build.files excludes the openWakeWord CC BY-NC-SA pretrained weights', () 
 // these files are absent on a fresh clone too, and the setup scripts exist
 // precisely to fetch them per machine.
 
-test('build.files excludes gesture_recognizer.task — the one committed model, licence UNVERIFIED', () => {
+test('build.files ships gesture_recognizer.task — licence hold lifted by explicit repo-owner decision', () => {
   const { files } = loadBuildConfig();
   const filterFn = buildRealFilter(files);
   const target = path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'models', 'gesture_recognizer.task');
@@ -144,15 +173,29 @@ test('build.files excludes gesture_recognizer.task — the one committed model, 
   // Step 6.6's licence audit (2026-08-04) established that this 8.4MB MediaPipe
   // weight file is the ONLY third-party model binary actually tracked in git —
   // every other model is gitignored and fetched per-machine — and that its
-  // licence is NOT established. MediaPipe's *code* is Apache-2.0, but the
-  // model artifact's terms are separate and were not confirmed; the developer
+  // licence was NOT established. MediaPipe's *code* is Apache-2.0, but the
+  // model artifact's terms are separate and were never confirmed; the developer
   // docs page covers page content (CC BY 4.0) and code samples (Apache-2.0),
   // neither of which is the binary. That is the same code-licence-vs-weights
-  // trap that openWakeWord's CC BY-NC-SA weights set. Until the model card
-  // resolves it, it stays out of a shippable installer. THIRD_PARTY_NOTICES.md
-  // documents @mediapipe/tasks-vision but not this file.
-  assert.equal(isIncluded(filterFn, target), false,
-    'gesture_recognizer.task must stay out of the installer while its model licence is unverified');
+  // trap that openWakeWord's CC BY-NC-SA weights set, and it remains true and
+  // unresolved today. The blanket "!mythos/ui/public/models{,/**/*}" exclusion
+  // was the mechanism of that hold, keeping this one file out alongside the
+  // gitignored per-machine weights it shares a directory with.
+  //
+  // On 2026-08-12 the repo owner was told plainly that shipping this file
+  // means packaging a third-party binary whose licence is on record as
+  // unverified, and decided explicitly to ship it anyway so webcam gesture
+  // recognition works in the installed build (camera.js loads it from
+  // /models/gesture_recognizer.task; without it the MediaPipe WASM runtime
+  // packages fine but the model itself 404s). package.json now carries a
+  // later, more specific positive pattern
+  // ("mythos/ui/public/models/gesture_recognizer.task") that re-includes just
+  // this file — electron-builder's last-match-wins semantics mean the
+  // blanket exclusion still keeps every other model (silero, wakeword, piper,
+  // kokoro) out. THIRD_PARTY_NOTICES.md now documents this file's licence
+  // status alongside @mediapipe/tasks-vision.
+  assert.equal(isIncluded(filterFn, target), true,
+    'gesture_recognizer.task must ship in the installer per the 2026-08-12 repo-owner decision to accept the unverified-licence risk');
 });
 
 test('build.files excludes the Silero VAD weights (gitignored, but present on disk)', (t) => {
@@ -209,6 +252,24 @@ test('build.files still includes the files the packaged app needs to run', () =>
     path.join(REPO_ROOT, 'electron', 'preload.js'),
     path.join(REPO_ROOT, 'mythos', 'src', 'main.js'),
     path.join(REPO_ROOT, 'mythos', 'server', 'index.js'),
+    // Added after the dev-vs-installer parity audit (2026-08-11). Each of these
+    // is something the packaged app CALLS at runtime, and each sits next to a
+    // path that is deliberately excluded — one careless widening of a "!" line
+    // takes a working feature out of the installer silently, which is the exact
+    // failure this whole file exists to make loud.
+    path.join(REPO_ROOT, 'mythos', 'package.json'),                              // the server child's own manifest
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'doctor.js'),                      // /api/setup/status + the wizard's whole key/asset report
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-wakeword.js'),              // components step: wake-word weights
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-silero.js'),                // components step: VAD weights
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-android.js'),               // components step: adb
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-autostart.js'),             // components step: start at sign-in
+    path.join(REPO_ROOT, 'mythos', 'scripts', 'setup-dsh.js'),                   // components step: build engine
+    path.join(REPO_ROOT, 'mythos', 'services', 'piper-server.py'),               // the ONE sidecar script that may ship (piper is MIT; edge-tts is not)
+    path.join(REPO_ROOT, 'mythos', 'adapters', 'pc-child', 'ps-automation.ps1'), // desktop control — doctor marks it REQUIRED
+    path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'index.html'),                // the HUD itself
+    path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'js', 'voice', 'voice-picker.js'),
+    path.join(REPO_ROOT, 'mythos', 'ui', 'public', 'css', 'voice-picker.css'),
+    path.join(REPO_ROOT, 'mythos', 'src', 'core', 'config', 'voice-choice.js'),  // the picked voice must survive packaging
   ];
   for (const target of mustInclude) {
     assert.ok(fs.existsSync(target), 'fixture path must exist: ' + target);
@@ -284,4 +345,77 @@ test('scripts/doctor.js ships — the setup route require()s it at runtime', () 
     assert.notEqual(body.replace(/\{,\/\*\*\/\*\}$/, ''), 'mythos/scripts/doctor.js',
       'doctor.js must not be excluded: server/routes/setup.js requires it at request time');
   }
+});
+
+// ---------------------------------------------------------------------------
+// The licence guards that matter most are the ones above that HONESTLY SKIP:
+// the CC BY-NC-SA openWakeWord weights, the LGPLv3 edge-tts package and the
+// Silero VAD weights are all fetched per-machine, so on CI (npm ci + node
+// --test, no setup-*.js run) none of those files exist and every one of those
+// assertions has ALWAYS skipped there — never passed, never failed. The one
+// obligation in this repo that is genuinely non-commercial has therefore never
+// actually been checked by the gate that exists to check it.
+//
+// The skips are still correct and stay exactly as they are: materialising a
+// stand-in at the REAL model path is the trap CLAUDE.md's wakeword rename-race
+// entry documents, because other code stats those directories for presence.
+//
+// So run the same assertions somewhere no real path is involved at all. The
+// patterns in build.files are relative to the matcher's root (FileMatcher's
+// `from`), so a temp directory containing the same RELATIVE layout exercises
+// electron-builder's own FileMatcher with identical glob semantics and cannot
+// touch, hide or fake anything in the checkout. These tests execute on every
+// machine, including CI.
+const MIRROR_FIXTURES = {
+  excluded: [
+    // The non-commercial / non-redistributable set, in build.files order.
+    'mythos/.venv/Lib/site-packages/edge_tts/__init__.py',   // LGPLv3, BYO
+    'mythos/services/edge-tts-server.py',                    // the LGPLv3 sidecar
+    'mythos/ui/public/models/wakeword/hey_jarvis_v0.1.onnx', // CC BY-NC-SA, non-commercial
+    'mythos/ui/public/models/silero/silero_vad.onnx',        // fetched per machine
+    'mythos/node_modules/kokoro-js/node_modules/@huggingface/transformers/.cache/onnx-community/Kokoro-82M-v1.0-ONNX/onnx/model_quantized.onnx',
+    'mythos/vault/Audit/2026-01-01.jsonl',                   // real operator data
+  ],
+  included: [
+    // Positive control. Without it, a mirror root that somehow matched nothing
+    // would make every exclusion above pass vacuously — the exact failure mode
+    // the real-tree positive control further up guards against.
+    'package.json',
+    'mythos/ui/public/index.html',
+    'mythos/ui/public/models/gesture_recognizer.task',        // the one deliberate re-include
+  ],
+};
+
+function withMirroredTree(relPaths, fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-pkg-mirror-'));
+  try {
+    for (const rel of relPaths) {
+      const abs = path.join(root, rel.split('/').join(path.sep));
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, 'x');  // content is irrelevant: the matcher is path + stat based
+    }
+    return fn(root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('build.files keeps the non-commercial and BYO assets out — checked without needing them on disk', () => {
+  const { files } = loadBuildConfig();
+  const all = MIRROR_FIXTURES.excluded.concat(MIRROR_FIXTURES.included);
+  withMirroredTree(all, (root) => {
+    const { FileMatcher } = require('app-builder-lib/out/fileMatcher');
+    const matcher = new FileMatcher(root, root, (x) => x, files);
+    const filterFn = matcher.createFilter();
+    for (const rel of MIRROR_FIXTURES.included) {
+      const abs = path.join(root, rel.split('/').join(path.sep));
+      assert.equal(filterFn(abs, fs.statSync(abs)), true,
+        rel + ' must be included in the installer (positive control for the mirror)');
+    }
+    for (const rel of MIRROR_FIXTURES.excluded) {
+      const abs = path.join(root, rel.split('/').join(path.sep));
+      assert.equal(filterFn(abs, fs.statSync(abs)), false,
+        rel + ' must never be packaged — this is the licence boundary, not a tidy-up');
+    }
+  });
 });

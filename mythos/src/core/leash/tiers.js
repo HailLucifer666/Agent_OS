@@ -9,6 +9,12 @@ const TIER_TABLE = {
   'navigate':              0,
   'close_panel':           0,
   'read_status':           0,
+  // E5: a stateless os.cpus()/totalmem() read of THIS host. Same tier as
+  // read_status — it reads, it cannot act, and it touches nothing outside
+  // the process. Without an entry here the leash's unknown-tool fail-safe
+  // gates it at T3, which would put a confirm prompt in front of "how much
+  // RAM does this machine have".
+  'read_system_specs':     0,
   'job_status':            0,
   'list_goals':            0,
   'pipeline_status':       0,
@@ -25,6 +31,13 @@ const TIER_TABLE = {
   'list_folder':           0,
   'read_file':             0,
   'clipboard_read':        0,  // Task 3 (step 5) — read-only
+  // think_deeply (2026-08-14) — asks the reasoning lane a question and returns
+  // the answer. Touches nothing: no filesystem, no network beyond the same
+  // provider chain every other brain call already uses, no world state. Same
+  // class as document_answer (also T0, also brain-backed). Without an entry
+  // here the unknown-tool fail-safe would gate "think about this" at T3 and put
+  // a confirm prompt in front of a question.
+  'think_deeply':          0,
   'list_windows':          0,
   // BUG-102: the cua-driver tools had NO entries at all, so tierOf()'s unknown-
   // tool fail-safe put a pure window listing on T3 and voice had to ask for
@@ -38,6 +51,14 @@ const TIER_TABLE = {
   'web_search':            0,  // read-only research — fetches public search results
   'web_fetch':             0,  // read-only fetch — retrieves public web page content
   'camera_look':           0,  // read-only — captures and describes camera frame
+  // Turning the CAMERA ON is not a read. It is T3-with-confirm and also
+  // NEVER_TRUSTABLE (leash/index.js), which together mean it can never
+  // auto-allow: not by operator-present trust, not by a session grant, not via
+  // TRUSTED_TOOLS. Added 2026-08-10 with camera_look's promotion to the voice
+  // allowlist — the point of that promotion is that "can you see me?" gets an
+  // honest path, and the point of this tier is that a MISHEARD "can you see me?"
+  // cannot open a webcam without the operator saying yes.
+  'camera_on':             3,
   'remember':              0,
   'forget_fact':           2,  // BUG-160 — deletes a durable memory: local write, reversible only by re-remembering, so a notch above remember
   'log_incident':          0,
@@ -50,6 +71,13 @@ const TIER_TABLE = {
   'use_skill':             0,  // read-only — loads a skill's guidance text from disk
   'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
   'recall_memory':         0,  // read-only — searches existing memory (recallHybrid), writes nothing
+  // Notes (memory/notes.js, 2026-08-14). Reads are T0 like recall_memory /
+  // read_file above; note_take is T1 — a local write into MYTHOS's own notes
+  // directory, same class as write_note, not the T3 class of write_file (which
+  // can reach any sandboxed root, including mythos/.env).
+  'note_read':             0,
+  'note_search':           0,
+  'note_take':             1,
   'persona_status':        0,  // read-only — reports current personality dial settings
   'self_capabilities':     0,  // read-only — reports the boot-generated capabilities manifest
   'document_list':         0,  // read-only — lists ingested documents (doc-level metadata), §7.5
@@ -57,6 +85,11 @@ const TIER_TABLE = {
   'document_answer':       0,  // read-only — answers a question grounded in ingested document chunks + cites them, §7.5, writes nothing
   'search_code':           0,  // read-only — semantic search over indexed code chunks, §7.11, writes nothing
   'phone_list_devices':    0,  // Task 10 (step 6, Android bridge) — read-only, `adb devices -l` via the adapter's own live status
+  // Task B3 — on-demand self-knowledge digest (host metrics + provider health +
+  // spend stats + adapter ONLINE/OFFLINE). Same class as read_system_specs/
+  // read_status above: a stateless read of THIS process's own state, no dollar
+  // figures, cannot act.
+  'system_status':         0,
 
   // T1 — LOCAL WRITES (auto-allow, audit logged)
   'create_goal':           1,
@@ -108,6 +141,10 @@ const TIER_TABLE = {
 
   // T2 — LOCAL ACTIONS (auto-allow within AUTONOMOUS_MAX_TIER, audit)
   'open_folder':           2,
+  // open_file (2026-08-21): same class as open_folder — hands a path to the
+  // shell and shows the operator something. Explicit because an unlisted name
+  // falls to the T3 fail-safe, which would confirm-gate every document open.
+  'open_file':             2,
   'launch_app':            2,
   'open_artifact':         2,  // BUG-008 — opens a file/URL via the OS (cmd start/open/xdg-open),
                                // read-only w.r.t. destructive risk; same category as open_folder/
@@ -160,7 +197,7 @@ const TIER_TABLE = {
   // outward-facing risk, so a confirm popup on every "play a song"/"build me
   // a landing page" was pure friction, not safety. See BUGS.md for the audit
   // that identified them; the T3/T4 security-invariant tools below (compose_email,
-  // gmail_send, delete_goal, close_window, hermes_task, ui_click, ui_type,
+  // gmail_send, delete_goal, close_window, dsh_task, ui_click, ui_type,
   // click_at, browser_click, browser_type, kill_session, browser_evaluate) are
   // deliberately untouched.
   //
@@ -174,15 +211,22 @@ const TIER_TABLE = {
   'spotify_play':          2,
   'spotify_search':        2,
   // RE-TIERED BACK TO T3 (2026-07-29). The T3->T2 reasoning above no longer
-  // holds for the build tools: as of the Hermes engine change every one of
-  // these drives an external coding agent that runs real commands (Forge sets
-  // HERMES_YOLO_MODE=1, which bypasses Hermes's own dangerous-command
-  // approval), so "sandboxed to vault/builds/" is no longer a true description
-  // of the blast radius. T2 also meant auto-allow under AUTONOMOUS_MAX_TIER —
+  // holds for the build tools: every one of these drives an external coding
+  // agent that runs real commands, so "sandboxed to vault/builds/" is no longer
+  // a true description of the blast radius.
+  //
+  // MECHANISM UPDATED BY W6 (2026-08-22), TIER DELIBERATELY NOT CHANGED. This
+  // used to say Forge sets `HERMES_YOLO_MODE=1`, bypassing Hermes's own
+  // dangerous-command approval. Under `dsh` the equivalent is
+  // `autoApprove: true` -> `DSH_PERMISSION_MODE=workspace-write`, which is a
+  // NARROWER grant: writes are confined to the cwd the runner hands it, and
+  // `danger-full-access` is never passed. A narrower grant is NOT a reason to
+  // re-tier, and the tier is staying at 3 — because the second reason below
+  // never depended on the write radius at all. T2 also meant auto-allow under AUTONOMOUS_MAX_TIER —
   // which is how a build launched itself unasked mid-conversation on
   // 2026-07-29 while the user was reporting an unrelated bug. Spotify and the
   // docs-gen tools keep T2; they genuinely are local and bounded.
-  'build_project':         3,  // P22 Forge — multi-file build; drives the Hermes CLI
+  'build_project':         3,  // P22 Forge — multi-file build; drives the build-engine CLI
   'revise_project':        3,  // P22 Forge — targeted regen; drives the Hermes CLI
   'pipeline_execute':      3,
   'kanban_assemble':       3,
@@ -263,7 +307,7 @@ const TIER_TABLE = {
   'browser_press_key':     3,  // Enter submits forms; allowlisted keys only, no free text
   'browser_hover':         1,  // reveals a menu, changes nothing — read-shaped, same class
                                // as browser_scroll
-  'hermes_task':           3,  // P7 — delegates to the hermes-agent sidecar, which runs real commands
+  'dsh_task':              3,  // delegates to the build engine (DeepSeek Harness), which runs real commands
   'run_command':           3,  // Phase 3 (V7) — allow-listed shell command; confirm-once-per-goal. v1 is allowlist+timeout, NOT a full sandbox
   'install_from_github':   3,  // clones + installs a GitHub repo; shares run_command's allowlist gate. Runs the
                                // repo's own build hooks (npm postinstall, setup.py), so it is at least as
@@ -331,6 +375,10 @@ const TIER_TABLE = {
   // without asking again — a wrong digit here misdirects every future message to
   // that name, so it is confirmed once at save time rather than silently accepted.
   'whatsapp_contact_save': 3,
+  // Wave 4 (2026-08-13): destructive by nature (removes the ability to
+  // message someone by name) — same T3 as the save it undoes, never
+  // auto-allowed.
+  'whatsapp_contact_delete': 3,
   // Security-review correction (Task 10): phone_file_pull was originally T1
   // ("a read from the phone"), but from the PC-filesystem-integrity
   // standpoint `adb pull` WRITES (creates or overwrites) an arbitrary local

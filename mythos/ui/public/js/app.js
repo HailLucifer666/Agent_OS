@@ -17,15 +17,22 @@ import { mountWidgets } from './widgets/widget-host.js';
 import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
 import { decideVoiceTransport } from './voice/voice-transport.js';
+import { createToggleGuard } from './voice/toggle-guard.js';
 import { createCameraLoop } from './vision/camera.js';
+import { decideGestureMic } from './vision/gesture-mic.js';
+import { canGestureAccept } from './vision/gesture-confirm.js';
 import { createComposeBar } from './compose-bar.js';
 import { mountInitScreen } from './init-screen.js';
 import { mountPinLockScreen } from './pin/pin-lock-screen.js';
 import { mountAuthGate } from './auth/auth-gate.js';
 import { mountStatusBanner } from './status-banner.js';
+import { mountUpdateBanner } from './update-banner.js';
+import { mountVersionBadge } from './version-badge.js';
 import { mountSetupScreen } from './setup/setup-screen.js';
+import { mountComponentBanner } from './setup/component-banner.js';
 import { isGateClosed } from './pin/pin-gate.js';
 import { isEntityAlive } from './entity-status.js';
+import { safeUrl } from './url.js';
 
 const ctx = { subscribe, onRefresh };
 
@@ -48,13 +55,35 @@ mountAuthGate(document.getElementById('auth-root'));
 // "unresponsive" rather than "unauthenticated".
 mountStatusBanner(document.getElementById('status-banner-root'));
 
+// Says out loud when a new version has downloaded, with a button that installs
+// it. No-ops in a browser tab (no window.mythos, therefore no updater).
+mountUpdateBanner(document.getElementById('status-banner-root'));
+mountVersionBadge(document.getElementById('version-badge'));
+
 // First-run setup — the answer to "this machine is a half-broken twin of the
 // other one". Asks GET /api/setup/status and paints ONLY when a REQUIRED gap
 // exists, so a fully wired install never sees it and an install with merely
 // optional gaps (no adb, no piper voice) is not nagged on every boot. Mounted
 // after the token gate because that status call is itself behind it: a 401 here
 // means "not authenticated yet", never "your install is incomplete".
-mountSetupScreen(document.getElementById('setup-root'));
+// On a machine where NOTHING is configured yet (no stored key, no PIN) this
+// opens the first-run wizard instead of the gap list, and it now RETRIES the
+// status probe: in the packaged .exe the window loads before the fork()ed server
+// child is listening, so the single boot-time probe used to resolve
+// 'indeterminate' and the screen was never shown again — a fresh install was
+// never asked for a key at all. setupScreen.open() is the manual route back in
+// (the key button in the compose bar).
+const setupScreen = mountSetupScreen(document.getElementById('setup-root'));
+
+// Says out loud when a component the operator ASKED FOR during install is not
+// actually on disk (installer parity, 2026-08-11). The installer recorded
+// silero/wakeword/adb as wanted, downloaded none of them, and said nothing — so
+// the wake word was simply dead and the only symptom was that "hey jarvis" did
+// nothing. Paints nothing on a fully-installed machine, and nothing at all on an
+// indeterminate probe. See setup/component-banner.js.
+mountComponentBanner(document.getElementById('status-banner-root'), {
+  onOpenSetup: () => { try { setupScreen.open(); } catch (_) { /* screen not mountable here */ } },
+});
 
 // §7.3 local PIN lock — the enforcement point the backend never had. Mounted
 // here (before the HUD builds) but NON-BLOCKING: it asks GET /api/pin/status
@@ -133,7 +162,17 @@ fetch('/api/config/s2s')
   .catch(() => {});
 
 // overlays
-const overlays = createOverlayManager(document.getElementById('overlay-root'));
+const overlays = createOverlayManager(document.getElementById('overlay-root'), {
+  // Keep the chat bar's transcript toggle honest about the panel's real state:
+  // the × button, the backdrop, Escape and a close_panel tool call all close it
+  // without going through onTranscript below. `compose` is created further down
+  // this file, and a panel can open before that (a routed WS frame), so this
+  // guards rather than assuming.
+  onChange: (panelId, isOpen) => {
+    if (panelId !== 'conversation') return;
+    if (compose && typeof compose.setTranscriptOpen === 'function') compose.setTranscriptOpen(isOpen);
+  },
+});
 
 // core orb mounts first — hud-canvas's ctx needs orb.flashAction for its
 // per-action-type color relay (pure reorder, no visual side effect: DOM
@@ -183,6 +222,26 @@ const compose = createComposeBar({
     const v = ensureVoice();
     overlays.openPanel('mic-settings', { voice: { setMicDevice: (id) => v.setMicDevice(id), getMicDevice: () => v.getMicDevice() } });
   },
+  // Which voice the entity SPEAKS in — audition each, keep one. Owns no state
+  // here: the panel reads /api/tts/voices and writes /api/tts/voice, and the
+  // server rebuilds its chain so the next reply already uses the new voice.
+  onVoiceSettings: () => {
+    overlays.openPanel('voice-settings');
+  },
+  // Provider keys + local PIN, on demand. Re-probes /api/setup/status first so
+  // the wizard reflects what the server sees now, not what it saw at boot.
+  onSetup: () => setupScreen.open(),
+  // F7: the full-session transcript. The panel is not new — it has been in the
+  // registry as 'conversation' all along — but nothing on the chat bar opened
+  // it, so the operator's only view of the session was whatever few turns the
+  // compose caption happened to be showing.
+  // It is a toggle (aria-pressed, "Toggle the full conversation transcript"),
+  // so a second click has to close it — before this it re-opened, which
+  // overlay-manager treats as a focus() and looks like a dead button.
+  onTranscript: () => {
+    if (overlays.isOpen('conversation')) overlays.close('conversation');
+    else overlays.openPanel('conversation');
+  },
 });
 
 // mic indicator API still used by some caption calls below — keep a shim.
@@ -200,8 +259,34 @@ let wakeword = null;
 // onWake below to avoid re-triggering while MYTHOS is talking.
 let _voiceState = 'idle';
 
+// BUG-273 A3 — WHEN MYTHOS LAST HAD SPEECH AUDIO IN THE ROOM.
+//
+// Every guard in the wake-word suppression chain below asks about the present
+// instant, and a wake-word score is evidence about the previous ~2 seconds (see
+// wakeword.js's receptiveFieldMs). So a greeting that stopped playing shortly
+// before the score crossed the threshold defeats all of them. On 2026-08-18 it did:
+// gemini-tts 503 -> edge-tts failover at 11:33:17.978 -> 0.9797 at 11:33:19.591, in
+// a room that had been at 5e-6 for twenty seconds.
+//
+// A timestamp rather than a boolean, for exactly that reason: "was MYTHOS speaking
+// at any point inside the detector's window" is the question that can actually be
+// answered correctly, and a flag can only answer it for the instant it is read.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Deliberately only MYTHOS's own SPEECH. Media the
+// operator asked for — Spotify, a YouTube page — must not deafen the wake word,
+// which is the whole reason suspendForMedia below is a separate, narrower mechanism
+// with its own opening-burst-only scope. The two feeds here are the server-TTS
+// chunk stream and voice-state transitions into 'speaking'; no action/media event
+// touches this timestamp.
+let _lastAssistantAudioAt = 0;
+function noteAssistantAudio() { _lastAssistantAudioAt = Date.now(); }
+
 function onVoiceState(s) {
   _voiceState = s;
+  // Covers both engines that route through here: voice-loop chunk playback (the
+  // batch/proactive path) and the Live bridge, which is constructed with
+  // onState: onVoiceState and calls setVoiceState('speaking') from onSpeakStart.
+  if (s === 'speaking') noteAssistantAudio();
   compose.setVoiceState(s);
   orb.setVoiceState(s);
   hud.setVoiceState(s);
@@ -234,6 +319,12 @@ subscribe(['action'], (msg) => {
 // synthetic amplitude signal that makes the orb pulse in rhythm with MYTHOS's
 // voice. Spikes an envelope that decays in core-orb's frame loop.
 subscribe(['speech-chunk'], () => {
+  // BUG-273 A3: a chunk on the wire means server-side TTS audio is arriving to be
+  // played out of the speakers. This is the earliest honest signal there is — it
+  // precedes playback, so the suppression window opens before the first sample is
+  // audible rather than after, and it does not depend on which of the three TTS
+  // engines won the chain or on a voice-state transition landing in time.
+  noteAssistantAudio();
   if (typeof orb.pulseSpeaking === 'function') orb.pulseSpeaking();
   if (typeof hud.pulseSpeaking === 'function') hud.pulseSpeaking();
 });
@@ -296,7 +387,7 @@ function ensureS2S() {
 // both capturing at once would have the Live model hearing itself and the
 // batch loop transcribing MYTHOS's own replies. See voice/voice-transport.js
 // and test/voice-transport-decision.test.js.
-async function toggleVoice() {
+async function toggleVoiceImpl() {
   // No voice affordance (compose-bar button, orb click, wake word) may open
   // the mic while the PIN lock screen is locked OR its status check hasn't
   // answered yet — see isGateClosed()'s doc comment in pin/pin-gate.js.
@@ -313,16 +404,27 @@ async function toggleVoice() {
   if (plan.stopOther === 's2s' && s2s) await s2s.stop();
 
   if (plan.transport === 'batch') {
-    if (plan.action === 'start') ensureVoice().start();
+    // BUG-269 defect 2: this start() was un-awaited, so two presses could
+    // interleave their async re-entry into voice-loop's start(). Awaited now;
+    // the in-flight guard below drops presses that land while it resolves.
+    if (plan.action === 'start') await ensureVoice().start();
     else if (voice) voice.stop();
     return;
   }
 
   const bridge = await ensureS2S();
-  if (!bridge) { ensureVoice().start(); return; } // import failed — batch fallback
+  if (!bridge) { await ensureVoice().start(); return; } // import failed — batch fallback
   if (plan.action === 'start') await bridge.start();
   else await bridge.stop();
 }
+
+// BUG-269 defect 2: every caller fires toggleVoice() without await, and the
+// toggle itself awaits mic acquisition — two presses landing mid-toggle
+// interleaved their start/stop writes ("erratic on repeat presses"). The
+// guard drops presses arriving while a toggle is in flight (drop, not queue:
+// queueing would ripple start/stop/start the operator never asked for).
+// See voice/toggle-guard.js and test/voice-toggle-guard.test.js.
+const toggleVoice = createToggleGuard(toggleVoiceImpl);
 
 // Orb click still toggles voice (legacy affordance)
 // (onClick already wired in mountCoreOrb above)
@@ -341,6 +443,10 @@ if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHot
   window.mythos.onHotkey((action) => {
     if (action === 'talk') toggleVoice();
   });
+  // BUG-269 defect 1: announce the listener above is registered. The main
+  // process latches earlier presses and flushes them now (electron/
+  // hotkey-latch.js) — without this, a boot-time press was lost forever.
+  if (typeof window.mythos.notifyReady === 'function') window.mythos.notifyReady();
 }
 
 // camera + hand-gesture control (Part A/B, P16). Camera is OFF by default,
@@ -352,15 +458,67 @@ let camera = null;
 // Gesture -> action map. Confirm accept/reject reuse the LIVE modal buttons
 // (confirm-modal.js) — same code path as a human click, zero new approval
 // surface. Selectors return null harmlessly when no confirm is showing.
-const GESTURE_ACTIONS = {
-  Thumb_Up:    () => { const b = document.querySelector('.confirm-accept'); if (b) { b.click(); mic.setCaption('👍 approved by gesture', 'reply'); } },
-  Closed_Fist: () => { const b = document.querySelector('.confirm-reject'); if (b) { b.click(); mic.setCaption('✊ denied by gesture', 'reply'); } },
-  Open_Palm:   () => {
+// Timestamp of the last mic state change a gesture caused. Owned here rather
+// than inside decideGestureMic so that function stays pure — see
+// vision/gesture-mic.js for why the refractory window it feeds is load-bearing
+// (a hand held in frame re-fires every 2s and would otherwise flip the mic back).
+let lastGestureMicToggleAt = 0;
+
+// Open_Palm toggles the mic; Pointing_Up only ever unmutes it. The decision
+// lives in decideGestureMic() so it is testable without a DOM; this handler owns
+// only the side effects.
+function applyGestureMic(gesture) {
+  const plan = decideGestureMic({
+    gesture,
+    batchActive: Boolean(voice && voice.isActive()),
+    s2sActive: Boolean(s2s && s2s.isActive()),
+    now: Date.now(),
+    lastToggleAt: lastGestureMicToggleAt,
+  });
+  if (plan.action === 'none') return;
+  lastGestureMicToggleAt = Date.now();
+  if (plan.action === 'stop') {
     // Whichever transport currently holds the mic (see toggleVoice) — the
     // gesture has to be able to mute an S2S session too, not just the batch loop.
-    if (voice && voice.isActive()) { voice.stop(); mic.setCaption('🖐 mic muted by gesture', 'info'); }
-    if (s2s && s2s.isActive()) { s2s.stop(); mic.setCaption('🖐 mic muted by gesture', 'info'); }
+    if (voice && voice.isActive()) voice.stop();
+    if (s2s && s2s.isActive()) s2s.stop();
+    mic.setCaption('🖐 mic muted by gesture', 'info');
+    return;
+  }
+  // Start goes through toggleVoice(), never voice.start()/s2s.start() directly:
+  // it owns the PIN gate refusal, the transport choice and the mic-exclusivity
+  // invariant. It is async and a gesture handler must not block, so this is
+  // deliberately fire-and-forget — but a rejection still has to be visible
+  // rather than an unhandled promise.
+  mic.setCaption('☝ mic on by gesture', 'info');
+  toggleVoice().catch((err) => {
+    mic.setCaption(`Could not open the mic: ${err && err.message ? err.message : err}`, 'error');
+  });
+}
+
+const GESTURE_ACTIONS = {
+  // G4: tag the button with the real origin BEFORE the synchronous .click()
+  // fires confirm-modal.js's listener, so the audit trail can tell a gesture
+  // accept apart from a human click on the same button — see that listener
+  // for why the click event itself carries no such distinction on its own.
+  // The tier ceiling (vision/gesture-confirm.js) is checked BEFORE the tag and
+  // the click, so a refused gesture leaves no data-mythos-surface behind for a
+  // later real human click to inherit. A refusal has to be spoken in the caption
+  // or a held thumbs-up looks like the camera simply stopped working.
+  Thumb_Up:    () => {
+    const b = document.querySelector('.confirm-accept');
+    if (!b) return;
+    if (!canGestureAccept(b.dataset.mythosTier)) {
+      mic.setCaption(`👍 ignored — tier ${b.dataset.mythosTier || '?'} needs a real click`, 'error');
+      return;
+    }
+    b.dataset.mythosSurface = 'gesture';
+    b.click();
+    mic.setCaption('👍 approved by gesture', 'reply');
   },
+  Closed_Fist: () => { const b = document.querySelector('.confirm-reject'); if (b) { b.click(); mic.setCaption('✊ denied by gesture', 'reply'); } },
+  Open_Palm:   () => applyGestureMic('Open_Palm'),
+  Pointing_Up: () => applyGestureMic('Pointing_Up'),
   Victory:     () => describeScene('Describe what you see, briefly.'),
 };
 
@@ -432,6 +590,40 @@ subscribe(['camera-frame-request'], (msg) => {
   if (image) sendMessage({ type: 'camera-frame', frameReqId: m.frameReqId, image: image });
 });
 
+// Server-initiated camera POWER-ON (camera_on, T3 — the operator has already
+// confirmed by the time this arrives; see leash/tiers.js). Answers with the state
+// the camera loop ACTUALLY reached, never a hopeful one: createCameraLoop().start()
+// returns false on permission denial and on a failed gesture-model load, and both
+// of those are things the operator needs told rather than papered over.
+//
+// This is the fix for the 2026-08-10 incident's dead end: with the camera off and
+// no way to ask for it, "can you see me?" had no honest path, and the model
+// substituted a desktop screenshot and described that instead.
+subscribe(['camera-power-request'], async (msg) => {
+  const m = msg.payload || msg;
+  const ack = (on, state, reason) =>
+    sendMessage({ type: 'camera-power-ack', reqId: m.reqId, on, state, reason: reason || '' });
+  // The PIN gate governs every sensor affordance, exactly as it does for the mic
+  // and every voice path (see toggleVoice) — a locked HUD must not open a camera.
+  if (isGateClosed(pinLockScreen.lockState())) {
+    ack(false, 'locked', 'the HUD is locked');
+    return;
+  }
+  const cam = ensureCamera();
+  if (cam.isActive()) { ack(true, 'watching', ''); return; }
+  try {
+    // start() resolves only once getUserMedia AND the MediaPipe model are ready
+    // and the detect loop is running, so acking on it means a camera_look issued
+    // immediately afterwards does not race the warm-up. It also emits its own
+    // caption on failure, so the operator sees why in the HUD too.
+    const started = await cam.start();
+    if (started && cam.isActive()) ack(true, 'watching', '');
+    else ack(false, 'off', 'the camera did not start — permission may have been denied, or no camera is available');
+  } catch (err) {
+    ack(false, 'error', (err && err.message) ? err.message : String(err));
+  }
+});
+
 // Chrome gesture policy: SpeechRecognition/AudioContext need a user gesture, so
 // the loop object is constructed on the FIRST pointerdown (any click) — but
 // listening still starts only when the user explicitly clicks the mic or orb.
@@ -478,6 +670,69 @@ if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHot
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', armInShell, { once: true });
   else armInShell();
+}
+
+// BUG-272 W1: a FAILED wake-word start used to be terminal. On 2026-08-17 the
+// mic threw OverconstrainedError 29s into boot (a stale MYTHOS_MIC_DEVICE id)
+// and the wake word stayed dead for the whole 20-minute session, because every
+// arm path in this file is one-shot: armOnce removes its own listener, armInShell
+// polls only the PIN gate and stops once ensureWakeWord() has been CALLED (not
+// once it has succeeded), and startWakeWord() nulls `wakeword` on failure
+// specifically so "a later gesture" can retry. In the Electron shell, hands-free,
+// that later gesture never comes.
+//
+// Two cheap heals, both bounded:
+//   * a backoff re-arm (30s/60s/120s, then stop). Bounded on purpose — an
+//     unbounded retry loop against a denied permission is a prompt storm, and a
+//     mic that is still broken after ~3.5 minutes needs the operator, not
+//     another attempt.
+//   * a `devicechange` re-arm, which is the event that actually corresponds to
+//     the failure: openMicWithFallback() has by then cleared the stale id, so
+//     plugging the mic back in (or Windows re-enumerating it) is exactly when a
+//     retry can newly succeed. Mirrors the listener in views/mic-settings.js.
+//
+// Q8 (pin the disposition): this deliberately does NOT retry when the wake word
+// is disabled by config or its models are absent — those are honest, permanent
+// "not available here" states, and retrying them would just log noise every
+// 30 seconds. `_wakewordCfgError` / model-missing paths return before arming and
+// are left exactly as they were.
+const WAKEWORD_REARM_DELAYS_MS = [30000, 60000, 120000];
+let wakewordRearmIndex = 0;
+let wakewordRearmTimer = null;
+
+function wakewordIsLive() {
+  return Boolean(wakeword && typeof wakeword.isRunning === 'function' && wakeword.isRunning());
+}
+
+function scheduleWakewordRearm(source) {
+  if (wakewordRearmTimer) return;                                  // one pending attempt at a time
+  if (wakewordRearmIndex >= WAKEWORD_REARM_DELAYS_MS.length) return; // bounded, then the operator's problem
+  if (wakewordIsLive()) return;
+  const delay = WAKEWORD_REARM_DELAYS_MS[wakewordRearmIndex++];
+  wakewordRearmTimer = setTimeout(() => {
+    wakewordRearmTimer = null;
+    if (wakewordIsLive()) return;
+    if (isGateClosed(pinLockScreen.lockState())) { scheduleWakewordRearm(source); return; }
+    reportWakeword('rearm', 'retrying the wake word after a failed start', {
+      source: source, attempt: wakewordRearmIndex, delayMs: delay,
+    });
+    ensureWakeWord();
+  }, delay);
+}
+
+// A device arriving/leaving is the one signal that can turn a stale-device
+// failure into a success, so it resets the backoff ladder rather than consuming
+// a rung of it.
+if (typeof navigator !== 'undefined' && navigator.mediaDevices
+    && typeof navigator.mediaDevices.addEventListener === 'function') {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    if (wakewordIsLive()) return;
+    if (isGateClosed(pinLockScreen.lockState())) return;
+    wakewordRearmIndex = 0;
+    if (wakewordRearmTimer) { clearTimeout(wakewordRearmTimer); wakewordRearmTimer = null; }
+    reportWakeword('rearm', 'audio devices changed — retrying the wake word', { source: 'devicechange' });
+    ensureWakeWord();
+  });
 }
 
 // Wake-word ("hey jarvis") — hands-free activation. Lazily imported (like
@@ -601,15 +856,43 @@ function startWakeWord() {
         // was never heard at all, which is half of why this went a week without
         // a diagnosis. Behaviour is deliberately unchanged — the PIN gate in
         // particular is a security control, not a nuisance — they only say so now.
+        // BUG-273 A3: the sixth guard, and the only one that is not about the
+        // present instant. See _lastAssistantAudioAt and wakeword.js's
+        // receptiveFieldMs: a score reported now is evidence about the previous ~2
+        // seconds, so "MYTHOS is not speaking right now" is not the same claim as
+        // "this score cannot be MYTHOS's own voice".
+        //
+        // Q8 — THE COST, DELIBERATELY ACCEPTED. This extends an existing suppression
+        // rather than adding a new one: an operator speaking the wake word WHILE
+        // MYTHOS talks was already suppressed by the two guards above ('mythos-is-
+        // speaking', 'voice-state-speaking'). What changes is that the suppression now
+        // outlasts the speech by one receptive field instead of ending the instant the
+        // audio stops. So the operator cannot wake MYTHOS for ~2s after it finishes a
+        // sentence, and that is the price of not having it wake itself. It is bounded
+        // by the window, it is logged with the exact age below, and it is smaller than
+        // the detector's own REFRACTORY_MS gap between two accepted wakes.
+        const audioAgeMs = _lastAssistantAudioAt ? Date.now() - _lastAssistantAudioAt : Infinity;
+        // Read from the detector, never hardcoded here — a copied constant drifts the
+        // first time a model ships a different classifierWindow.
+        const windowMs = (wakeword && typeof wakeword.receptiveFieldMs === 'function')
+          ? wakeword.receptiveFieldMs() : 0;
         const suppressed =
           isGateClosed(pinLockScreen.lockState()) ? 'pin-gate-closed' :
           (voice && voice.isActive()) ? 'voice-turn-already-active' :
           (s2s && s2s.isActive()) ? 's2s-session-already-active' :
           (s2s && s2s.isSpeaking()) ? 'mythos-is-speaking' :
-          (_voiceState === 'speaking') ? 'voice-state-speaking' : null;
+          (_voiceState === 'speaking') ? 'voice-state-speaking' :
+          (audioAgeMs < windowMs) ? 'own-audio-within-detector-window' : null;
         if (suppressed) {
+          // Q2 — the age and the window ride along. The 2026-08-18 diagnosis was
+          // only possible because the suppressed/unsuppressed distinction and the
+          // score were both in the log; a suppression whose margin is invisible is
+          // the next session that cannot tell "correctly rejected our own greeting"
+          // from "the window is too wide and ate the operator".
           reportWakeword('detected-suppressed', 'wake word detected but not acted on', {
             reason: suppressed, score: typeof score === 'number' ? Number(score.toFixed(4)) : null,
+            ownAudioAgeMs: Number.isFinite(audioAgeMs) ? Math.round(audioAgeMs) : null,
+            detectorWindowMs: windowMs,
           });
           return;
         }
@@ -658,18 +941,24 @@ function startWakeWord() {
     // than inside it: wakeword-arming.test.js asserts setCaption appears within
     // 300 chars of the .then(, and that assertion is worth keeping intact.)
     return wakeword.start().then((ok) => {
-      if (ok) mic.setCaption('Standby — listening for "hey jarvis"', 'info');
+      // A successful arm resets the ladder, so a failure LATER in the session
+      // gets its own three attempts rather than inheriting a spent budget.
+      if (ok) { wakewordRearmIndex = 0; mic.setCaption('Standby — listening for "hey jarvis"', 'info'); }
       else {
         wakeword = null; // failed to arm; let a later gesture try again
         // The status handler has already set a specific caption ('silent' /
         // 'error') and reported it; don't overwrite it with something vaguer.
         reportWakeword('not-listening', 'wake word did not arm');
+        // BUG-272 W1: "let a later gesture try again" is not a plan in the
+        // hands-free Electron shell, where no later gesture arrives.
+        scheduleWakewordRearm('start-failed');
       }
       return ok;
     });
   }).catch((err) => {
     wakeword = null;
     mic.setCaption('Wake word failed to load: ' + (err && err.message || err), 'error');
+    scheduleWakewordRearm('load-failed');
   });
 }
 
@@ -772,7 +1061,21 @@ subscribe(['navigate'], (msg) => {
 // document, and the whole point of the hotkey is that the HUD is NOT focused —
 // a rejected promise just means the caption is the only surface this time).
 subscribe(['ocr-result'], (msg) => {
-  if (isGateClosed(pinLockScreen.lockState())) return;
+  // BUG-268 instrumentation, boundary 3 of 3 (see electron/main.js's OCR-grab
+  // callback for the read-in-order guide). Logged BEFORE the gate check and
+  // recording the gate verdict, because a closed lock gate drops the result
+  // silently — no caption, no clipboard write — and from the operator's side
+  // that is indistinguishable from OCR having failed or never run. This line is
+  // the only way to tell "the PIN lock ate it" from the other four candidates.
+  const gateClosed = isGateClosed(pinLockScreen.lockState());
+  try {
+    console.info('[BUG-268] ocr-result received', {
+      gateClosed: gateClosed,
+      ok: Boolean(msg && msg.payload && msg.payload.ok),
+      textLength: String((msg && msg.payload && msg.payload.text) || '').length,
+    });
+  } catch (_) { /* never break the subscriber to log */ }
+  if (gateClosed) return;
   const p = msg.payload || {};
   if (!p.ok) {
     mic.setCaption('OCR failed: ' + (p.error || 'unknown error'), 'error');
@@ -811,16 +1114,53 @@ subscribe(['widget-command'], (msg) => {
 // Routes rich media (YouTube, direct URLs) to the overlay panel; compact results
 // (search, weather, flights, images) to floating widgets; iframe-blocking sites
 // get smart-routed: 'newtab' opens externally, 'news' navigates to news panel.
+// BUG-273 B3 — every branch below now answers the server: did this actually appear?
+// Three incidents on 2026-08-18 (`news`, `flights`, and a generic "Dashboard did
+// not confirm display") were open_web reporting ok with "the dashboard has not
+// confirmed it rendered this", because nothing ever reported back.
+//
+// `reqId` is absent on the legacy bus relay — from-pc.js and from-widgets.js still
+// emit ui.open-web directly — so ackRender is a no-op for those and this stays
+// purely additive rather than making them fail for want of an ack.
+function ackRender(msg, result) {
+  if (!msg || !msg.reqId) return;
+  try {
+    sendMessage(Object.assign({ type: 'open-web-ack', reqId: msg.reqId }, result || {}));
+  } catch (_) { /* socket down — the server times out and reports unverified */ }
+}
+
 subscribe(['open-web'], (msg) => {
   const p = msg.payload;
-  if (!p || !p.widgetType) return;
+  if (!p || !p.widgetType) {
+    ackRender(msg, { mounted: false, reason: 'the descriptor had no widgetType' });
+    return;
+  }
   if (p.widgetType === 'newtab' || p.widgetType === 'news') {
-    const targetUrl = p.url || 'https://news.google.com';
-    window.open(targetUrl, '_blank', 'noopener');
+    // p.url is untrusted: it comes from the open_web tool, whose URLs originate
+    // in web-search results, fetched page content and model output. window.open
+    // honours javascript:, data: and file: just as happily as http(s), so the
+    // scheme has to be gated here and NOT fall back to the default on a reject —
+    // opening a different page than the one asked for would be a silent lie.
+    const targetUrl = p.url ? safeUrl(p.url) : 'https://news.google.com';
+    if (!targetUrl) {
+      ackRender(msg, { mounted: false, reason: 'that link was not an http(s) URL, so I did not open it' });
+      return;
+    }
+    // window.open returns null when the popup is blocked, which is a real and
+    // common failure that used to be reported to the operator as a success.
+    const win = window.open(targetUrl, '_blank', 'noopener');
+    ackRender(msg, win
+      ? { mounted: true, surface: 'new browser tab' }
+      : { mounted: false, reason: 'the browser blocked the new tab' });
     return;
   }
   if (p.widgetType === 'youtube' || p.widgetType === 'web') {
-    overlays.openPanel('web', p);
+    try {
+      overlays.openPanel('web', p);
+      ackRender(msg, { mounted: true, surface: 'dashboard panel' });
+    } catch (err) {
+      ackRender(msg, { mounted: false, reason: 'the web panel would not open: ' + ((err && err.message) || err) });
+    }
     return;
   }
   // dynamic — Item 11 generative UI (spawn_widget effector): declarative
@@ -828,8 +1168,8 @@ subscribe(['open-web'], (msg) => {
   // floating-widget lifecycle as search/weather/flights/image below — just a
   // distinct render path inside spawnWebWidget, not a different lifecycle.
   if (p.widgetType === 'dynamic') {
-    widgetApi.spawnWebWidget(p);
+    ackRender(msg, widgetApi.spawnWebWidget(p));
     return;
   }
-  widgetApi.spawnWebWidget(p);
+  ackRender(msg, widgetApi.spawnWebWidget(p));
 });

@@ -265,6 +265,40 @@ test('identify registers a node and acks it; a second socket for the same id win
   });
 });
 
+// FIX-PLAN 3.4 (2026-08-17): BUG-253's largest untracked cluster was SIX
+// reports of one reconnect loop in ~30 minutes, each narrated by the immune
+// explainer as a fresh unexplained fault. The anomaly is now damped to one per
+// nodeId per minute with a suppressedCount riding the detail — the storm stays
+// countable, it just stops re-alarming per bounce. (rules/core.md §11.2: the
+// vault's anomaly subscriber stores every EMITTED record; the suppressed
+// bounces are the ones between emissions, carried on the next emission.)
+test('a duplicate-identify storm is damped: one anomaly per nodeId per minute, count carried', async () => {
+  await withServer({}, async ({ bus, port }) => {
+    let live = await connect(port);
+    await identifyAs(live, 'storm-phone');
+
+    const anomalies = [];
+    bus.subscribe('health.anomaly', (e) => anomalies.push(e.payload));
+
+    // Three supersessions inside the damping window: the first emits (with
+    // suppressedCount:0 — nothing suppressed yet), the next two are absorbed.
+    for (let i = 0; i < 3; i++) {
+      const next = await connect(port);
+      await identifyAs(next, 'storm-phone');
+      // Each new socket becomes `previous` for the next round by staying open.
+      live = next;
+    }
+
+    const dupAnomalies = anomalies.filter((a) => a.kind === 'voice-node-duplicate-identify');
+    assert.equal(dupAnomalies.length, 1,
+      'a reconnect bounce inside the window must not re-alarm — six-of-one-loop-in-30-minutes was the recorded storm');
+    assert.equal(dupAnomalies[0].detail.suppressedCount, 0, 'the first emission carries zero suppressed');
+    assert.equal(dupAnomalies[0].detail.nodeId, 'storm-phone');
+
+    live.ws.close();
+  });
+});
+
 test('a second socket identifying for the same nodeId closes the first, and speech afterwards reaches only the new one', async () => {
   await withServer({}, async ({ bus, port }) => {
     const hud = await connect(port);

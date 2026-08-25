@@ -9,7 +9,7 @@ function createInterview({ config, brain, buildEngine }) {
   var maxQuestions = (config.ENGAGEMENT_INTERVIEW_MAX_Q || 5);
   // V6 (Phase 4): brain is optional. When absent or offline, every method
   // falls back to the canned DEFAULT_QUESTIONS template (honest-inert).
-  // Phase B: buildEngine (Hermes-Agent) is now the preferred generator for
+  // Phase B: buildEngine (DeepSeek Harness) is now the preferred generator for
   // generateQuestionsBrain() below, same single-engine reasoning as
   // executor.js's build stage. Unlike brain.think (schemaHint pre-parses the
   // reply into result.parsed), buildEngine.generate() only returns raw
@@ -89,8 +89,11 @@ function createInterview({ config, brain, buildEngine }) {
         if (!result || result.offline || result.aborted || !result.content) return generateQuestions(intent);
         parsed = extractJsonObject(result.content);
       } else {
+        // lane 'reasoning' (2026-08-14) — the questions this generates shape the
+        // whole engagement, and there is a hand-written fallback right below if
+        // the lane is down, so a slower/better model costs nothing.
         var brainResult = await brain.think({
-          lane: 'simple',
+          lane: 'reasoning',
           messages: [{ role: 'user', content: prompt }],
           schemaHint: '{ questions: Array<{id:string,prompt:string,type:string,options?:string[]}> }',
           source: 'engagement:interview'

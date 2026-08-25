@@ -325,3 +325,53 @@ describe('F3 · Dockerfile honors the TTS-is-BYO licensing gate', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// F4 — .dockerignore must keep local builds from baking secrets and junk.
+//
+// Docker does NOT read .gitignore, and Dockerfile:18 does `COPY . .` — so a
+// local `docker build` from mythos/ would bake .env (live secrets, including
+// MYTHOS_AUTH_TOKEN), vault/ (personal data) and the host's node_modules
+// (shadowing the fresh `npm ci` layer) into the image. Render builds from a
+// git clone (render.yaml rootDir: mythos) so it is already protected; this
+// file is the local-build enforcement of the Dockerfile's "NOT baked into
+// the image" promise for the auth token.
+// ---------------------------------------------------------------------------
+
+describe('F4 · .dockerignore keeps local builds from baking secrets and junk', () => {
+  const DOCKERIGNORE_PATH = path.join(MYTHOS_ROOT, '.dockerignore');
+
+  // The real entries on disk, minus comments and blanks — never a
+  // hand-rolled copy of them.
+  function entries() {
+    return readLines(DOCKERIGNORE_PATH)
+      .map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('#'));
+  }
+
+  test('.dockerignore exists and excludes .env, node_modules and vault', () => {
+    assert.ok(fs.existsSync(DOCKERIGNORE_PATH),
+      'mythos/.dockerignore must exist — Docker does not read .gitignore');
+    const list = entries();
+    assert.ok(list.includes('.env'), '.dockerignore must exclude .env (live secrets)');
+    assert.ok(list.some((e) => e === 'node_modules' || e === 'node_modules/'),
+      '.dockerignore must exclude node_modules (npm ci runs before COPY . .)');
+    assert.ok(list.some((e) => e === 'vault' || e === 'vault/'),
+      '.dockerignore must exclude vault/ (personal data)');
+  });
+
+  test('positive control: runtime-read paths stay in the build context', () => {
+    const list = entries();
+    // Verified runtime reads: ui/ (static HUD), skills/ + skills.allowlist
+    // (skills/loader.js), personas/ (personas.js), providers/, src/, server/,
+    // services/, adapters/, mcp/, package*.json (npm ci). An over-aggressive
+    // ignore breaks the image silently — this guard fails loudly instead.
+    const keep = ['ui', 'skills', 'personas', 'providers', 'src', 'server', 'services', 'adapters', 'mcp'];
+    for (const dir of keep) {
+      assert.ok(!list.some((e) => e === dir || e === `${dir}/` || e === `/${dir}` || e === `/${dir}/`),
+        `.dockerignore must NOT exclude ${dir}/ — the runtime reads it`);
+    }
+    assert.ok(!list.some((e) => /^\/?package(-lock)?\.json$/.test(e)),
+      '.dockerignore must NOT exclude package*.json — npm ci needs them');
+  });
+});

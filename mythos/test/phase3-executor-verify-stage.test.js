@@ -60,7 +60,11 @@ function setup(opts) {
     bus, config, dispatchAction: dispatchAction, leash: leash,
     effectors: hub,
     brain: null, checkpoints: null, store: engagement,
-    engagementStore: store, vault: fs, logger: null
+    engagementStore: store, vault: fs, logger: null,
+    // Stub buildEngine: build stages hard-fail without an engine (no brain
+    // fallback), so these build-stage tests wire an offline stub — it fires
+    // the kept offline-anomaly path and still reaches verifyStage.
+    buildEngine: { generate: async function () { return { offline: true, engine: 'fake', error: 'stub' }; } }
   });
   engagement.setOnExecute(function (id) { executor.runEngagement(id); });
 
@@ -78,9 +82,9 @@ describe('Phase 3 (V7) executor command-verify — allowlist-set path runs run_c
   it('a command-type verify with allowlist set dispatches run_command through dispatchAction', async () => {
     const h = setup({ allowlist: 'node:--version' });
     try {
-      // Use a BUILD stage (kind:'build') — build stages always reach
-      // verifyStage even when brain is null (offline brain skips the build
-      // itself but verify still runs). An action stage with an unregistered
+      // Use a BUILD stage (kind:'build') — the stub buildEngine returns an
+      // offline result, so the build itself is skipped (offline-anomaly path)
+      // but verifyStage still runs. An action stage with an unregistered
       // tool would fail out before verify.
       const created = h.engagement.create({ initialIntent: 'verify test' });
       const rec = h.store.read(created.id);

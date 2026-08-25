@@ -49,6 +49,44 @@ strix-security
 okf-knowledge
 llm-app-patterns
 
+# ---- Design / build quality (vendored 2026-08-14 from the verified trending
+# sweep — see THIRD_PARTY_NOTICES.md "Vendored agent skills" for provenance) ----
+hallmark
+diagram-design
+webapp-testing
+web-artifacts-builder
+canvas-design
+theme-factory
+mcp-builder
+skill-creator
+
+# ---- Engineering discipline (addyosmani/agent-skills, MIT) ----
+api-and-interface-design
+code-review-and-quality
+performance-optimization
+security-and-hardening
+observability-and-instrumentation
+
+# ---- Plan sharpening (mattpocock/skills, MIT; grill-me drives grilling) ----
+grill-me
+grilling
+
+# ---- Obsidian-compatible notes (kepano/obsidian-skills, MIT; obsidian-cli
+# is inert without the optional binary — that's fine) ----
+obsidian-markdown
+obsidian-bases
+json-canvas
+defuddle
+obsidian-cli
+
+# ---- Personas (adapted from msitarzewski/agency-agents, MIT) ----
+persona-frontend-developer
+persona-backend-architect
+persona-ui-designer
+persona-brand-guardian
+persona-reality-checker
+persona-ui-finish-gate-reviewer
+
 # ---- Host-only extras ----
 ?deep-research
 ?spec-driven-development

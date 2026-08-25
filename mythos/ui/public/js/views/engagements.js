@@ -2,6 +2,7 @@
 // Follows the established MYTHOS view pattern with render(mount) -> teardown fn contract
 
 import { subscribe } from '../ws.js';
+import { safeHref } from '../url.js';   // relative, not /js/…: this file stays node-importable
 
 // Engagement states for filtering
 const ACTIVE_STATES = ['DRAFT', 'INTERVIEWING', 'SPEC_READY', 'PLAN_READY', 'AWAITING_APPROVAL', 'AWAITING_STAGE_APPROVAL', 'EXECUTING', 'VERIFYING', 'REPAIRING'];
@@ -12,6 +13,12 @@ let state = {
   engagements: [],
   filter: 'active', // active | recent | completed
   selectedId: null,
+  // Which detail tab is showing. The tablist and every pane renderer existed
+  // from the start, but renderTabContent() was never called and no click
+  // handler was ever registered for .engag-detail-tab — so the Spec/Plan/
+  // Execution/Verifications/Report buttons rendered, highlighted on hover, and
+  // did nothing, for mouse and keyboard alike. This is the missing state.
+  activeTab: 'spec',
   wsUnsub: null,
   pollTimer: null,
 };
@@ -26,18 +33,17 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// safeHref — duplicated verbatim from components/engagement/SpecPreviewCard.js
-// (which owns the canonical copy and the tests). escapeHtml() above leaves `"`
-// intact, so without this an LLM-authored spec containing
-// `[x](" onmouseover="alert(1))` breaks out of renderMarkdown's href attribute.
-// Input is already escapeHtml()'d, so only the quote needs handling here.
-function safeHref(url) {
-  if (typeof url !== 'string') return null;
-  const trimmed = url.trim();
-  if (!trimmed) return null;
-  if (!/^https?:\/\//i.test(trimmed)) return null;
-  return trimmed.replace(/"/g, '&quot;');
+// escapeHtml() above does NOT escape `"` — textContent/innerHTML round-tripping
+// never needs to, because it is encoding for TEXT position. Interpolating its
+// output into an ATTRIBUTE is therefore a break-out: one double quote in the
+// value ends the attribute and everything after it is parsed as markup. This
+// repo has shipped that bug before (the HUD's markdown link renderer, fixed with
+// safeHref on 2026-08-02), and this file was doing it again at three
+// interpolations of engagement.id/status. Mirrors overlay-manager.js's escapeAttr.
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, '&quot;');
 }
+
 
 function relativeTime(ts) {
   if (!ts) return '—';
@@ -76,7 +82,12 @@ function filterMatches(engagement) {
   }
   if (state.filter === 'recent') {
     // Recent = completed within 24h or blocked/failed
-    if (REPAIRING.includes(engagement.status)) return true;
+    // `REPAIRING.includes(...)` here was a ReferenceError waiting to happen —
+    // there is no such binding, only the string in ACTIVE_STATES. It never fired
+    // because renderFilterChips() was never called, so state.filter could never
+    // leave 'active'; painting the chips (see render()) would have crashed the
+    // panel on the first click. Fixed 2026-08-13 with the comparison it meant.
+    if (engagement.status === 'REPAIRING') return true;
     if (engagement.status === 'COMPLETED') {
       const completedAt = engagement.completion?.completedAt || engagement.updatedAt;
       return completedAt && (Date.now() - completedAt < 24 * 3600 * 1000);
@@ -104,8 +115,8 @@ function renderListItem(engagement) {
   const time = formatItemTime(engagement);
 
   return `
-    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${escapeHtml(engagement.id)}">
-      <div class="engag-status-dot status-${escapeHtml(engagement.status)}"></div>
+    <div class="engag-list-item${selected ? ' selected' : ''}" data-id="${escapeAttr(engagement.id)}">
+      <div class="engag-status-dot status-${escapeAttr(engagement.status)}"></div>
       <div class="engag-list-item-main">
         <div class="engag-list-item-name">${escapeHtml(name)}</div>
         <div class="engag-list-item-sub">${escapeHtml(sub)}</div>
@@ -156,7 +167,7 @@ function formatItemTime(engagement) {
 function renderFilterChips() {
   const activeCount = state.engagements.filter((e) => ACTIVE_STATES.includes(e.status)).length;
   const recentCount = state.engagements.filter((e) => {
-    if (REPAIRING.includes(e.status)) return true;
+    if (e.status === 'REPAIRING') return true; // see filterMatches — same fix
     if (e.status === 'COMPLETED') {
       const completedAt = e.completion?.completedAt || e.updatedAt;
       return completedAt && (Date.now() - completedAt < 24 * 3600 * 1000);
@@ -204,7 +215,7 @@ function renderDetailHeader(engagement) {
     <div class="engag-detail-header">
       <div class="engag-detail-header-name">${escapeHtml(name)}</div>
       <div class="engag-detail-header-status">
-        <span class="engag-status-dot status-${escapeHtml(engagement.status)}"></span>
+        <span class="engag-status-dot status-${escapeAttr(engagement.status)}"></span>
         <span>${escapeHtml(statusLabel(engagement.status))}</span>
       </div>
       <div class="engag-detail-header-meta">${escapeHtml(meta)}</div>
@@ -212,27 +223,9 @@ function renderDetailHeader(engagement) {
   `;
 }
 
-function renderTabs(engagement) {
-  const tabs = [
-    { key: 'spec', label: 'Spec' },
-    { key: 'plan', label: 'Plan' },
-    { key: 'execution', label: 'Execution' },
-    { key: 'verifications', label: 'Verifications' },
-  ];
-
-  if (engagement.status === 'COMPLETED') {
-    tabs.push({ key: 'report', label: 'Report' });
-  }
-
-  return `
-    <div class="engag-detail-tabs" role="tablist">
-      ${tabs.map((tab) => `
-        <button class="engag-detail-tab" role="tab" data-tab="${tab.key}" ${tab.key === 'spec' ? 'aria-selected="true"' : ''}>${tab.label}</button>
-      `).join('')}
-    </div>
-  `;
-}
-
+// One source of truth for the tab list. renderTabs() used to carry its own
+// copy of this array, which is how a fifth tab could have appeared in one place
+// and not the other.
 function getTabs(engagement) {
   const tabs = [
     { key: 'spec', label: 'Spec' },
@@ -244,6 +237,40 @@ function getTabs(engagement) {
     tabs.push({ key: 'report', label: 'Report' });
   }
   return tabs;
+}
+
+// The Report tab only exists once an engagement completes, so an activeTab
+// pointing at a tab that is no longer in the list has to fall back rather than
+// render an empty panel with no tab selected.
+//
+// Exported so node:test can exercise it directly — same reason web-panel.js
+// exports shouldAutoOpenOnStall (see bug-114's test): it is the one piece of
+// this view with real branching, and the HUD has no DOM harness.
+export function resolveActiveTab(engagement, wanted) {
+  const keys = getTabs(engagement).map((t) => t.key);
+  return keys.includes(wanted) ? wanted : keys[0];
+}
+
+function renderTabs(engagement, activeTab) {
+  // Roving tabindex: exactly one tab is in the tab order, and the arrow keys
+  // move between them (see the keydown handler in render()). That is the
+  // documented tablist pattern, and without it a keyboard user would have to
+  // Tab through every panel heading to reach the last tab.
+  return `
+    <div class="engag-detail-tabs" role="tablist" aria-label="Engagement detail sections">
+      ${getTabs(engagement).map((tab) => {
+        const selected = tab.key === activeTab;
+        return `
+        <button class="engag-detail-tab${selected ? ' active' : ''}" role="tab"
+                id="engag-tab-${escapeAttr(tab.key)}"
+                aria-controls="engag-panel-${escapeAttr(tab.key)}"
+                aria-selected="${selected ? 'true' : 'false'}"
+                tabindex="${selected ? '0' : '-1'}"
+                data-tab="${escapeAttr(tab.key)}">${escapeHtml(tab.label)}</button>
+      `;
+      }).join('')}
+    </div>
+  `;
 }
 
 function renderTabContent(engagement, activeTab) {
@@ -258,18 +285,42 @@ function renderTabContent(engagement, activeTab) {
 
   return `
     <div class="engag-detail-tab-content">
-      ${tabs.map((tab) => `
-        <div class="engag-detail-tab-pane${tab.key === activeTab ? ' active' : ''}" role="tabpanel">${content[tab.key] || ''}</div>
-      `).join('')}
+      ${tabs.map((tab) => {
+        const selected = tab.key === activeTab;
+        // `hidden` as well as the CSS class: .engag-detail-tab-pane is
+        // display:none by default, but a hidden attribute is what keeps an
+        // inactive panel out of the accessibility tree too.
+        return `
+        <div class="engag-detail-tab-pane${selected ? ' active' : ''}" role="tabpanel"
+             id="engag-panel-${escapeAttr(tab.key)}"
+             aria-labelledby="engag-tab-${escapeAttr(tab.key)}"
+             tabindex="0"${selected ? '' : ' hidden'}>${content[tab.key] || ''}</div>
+      `;
+      }).join('')}
     </div>
   `;
 }
 
 function renderSpecTabContent(engagement) {
   if (!engagement.spec?.markdown) {
+    // BUG-341: an empty spec is exactly when the operator needs the button —
+    // pressing it surfaces the machine's refusal verbatim instead of silence.
+    if (engagement.status === 'SPEC_READY') {
+      return `<div style="margin: 16px;">
+        <button class="engag-btn engag-btn-primary" type="button" data-action="build-plan">Build plan</button>
+        <span data-role="build-plan-error" style="color: var(--danger, #e5484d); font-size: 12px; margin-left: 8px;"></span>
+      </div>`;
+    }
     return '<div class="engag-skeleton-block" style="height: 120px; margin: 16px;"></div>';
   }
-  return `<div class="engag-spec-markdown">${renderMarkdown(engagement.spec.markdown)}</div>`;
+  let html = `<div class="engag-spec-markdown">${renderMarkdown(engagement.spec.markdown)}</div>`;
+  if (engagement.status === 'SPEC_READY') {
+    html += `<div style="margin-top: 12px; display: flex; gap: 8px; align-items: center;">
+      <button class="engag-btn engag-btn-primary" type="button" data-action="build-plan">Build plan</button>
+      <span data-role="build-plan-error" style="color: var(--danger, #e5484d); font-size: 12px;"></span>
+    </div>`;
+  }
+  return html;
 }
 
 function renderPlanTabContent(engagement) {
@@ -282,7 +333,7 @@ function renderPlanTabContent(engagement) {
       <div class="engag-stage-card${current ? ' current' : ''}">
         <div class="engag-stage-header">
           <span class="engag-stage-name">${escapeHtml(stage.name)}</span>
-          <span class="engag-stage-type-badge ${stage.type}">${stage.type}</span>
+          <span class="engag-stage-type-badge ${escapeAttr(stage.type)}">${escapeHtml(stage.type)}</span>
         </div>
         <div class="engag-stage-prompt">${escapeHtml(stage.prompt || '')}</div>
         ${stage.verification ? `
@@ -341,7 +392,7 @@ function renderVerificationsTabContent(engagement) {
       ${allChecks.map((check, idx) => {
         const status = check.ok ? 'passed' : 'failed';
         return `
-        <div class="engag-check-card status-${status}" role="listitem" aria-label="Verification check: ${escapeHtml(check.type)} — ${status}">
+        <div class="engag-check-card status-${status}" role="listitem" aria-label="Verification check: ${escapeAttr(check.type)} — ${status}">
           <div class="engag-check-card-header">
             <div class="engag-check-card-icon" aria-hidden="true">${check.ok ? '✓' : '✗'}</div>
             <div class="engag-check-card-info">
@@ -540,6 +591,15 @@ function startPolling() {
 // ============================================ */
 
 function renderListAndDetail() {
+  // The Active/Recent/Completed chips: #engag-filters exists in the panel markup
+  // and its click handler is registered in render(), but nothing ever filled the
+  // container — renderFilterChips() was defined and never called, so the filter
+  // UI was invisible and state.filter could never leave 'active'. Painted here so
+  // it re-renders with the counts on every state change (2026-08-13).
+  // xss-safe: counts are numbers, filter names are literals.
+  const filtersEl = document.getElementById('engag-filters');
+  if (filtersEl) filtersEl.innerHTML = renderFilterChips();
+
   const listEl = document.getElementById('engag-list');
   // xss-safe: static template, no interpolation
   if (listEl) listEl.innerHTML = renderList();
@@ -551,8 +611,15 @@ function renderListAndDetail() {
       // xss-safe: static template, no interpolation
       detailEl.innerHTML = '<div class="engag-list-empty" style="height: 100%; align-items: center; justify-content: center;">Select an engagement to view details.</div>';
     } else {
+      // renderTabContent() was written at the same time as the tablist and then
+      // never called, so every pane renderer below it was dead and the tabs
+      // were decorative. Both halves are wired here.
+      const activeTab = resolveActiveTab(selected, state.activeTab);
+      state.activeTab = activeTab;
       // xss-safe: all interpolated fields escaped
-      detailEl.innerHTML = renderDetailHeader(selected) + renderTabs(selected);
+      detailEl.innerHTML = renderDetailHeader(selected)
+        + renderTabs(selected, activeTab)
+        + renderTabContent(selected, activeTab);
     }
   }
 }
@@ -626,7 +693,59 @@ export async function render(mount) {
     const item = e.target.closest('.engag-list-item');
     if (!item) return;
     state.selectedId = item.dataset.id;
+    // A different engagement starts on its first tab. Carrying the previous
+    // selection over would land on Report for an engagement that has none.
+    state.activeTab = 'spec';
     renderListAndDetail();
+  });
+
+  const detailPanel = document.getElementById('engag-detail');
+
+  detailPanel.addEventListener('click', (e) => {
+    // BUG-341: SPEC_READY advance — the call that was never made anywhere.
+    const buildPlanBtn = e.target.closest('[data-action="build-plan"]');
+    if (buildPlanBtn) {
+      const id = state.selectedId;
+      const errEl = detailPanel.querySelector('[data-role="build-plan-error"]');
+      if (errEl) errEl.textContent = '';
+      buildPlanBtn.disabled = true;
+      transitionEngagement(id, 'buildPlan')
+        .then(() => renderListAndDetail())
+        .catch((err) => {
+          const message = (err && err.message) || String(err);
+          if (errEl) errEl.textContent = message;
+          else console.error('buildPlan refused', message);
+        })
+        .finally(() => { buildPlanBtn.disabled = false; });
+      return;
+    }
+    const tab = e.target.closest('.engag-detail-tab');
+    if (!tab) return;
+    state.activeTab = tab.dataset.tab;
+    renderListAndDetail();
+  });
+
+  // Arrow-key navigation, because role="tablist" promises it. Left/Right move
+  // between tabs, Home/End jump to the ends; the newly selected tab takes focus
+  // so the keyboard user is not dropped back at the top of the panel after
+  // every re-render.
+  detailPanel.addEventListener('keydown', (e) => {
+    const tab = e.target.closest('.engag-detail-tab');
+    if (!tab) return;
+    const tabs = [...detailPanel.querySelectorAll('.engag-detail-tab')];
+    const current = tabs.indexOf(tab);
+    if (current === -1) return;
+    let next = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (current + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (current - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = tabs.length - 1;
+    if (next === null) return;
+    e.preventDefault();
+    state.activeTab = tabs[next].dataset.tab;
+    renderListAndDetail();
+    const focused = detailPanel.querySelector('.engag-detail-tab[aria-selected="true"]');
+    if (focused) focused.focus();
   });
 
   // Initial render

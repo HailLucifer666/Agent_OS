@@ -129,7 +129,11 @@ describe('chaos drill: MYTHOS_DRY_RUN + leash tier-gating under a simultaneous p
 
     // The audit line must be real, on disk, decision 'dry-run' — not skipped because
     // "brain is down anyway".
-    const today = new Date().toISOString().slice(0, 10);
+    // F11 (2026-08-15): audit files roll on the LOCAL day now, matching Episodic —
+    // they used to roll on UTC, so a session spanning local midnight split across
+    // two differently-named files. Read through the shared helper, never a second
+    // copy of the arithmetic.
+    const today = require('../src/core/util/day-key').dayKey();
     const lines = fsStore.readLines('Audit/' + today + '.jsonl');
     const entry = lines.find((l) => l && l.tool === 'launch_app');
     assert.ok(entry, 'a real audit line must exist for the dry-run decision');
@@ -191,7 +195,11 @@ describe('chaos drill: MYTHOS_DRY_RUN + leash tier-gating under a simultaneous p
     assert.ok(history.some((e) => e.type === 'action.denied' && e.payload.reason === 'dry-run'),
       'action.denied with reason dry-run must fire — the tick must not just silently drop the action');
 
-    const today = new Date().toISOString().slice(0, 10);
+    // F11 (2026-08-15): audit files roll on the LOCAL day now, matching Episodic —
+    // they used to roll on UTC, so a session spanning local midnight split across
+    // two differently-named files. Read through the shared helper, never a second
+    // copy of the arithmetic.
+    const today = require('../src/core/util/day-key').dayKey();
     const lines = fsStore.readLines('Audit/' + today + '.jsonl');
     assert.ok(lines.some((l) => l && l.tool === 'launch_app' && l.decision === 'dry-run'),
       'the composed real-instance path must still produce a real, durable audit line — the provider outage must not degrade auditing');

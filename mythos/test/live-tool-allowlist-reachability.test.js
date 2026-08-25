@@ -94,3 +94,79 @@ describe('Live allowlist — the tools the 2026-08-02 WhatsApp session needed', 
     }
   });
 });
+
+// ---- a description must not send the model to a tool it cannot see ----------
+//
+// 2026-08-13. Commit 0bd8408 taught reminder_add to say "Do NOT use this for a
+// timer ... use timer_add for those instead; it rings, this tool never does",
+// and timer_add to say "Use this — never reminder_add — for ANY 'set a timer for
+// N minutes'". But timer_add sat in VOICE_ALLOWLIST_EXEMPT, so on the voice
+// surface it did not exist: a spoken "set a timer for 5 minutes" reached a model
+// holding one reachable tool whose own description forbade using it for that.
+// The commit's own tests were green — they asserted the description TEXT and
+// never reachability.
+//
+// This generalises the read/act-pair rule enforced above: if an allowlisted
+// tool's description names another tool as the thing to use instead, that tool
+// must be reachable too. A hint pointing at an invisible tool is not a remedy,
+// it is a dead end with instructions.
+//
+// Source-scanned across every effector registry rather than constructed: the
+// registries are factories needing live ctx objects (buildCalendarTools(ctx) and
+// friends), and a hand-built stand-in here would recreate exactly the
+// parallel-list problem this file exists to catch.
+describe('Live allowlist — descriptions cannot name unreachable tools', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const EFFECTOR_DIR = path.join(__dirname, '..', 'src', 'core', 'effectors');
+  // { name, description } pairs as they are literally written in the registries.
+  // Anchored on the `, params:` that follows every declaration in these
+  // registries, so an apostrophe inside a description cannot end the match early.
+  const DECL = /name:\s*'([a-z][a-z0-9_]*)'\s*,\s*description:\s*'([^\n]*?)'\s*,\s*params/g;
+  // Only imperative redirects. "see also x" is advice; "use X instead" is an
+  // instruction the model is expected to obey.
+  const REDIRECT = /(?:use|call)\s+([a-z][a-z0-9_]{2,})\s+(?:for those|instead|for that|for any)/gi;
+
+  const declared = new Map(); // tool name -> description
+  for (const file of fs.readdirSync(EFFECTOR_DIR).filter((f) => f.endsWith('.js'))) {
+    const src = fs.readFileSync(path.join(EFFECTOR_DIR, file), 'utf8');
+    for (const m of src.matchAll(DECL)) {
+      if (!declared.has(m[1])) declared.set(m[1], m[2]);
+    }
+  }
+
+  const allowlisted = new Set(DEFAULT_ALLOWLIST);
+
+  test('the scan actually found the registries (a silent zero would pass everything)', () => {
+    assert.ok(declared.size > 100,
+      `expected the effector registries to declare >100 tools, found ${declared.size} — `
+      + 'if this drops, the regex stopped matching and this whole gate is vacuous');
+    assert.ok(declared.has('reminder_add') && declared.has('timer_add'),
+      'and specifically the pair that motivated this gate');
+  });
+
+  test('every tool a reachable description redirects to is itself reachable', () => {
+    const offenders = [];
+    for (const [name, desc] of declared) {
+      if (!allowlisted.has(name)) continue; // an unreachable tool's advice reaches nobody
+      for (const m of desc.matchAll(REDIRECT)) {
+        const named = m[1];
+        if (!declared.has(named)) continue;      // prose, not a tool name
+        if (named === name) continue;            // "use this tool for ..."
+        if (!allowlisted.has(named)) offenders.push(`${name} -> ${named}`);
+      }
+    }
+    assert.deepEqual(offenders, [],
+      'these reachable descriptions send the Live model to a tool that is NOT in '
+      + `DEFAULT_ALLOWLIST: ${offenders.join(', ')}`);
+  });
+
+  test('timer_add and timer_cancel are reachable — the case that found this', () => {
+    assert.ok(allowlisted.has('timer_add'),
+      "reminder_add's description redirects timers to timer_add; without this a spoken timer "
+      + 'silently becomes a reminder that never rings');
+    assert.ok(allowlisted.has('timer_cancel'),
+      'and its cancel sibling, by the read/act-pair rule this file already enforces');
+  });
+});

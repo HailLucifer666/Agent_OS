@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI DIGEST - Compiled by MYTHOS</title>
+    <style>
+        :root {
+            --color-primary: #0A0A0A;
+            --color-on-primary: #FFFFFF;
+            --color-secondary: #1A1A1A;
+            --color-accent: #EC4899;
+            --color-muted: #333333;
+            --color-border: #333333;
+            --color-destructive: #DC2626;
+            --color-ring: #0A0A0A;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --color-primary: #0A0A0A;
+                --color-on-primary: #FFFFFF;
+                --color-secondary: #1A1A1A;
+                --color-accent: #EC4899;
+                --color-muted: #333333;
+                --color-border: #333333;
+                --color-destructive: #DC2626;
+                --color-ring: #0A0A0A;
+            }
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--color-primary);
+            color: var(--color-on-primary);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            padding: 2rem 0;
+            border-bottom: 1px solid var(--color-border);
+        }
+
+        .hero {
+            background-color: var(--color-primary);
+            padding: 2rem 0;
+            margin-bottom: 2rem;
+            position: relative;
+        }
+
+        .hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background-color: var(--color-accent);
+        }
+
+        .breaking-badge {
+            display: inline-block;
+            background-color: var(--color-accent);
+            color: var(--color-primary);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 1rem;
+        }
+
+        .hero h1 {
+            font-family: 'Newsreader', serif;
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+
+        .hero p {
+            font-size: 1.125rem;
+            margin-bottom: 1rem;
+        }
+
+        .source-info {
+            display: flex;
+            align-items: center;
+            font-size: 0.875rem;
+            color: var(--color-muted);
+        }
+
+        .source-info span {
+            margin-right: 1rem;
+        }
+
+        .story-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .story-card {
+            background-color: var(--color-secondary);
+            border-radius: 8px;
+            padding: 1.5rem;
+            transition: transform 0.3s ease;
+        }
+
+        .story-card:hover {
+            transform: scale(1.02);
+        }
+
+        .story-card h2 {
+            font-family: 'Newsreader', serif;
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .story-card p {
+            margin-bottom: 0.5rem;
+        }
+
+        .story-card .source-info {
+            margin-top: 1rem;
+        }
+
+        footer {
+            padding: 2rem 0;
+            text-align: center;
+            border-top: 1px solid var(--color-border);
+            font-size: 0.875rem;
+            color: var(--color-muted);
+        }
+
+        @media (max-width: 768px) {
+            .story-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .hero h1 {
+                font-size: 2rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AI DIGEST</h1>
+        </header>
+        <main>
+            <section class="hero">
+                <span class="breaking-badge">BREAKING</span>
+                <h1>World leaders to attend the India-AI Impact Summit in New Delhi next week</h1>
+                <p>The summit is the first AI summit hosted in the global south; UN Secretary-General Antonio Guterres has said India is the right place for it.</p>
+                <div class="source-info">
+                    <span>News On AIR</span>
+                    <span>2 hours ago</span>
+                </div>
+            </section>
+            <section class="story-grid">
+                <article class="story-card">
+                    <h2>Nvidia notifies customers of AI-related price hikes above 15%</h2>
+                    <p>Nvidia has notified customers of price hikes for its AI-related products.</p>
+                    <div class="source-info">
+                        <span>Bloomberg via Yahoo Finance</span>
+                        <span>4 hours ago</span>
+                    </div>
+                </article>
+                <article class="story-card">
+                    <h2>UN chief says India is the right place to host the first AI summit in the global south</h2>
+                    <p>UN Secretary-General Antonio Guterres has said India is the right place to host the first AI summit in the global south.</p>
+                    <div class="source-info">
+                        <span>News On AIR</span>
+                        <span>4 hours ago</span>
+                    </div>
+                </article>
+                <article class="story-card">
+                    <h2>BRICS+ Lawyers Forum in Delhi debates AI and global legal cooperation</h2>
+                    <p>The BRICS+ Lawyers Forum in Delhi is debating AI and global legal cooperation.</p>
+                    <div class="source-info">
+                        <span>India Today</span>
+                        <span>7 hours ago</span>
+                    </div>
+                </article>
+                <article class="story-card">
+                    <h2>OpenAI slows model training to bolster security after Hugging Face hack</h2>
+                    <p>OpenAI has slowed model training to bolster security after the Hugging Face hack.</p>
+                    <div class="source-info">
+                        <span>Economic Times</span>
+                        <span>2 days ago</span>
+                    </div>
+                </article>
+            </section>
+        </main>
+        <footer>
+            <p>AI DIGEST - compiled by MYTHOS - <?php echo date("Y-m-d"); ?></p>
+        </footer>
+    </div>
+</body>
+</html>

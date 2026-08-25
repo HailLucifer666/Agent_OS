@@ -13,6 +13,7 @@
 
 var version = require('./version');
 var skillsLoader = require('../skills/loader');
+var bootTimeline = require('./boot-timeline');
 
 // Build the manifest from live runtime state. Callers pass the already-
 // constructed hub/brain/sensors so this never constructs anything itself.
@@ -110,7 +111,7 @@ var TIER_LABELS = {
   4: 'Tier 4 — always confirmed, never cached'
 };
 
-function generateMarkdown(hub, adapterStatuses) {
+function generateMarkdown(hub, adapterStatuses, firstBootAt) {
   var v = version.getVersion();
   var cat = (hub && typeof hub.catalog === 'function') ? hub.catalog() : [];
   var byTier = {};
@@ -125,6 +126,17 @@ function generateMarkdown(hub, adapterStatuses) {
     'Auto-generated at boot — do not edit. Version ' + v.version + ' (' + v.gitRef + '), ' + cat.length + ' tools.',
     ''
   ];
+
+  // Wave 7 (2026-08-13): "when did you first boot" / "how long have you been
+  // in development" had no honest answer — version.js's bootDate re-stamps
+  // every restart. firstBootAt is read from vault/Identity/first-boot.json
+  // (written exactly once, ever, by boot-timeline.js), not recomputed here.
+  if (firstBootAt) {
+    var days = Math.floor((Date.now() - new Date(firstBootAt).getTime()) / 86400000);
+    lines.push('First boot ever recorded on this install: ' + firstBootAt +
+      ' (' + days + ' day' + (days === 1 ? '' : 's') + ' ago).');
+    lines.push('');
+  }
 
   if (adapterStatuses && adapterStatuses.length) {
     lines.push('## Adapters');
@@ -164,8 +176,11 @@ function generateMarkdown(hub, adapterStatuses) {
 }
 
 // Render + write vault/Identity/capabilities.md via the vault fs-store.
+// Wave 7: also ensures the vault's first-ever boot timestamp exists (a no-op
+// after the very first call) and renders it into the manifest.
 function writeManifest(fs, hub, adapterStatuses) {
-  var text = generateMarkdown(hub, adapterStatuses);
+  var firstBootAt = bootTimeline.ensureFirstBootRecorded(fs);
+  var text = generateMarkdown(hub, adapterStatuses, firstBootAt);
   fs.writeText('Identity/capabilities.md', text);
   return text;
 }

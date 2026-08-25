@@ -13,11 +13,21 @@ export async function render(mount) {
   mount.innerHTML = `<div class="audit-list" id="audit-list"></div>`;
   const rows = [];
 
+  // Wave 0 (2026-08-13): healer.js's audit rows are deliberately tool:null —
+  // a heal is a playbook decision, not a dispatch, and there is no tool to
+  // name (BUG-125's comment on the write side). Rendering `null` as nothing
+  // made every heal row look like a dispatch that lost its tool name, which
+  // is exactly the failure BUG-125 already ruled out on the write side.
+  function toolLabel(r) {
+    if (r.tool != null) return r.tool;
+    return r.decision === 'heal' ? 'heal' : '';
+  }
+
   function renderList() {
     // xss-safe: all interpolated fields escaped
     mount.querySelector('#audit-list').innerHTML = rows
       .slice(-200).reverse()
-      .map((r) => `<div class="audit-row"><span class="mono">T${escapeHtml(r.tier)}</span> <span class="mono">${escapeHtml(r.decision)}</span> ${escapeHtml(r.tool)}</div>`)
+      .map((r) => `<div class="audit-row"><span class="mono">T${escapeHtml(r.tier)}</span> <span class="mono">${escapeHtml(r.decision)}</span> ${escapeHtml(toolLabel(r))}</div>`)
       .join('') || '<div class="text-faint">No decisions yet.</div>';
   }
 

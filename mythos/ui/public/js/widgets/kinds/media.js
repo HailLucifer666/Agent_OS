@@ -2,9 +2,14 @@
 // Polls /api/media every 5s. Shows album art, track title, artist, and playback state.
 // Honest-offline: shows "no media" when nothing is playing or pc-child is offline.
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/"/g, '"');
-}
+// There used to be an escapeHtml() here that replaced every character with
+// itself — `.replace(/&/g, '&')` and three more like it. It escaped nothing,
+// and it was applied to three values that all go to .textContent, which needs
+// no escaping in the first place. Deleted rather than fixed: a function that
+// LOOKS like a security control and is not one is worse than no function,
+// because the next person to switch a sink to innerHTML will trust it.
+// If a sink here ever becomes innerHTML, import the real helpers from
+// /js/url.js instead of growing another local copy.
 
 // BUG-176: mm:ss for the timeline labels. Pure, exported for node:test.
 // A non-finite position renders as a dash placeholder rather than 0:00 —
@@ -53,17 +58,37 @@ export function mountMedia(el) {
   // One delegated listener for all 5 buttons — posts the key, then refreshes
   // shortly after so the widget reflects the new state fast (5s poll alone
   // would feel laggy right after a click).
-  controlsEl.addEventListener('click', (e) => {
+  controlsEl.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-key]');
     if (!btn) return;
     const key = btn.dataset.key;
-    fetch('/api/media/control', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key }),
-    }).then((res) => {
-      if (res.ok) setTimeout(load, 400);
-    }).catch(() => {});
+    try {
+      const res = await fetch('/api/media/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.ok !== false) { setTimeout(load, 400); return; }
+      if (res.ok) {
+        // HTTP 200 but the dispatch itself failed — breaker open, effector
+        // error. Not a policy refusal, so it does not say "blocked".
+        const detail = body.reason || body.error;
+        statusEl.textContent = detail ? `didn't take effect: ${detail}` : "didn't take effect";
+      } else if (res.status >= 500) {
+        // A server-side crash (e.g. the route's own catch, HTTP 502) is not
+        // a policy decision either — "blocked" would misname it.
+        statusEl.textContent = `request failed (HTTP ${res.status})`;
+      } else {
+        // A refused transport key used to render as a dead button: res.ok was
+        // false and the handler simply returned. Say what happened.
+        statusEl.textContent = body.reason ? `blocked: ${body.reason}` : `blocked (HTTP ${res.status})`;
+      }
+      statusEl.classList.add('media-idle');
+    } catch {
+      statusEl.textContent = 'control failed: no response from the server';
+      statusEl.classList.add('media-idle');
+    }
   });
 
   async function load() {
@@ -78,7 +103,7 @@ export function mountMedia(el) {
         artEl.innerHTML = '';
         titleEl.textContent = '—';
         artistEl.textContent = 'no media playing';
-        statusEl.textContent = data.error ? `error: ${escapeHtml(data.error)}` : '';
+        statusEl.textContent = data.error ? `error: ${data.error}` : '';
         statusEl.classList.add('media-idle');
         progressEl.hidden = true;
         return;
@@ -100,8 +125,8 @@ export function mountMedia(el) {
         artEl.innerHTML = '';
       }
       // Track info
-      titleEl.textContent = m.title ? escapeHtml(m.title) : '—';
-      artistEl.textContent = m.artist ? escapeHtml(m.artist) : (m.source ? `via ${escapeHtml(m.source)}` : 'unknown artist');
+      titleEl.textContent = m.title ? m.title : '—';
+      artistEl.textContent = m.artist ? m.artist : (m.source ? `via ${m.source}` : 'unknown artist');
       // Status
       if (m.playing) {
         statusEl.textContent = '▶ playing';

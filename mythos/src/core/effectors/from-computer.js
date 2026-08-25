@@ -16,6 +16,11 @@ const evidence = require('./evidence');
 // (dispatch-action.js's real ctx is {signal, bus, goalId} — it never carries
 // adapter handles — so these must NOT expect an injected ctx.pcChild).
 const pcChild = require('../../../adapters/pc-child');
+// F6 (2026-08-15 live-session RCA): the SAME vault-relative detector open_artifact
+// (from-dashboard.js) already trusts, reused here rather than hand-rolling a
+// second pattern — see resolveSandboxed()'s vault branch below for why this file
+// needed it too.
+const { vaultRelativePath } = require('./vault-url');
 
 const MAX_LIST_ENTRIES = 50;
 const MAX_READ_BYTES = 1 * 1024 * 1024; // 1MB cap
@@ -69,6 +74,25 @@ function hasReservedDeviceName(resolved) {
   });
 }
 
+// Populated by registerFromComputer(hub, ctx) at boot — same ctx.config every
+// other module-scope collaborator here reads (deepThinkConfig below is the
+// identical object, scoped to think_deeply's own name). resolveSandboxed's
+// vault branch needs it because MYTHOS_VAULT_ROOT is not derivable from
+// process.cwd() — see the F6 comment there.
+let vaultRootConfig = null;
+
+// F6: the forked server process's cwd is pinned by Electron to MYTHOS_DIR
+// (resources\app.asar.unpacked\mythos in the packaged app) — the
+// PRE-MIGRATION vault location (schema.js's DEFAULT_VAULT_ROOT comment) — so
+// path.resolve()ing a vault-relative path against cwd lands in the wrong,
+// stale tree. MYTHOS_VAULT_ROOT is injected correctly (Electron sets it to
+// %APPDATA%\MYTHOS\vault) but nothing here ever consulted it. Returns null,
+// never a guess, when no config was ever handed to registerFromComputer.
+function realVaultRoot() {
+  const configured = vaultRootConfig && vaultRootConfig.MYTHOS_VAULT_ROOT;
+  return configured ? path.resolve(configured) : null;
+}
+
 function realpathOrNull(p) {
   try {
     return fs.realpathSync(p);
@@ -114,6 +138,52 @@ function resolveSandboxed(raw) {
     // (e.g. "/vault/builds" instead of "vault/builds"). Strip it so
     // path.resolve treats it as relative, not as drive-root absolute.
     var cleaned = String(raw).replace(/^\/+/, '');
+
+    // F6 (2026-08-15 live-session RCA, measured): read_file({path:
+    // "vault/builds/job-1786743287677-62/index.html"}) ENOENT'd under
+    // ...\app.asar.unpacked\mythos\vault\builds\... because the generic branch
+    // below resolves relative paths against process.cwd() — and in the
+    // packaged app that cwd IS app.asar.unpacked\mythos, not the real vault.
+    // A vault-relative path must resolve against MYTHOS_VAULT_ROOT instead,
+    // exactly like open_artifact already does via this same vaultRelativePath()
+    // call. Checked BEFORE the generic branch so a vault reference can never
+    // fall through to the cwd-relative path.resolve() that produced F6.
+    const vaultRel = vaultRelativePath(cleaned);
+    if (vaultRel !== null) {
+      const vaultRoot = realVaultRoot();
+      if (!vaultRoot) {
+        return {
+          ok: false,
+          reason: `"${raw}" names a path inside the vault, but no vault root reached this resolver ` +
+            `(registerFromComputer was never given ctx.config) — refusing rather than guessing.`,
+        };
+      }
+      const vaultResolved = path.resolve(vaultRoot, vaultRel);
+      if (hasReservedDeviceName(vaultResolved)) {
+        return { ok: false, reason: 'That path name is reserved by Windows and cannot be used.' };
+      }
+      // Escape check, lexical then realpath (mirrors isInsideAllowedRoots below) —
+      // a vault root that is itself a junction, or a vaultRel containing enough
+      // "../" to walk out, must still be caught. Named loudly with BOTH roots:
+      // the process cwd is exactly what the pre-fix code resolved against, so a
+      // future divergence between the two is legible here instead of surfacing
+      // as a bare ENOENT the way F6 did.
+      const vaultRootReal = realpathOrNull(vaultRoot) || vaultRoot;
+      const ancestorReal = realpathOrNull(nearestExistingAncestor(vaultResolved));
+      const insideVault = containedIn(vaultResolved, vaultRoot) ||
+        (ancestorReal && (containedIn(ancestorReal, vaultRoot) || containedIn(ancestorReal, vaultRootReal)));
+      if (!insideVault) {
+        return {
+          ok: false,
+          reason: `"${raw}" escapes the vault. Resolved against MYTHOS_VAULT_ROOT ("${vaultRoot}") it points to ` +
+            `"${vaultResolved}", which is outside it. (This process's cwd is "${process.cwd()}" — the two roots ` +
+            `diverging is exactly what caused F6, so both are named here rather than one being silently assumed.)`,
+          rule: 'outside-vault-root',
+        };
+      }
+      return { ok: true, resolved: vaultResolved };
+    }
+
     const expanded = cleaned.replace(/%USERPROFILE%/gi, os.homedir());
     const resolved = path.resolve(expanded);
     if (hasReservedDeviceName(resolved)) {
@@ -121,7 +191,19 @@ function resolveSandboxed(raw) {
     }
 
     const roots = allowedRoots();
-    const outside = { ok: false, reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}.` };
+    // `rule`/`allowedRoots` are carried alongside the prose `reason` only for
+    // THIS failure (outside the allowlist) — every other resolveSandboxed()
+    // caller (list_folder, read_file, ...) still reads .reason as a plain
+    // string and is unaffected. open_folder uses the structured fields below
+    // so a refusal is a fact the operator can act on rather than "a mystery":
+    // narrating a fixed rule as unexplained was the actual bug (2026-08-12,
+    // 02:21:27 — the allowlist refusal was explained as a mystery, not a rule).
+    const outside = {
+      ok: false,
+      reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}.`,
+      rule: 'outside-allowed-roots',
+      allowedRoots: roots,
+    };
     // Lexical containment first (cheap, no fs access)...
     if (!comparableRoots().some((root) => containedIn(resolved, root))) return outside;
     // ...then the real-path check, so a junction/symlink planted inside an
@@ -153,39 +235,95 @@ function resolveSandboxed(raw) {
 async function open_folder({ path: rawPath }) {
   if (!rawPath) return fail('A folder path is required.');
   const sandboxed = resolveSandboxed(rawPath);
-  if (!sandboxed.ok) return fail(sandboxed.reason);
+  if (!sandboxed.ok) {
+    // Carry the rule and the allowed roots as fields the model can act on
+    // (e.g. "open X inside <one of allowedRoots>"), not only prose it has to
+    // parse back apart — see the WAVE comment above resolveSandboxed's
+    // `outside` object for why this is open_folder-specific.
+    if (sandboxed.rule) {
+      return fail({ error: sandboxed.reason, rule: sandboxed.rule, allowedRoots: sandboxed.allowedRoots });
+    }
+    return fail(sandboxed.reason);
+  }
   try {
     if (!fs.existsSync(sandboxed.resolved)) return fail(`Folder not found: ${sandboxed.resolved}`);
     let stat;
     try { stat = fs.statSync(sandboxed.resolved); } catch (_) { stat = null; }
-    if (stat && !stat.isDirectory()) {
-      return fail(`That is a file, not a folder: ${sandboxed.resolved}. Use open_artifact for files.`);
-    }
-
-    const child = spawn('explorer.exe', [sandboxed.resolved], { detached: true, stdio: 'ignore' });
+    // BUG-283 (2026-08-20): a file path used to be refused outright, with a
+    // message naming open_artifact. Measured against the audited session: the
+    // model did not take the pointer. open_folder was handed
+    // Desktop\capabilities.txt, got exactly that refusal, and later — asked to
+    // reopen a saved recipe — told the operator "Cannot open that specific file.
+    // System limitation." while open_artifact sat declared in the Live allowlist,
+    // uncalled, for the entire session.
+    //
+    // This is the third time this tool has lost a tool-selection race for this
+    // intent (see the launch_app('explorer.exe "D:\\..."') history above), and
+    // the second time the remedy was prose. Prose lost twice, so the dead end
+    // goes: a file path now REVEALS the file — Explorer opens the containing
+    // folder with the file selected, which is what "open the folder" means when
+    // you are pointed at a file — and the result still names open_artifact for
+    // opening the file itself.
+    //
+    // Deliberately NOT a silent delegation to open_artifact. This tool opens
+    // Explorer; launching a document from something called open_folder would
+    // trade one dishonesty for another. `opened` and `revealed` stay separate
+    // fields for the same reason.
+    const isFile = Boolean(stat && !stat.isDirectory());
+    // `/select,<path>` must be ONE argument — split in two, Explorer quietly
+    // opens the wrong thing and the spawn still succeeds.
+    const spawnArgs = isFile ? [`/select,${sandboxed.resolved}`] : [sandboxed.resolved];
+    const child = spawn('explorer.exe', spawnArgs, { detached: true, stdio: 'ignore' });
     child.unref();
 
-    const leaf = path.basename(sandboxed.resolved);
-    const base = { ok: true, result: { opened: sandboxed.resolved, name: leaf } };
+    // The window that appears is the CONTAINING folder's, so the oracle below
+    // must look for that name, not the file's.
+    const openedPath = isFile ? path.dirname(sandboxed.resolved) : sandboxed.resolved;
+    const leaf = path.basename(openedPath);
+    const base = isFile
+      ? {
+        ok: true,
+        result: {
+          opened: openedPath,
+          name: leaf,
+          revealed: sandboxed.resolved,
+          note: 'That path is a file, so I opened its folder with the file selected. '
+            + 'Call open_artifact on the same path to open the file itself.',
+        },
+      }
+      : { ok: true, result: { opened: sandboxed.resolved, name: leaf } };
 
-    // Explorer needs a moment to create and title the window.
-    await new Promise((r) => setTimeout(r, 700));
-    let win = null;
-    try {
-      const fromPc = require('./from-pc');
-      if (typeof fromPc.findExplorerWindow === 'function') win = await fromPc.findExplorerWindow(leaf);
-    } catch (_) { /* pc-child may be offline; that only costs us the oracle */ }
+    // Explorer needs a moment to create and title the window — and a single
+    // check after a fixed 700ms was a coin flip on a busy machine, reporting
+    // real successes as unverified. Bounded poll instead (fix-plan 2.2): four
+    // tries, 400ms apart, stopping at the first hit. from-pc is required
+    // lazily (circular dep) and its absence costs only the oracle, never the
+    // open itself.
+    let locate = null;
+    try { locate = require('./from-pc').findExplorerWindow; } catch (_) { /* pc-child offline costs only the oracle */ }
+    let located = null;
+    if (typeof locate === 'function') {
+      for (let attempt = 0; attempt < 4 && !(located && located.window); attempt++) {
+        await new Promise((r) => setTimeout(r, 400));
+        try { located = await locate(leaf); } catch (_) { located = null; }
+      }
+    }
 
-    if (win) {
+    if (located && located.window) {
       return evidence.verifiedOk(base, {
         oracle: 'window-title',
         expected: leaf,
-        observed: String(win.title) + ' (pid ' + win.pid + ')',
+        observed: String(located.window.title) + ' (pid ' + located.window.pid + ')'
+          + (located.matchedBy === 'contains' ? ' [title-match: contains]' : ''),
       });
+    }
+    if (located && !located.online) {
+      return evidence.unverified(base,
+        'asked Explorer to open ' + leaf + ', but pc-child is not running, so I could not verify the window');
     }
     return evidence.unverified(base,
       'asked Explorer to open ' + leaf + ', but no window with that name showed up — it may have ' +
-      'reused a window you already had open, or pc-child is not running to check');
+      'reused a window you already had open');
   } catch (err) {
     return fail(err.message);
   }
@@ -544,11 +682,236 @@ function compose_email({ to, subject, body }) {
   }
 }
 
+// ---- think_deeply (2026-08-14) -------------------------------------------
+// The only route from a conversation to a strong reasoning model. See
+// deep-think.js's header for why a TOOL is the mechanism rather than a lane
+// change: the Live voice path makes no brain.think calls at all, so nothing in
+// lanes.default.js can reach it.
+//
+// Collaborators arrive through registerFromComputer(hub, ctx) rather than a
+// closure factory, because TOOLS is a module-level const this file exports and
+// four other modules import from. Held in module scope, which is exactly the
+// shape that made camera_look's brain "always null" for weeks — so the failure
+// below is explicit and named, and test/think-deeply.test.js pins that main.js
+// actually passes it.
+let deepThinkBrain = null;
+let deepThinkConfig = null;
+let deepThinkLogger = null;
+
+// BUG-287 (2026-08-20): think_deeply had no rate limit, and the reasoning lane
+// is slow and rate-limited upstream, so nothing stopped it being called in a
+// tight loop.
+//
+// Measured from that day's audit: eight calls, all actor:"cortex", with gaps of
+// 61s, 12s, 17s, 153s, 416s and 22s — four of them inside 91 seconds, each
+// restating the same browser-offline diagnosis. The operator said "Why are you
+// repeating yourself? You just told me that" and "why are you thinking deeply
+// for everything?", then told it to log the bug, which is incident
+// inc-1787170098385-1. The loop is legible in the arguments: at 20:07:59 it
+// asked the reasoning lane why it had repeated itself, and at 20:08:16 it asked
+// the reasoning lane why it kept calling the reasoning lane — each call adding
+// the latency that produced the next repetition.
+//
+// A CONTENT DIFF-GATE WOULD NOT HAVE CAUGHT THIS, and diff-gate.js already
+// exists for a neighbouring problem (mull() speaks only when its thought
+// changed), so that was the obvious first idea. All eight questions are
+// textually different — different questions about the same stuck situation. The
+// only thing they share is being seconds apart, so the gate has to be time.
+//
+// 60s is not a round number chosen for looking sensible: it is the cut that
+// blocks the three rapid calls (12s, 17s, 22s) and allows the four spaced ones
+// (61s, 153s, 416s). Change the reasoning if you change the number.
+//
+// The tool description already says "DEFAULT TO ANSWERING IT YOURSELF... this
+// call is expensive". It is still there, still right, and it lost — the third
+// time prose guidance has lost to a tool call in this codebase.
+const DEEP_THINK_MIN_INTERVAL_DEFAULT_MS = 60000;
+let lastDeepThinkAt = 0;
+
+function deepThinkMinIntervalMs() {
+  const raw = deepThinkConfig && deepThinkConfig.DEEP_THINK_MIN_INTERVAL_MS;
+  if (raw === undefined || raw === null || raw === '') return DEEP_THINK_MIN_INTERVAL_DEFAULT_MS;
+  const n = Number(raw);
+  // A threshold that parses to NaN makes every comparison below false, which
+  // switches the guard OFF while leaving it looking on — the exact shape this
+  // repo has been bitten by before. Fall back to the DEFAULT, never to zero:
+  // a broken value must leave the guard standing, and it says so out loud.
+  // An explicit 0 is different and is honoured — that is the deliberate opt-out.
+  if (!Number.isFinite(n) || n < 0) {
+    if (deepThinkLogger && typeof deepThinkLogger.warn === 'function') {
+      try {
+        deepThinkLogger.warn('DEEP_THINK_MIN_INTERVAL_MS is not a non-negative number — using the default',
+          { value: raw, usingMs: DEEP_THINK_MIN_INTERVAL_DEFAULT_MS });
+      } catch (_) { /* logging must never take the tool down */ }
+    }
+    return DEEP_THINK_MIN_INTERVAL_DEFAULT_MS;
+  }
+  return n;
+}
+
+async function think_deeply({ question, context }) {
+  if (!deepThinkBrain || typeof deepThinkBrain.think !== 'function') {
+    return fail('No brain is wired for deep reasoning, so I cannot think this through properly.');
+  }
+  // Checked AFTER the brain check on purpose: telling the operator to wait 45
+  // seconds for a lane that is not wired at all would be a confident wrong
+  // answer, and "no brain" is the more actionable of the two.
+  // The `minIntervalMs > 0` clause below is an EQUIVALENT MUTANT under testing:
+  // with the interval at 0, `sinceLast < 0` is already false for any forward
+  // clock, so flipping it to >= 0 changes nothing a test can observe. It is kept
+  // deliberately — it is what makes the 0 opt-out true even if the system clock
+  // steps backwards mid-session, which is the one case where sinceLast can go
+  // negative. Recorded so the next reader does not delete it as dead.
+  const minIntervalMs = deepThinkMinIntervalMs();
+  const sinceLast = Date.now() - lastDeepThinkAt;
+  if (minIntervalMs > 0 && lastDeepThinkAt > 0 && sinceLast < minIntervalMs) {
+    const waitS = Math.ceil((minIntervalMs - sinceLast) / 1000);
+    // Deliberately NOT phrased as a fault. A message the model reads as broken
+    // sends it diagnosing a healthy system, which is the loop this is closing.
+    // It has to be actionable, so it names the one action available: answer now.
+    return fail('Deep reasoning was used ' + Math.round(sinceLast / 1000) + 's ago and is rate-limited '
+      + 'for another ' + waitS + 's. Nothing is wrong. Answer this yourself now, from what you already '
+      + 'know — you are capable of it, and a fast good answer beats a slow better one.');
+  }
+  // Stamped BEFORE the call, not after. A lane that is down burns the full
+  // timeout on every attempt, so a failing call is the one most worth spacing
+  // out; stamping on success only would leave a broken lane hammerable.
+  lastDeepThinkAt = Date.now();
+  const { deepThink } = require('./deep-think');
+  try {
+    const r = await deepThink(deepThinkBrain, {
+      question: question,
+      context: context,
+      source: 'think-deeply',
+      timeoutMs: deepThinkConfig && deepThinkConfig.DEEP_THINK_TIMEOUT_MS,
+      attemptTimeoutMs: deepThinkConfig && deepThinkConfig.DEEP_THINK_ATTEMPT_TIMEOUT_MS,
+      logger: deepThinkLogger,
+    });
+    // Degrade HONESTLY and specifically. "Failed" would be indistinguishable
+    // between "no provider alive", "took too long" and "you gave me nothing to
+    // think about", and the operator can act on all three differently.
+    if (r.reason && !r.content) return fail(r.reason);
+    if (r.offline || !r.content) return fail('The reasoning lane did not return an answer.');
+    return ok({ answer: r.content, provider: r.provider, model: r.model, ms: r.ms });
+  } catch (err) {
+    return fail(err.message);
+  }
+}
+
+// open_file needs the Electron shell to ask the OS to open a document, and
+// the effector layer has no way to reach it directly. src/main.js injects
+// serverHandle.requestOpenPath here once the server exists. Left null under a
+// batch/dev boot on purpose: open_file then says the shell is absent instead
+// of reporting an open that nothing performed.
+let openPathProvider = null;
+function setOpenPathProvider(fn) { openPathProvider = typeof fn === 'function' ? fn : null; }
+
+// Extensions where the shell EXECUTES rather than displays. Refused by NAME,
+// matching the posture of isUncPath/hasReservedDeviceName above: name the
+// risk shape rather than trusting one layer to have caught it.
+//
+// Q1 — WHAT ELSE MATCHES THIS? This is a denylist, and a denylist over
+// attacker-chosen extensions is not a security boundary; the real boundary is
+// resolveSandboxed(), which runs first and confines every path to the allowed
+// roots. This list exists so that a file the OPERATOR names by voice inside
+// their own sandbox cannot turn "show me that" into "run that" by accident —
+// a different and much narrower job. .lnk is here because a shortcut executes
+// whatever it points at, and .js because Windows hands it to wscript.
+const OPEN_FILE_BLOCKED_EXT = new Set([
+  '.exe', '.bat', '.cmd', '.ps1', '.msi', '.scr', '.com', '.vbs', '.js',
+  '.jar', '.wsf', '.hta', '.lnk', '.reg',
+]);
+
+async function open_file({ path: raw }) {
+  const sandboxed = resolveSandboxed(raw);
+  if (!sandboxed.ok) return fail(sandboxed.reason);
+  const resolved = sandboxed.resolved;
+  let st;
+  try { st = fs.statSync(resolved); }
+  catch { return fail('File not found: ' + resolved); }
+  if (st.isDirectory()) {
+    return fail('That is a folder, not a file — use open_folder for folders: ' + resolved);
+  }
+  const ext = path.extname(resolved).toLowerCase();
+  if (OPEN_FILE_BLOCKED_EXT.has(ext)) {
+    return fail('Refusing to open "' + ext + '" — Windows would EXECUTE it, not display it. ' +
+      'If running it is genuinely what you want, that is run_command, which asks first.');
+  }
+  if (!openPathProvider) {
+    return fail('open_file needs the MYTHOS desktop shell, and it is not running.');
+  }
+  const verdict = await openPathProvider(resolved);
+  if (!verdict || !verdict.opened) {
+    return fail('Could not open ' + resolved + ': ' + ((verdict && verdict.reason) || 'unknown'));
+  }
+  // 2026-08-21, operator ticket, their words: "why can't you confirm? ... Just
+  // tell me in short that I have opened it." The first version of this said
+  // there was no oracle for whether the app rendered anything. That was wrong:
+  // open_folder, forty lines up, has polled findExplorerWindow for exactly this
+  // since it was written. The window that appears here belongs to the
+  // ASSOCIATED app rather than Explorer, so this uses findWindowByTitle — but
+  // it is the same oracle, and not looking for it was a sibling-parity miss.
+  //
+  // The verbosity the operator objected to is downstream of the same defect:
+  // the paragraph about Windows accepting a command is what
+  // evidence.unverified() emits. Confirm the open and those fields disappear on
+  // their own. Shortening the text WITHOUT the oracle would have meant claiming
+  // an open nobody had checked, which is the one thing the contract forbids.
+  //
+  // Bounded poll, four tries 400ms apart, mirroring open_folder: an app needs a
+  // moment to create and title its window, and a single fixed-delay check is a
+  // coin flip on a busy machine that reports real successes as unverified.
+  // from-pc is required lazily (circular dep) and its absence costs only the
+  // oracle, never the open.
+  const leaf = path.basename(resolved);
+  const base = ok({ opened: resolved, name: leaf });
+  let locate = null;
+  try { locate = require('./from-pc').findWindowByTitle; } catch (_) { /* offline costs only the oracle */ }
+  let located = null;
+  if (typeof locate === 'function') {
+    for (let attempt = 0; attempt < 4 && !(located && located.window); attempt++) {
+      await new Promise((r) => setTimeout(r, 400));
+      try { located = await locate(leaf); } catch (_) { located = null; }
+    }
+  }
+
+  if (located && located.window) {
+    // "and focus it on front" was part of the same request. Advisory: Windows
+    // can refuse the foreground change (BUG-272 T3, ladder documented as
+    // exhausted), and a refused focus must not turn a confirmed open into a
+    // failure — the file IS open either way.
+    try {
+      const pcFocus = require('./from-pc').focus_window;
+      if (typeof pcFocus === 'function') await pcFocus({ pid: located.window.pid });
+    } catch (_) { /* the window is open regardless of whether it came forward */ }
+    return evidence.verifiedOk(base, {
+      oracle: 'window-title',
+      expected: leaf,
+      observed: String(located.window.title) + ' (pid ' + located.window.pid + ')'
+        + (located.matchedBy === 'contains' ? ' [title-match: contains]' : ''),
+    });
+  }
+  if (located && !located.online) {
+    return evidence.unverified(base,
+      'asked Windows to open ' + leaf + ', but pc-child is not running, so I could not verify the window');
+  }
+  return evidence.unverified(base,
+    'asked Windows to open ' + leaf + ', but no window with that name showed up — the app may still ' +
+    'be starting, or it may have opened the file in a window that is titled differently');
+}
+
 const TOOLS = [
-  { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - the folder path to open' }, danger: false, fn: open_folder },
+  { name: 'open_file', description: 'Open a FILE in whatever application Windows associates with it — a .txt in Notepad, a .pdf in the PDF viewer, a .png in Photos. Use for "open that file", "open the report on my desktop", "open notes.txt". Takes a full file PATH. For a FOLDER use open_folder; for a build MYTHOS itself produced in the vault use open_artifact. Refuses executables (.exe/.bat/.ps1 and similar) because Windows would run them rather than show them.', params: { path: 'string - the full path of the file to open' }, danger: false, fn: open_file },
+  { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. Given a FILE path it opens that file\'s folder with the file selected — to open the file itself in its app, call open_file instead (until 2026-08-21 this said open_artifact, which only serves builds out of the vault over HTTP and could not open a file on disk at all). This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - a folder path, or a file path to reveal in its folder' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
   { name: 'read_file', description: 'Read a text file (head 16KB, max 1MB).', params: { path: 'string' }, danger: false, fn: read_file },
-  { name: 'write_file', description: 'Write text content to a file inside the allowed sandbox (creates missing parent folders; overwrites if the file already exists).', params: { path: 'string', content: 'string' }, danger: true, fn: write_file },
+  // 2026-08-14 (BUG-219): the description now names the phrasing that should reach
+  // it. Asked to "save it", the model went after a Save dialog it cannot drive on
+  // MSIX Notepad — five minutes of ctrl+s and File-menu clicks, then it closed the
+  // window and the text was gone. Writing the content to a file was available the
+  // whole time. The rule of thumb is the operator's intent: they want the CONTENT
+  // kept, not a particular dialog operated.
+  { name: 'write_file', description: 'Write text content to a file inside the allowed sandbox (creates missing parent folders; overwrites if the file already exists). Use this — not a Save dialog, ctrl+s, or menu clicking — whenever the user says "save it", "save this as X", "keep this", or "put that in a file" and a specific path or filename matters; for a plain titled note with no path, use note_take instead. If a save keystroke or Save menu has already failed in an app, do NOT retry it: write the content here and say where it went.', params: { path: 'string', content: 'string' }, danger: true, fn: write_file },
   { name: 'create_folder', description: 'Create a folder (and any missing parent folders) inside the allowed sandbox.', params: { path: 'string' }, danger: true, fn: create_folder },
   { name: 'delete_file', description: 'Permanently delete a file (not a folder) inside the allowed sandbox.', params: { path: 'string' }, danger: true, fn: delete_file },
   { name: 'move_file', description: 'Move (or rename) a file or folder from one location to another inside the allowed sandbox.', params: { from: 'string', to: 'string' }, danger: true, fn: move_file },
@@ -566,9 +929,37 @@ const TOOLS = [
   // full conflict-resolution reasoning (Task 3 proposed T1, V2 §7.8 proposed
   // T2; resolved T2, which requires danger:false to stay consistent here).
   { name: 'clipboard_write', description: 'Overwrite the Windows clipboard with the given text.', params: { text: 'string' }, danger: false, fn: clipboard_write },
+  // The description has to say WHEN to reach for this, not what it is. A vague
+  // one is how open_web got `query` where its contract demanded `url`, five
+  // times out of five (docs/free-tier-model-map.md's J probe is a miniature of
+  // that failure). Two failure modes are named explicitly: reaching for it on
+  // small talk (burns a slow call and a scarce 5/min budget) and NOT reaching
+  // for it on a question the conversation model will otherwise answer badly
+  // from its own Flash-tier depth.
+  // BUG-255: the first wording named the two failure modes but framed CALLING as
+  // the normal move — "comparing options, planning an approach, checking whether
+  // an argument holds" describes most of a conversation, and a measured session
+  // reached for it 10 times out of 34 total tool calls, more than every other
+  // tool combined. Each call is two inference passes (call, then re-reason over
+  // the result), which on a rate-limited free tier is the dominant latency the
+  // operator feels — a turn that stalled 19s after the tool itself answered in
+  // 580ms. So the default is now ANSWERING, and calling requires a positive
+  // test the model can actually apply: would you otherwise guess?
+  { name: 'think_deeply', description: 'Hand a hard question to a stronger reasoning model and get its answer back. DEFAULT TO ANSWERING IT YOURSELF — you are capable, and this call is expensive: it costs a scarce rate-limited request and roughly doubles how long the operator waits. Only reach for it when you would otherwise GUESS: a genuinely multi-step problem you cannot hold in one pass, a real trade-off between options where being wrong matters, or a described failure whose cause you cannot name. If you already know the shape of the answer, say it — a fast good answer beats a slow better one. Never for chat, opinions, recall, or anything you could answer in a sentence. Not for looking something up (use web_search) or anything on screen (use screen_look). Pass the FULL question plus any facts in `context` — it cannot see the conversation. It takes several seconds, so say you are thinking first. It is rate-limited to roughly one call a minute across the whole system; if it says it is cooling down, that is normal — answer the question yourself instead of retrying or apologising.', params: { question: 'string - the full question, self-contained', context: 'string (optional) - facts, prior findings or constraints it should reason from' }, danger: false, fn: think_deeply, needs_result: true },
 ];
 
-function registerFromComputer(hub) {
+// ctx (optional) — { brain, config, logger }. think_deeply needs ctx.brain;
+// resolveSandboxed's vault branch (F6, 2026-08-15) needs ctx.config for
+// MYTHOS_VAULT_ROOT. Every other tool here is dependency-free, which is why
+// this stayed a plain (hub) call until 2026-08-14. A call with no ctx still
+// registers every tool: think_deeply fails with a named reason instead of
+// throwing, and a vault-relative path fails loudly instead of silently
+// resolving against cwd (see realVaultRoot()'s null case above).
+function registerFromComputer(hub, ctx) {
+  deepThinkBrain = (ctx && ctx.brain) || null;
+  deepThinkConfig = (ctx && ctx.config) || null;
+  deepThinkLogger = (ctx && ctx.logger) || null;
+  vaultRootConfig = (ctx && ctx.config) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }
@@ -577,6 +968,11 @@ function registerFromComputer(hub) {
 
 module.exports = {
   registerFromComputer,
+  open_file,
+  setOpenPathProvider,
+  // BUG-287 test seam: lets the suite assert the schema default and the code
+  // default are the same number, since the reasoning for 60s lives in both.
+  _deepThinkMinIntervalDefaultMs: () => DEEP_THINK_MIN_INTERVAL_DEFAULT_MS,
   TOOLS,
   open_folder,
   list_folder,
@@ -590,6 +986,7 @@ module.exports = {
   search_files,
   clipboard_read,
   clipboard_write,
+  think_deeply,
   compose_email,
   resolveSandboxed,
   isInsideAllowedRoots,

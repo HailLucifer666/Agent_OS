@@ -105,7 +105,12 @@ function createBrain({ config, bus, identity }) {
     // whose output is spoken aloud even though its lane is in BRAIN_TERSE_LANES
     // (the boot greeting uses lane 'simple' and is read out, so it passes false).
     // Undefined means "follow the lane config".
-    async think({ lane, messages, schemaHint, budget, signal, source, onToken, persona, terse }) {
+    // attemptTimeoutMs / onAttemptEnd (2026-08-14) are pass-throughs to chain.js
+    // for callers that bound their OWN total budget: a caller whose budget is
+    // shorter than the chain's per-attempt step gets no failover at all, because
+    // the first slow provider eats the whole budget. See chain.complete's header —
+    // vision is the case that exposed it.
+    async think({ lane, messages, schemaHint, budget, signal, source, onToken, persona, terse, attemptTimeoutMs, onAttemptEnd }) {
       // 1. Embed lane is placeholder — clean offline
       if (lane === 'embed') {
         return { content: null, offline: true, lane };
@@ -125,7 +130,17 @@ function createBrain({ config, bus, identity }) {
           ...messages
         ];
       }
-      if (['voice', 'build', 'simple'].indexOf(lane) !== -1) {
+      // 'reasoning' and 'memory' joined this list on 2026-08-14 WITH the lane
+      // split, not after it. agent-actions.js passes
+      // `persona: personas.loadPersona('reviewer')` / `'reality-checker'`, and
+      // those two calls moved from 'simple' to 'reasoning' in the same change —
+      // had this list not moved with them, the `persona` argument would have
+      // been silently ignored and both seats would have gone generic. A lane
+      // rename dropping a sibling argument is invisible: nothing throws, the
+      // call still succeeds, the output is merely less specialised. If you add a
+      // lane that accepts a persona, add it here, and
+      // test/brain-persona-lanes.test.js will hold you to it.
+      if (['voice', 'build', 'simple', 'reasoning', 'memory'].indexOf(lane) !== -1) {
         // Per-call persona override — when the caller passes a `persona` string,
         // use it instead of the global identity persona. This enables specialized
         // agent seats (frontend-builder, backend-builder, reviewer) without
@@ -170,7 +185,16 @@ function createBrain({ config, bus, identity }) {
           onAttempt: function({ provider, model }) {
             if (bus) bus.emit('brain-spend', { provider, model, lane, source });
           },
+          onAttemptEnd,
+          attemptTimeoutMs,
           onToken,
+          // B1 (2026-08-14): config was never forwarded, so chain.js's
+          // `config && config.CHAIN_COOLDOWN_MS` read undefined on every call
+          // from here and silently fell back to the env/literal default — which
+          // also means CHAIN_BREAKERS_ENABLED could not have reached it. bus is
+          // forwarded so a breaker trip is announced instead of being silent.
+          config,
+          bus,
         });
 
         // 4. Parse with repair

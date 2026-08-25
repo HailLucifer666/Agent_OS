@@ -27,8 +27,14 @@ const SRC = fs.readFileSync(
   'utf8'
 );
 const factory = new Function(`${SRC.replace(/^export /gm, '')}
-  return { deriveSetupNeed, planGapActions, extractKeyNames, validateKeyValue, interpretStoreResult };`);
-const { deriveSetupNeed, planGapActions, extractKeyNames, validateKeyValue, interpretStoreResult } = factory();
+  return { deriveSetupNeed, planGapActions, extractKeyNames, validateKeyValue, interpretStoreResult,
+           shouldRetryProbe, retryDelayMs, chooseSetupScreen, validatePinPair, interpretPinSetResult,
+           buildProviderCatalog, wizardCanFinish };`);
+const {
+  deriveSetupNeed, planGapActions, extractKeyNames, validateKeyValue, interpretStoreResult,
+  shouldRetryProbe, retryDelayMs, chooseSetupScreen, validatePinPair, interpretPinSetResult,
+  buildProviderCatalog, wizardCanFinish,
+} = factory();
 
 const okBody = (rows) => ({
   ok: true,
@@ -72,6 +78,29 @@ describe('deriveSetupNeed', () => {
     const need = deriveSetupNeed({ status: okBody([{ id: 'brain', label: 'Brain', required: true, ok: true }]) });
     assert.equal(need.show, false);
     assert.equal(need.reason, 'complete');
+  });
+
+  it('reports the required progress pair so the header bar can be honest', () => {
+    const rows = [
+      { id: 'brain', label: 'Brain', required: true, ok: true },
+      { id: 'live-voice', label: 'Gemini Live', required: true, ok: false },
+      { id: 'stt', label: 'STT', required: false, ok: false },
+    ];
+    const need = deriveSetupNeed({ status: okBody(rows) });
+    assert.equal(need.requiredTotal, 2);
+    assert.equal(need.requiredDoneCount, 1);
+    assert.deepEqual(need.requiredDone.map((r) => r.id), ['brain'],
+      'satisfied required rows are listed so the screen can show them as stored-with-tick');
+    assert.equal(need.requiredGaps.length, 1);
+    assert.equal(need.show, true);
+  });
+
+  it('requiredDone stays empty when nothing required is satisfied', () => {
+    const rows = [{ id: 'brain', label: 'Brain', required: true, ok: false }];
+    const need = deriveSetupNeed({ status: okBody(rows) });
+    assert.equal(need.requiredTotal, 1);
+    assert.equal(need.requiredDoneCount, 0);
+    assert.deepEqual(need.requiredDone, []);
   });
 });
 
@@ -166,5 +195,155 @@ describe('interpretStoreResult', () => {
   it('never claims success on an unrecognized answer', () => {
     assert.equal(interpretStoreResult(undefined).stored, false);
     assert.equal(interpretStoreResult({}).stored, false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// First-run additions
+// ---------------------------------------------------------------------------
+// The bug these pin: on the packaged .exe the BrowserWindow is up before the
+// fork()ed server child is listening, so the boot probe answered nothing,
+// deriveSetupNeed said 'indeterminate' (correctly — it knew nothing), and the
+// screen never asked again. A brand-new install was therefore never offered a
+// place to put an API key, and there was no PIN-creation client at all.
+
+describe('shouldRetryProbe', () => {
+  it('retries an indeterminate probe — that is the cold-launch race, not a verdict', () => {
+    assert.equal(shouldRetryProbe('indeterminate', 1, 12), true);
+    assert.equal(shouldRetryProbe('indeterminate', 11, 12), true);
+  });
+
+  it('stops at the attempt ceiling instead of polling a dead server forever', () => {
+    assert.equal(shouldRetryProbe('indeterminate', 12, 12), false);
+  });
+
+  it('never retries a real answer, and never fights the token gate', () => {
+    assert.equal(shouldRetryProbe('required-gaps', 1, 12), false);
+    assert.equal(shouldRetryProbe('complete', 1, 12), false);
+    assert.equal(shouldRetryProbe('unauthenticated', 1, 12), false,
+      'the auth gate opens on its own; re-probing behind it just 401s again');
+  });
+});
+
+describe('retryDelayMs', () => {
+  it('backs off and stays capped', () => {
+    assert.equal(retryDelayMs(1), 400);
+    assert.equal(retryDelayMs(2), 800);
+    assert.equal(retryDelayMs(50), 3000);
+  });
+});
+
+describe('chooseSetupScreen', () => {
+  const need = { show: true };
+
+  it('opens the wizard when nothing has ever been configured here', () => {
+    assert.equal(chooseSetupScreen({ need, keyStoreNames: [], pinConfigured: false }), 'wizard');
+  });
+
+  it('keeps the gap list for a configured machine that has drifted', () => {
+    assert.equal(chooseSetupScreen({ need, keyStoreNames: ['GROQ_API_KEY'], pinConfigured: false }), 'gaps');
+    assert.equal(chooseSetupScreen({ need, keyStoreNames: [], pinConfigured: true }), 'gaps');
+  });
+
+  it('paints nothing when there is no required gap to report', () => {
+    assert.equal(chooseSetupScreen({ need: { show: false }, keyStoreNames: [], pinConfigured: false }), 'none');
+  });
+});
+
+describe('extractKeyNames', () => {
+  it('prefers the server-projected keyNames over parsing doctor prose', () => {
+    assert.deepEqual(
+      extractKeyNames({ keyNames: ['GROQ_API_KEY', 'GOOGLE_API_KEY'], detail: 'none of: SOMETHING_ELSE' }),
+      ['GROQ_API_KEY', 'GOOGLE_API_KEY'],
+    );
+  });
+
+  it('still parses detail when the server is older than the keyNames field', () => {
+    assert.deepEqual(extractKeyNames({ detail: 'missing: NIM_API_KEY' }), ['NIM_API_KEY']);
+  });
+
+  it('rejects a junk name rather than passing it to setKey', () => {
+    assert.deepEqual(extractKeyNames({ keyNames: ['ok_NAME', 'not a key name', ''] }), ['ok_NAME']);
+  });
+});
+
+describe('validatePinPair', () => {
+  it('mirrors pin-lock.js (4–12 digits) so a bad PIN costs no round-trip', () => {
+    assert.equal(validatePinPair('1234', '1234').ok, true);
+    assert.equal(validatePinPair('123', '123').ok, false);
+    assert.equal(validatePinPair('1234567890123', '1234567890123').ok, false);
+    assert.equal(validatePinPair('12ab', '12ab').ok, false);
+  });
+
+  it('names the field to focus, and never echoes the PIN in the error', () => {
+    const mismatch = validatePinPair('1234', '5678');
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.field, 'confirm');
+    assert.doesNotMatch(mismatch.error, /1234|5678/);
+  });
+});
+
+describe('interpretPinSetResult', () => {
+  it('confirms only on the server saying ok', () => {
+    assert.equal(interpretPinSetResult({ status: 200 }, { ok: true }).ok, true);
+    assert.equal(interpretPinSetResult({ status: 200 }, {}).ok, false,
+      'a 200 without ok:true is not a confirmation');
+  });
+
+  it('passes the server refusal through instead of rewording it', () => {
+    const res = interpretPinSetResult({ status: 400 }, { error: 'Incorrect PIN.' });
+    assert.equal(res.ok, false);
+    assert.match(res.message, /Incorrect PIN/);
+  });
+
+  it('reports lockout, an unwired deployment, and a dead server distinctly', () => {
+    assert.match(interpretPinSetResult({ status: 429 }, { error: 'locked for 42s' }).message, /42s/);
+    assert.match(interpretPinSetResult({ status: 404 }, {}).message, /no PIN lock/i);
+    assert.match(interpretPinSetResult(null, null).message, /did not answer/i);
+  });
+});
+
+describe('buildProviderCatalog', () => {
+  const body = {
+    keys: [
+      { id: 'brain', label: 'Brain', required: true, ok: false, keyNames: ['GROQ_API_KEY', 'GOOGLE_API_KEY'], why: 'w', fix: 'f' },
+      { id: 'stt', label: 'STT', required: false, ok: true, keyNames: ['GROQ_API_KEY'], why: 'w', fix: 'f' },
+    ],
+    assets: [],
+    keyStoreNames: ['GROQ_API_KEY'],
+  };
+
+  it('keeps SATISFIED rows too — the point is adding a provider on purpose', () => {
+    const catalog = buildProviderCatalog(body, true);
+    assert.equal(catalog.length, 2);
+    assert.equal(catalog[1].ok, true, 'a configured row must still be offered, not hidden');
+  });
+
+  it('marks which names are already stored, by name only', () => {
+    const brain = buildProviderCatalog(body, true)[0];
+    assert.deepEqual(brain.storedNames, ['GROQ_API_KEY']);
+  });
+
+  it('describes instead of offering an input when there is no key store', () => {
+    assert.equal(buildProviderCatalog(body, false)[0].action, 'describe',
+      'a browser tab has no bridge; an input box there would silently do nothing');
+  });
+});
+
+describe('wizardCanFinish', () => {
+  const catalog = [{ id: 'brain', ok: false, keyNames: ['GROQ_API_KEY', 'GOOGLE_API_KEY'] }];
+
+  it('warns when no brain lane exists — and says what will not work', () => {
+    const verdict = wizardCanFinish(catalog, new Set());
+    assert.equal(verdict.ok, false);
+    assert.match(verdict.reason, /brain/i);
+  });
+
+  it('counts a key stored during this run, which the server cannot see yet', () => {
+    assert.equal(wizardCanFinish(catalog, new Set(['GOOGLE_API_KEY'])).ok, true);
+  });
+
+  it('accepts a row the server already reports as satisfied', () => {
+    assert.equal(wizardCanFinish([{ id: 'brain', ok: true, keyNames: [] }], new Set()).ok, true);
   });
 });

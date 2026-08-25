@@ -5,8 +5,9 @@
 // Every tool call — cortex, voice-agent, Live session, REST, confirm-accept — goes
 // leash.check() -> dispatchAction() -> sharedDispatch. No channel gets its own path."
 // Executable check, verbatim from the spine's own table: read every file under
-// src/core/ + server/; assert `effectors.invoke(` appears ONLY in
-// src/core/effectors/dispatch-action.js.
+// src/core/ + server/ + adapters/ + ui/ plus the repo-root electron/ dir
+// (providers/, scripts/, services/, mcp/, skills/, personas/, test/ are not
+// scanned); assert `effectors.invoke(` appears ONLY in dispatch-action.js.
 //
 // FIXED (2026-07-30, merged-order step 2): the three real call sites that bypassed
 // dispatchAction() with a raw effectors.invoke() are rerouted:
@@ -32,7 +33,9 @@ const path = require('node:path');
 
 const MYTHOS_ROOT = path.join(__dirname, '..');
 const ALLOWED_FILE = path.join('src', 'core', 'effectors', 'dispatch-action.js');
-const SCAN_ROOTS = ['src/core', 'server'];
+const SCAN_ROOTS = ['src/core', 'server', 'adapters', 'ui'];
+// electron/ lives at the repo root, outside mythos/ — scan it by absolute path.
+const EXTRA_SCAN_ROOTS = [path.join(MYTHOS_ROOT, '..', 'electron')];
 const NEEDLE = 'effectors.invoke(';
 
 function collectJsFiles(dir) {
@@ -48,8 +51,9 @@ function collectJsFiles(dir) {
 
 test('AD-1: effectors.invoke( appears only in dispatch-action.js (single execution surface)', () => {
   const hits = [];
-  for (const root of SCAN_ROOTS) {
-    for (const file of collectJsFiles(path.join(MYTHOS_ROOT, root))) {
+  const scanDirs = [...SCAN_ROOTS.map((root) => path.join(MYTHOS_ROOT, root)), ...EXTRA_SCAN_ROOTS];
+  for (const dir of scanDirs) {
+    for (const file of collectJsFiles(dir)) {
       const rel = path.relative(MYTHOS_ROOT, file);
       const content = fs.readFileSync(file, 'utf8');
       let idx = content.indexOf(NEEDLE);

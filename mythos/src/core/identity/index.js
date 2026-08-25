@@ -57,6 +57,10 @@ function createIdentity({ bus, config, fs, identityStore }) {
   var self = null;        // cached self.md content: { purpose, values, persona }
   var boundaries = null;  // cached boundaries.md content: { deny, max_autonomous_tier, allowed_dirs }
   var levels = null;      // cached persona levels: { humor, warmth, ... }
+  // Which of the three boundary conditions init() resolved: the file was read,
+  // the file was absent (configured ceiling applies), or the file was present
+  // but malformed (§11 tier-1 fail-safe). See init() and boundariesSource().
+  var boundariesSource = 'unloaded';
 
   // REMEDIATION P3-9 (2026-07-29 audit): identity-class claims (the
   // operator's name, or what to call them) are uniquely dangerous — this is
@@ -84,8 +88,13 @@ function createIdentity({ bus, config, fs, identityStore }) {
     return Math.max(0, Math.min(10, n));
   }
 
-  function loadLevels() {
-    var stored = fs.readJSON(PERSONA_LEVELS_PATH, {});
+  // strict=true is for the read-mutate-write path in setPersonaLevel below.
+  // The lenient read stays the default for display/composition, where treating a
+  // corrupt file as "no overrides" degrades to defaults and hurts nobody.
+  function loadLevels(strict) {
+    var stored = strict
+      ? fs.readJSONStrict(PERSONA_LEVELS_PATH, {})
+      : fs.readJSON(PERSONA_LEVELS_PATH, {});
     var out = {};
     for (var i = 0; i < TRAITS.length; i++) {
       var t = TRAITS[i];
@@ -134,7 +143,12 @@ function createIdentity({ bus, config, fs, identityStore }) {
   // prepends, so the first n bullets are the n most recent).
   function topLearnedPrefs(n) {
     var raw = identityStore.readRaw();
-    var section = raw.match(/## Learned Preferences\n([\s\S]*)$/);
+    // BUG-254: same CRLF trap as extractSection below. This one LOOKED healthy
+    // because learn() prepends a second '## Learned Preferences' header written
+    // with a bare \n, so the regex skipped the operator's CRLF copy and matched
+    // the code-written one further down — right answer, wrong header, and only
+    // ever on vaults where learn() had already run at least once.
+    var section = raw.match(/## Learned Preferences\r?\n([\s\S]*)$/);
     if (!section) return [];
     var lines = section[1].match(/^-\s+.+$/gm) || [];
     return lines.slice(0, n).map(function(line) {
@@ -142,8 +156,16 @@ function createIdentity({ bus, config, fs, identityStore }) {
     });
   }
 
+  // BUG-254: self.md is operator-editable markdown, so it arrives with whatever
+  // line endings the editor used — Notepad and a Windows-synced Obsidian vault
+  // both write CRLF. This regex required a literal \n straight after the header,
+  // so against a CRLF file EVERY section returned null and loadSelf() fell back
+  // to its defaults: a full authored persona sat on disk while the model was
+  // told "You are MYTHOS." The failure was silent because a parse miss and an
+  // unwritten section are indistinguishable once both return null.
+  // \r?\n on both the header and the lookahead; trim() removes any trailing CR.
   function extractSection(raw, header) {
-    var re = new RegExp('## ' + header + '\\n([\\s\\S]*?)(?=\\n## |\\n*$)');
+    var re = new RegExp('## ' + header + '\\r?\\n([\\s\\S]*?)(?=\\r?\\n## |\\s*$)');
     var m = raw.match(re);
     return m ? m[1].trim() : null;
   }
@@ -166,6 +188,13 @@ function createIdentity({ bus, config, fs, identityStore }) {
   // Read-only. No writeText/writeJSON/appendLine/removeFile call anywhere
   // in this function or this file targets BOUNDARIES_PATH.
   function loadBoundaries() {
+    // ABSENT IS NOT MALFORMED (installer parity, 2026-08-11). See init() below
+    // for the incident: a fresh install has no boundaries file, and treating
+    // that as corruption clamped the autonomy ceiling to tier 1 so every Tier-2
+    // tool asked for approval. `present` is what lets init() tell the two apart.
+    // Read-only — fs.exists, like fs.readText, never writes.
+    var present = false;
+    try { present = fs.exists(BOUNDARIES_PATH); } catch (_) { present = false; }
     var raw = fs.readText(BOUNDARIES_PATH, '');
     var deny = [];
     var denyRe = /^deny:\s*(.+)$/gm;
@@ -184,7 +213,7 @@ function createIdentity({ bus, config, fs, identityStore }) {
       }
     }
 
-    return { deny: deny, max_autonomous_tier: max_autonomous_tier, allowed_dirs: allowed_dirs };
+    return { deny: deny, max_autonomous_tier: max_autonomous_tier, allowed_dirs: allowed_dirs, present: present };
   }
 
   return {
@@ -193,12 +222,55 @@ function createIdentity({ bus, config, fs, identityStore }) {
       boundaries = loadBoundaries();
       levels = loadLevels();
 
-      // Validate boundaries — malformed → fail-safe (exact event/kind strings below,
-      // copied verbatim from §11 — do not paraphrase)
-      if (typeof boundaries.max_autonomous_tier !== 'number') {
+      // Validate boundaries. ABSENT and MALFORMED are different conditions and
+      // get different answers (installer parity, 2026-08-11).
+      //
+      // THE INCIDENT: the freshly installed MYTHOS.exe asked for approval on
+      // every Tier-2 tool; the dev run with byte-identical code never did.
+      // app.setName was missing from electron/main.js, so the install's vault
+      // was a different, empty directory with no Identity/boundaries.md at all.
+      // loadBoundaries() read '' from the missing file, the tier parsed as
+      // undefined, this branch called that malformed, clamped the ceiling to 1,
+      // and leash/index.js's Math.min(config, identity) pinned every check to
+      // tier 1 regardless of what the operator had configured.
+      //
+      // MALFORMED (file present, tier unparseable) keeps the §11 fail-safe
+      // verbatim — clamp to 1 plus the exact critical anomaly. A corrupt or
+      // tampered boundaries file must never be able to widen the ceiling, and
+      // test/identity-boundaries-failsafe-contract.test.js holds that shut.
+      //
+      // ABSENT (no file) is a fresh vault, not corruption. The configured
+      // ceiling applies and the anomaly is a distinct, non-critical kind so it
+      // is not confused with tampering. src/core/identity/boundaries-seed.js
+      // normally writes the file during boot before this runs, so reaching this
+      // branch means the seed could not write (read-only vault) — degraded, and
+      // worth saying so, but not a reason to silently narrow the operator's own
+      // ceiling to 1.
+      boundariesSource = 'file';
+      if (!boundaries.present) {
+        var configured = Number(config && config.AUTONOMOUS_MAX_TIER);
+        boundaries.max_autonomous_tier = Number.isInteger(configured) ? configured : 1;
+        boundariesSource = 'absent-config-ceiling';
+        bus.emit('health.anomaly', {
+          kind: 'identity-boundaries-absent',
+          severity: 'warning',
+          detail: 'no Identity/boundaries.md — using the configured AUTONOMOUS_MAX_TIER',
+          max_autonomous_tier: boundaries.max_autonomous_tier,
+        });
+      } else if (typeof boundaries.max_autonomous_tier !== 'number') {
         boundaries.max_autonomous_tier = 1;
+        boundariesSource = 'malformed-failsafe';
         bus.emit('health.anomaly', { kind: 'identity-boundaries-malformed', severity: 'critical' });
       }
+    },
+
+    // WHERE the autonomy ceiling came from: 'file' | 'absent-config-ceiling' |
+    // 'malformed-failsafe'. Exposed so the HUD can render the effective ceiling
+    // and its source. The whole reason the approval-prompt incident survived a
+    // fresh install unnoticed is that this was invisible everywhere — the
+    // operator could see the prompts but not the clamp that caused them.
+    boundariesSource() {
+      return boundariesSource;
     },
 
     // exact name/arity from §11 — do not paraphrase
@@ -299,7 +371,21 @@ function createIdentity({ bus, config, fs, identityStore }) {
       if (v === null) {
         return { ok: false, error: 'Value must be a number 0-10.' };
       }
-      if (!levels) levels = loadLevels();
+      // Re-read strictly, every time, immediately before the write. Two failure
+      // modes close here: a CORRUPT persona.json read leniently comes back as {},
+      // so the writeJSON below would commit DEFAULTS over every dial the operator
+      // has ever set — keeping only the one just changed — and still report
+      // ok:true. And a cached `levels` from boot would clobber anything written
+      // since. readJSONStrict throws on corruption (and emits health.anomaly), so
+      // the write is skipped and the operator is told, rather than the file being
+      // quietly rebuilt from defaults.
+      var fresh;
+      try {
+        fresh = loadLevels(true);
+      } catch (err) {
+        return { ok: false, error: 'The saved persona levels are unreadable (' + err.message + '), so I left them alone rather than overwriting them.' };
+      }
+      levels = fresh;
       levels[t] = v;
       try {
         fs.writeJSON(PERSONA_LEVELS_PATH, levels);

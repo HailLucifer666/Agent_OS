@@ -14,21 +14,37 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const { createTtsChain } = require('../providers/tts');
+const { mountTtsVoiceRoutes } = require('./routes/tts-voices');
+const { recordLiveVoiceSwitch, popPreviousLiveVoice } = require('../src/core/config/voice-choice');
 const sttChain = require('../providers/stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
+const { buildBriefingFacts } = require('../src/core/conversation/briefing');
+const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
+// A2: reuse credential-scanner's curated pattern list (single source of truth)
+// to scrub secret-shaped values out of the client-bound log copy.
+const { _PATTERNS: LOG_SECRET_PATTERNS } = require('../src/core/effectors/credential-scanner');
 // S2S (V2 §6-§10, merged-order step 4, Phase 5 wiring): Gemini Live transport,
 // hub->functionDeclarations conversion, and the tool-adapter safety seam.
 const { createLiveSession } = require('../src/core/voice/live-session');
 const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
+// Installer parity (2026-08-11): do not DECLARE a tool whose adapter or
+// credentials do not exist on this machine — the fresh install fired
+// gmail_unread/media_status/spotify_status against neither. See tool-capability.js.
+const { buildCapabilitySnapshot } = require('../src/core/voice/tool-capability');
+// Where downloaded model weights live now that the install tree cannot hold them.
+const { userDataModelsDir } = require('../src/core/setup/model-paths');
 const {
   createLiveToolAdapter, SYSTEM_NOTICE_PREFIX, LIVE_SYSTEM_NOTICE_INSTRUCTION,
 } = require('../src/core/voice/live-tool-adapter');
 const { summarizeActionsForResult } = require('../src/core/voice/action-outcome-summary');
+// B2: the anomaly persist allowlist. See its header — the previous fixed
+// four-field detail dropped every diagnostic field its emitters attached.
+const { anomalyDetail, anomalySummaryDetail } = require('../src/core/immune/anomaly-detail');
 // BUG-113: a spoken first-person commitment ("I'll check X") must leave a
 // record — logCommitmentIfPresent is a no-op unless the text matches the
 // explicit commitment-phrase list, so ordinary replies are unaffected.
@@ -37,7 +53,14 @@ const { createLatencyTracker } = require('../src/core/voice/latency-tracker');
 const skillsLoader = require('../src/core/skills/loader');
 // createNewsFeed moved to routes/news.js (W9 god-file decomposition).
 const pcChild = require('../adapters/pc-child');
+// Read-only status singletons for the Live capability snapshot above. Requiring
+// an adapter module starts nothing — each one only spawns on its explicit
+// start*/connect call, which main.js owns.
+const browserAgentAdapter = require('../adapters/browser-agent');
+const cuaDriverAdapter = require('../adapters/cua-driver');
+const androidChildAdapter = require('../adapters/android-child');
 const version = require('../src/core/identity/version');
+const { getUpdateReport } = require('../src/core/identity/update-report');
 const { isProviderDown } = require('../src/core/immune/probes');
 const { createPinSessionStore } = require('../src/core/security/pin-session');
 
@@ -76,6 +99,21 @@ function isLoopback(req) {
 // untouched for other callers (e.g. memory.reindex()'s batch backfill), which
 // have no such latency budget.
 const RECALL_TIMEOUT_MS = Number(process.env.VOICE_RECALL_TIMEOUT_MS) || 3500;
+
+// BUG-251: ceiling for the OPERATOR FACTS block in the Live setup frame.
+// user-facts.md is append-only and unbounded; without a cap a long-lived vault
+// would grow the once-per-session system instruction without limit.
+//
+// BUG-256: raised 4000 -> 8000. At 4000 the operator's real vault already had
+// 11 of its 37 facts falling off the front after two days of use, and a fact
+// the model cannot see is one it asks a tool for — `recall_memory` is a second
+// inference pass, which on a rate-limited free tier costs far more than the
+// tokens do. The whole composed instruction is ~35K chars and is built ONCE per
+// session (BUG-136), while a tool round-trip is paid per turn, so trading
+// prompt size for round-trips is the right direction here. Still a hard cap:
+// unbounded growth would eventually crowd the frame, and at that point the
+// answer is distillation, not a bigger number.
+const LIVE_FACTS_MAX_CHARS = 8000;
 const RECALL_TIMED_OUT = Symbol('recall-timed-out');
 function recallWithTimeout(promise, ms) {
   return Promise.race([
@@ -87,6 +125,71 @@ function recallWithTimeout(promise, ms) {
   ]);
 }
 
+// A2 — logger redaction at the WS relay choke point. The onLog relay below is
+// the ONE seam feeding both broadcastAll({type:'log'}) and pushReplay('log'),
+// so scrubbing here covers every live client AND the replay buffer in a single
+// place. stdout/container logging is untouched: logger.js writes its own line
+// to stdout before notifying listeners, and redactLogEntry returns a NEW object
+// (never mutates the entry), so the operator still sees the full record.
+//
+// Key-name list duplicated from src/core/memory/audit-writer.js's REDACT_KEYS
+// (closure-scoped there, not exported; hoisting it would be a refactor the task
+// brief explicitly discourages). Keep the two lists in sync. Value patterns are
+// NOT duplicated — they reuse credential-scanner's exported _PATTERNS so there
+// is one source of truth. Over-matching (e.g. a benign 'token' substring) is
+// acceptable: redaction errs safe.
+//
+// PINNED DISPOSITION (2026-08-17 review): the substring semantics STAY, and the
+// list is deliberately NOT narrowed. Reviewed because 'session' and 'token' are
+// the kind of words that appear in ordinary diagnostic field names, so the
+// over-match risked the failure mode that matters most here — a fix that hides
+// the evidence trail (rules/core.md §11.2). Three things settled it:
+//   * Measured, not assumed: a sweep of every real logger/anomaly payload key in
+//     src/ + server/ found exactly ONE collateral key, `sessionsClosed`, a
+//     counter that nothing read programmatically. It is now `closedCount`.
+//   * audit-writer.js's REDACT_KEYS is byte-identical AND matches by substring
+//     too. Narrowing one list would leave two redaction rules with different
+//     semantics, which is strictly worse than one over-broad rule — the comment
+//     above already asks for them to be kept in sync.
+//   * The blast radius is one frame type. redactLogEntry is applied only to the
+//     logger.onLog relay, not to /api responses or any other WS frame.
+// So the enforcement is a gate, not a narrower list:
+// test/log-redaction-collateral.test.js sweeps the real emitters and fails when a
+// NEW payload key would be swallowed — the drift becomes a red commit instead of
+// something noticed by eye months later. If a future key legitimately collides,
+// rename the key; do not narrow this list without also narrowing audit-writer's.
+const LOG_REDACT_KEYS = ['apiKey', 'api_key', 'token', 'authorization', 'password', 'secret', 'cookie', 'credential', 'session'];
+
+function redactLogValue(str) {
+  for (let i = 0; i < LOG_SECRET_PATTERNS.length; i++) {
+    const re = LOG_SECRET_PATTERNS[i].re;
+    re.lastIndex = 0; // patterns carry the global flag; reset before each use
+    str = str.replace(re, '[REDACTED]');
+  }
+  return str;
+}
+
+// Recursive copy-and-redact. Bounded by credential-scanner's depth cap (5) so a
+// pathological/circular object cannot stall the hot log path.
+function redactLogEntry(obj, depth) {
+  depth = depth || 0;
+  if (depth > 5) return obj;
+  if (typeof obj === 'string') return redactLogValue(obj);
+  if (Array.isArray(obj)) return obj.map((item) => redactLogEntry(item, depth + 1));
+  if (!obj || typeof obj !== 'object') return obj;
+  const copy = {};
+  const keys = Object.keys(obj);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    if (LOG_REDACT_KEYS.some((r) => k.toLowerCase().includes(r.toLowerCase()))) {
+      copy[k] = '[REDACTED]';
+    } else {
+      copy[k] = redactLogEntry(obj[k], depth + 1);
+    }
+  }
+  return copy;
+}
+
 function createServer(deps) {
   const bus = deps.bus;
   const config = deps.config;
@@ -96,6 +199,7 @@ function createServer(deps) {
   const kanbanEffector = deps.kanbanEffector;    // P7 effectors/kanban.js
   const pipelineEffector = deps.pipelineEffector; // P7 effectors/pipeline.js
   const effectors = deps.effectors;              // hub — .invoke, .breakers, .effectors
+  const geminiLiveBreakers = require('../src/core/voice/live-breakers.js').ensureGeminiLiveBreakerWired({ bus: bus, config: config, effectors }); // BUG-340: wiring lives in voice/live-breakers.js
   const leash = deps.leash;                      // P5 — .check, .confirm.{create,accept,reject}
   const goals = deps.goals;                       // cognitive GoalSystem — .debitBudget
   const probes = deps.probes;                     // P6 immune/probes.js — .getStatus()
@@ -161,7 +265,10 @@ function createServer(deps) {
       const persona = identity && typeof identity.persona === 'function' ? identity.persona() : null;
       if (persona) parts.push(persona);
     } catch (err) { logger.warn('live.persona-compose-failed', { error: err.message }); }
-    try { parts.push(version.contextLine()); } catch (err) { logger.warn('live.version-compose-failed', { error: err.message }); }
+    try {
+      parts.push(version.contextLine() +
+        ' (as of session-start — a code upgrade since then would not be reflected here; re-check with a tool before relying on it.)');
+    } catch (err) { logger.warn('live.version-compose-failed', { error: err.message }); }
     // BUG-136: this frame is composed once per open()/rotation and can then ride
     // unrefreshed for up to ~10 minutes (Gemini Live's own connection ceiling) —
     // any per-turn-fresh value baked in here goes stale but keeps LOOKING live to
@@ -169,14 +276,54 @@ function createServer(deps) {
     // every turn and is genuinely live; this is the only composition point where
     // it is not, so it asks for the labelled `asOf` form instead of the "live —
     // trust this" default. `version.contextLine()` and the skills catalog below
-    // share the same trap and are not yet labelled — the local time below is the
-    // one prior fix for this class (refreshed on every open(), with its own
-    // comment explaining why).
+    // share the same trap and are now labelled the same way (Task B3) — the
+    // local time below is the one prior fix for this class (refreshed on every
+    // open(), with its own comment explaining why).
     try {
       const digest = getCapabilityDigest ? getCapabilityDigest({ asOf: 'session-start' }) : null;
       if (digest) parts.push(digest);
     } catch (err) { logger.warn('live.capability-digest-failed', { error: err.message }); }
-    try { parts.push(skillsLoader.catalogBlock()); } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }
+    try {
+      const skillsBlock = skillsLoader.catalogBlock();
+      if (skillsBlock) {
+        parts.push(skillsBlock +
+          '\n(as of session-start — a skill added/removed since would not be reflected here; re-check with a tool before relying on it.)');
+      }
+    } catch (err) { logger.warn('live.skills-catalog-failed', { error: err.message }); }
+    // BUG-251: the Live path had no memory of the operator at all. Everything
+    // durable the vault knew (Semantic/user-facts.md) was reachable only from
+    // handleUtterance()'s recallHybrid() — the TYPED path — so the primary
+    // SPOKEN surface was structurally amnesiac and "you never remember my
+    // songs" was correct about the surface even though the facts were on disk.
+    // BUG-249 fixed the write side (habit promotion); this is the read side.
+    //
+    // Deliberately a direct topic() read, not recallHybrid(): this composer is
+    // called synchronously from live-session.js's buildSetup() on every
+    // open()/rotation and cannot await, and an embeddings round-trip on the
+    // session-open path would add latency to every reconnect. There is also no
+    // query to score against here — the whole file IS the relevant context.
+    // Labelled session-start per BUG-136, and capped: user-facts.md is
+    // append-only and unbounded, so the TAIL (newest facts) is what survives.
+    try {
+      if (config.LIVE_MEMORY_INJECT !== false) {
+        const semantic = memory && memory.semantic;
+        const factsTopic = (semantic && typeof semantic.topic === 'function') ? semantic.topic('user-facts') : null;
+        const facts = factsTopic && Array.isArray(factsTopic.facts) ? factsTopic.facts : [];
+        if (facts.length) {
+          const header = 'OPERATOR FACTS (as of session-start — durable memory, may have changed since; ' +
+            'use recall_memory for anything not here):';
+          const lines = [];
+          let used = header.length;
+          for (let i = facts.length - 1; i >= 0; i--) {
+            const line = '- ' + facts[i];
+            if (used + line.length + 1 > LIVE_FACTS_MAX_CHARS) break;
+            used += line.length + 1;
+            lines.unshift(line);
+          }
+          if (lines.length) parts.push(header + '\n' + lines.join('\n'));
+        }
+      }
+    } catch (err) { logger.warn('live.facts-compose-failed', { error: err.message }); }
     // BUG-079 (Stage 6, item #19): with no local time anywhere in the prompt,
     // MYTHOS said "have a good afternoon" at ~01:50 local — the operator had
     // to correct "a.m. not p.m." live-session.js's buildSetup() calls this
@@ -208,6 +355,37 @@ function createServer(deps) {
     });
   }
 
+  // Server-initiated camera POWER-ON, same request/ack shape as
+  // requestCameraFrame above. Exists because withholding the ability to ask is
+  // what produced the 2026-08-10 incident: with the camera off and no way to
+  // request it, "can you see me?" had no honest path at all, and the model
+  // substituted a desktop screenshot and described that instead.
+  //
+  // Three properties, in order of importance:
+  //   1. The HUD decides, not the server. It answers with the state the camera
+  //      loop ACTUALLY reached — getUserMedia can be denied and the gesture model
+  //      can fail to load, and both already return false from start(). A hopeful
+  //      `on: true` here would recreate the exact class of bug this whole change
+  //      is about.
+  //   2. camera_on is T3 + NEVER_TRUSTABLE (leash/tiers.js, leash/index.js), so
+  //      the operator has confirmed before this function is ever reached. Nothing
+  //      on the autonomous path can call it.
+  //   3. The timeout is longer than requestCameraFrame's 8s: this waits for the
+  //      permission prompt AND MediaPipe's first model load, which the frame
+  //      request never has to (by the time anything asks for a frame, the loop is
+  //      already warm). The HUD acks only once the loop reports 'watching', so a
+  //      camera_look issued immediately afterwards does not race the warm-up.
+  const pendingCameraPower = new Map(); // reqId -> { resolve, timer }
+  const CAMERA_POWER_TIMEOUT_MS = 20000;
+  function requestCameraPower() {
+    return new Promise(function(resolve) {
+      const id = 'campower-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+      const timer = setTimeout(function() { pendingCameraPower.delete(id); resolve(null); }, CAMERA_POWER_TIMEOUT_MS);
+      pendingCameraPower.set(id, { resolve: resolve, timer: timer });
+      broadcastAll({ type: 'camera-power-request', reqId: id });
+    });
+  }
+
   // REMEDIATION P1-5: server-initiated close_panel ack, mirroring
   // requestCameraFrame's request/response shape exactly. close_panel used to
   // broadcast 'close-panel' fire-and-forget and immediately report
@@ -217,6 +395,39 @@ function createServer(deps) {
   // (or that never answers within the timeout) resolves null, and close_panel
   // surfaces that honestly instead of fabricating success.
   const pendingClosePanel = new Map(); // reqId -> { resolve, timer }
+  // BUG-273 B3: the same shape, for "did the widget actually mount". A separate
+  // map because the two round-trips can be in flight at once (a close_panel while
+  // a spawn is still resolving); sharing one keyed by reqId would work and would
+  // read as if they were the same conversation.
+  const pendingWidgetRender = new Map(); // reqId -> { resolve, timer }
+  // BUG-273 B3 — send a widget descriptor to the HUD and wait to be told whether
+  // it mounted. Modelled on requestClosePanel below, including the 3s timeout
+  // resolving NULL rather than throwing: "no answer" and "did not mount" are
+  // different facts, and from-dashboard.js reports them differently.
+  //
+  // This becomes the ONLY path that broadcasts open-web for the open_web effector
+  // — dispatch-action.js skips its bus relay for a descriptor marked
+  // renderDispatched — so a widget cannot render twice. The Electron media-window
+  // relay is kept verbatim from the bus subscriber, BUG-166's rule included: under
+  // Electron, youtube/web are handled by the media window INSTEAD of a panel
+  // broadcast, and that window has its own ack channel, so there is no HUD panel
+  // to wait for and this resolves null rather than pretending to have asked one.
+  function requestWidgetRender(payload) {
+    return new Promise(function (resolve) {
+      const electronHandles = typeof process.send === 'function'
+        && payload && (payload.widgetType === 'youtube' || payload.widgetType === 'web');
+      if (typeof process.send === 'function') {
+        try { process.send({ channel: 'mythos:ui.open-web', payload: payload }); }
+        catch (_) { /* no parent listening (non-Electron boot) */ }
+      }
+      if (electronHandles) { resolve(null); return; }
+      const id = 'openweb-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+      const timer = setTimeout(function () { pendingWidgetRender.delete(id); resolve(null); }, 3000);
+      pendingWidgetRender.set(id, { resolve: resolve, timer: timer });
+      broadcastAll({ type: 'open-web', payload: payload, reqId: id });
+    });
+  }
+
   function requestClosePanel(all) {
     return new Promise(function(resolve) {
       const id = 'closepanel-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
@@ -242,10 +453,68 @@ function createServer(deps) {
   // captures and restores the real pre-duck level (server/index.js duckAudio/
   // unduckAudio), so these only control the duck TARGET and the fallback timer.
   // Defaults unchanged (15 / 15000). Verify live before altering restore logic.
-  const DUCK_VOLUME_LEVEL = Number(process.env.DUCK_VOLUME_LEVEL) || 15;
-  const UNDUCK_SAFETY_MS = Number(process.env.UNDUCK_SAFETY_MS) || 15000; // restore even if the client never sends unduck (dropped connection, crash)
+  // From config, not process.env, for the reason spelled out at DUCK_MIN_HOLD_MS
+  // below: a key read straight from the environment cannot be set in a packaged
+  // install at all. Default unchanged (15).
+  const DUCK_VOLUME_LEVEL = Number(config.DUCK_VOLUME_LEVEL) || 15;
+  const UNDUCK_SAFETY_MS = Number(config.UNDUCK_SAFETY_MS) || 15000; // restore even if the client never sends unduck (dropped connection, crash)
+  // HYSTERESIS (operator, 2026-08-11). Ducking is self-cancelling with media
+  // playing: the duck quiets the room, the RMS VAD then sees silence and stops
+  // recording, the unduck restores full volume, and the music immediately
+  // re-arms the mic. The operator's installed build logged 58 set_volume calls
+  // in one session doing exactly that — it described it as the volume being a
+  // "ping-pong ball", and the entity itself filed an incident calling it a
+  // "volume control feedback loop".
+  //
+  // Two bounds break the cycle without touching the VAD or the duck depth:
+  //   DUCK_MIN_HOLD_MS  — once ducked, stay ducked this long. An unduck arriving
+  //                       sooner is deferred, not dropped, so a genuinely short
+  //                       utterance still restores; it just does not flap.
+  //   DUCK_COOLDOWN_MS  — after restoring, ignore a re-duck for this long. This
+  //                       is the half that matters: the re-trigger is the music
+  //                       coming back up, and it arrives within milliseconds.
+  // Both env-overridable in the same style as DUCK_VOLUME_LEVEL above. Note that
+  // an operator running with VOICE_S2S_ENABLED (the dev configuration, and now
+  // the derived default when a Google key is present) never reaches this code at
+  // all — Live duplex has no record-window ducking.
+  // Hysteresis alone only RATE-LIMITS the loop (measured: a storm collapses from
+  // dozens of cycles to one per hold+cooldown), so it is paired below with the
+  // one signal that actually classifies the trigger: a mic-hot window that ends
+  // without an utterance being dispatched was not a person. Two of those in a row
+  // and ducking backs off entirely for DUCK_SUPPRESS_MS — the loop stops instead
+  // of merely slowing down. A single real utterance clears the count.
+  // Read from CONFIG, not straight from process.env (installer parity,
+  // 2026-08-11). These four were `Number(process.env.X) || default`, which means
+  // they were invisible to the config schema and therefore unsettable from
+  // userData/config.json — the only place a PACKAGED install can put a setting.
+  // So the very bounds that stop the volume feedback loop could not be tuned on
+  // the build that reported the loop. Found by scripts/parity-check.js naming them
+  // as "not reported by /api/config/settings"; now in schema.js with these exact
+  // defaults, so .env keeps working and config.json works too.
+  // The `|| default` is kept for one specific reason: several tests construct
+  // createServer with a hand-built partial `config` object rather than a validated
+  // one, and an undefined here would silently become NaN in every comparison
+  // below — a hysteresis that never engages, with no error anywhere. The defaults
+  // are the same values schema.js now carries.
+  const DUCK_MIN_HOLD_MS = Number(config.DUCK_MIN_HOLD_MS) || 800;
+  const DUCK_COOLDOWN_MS = Number(config.DUCK_COOLDOWN_MS) || 1200;
+  const DUCK_FALSE_MAX = Number(config.DUCK_FALSE_MAX) || 2;
+  const DUCK_SUPPRESS_MS = Number(config.DUCK_SUPPRESS_MS) || 30000;
   let preDuckVolume = null;
   let unduckSafetyTimer = null;
+  let duckedAt = 0;          // when the current duck started
+  let lastUnduckAt = 0;      // when the last restore completed
+  let pendingUnduckTimer = null;
+  let utteranceSinceDuck = false;  // did this mic-hot window produce a real turn?
+  let falseDuckCycles = 0;
+  let duckSuppressedUntil = 0;
+  // Called from the WS 'utterance' handler: proof that the window that just
+  // ducked was a person talking, not the speakers.
+  function noteUtteranceHeard() {
+    utteranceSinceDuck = true;
+    falseDuckCycles = 0;
+    duckSuppressedUntil = 0;
+  }
   // AD-1: these three calls used to go straight to the effector hub's
   // invoke() method, bypassing the single execution surface (dispatchAction,
   // defined below —
@@ -254,12 +523,25 @@ function createServer(deps) {
   // dispatched action, tagged channel:'voice-ducking' so it's distinguishable
   // from an operator-driven volume change.
   async function duckAudio() {
-    if (preDuckVolume !== null) return; // already ducked
+    if (preDuckVolume !== null) {
+      // Already ducked, and a fresh mic-hot window means the operator is still
+      // talking — cancel any deferred restore rather than letting it fire mid-
+      // utterance.
+      if (pendingUnduckTimer) { clearTimeout(pendingUnduckTimer); pendingUnduckTimer = null; }
+      return;
+    }
+    // Inside the cooldown this duck request is almost certainly the media we
+    // just un-ducked re-triggering the VAD, not a person. Refuse it.
+    if (lastUnduckAt && (Date.now() - lastUnduckAt) < DUCK_COOLDOWN_MS) return;
+    // Backed off after repeated windows that produced no speech at all.
+    if (duckSuppressedUntil && Date.now() < duckSuppressedUntil) return;
     if (!effectors || typeof effectors.invoke !== 'function') return;
     try {
       const current = await dispatchAction({ tool: 'get_volume', args: {} }, { tier: 0, channel: 'voice-ducking' });
       if (!current.ok || !current.result || typeof current.result.level !== 'number') return;
       preDuckVolume = current.result.level;
+      duckedAt = Date.now();
+      utteranceSinceDuck = false;
       await dispatchAction({ tool: 'set_volume', args: { level: DUCK_VOLUME_LEVEL } }, { tier: 2, channel: 'voice-ducking' });
       clearTimeout(unduckSafetyTimer);
       unduckSafetyTimer = setTimeout(function() { unduckAudio(); }, UNDUCK_SAFETY_MS);
@@ -270,8 +552,42 @@ function createServer(deps) {
   }
   async function unduckAudio() {
     if (preDuckVolume === null) return;
+    // Hold the duck for its minimum window. Deferred, never dropped: the timer
+    // below performs the same restore once the window closes, so a one-word
+    // utterance still gets its volume back — just not fast enough to bounce.
+    const heldFor = Date.now() - duckedAt;
+    if (heldFor < DUCK_MIN_HOLD_MS) {
+      if (pendingUnduckTimer) return;   // a restore is already scheduled
+      pendingUnduckTimer = setTimeout(function() {
+        pendingUnduckTimer = null;
+        unduckAudio().catch(function() {});
+      }, DUCK_MIN_HOLD_MS - heldFor);
+      // unref: a pending restore must never be the reason the process stays
+      // alive at shutdown (the same courtesy the rest of the server's timers
+      // extend). The volume is restored on the next boot's duck cycle anyway,
+      // and UNDUCK_SAFETY_MS still covers a dropped connection.
+      if (typeof pendingUnduckTimer.unref === 'function') pendingUnduckTimer.unref();
+      return;
+    }
+    if (pendingUnduckTimer) { clearTimeout(pendingUnduckTimer); pendingUnduckTimer = null; }
+    // Classify the window that just closed. No utterance means the VAD armed on
+    // something that was not a person — with music playing, that is the loop.
+    if (!utteranceSinceDuck) {
+      falseDuckCycles++;
+      if (falseDuckCycles >= DUCK_FALSE_MAX && !duckSuppressedUntil) {
+        duckSuppressedUntil = Date.now() + DUCK_SUPPRESS_MS;
+        logger.warn('audio-duck-suppressed', {
+          cycles: falseDuckCycles,
+          forMs: DUCK_SUPPRESS_MS,
+          note: 'mic-hot windows keep closing with no speech — ducking is arming on playback, not on you',
+        });
+      }
+    } else {
+      falseDuckCycles = 0;
+    }
     const restoreLevel = preDuckVolume;
     preDuckVolume = null;
+    lastUnduckAt = Date.now();
     clearTimeout(unduckSafetyTimer);
     if (!effectors || typeof effectors.invoke !== 'function') return;
     try {
@@ -288,20 +604,20 @@ function createServer(deps) {
   // any route; the only gate was origin allow-listing (verifyClient below),
   // which any non-browser client spoofs with a header. Dockerfile and
   // render.yaml both set MYTHOS_BIND=0.0.0.0. Fail closed, loudly, at boot,
-  // rather than silently exposing 107 tools (including T3 confirm-and-execute)
+  // rather than silently exposing the full effector set (including T3 confirm-and-execute)
   // to anyone who finds the URL.
   const AUTH_TOKEN = config.MYTHOS_AUTH_TOKEN || '';
   const isLoopbackBind = /^(127\.|::1|localhost)/i.test(String(BIND));
   if (!isLoopbackBind && !AUTH_TOKEN) {
     throw new Error(
       `MYTHOS_BIND is non-loopback (${BIND}) but MYTHOS_AUTH_TOKEN is unset. ` +
-      'Refusing to expose 107 tools unauthenticated. Set MYTHOS_AUTH_TOKEN (see mythos/.env.example) or bind 127.0.0.1.'
+      'Refusing to expose the full effector set unauthenticated. Set MYTHOS_AUTH_TOKEN (see mythos/.env.example) or bind 127.0.0.1.'
     );
   }
 
   // H3(b) (security audit, 2026-08-08) — MYTHOS_AUTH_TOKEN had no minimum
   // length or entropy requirement, yet it is the ONLY thing standing between
-  // the public internet and 166 effectors including tier-3 confirm-and-execute
+  // the public internet and the full effector set including tier-3 confirm-and-execute
   // once MYTHOS_BIND is non-loopback (see the guard just above). Reject an
   // obviously weak token at boot with the same fail-loud posture — but ONLY
   // when a token is actually configured. Running with NO token at all on
@@ -309,15 +625,10 @@ function createServer(deps) {
   // pre-existing test depends on it) and is completely untouched by this;
   // this only tightens what counts as a VALID token once the operator has
   // chosen to set one.
-  const MIN_AUTH_TOKEN_LENGTH = 16;
-  const WEAK_AUTH_TOKEN_RE = /^(password|changeme|admin|secret|letmein|qwerty|default|token|test|12345678)/i;
-  function weakAuthTokenReason(token) {
-    if (token.length < MIN_AUTH_TOKEN_LENGTH) return `shorter than the ${MIN_AUTH_TOKEN_LENGTH}-char minimum`;
-    if (/^(.)\1*$/.test(token)) return 'a single character repeated';
-    if (new Set(token.toLowerCase()).size < 4) return 'too few distinct characters (low entropy)';
-    if (WEAK_AUTH_TOKEN_RE.test(token)) return 'matches a common/weak token pattern';
-    return null;
-  }
+  // H3(b) (security audit, 2026-08-08) — weak-token rejection at boot; the
+  // check itself lives in src/core/server/boot-guards.js (ratchet extraction,
+  // BUG-337). Running with NO token on loopback stays the documented default.
+  const { weakAuthTokenReason, MIN_AUTH_TOKEN_LENGTH } = require('../src/core/server/boot-guards.js');
   if (AUTH_TOKEN) {
     const weakReason = weakAuthTokenReason(AUTH_TOKEN);
     if (weakReason) {
@@ -482,51 +793,11 @@ function createServer(deps) {
     ...(process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean).filter(isValidOrigin),
   ]);
 
-  // A4 FIX: sanitize error messages before sending to WS clients.
-  // Prevents leaking internal paths, dependency details, stack fragments.
-  //
-  // 2026-08-02: this was flattening EVERY non-matching message to the generic
-  // fallback, including an effector's own honest fail() text (e.g. app_reply's
-  // "whatsapp is not open, so there is no conversation to reply to"), which the
-  // model then received as "An internal error occurred." — a real, spoken-safe
-  // answer thrown away. live-tool-adapter.js's sanitizeResultError routes EVERY
-  // effector failure through this same function, and now tags those values
-  // effectorReason:true — set at the origin, the only place that knows a value is
-  // a fail() string rather than a thrown exception. Everything untagged is still
-  // generalized, so this stays deny-by-default. Tagged text is still scanned for
-  // accidental path/stack/secret leakage (e.g. run_command's raw stderr) before
-  // being allowed through unmodified.
-  function looksLikeUnsafeLeak(msg) {
-    return /[a-zA-Z]:\\|(?:^|[\s(])\/(?:home|Users|root|var|etc|tmp)\//.test(msg) ||
-      /\bat\s+.+\(.+:\d+:\d+\)/.test(msg) ||
-      /\b(?:api[_-]?key|secret|token|password|bearer)\b\s*[:=]/i.test(msg);
-  }
-  function sanitizeErrorForClient(err) {
-    const msg = (err && err.message) || 'Unknown error';
-    // Map common internal errors to safe user-facing strings
-    if (/EACCES|EPERM/.test(msg)) return 'Permission denied — check file permissions.';
-    if (/ENOSPC/.test(msg)) return 'Disk full — unable to write data.';
-    if (/ENOENT/.test(msg)) return 'File not found.';
-    if (/fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg)) return 'Network request failed.';
-    if (/all models failed/.test(msg)) return 'All AI providers are currently unavailable.';
-    // An effector's own honest failure reason, EXPLICITLY tagged as such by
-    // live-tool-adapter.js's sanitizeResultError — the one call site that knows
-    // the value is a fail() string and not a thrown exception. Let it through so
-    // the operator hears what actually went wrong, still scanned for accidental
-    // path/stack/secret leakage (run_command hands back raw stderr) and still
-    // capped so a pathological effector cannot ship an unbounded string.
-    //
-    // Deliberately gated on the tag rather than on "this has no .stack": that
-    // inference would flip this whole function from deny-by-default to
-    // allow-by-default for every hand-built error object anywhere in the server,
-    // which is not a trade a WS-facing sanitizer should make.
-    const isEffectorReason = typeof err === 'object' && err !== null && err.effectorReason === true;
-    if (isEffectorReason && !looksLikeUnsafeLeak(msg)) {
-      return msg.length > 500 ? msg.slice(0, 500) + '…' : msg;
-    }
-    // Generic fallback — strip any paths or technical details
-    return 'An internal error occurred. Check server logs for details.';
-  }
+  // Error sanitization moved to server/sanitize-error.js so the extracted REST
+  // routes can share it — as a closure here it was reachable only from the WS
+  // result path, and routes/*.js answered failures with a raw err.message.
+  // The function bodies are unchanged; see that file for the two policies.
+  const { sanitizeErrorForClient } = require('./sanitize-error');
 
   const app = express();
   app.use((req, res, next) => { req.id = crypto.randomUUID(); next(); });
@@ -588,6 +859,10 @@ function createServer(deps) {
   app.use(setCspHeaders);
 
   app.use(express.json({ limit: '1mb' }));
+
+  // BUG-337: DNS-rebinding guard — implementation in boot-guards.js; loopback binds only (behind a proxy Host IS foreign and tokens are mandatory anyway).
+  const { createLoopbackHostGuard } = require('../src/core/server/boot-guards.js');
+  if (isLoopbackBind) app.use(createLoopbackHostGuard({ configuredPort: PORT }));
 
   const globalLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_GLOBAL) || 240, scope: 'global-api' });
   const expensiveLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_EXPENSIVE) || 8, scope: 'expensive' });
@@ -704,7 +979,7 @@ function createServer(deps) {
     if (PIN_UNLOCK_EXEMPT_PATHS.has(req.path)) return next();
     return requireToken(req, res, next);
   });
-  app.use('/vault/builds', requireToken);
+  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken, pinSessionRequired, pinSessionValid: (r) => pinSession.isValid(extractCookieToken(r)) })); // BUG-317: a signed artifact link substitutes for the bearer token, never for the PIN session
 
   // ---- static asset delivery: compression + caching -----------------------
   //
@@ -839,6 +1114,32 @@ function createServer(deps) {
 
   app.use(gzipTextAssets);
 
+  // Downloaded model weights, from the userData-scoped models directory.
+  //
+  // MOUNTED BEFORE ui/public ON PURPOSE, and this mount is what actually makes
+  // the wake word work in a packaged install. The browser-side loaders fetch
+  // '/models/wakeword/*.onnx' (ui/public/js/voice/wakeword.js) and
+  // '/models/silero/silero_vad.onnx' (voice/silero-vad.js) over HTTP — so a
+  // weight file that is not SERVED is a weight file that does not exist, however
+  // correctly it was downloaded. package.json build.files excludes
+  // mythos/ui/public/models, and scripts/setup-wakeword.js / setup-silero.js now
+  // write to userData instead (the install tree is replaced by every update), so
+  // without this mount the download would succeed and the feature would still be
+  // dead. The ui/public mount below still serves a dev checkout's own models.
+  const userModelsDir = userDataModelsDir();
+  if (userModelsDir) {
+    app.use('/models', express.static(userModelsDir, {
+      // Content-addressed in practice: these files are pinned release assets that
+      // only change when a downloader is re-run, and they are multi-megabyte.
+      etag: true, lastModified: true, maxAge: IMMUTABLE_MAX_AGE, immutable: true, setHeaders: immutableHeaders,
+      // A missing file must fall through to the ui/public mount below, not 404
+      // here — that is how a machine holding its models in the OLD location keeps
+      // working with no migration step.
+      fallthrough: true,
+    }));
+    logger.info('models.served', { dir: userModelsDir });
+  }
+
   app.use(express.static(path.join(__dirname, '..', 'ui', 'public'), {
     etag: true, lastModified: true, maxAge: 0, setHeaders: appAssetHeaders,
   }));
@@ -882,6 +1183,34 @@ function createServer(deps) {
   let gmailPollCountGetter = null;
   function setGmailPollCountGetter(fn) { gmailPollCountGetter = typeof fn === 'function' ? fn : null; }
 
+  // F7: the two halves of the session transcript, for the conversation panel.
+  // vault/Conversation/session.json is a ROLLING WINDOW (HISTORY_MAX_TURNS,
+  // and it is dropped entirely once HISTORY_IDLE_TTL_MS passes), so it alone
+  // shows only the last few turns — which is exactly the complaint. The day's
+  // Episodic jsonl carries the rest. They overlap, so the client merges and
+  // de-duplicates them (ui/public/js/views/transcript-model.js); this route
+  // deliberately does no merging of its own, keeping that logic in one
+  // unit-tested place rather than reimplemented on both sides of the wire.
+  //
+  // Raw text, not parsed: the jsonl may contain a torn final line if the
+  // process died mid-write, and the client's parser already skips unparseable
+  // lines without dropping the rest of the file. Parsing here would mean
+  // choosing between throwing away a good file for one bad line, or
+  // duplicating that tolerance.
+  app.get('/api/conversation/history', (req, res) => {
+    // Today only. The panel is a SESSION transcript, not an archive, and
+    // reading the whole Episodic directory would grow unbounded with vault
+    // age for a view that shows one day.
+    const today = new Date().toISOString().slice(0, 10);
+    let session = null;
+    let episodic = '';
+    try { session = memory.fs.readJSON('Conversation/session.json', null); } catch (_) { /* no vault, or unreadable */ }
+    try { episodic = (memory.fs.readLines('Episodic/' + today + '.jsonl') || []).filter(Boolean).join('\n'); } catch (_) { /* no file yet today */ }
+    // Each half degrades on its own: a missing session.json still yields the
+    // episodic history, and vice versa. The panel renders whatever arrives.
+    res.json({ session: session, episodic: episodic });
+  });
+
   app.get('/api/status', async (req, res) => {
     try {
       const status = await probes.getStatus();
@@ -889,9 +1218,20 @@ function createServer(deps) {
       // BUG-111: surface real Gmail triage poll count so quota burn is visible
       // instead of inferred after the fact — null when the sensor never ran
       // (unconfigured, or GMAIL_TRIAGE_MODE:'off').
+      // Build identity, for the HUD's version badge. recentChanges is
+      // deliberately NOT included — it is a 15-commit git log, this endpoint is
+      // polled, and the badge needs four short fields.
+      let build = null;
+      try {
+        const v = version.getVersion();
+        build = { version: v.version, gitRef: v.gitRef, buildTime: v.buildTime, packaged: v.packaged };
+      } catch (err) {
+        logger.warn('status.version-read-failed', { error: err.message });
+      }
       res.json(Object.assign({}, status, {
         voiceLatency: voiceLatencyTracker.stats(),
         gmailTriagePollCount: gmailPollCountGetter ? gmailPollCountGetter() : null,
+        build,
       }));
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -906,6 +1246,16 @@ function createServer(deps) {
     // that test no longer has to move the operator's real models aside; see
     // the comment at the resolution site for the EPERM data-loss it prevents.
     wakewordModelsDir: deps.wakewordModelsDir,
+    // Installer parity — loadConfig's origin map (src/core/config/index.js) so
+    // /api/config/settings can report which layer set each key. Undefined in
+    // tests and any caller that did not thread it through; the route then says
+    // origin:'unknown' rather than guessing.
+    configOrigins: deps.configOrigins,
+    settingsFile: deps.settingsFile,
+    // For /api/config/settings' autonomy block — the effective ceiling and
+    // whether it came from a real boundaries.md, a fresh vault, or the tier-1
+    // malformed fail-safe. Already a createServer dep; passed through, not new.
+    identity,
   });
 
   // ---- /api/media — Windows SMTC now-playing (W9: extracted to routes/media.js) ----
@@ -968,6 +1318,22 @@ function createServer(deps) {
   // to the renderer, and test/setup-route.test.js for the canary that pins it.
   require('./routes/setup').mountSetupRoutes(app, {});
 
+  // ---- /api/setup/components — the optional components the installer's own
+  // component page recorded a choice for (build/installer.nsh writes
+  // %APPDATA%\MYTHOS\install-selection.json; the wizard pre-checks exactly
+  // those). The installs run HERE rather than in NSIS so progress, failure and
+  // retry are visible in the app instead of happening behind a copy-files
+  // progress bar. IDs only over the wire — src/core/setup/components.js is the
+  // allowlist mapping an id to a fixed script + argv, so no request string ever
+  // reaches spawn(). See routes/components.js. ----
+  require('./routes/components').mountComponentsRoutes(app, {});
+
+  // ---- /api/setup/import — bring configuration and identity across from an
+  // existing MYTHOS on this machine. The scan is read-only and the import writes
+  // only what the operator confirms; secret values are never carried. See
+  // routes/import-existing.js and src/core/setup/import-existing.js. ----
+  require('./routes/import-existing').mountImportRoutes(app, { config, logger });
+
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/
   // engagements.js): list returns a JSON array OR {engagements:[...]}; get
@@ -1014,6 +1380,155 @@ function createServer(deps) {
     }
   });
 
+  // ONE VOICE PER SESSION. The chain resolves once and sticks, so the boot greeting,
+  // every proactive announcement and every batch reply all come from the SAME engine
+  // — the operator must never hear the voice change partway through a session. It
+  // only moves on a real provider failure, and then stays moved (see providers/tts.js).
+  // synthesize() returns { audio, mime, provider }: the engines emit different
+  // containers (edge=MP3, gemini/piper=WAV) so the mime travels PER CHUNK.
+  // Test-only seam, undefined in production (same shape as createLiveSocket
+  // below): lets a test drive synthesis timing, which is the only way to observe
+  // a reply that is still IN FLIGHT. With the real chain unavailable, every chunk
+  // is emitted in one synchronous burst, so "mid-reply" — the entire premise of
+  // the Stage 5 handoff — cannot be expressed at all.
+  //
+  // Named `ttsChain`, NOT `tts`, deliberately. Several existing test files already
+  // pass a `tts:` dep that this file has never read, so those objects are inert
+  // fakes missing most of the chain's surface (chainNames, synthesize). Honouring
+  // `deps.tts` here activated all of them at once and broke 21 tests that had
+  // nothing to do with this feature. Left inert rather than "fixed": making them
+  // real would change what those tests exercise, which is their authors' call.
+  //
+  // SWAPPABLE, as of the HUD voice picker (2026-08-11). The chain object itself
+  // parses VOICE_TTS_CHAIN once at construction and can never be re-pointed, so
+  // "apply the newly picked voice without a restart" has to mean "build a NEW
+  // chain and hand it to whoever asks next". That is all setTtsChain does.
+  //
+  // The one-voice guarantee survives because each speak path captures
+  // currentTts() ONCE at the top of its turn (see sendSpokenReply,
+  // proactiveSpeak and the vision path) and uses that same object for every
+  // chunk. A swap therefore lands on the NEXT reply — the one in flight finishes
+  // in the voice it started in, which is the only reading of "immediate" that
+  // does not mean "change voice mid-sentence". Nothing here touches a turn's
+  // AbortController, so barge-in is unaffected, and no provider holds per-chain
+  // state that would need tearing down (kokoro's model cache is a module-level
+  // singleton, the rest are stateless HTTP wrappers).
+  let ttsChainRef = deps.ttsChain || createTtsChain({ config, logger });
+  function currentTts() { return ttsChainRef; }
+  function setTtsChain(next) {
+    if (!next) return;
+    ttsChainRef = next;
+    logger.info('tts.chain-swapped', { chain: next.chainNames.join(',') });
+  }
+  logger.info('tts.chain', { chain: ttsChainRef.chainNames.join(',') });
+
+  // BUG-274 T4 — WHICH ENGINE ACTUALLY MADE THE SOUND, per spoken reply.
+  //
+  // T4's "do first" measurement is: play the same sentence through each engine with
+  // the mic live and record which come back as a transcript. MYTHOS has three, and
+  // they reach the speakers by three different routes — the TTS chain's MP3 through
+  // `new Audio(data:)`, the browser's own speechSynthesis, and Gemini Live's PCM
+  // through an AudioContext. Only the third is identifiable in the log today
+  // (live.turn-parts), and the first two were INDISTINGUISHABLE: the fallback to
+  // speechSynthesis is a CLIENT-side decision taken when audioB64 comes back null,
+  // and the server never recorded which way a reply went.
+  //
+  // So the measurement could not be scored even from a perfect session — the same
+  // shape as T4 step 0, where the check that had to run first could not run at all.
+  // This line makes the engine attributable per reply instead of inferred from the
+  // absence of a tts.chunk-failed warning nearby.
+  //
+  // `engine` is what the CLIENT will do with the chunks, not what the server tried:
+  // a synthesize() that threw still ships the chunk, and the browser still speaks it
+  // — through a different engine, which is the entire distinction being measured.
+  // 'mixed' is kept as its own value rather than rounded to either side, because a
+  // reply that was half MP3 and half speechSynthesis cannot be attributed to one
+  // engine and must not be silently counted as if it could.
+  // Wrapped because this is instrumentation sitting on the speech path, and both call
+  // sites are AFTER the chunks have already gone out. A throw here (a chain without
+  // chainNames, a logger that rejects) would reject out of the speak call and cost the
+  // operator the end of a reply that had already been delivered — a diagnostic
+  // breaking the thing it was added to diagnose. Same rule as the playback callbacks
+  // in pcm-player.js: logging must never be able to stop the audio.
+  function logSpokenEngine(reqId, chunkCount, synthesizedCount, path) {
+    try {
+      const engine = synthesizedCount === 0 ? 'browser-speechSynthesis'
+        : (synthesizedCount === chunkCount ? 'tts-chain' : 'mixed');
+      const chain = ttsChainRef && Array.isArray(ttsChainRef.chainNames)
+        ? ttsChainRef.chainNames.join(',') : null;
+      logger.info('tts.spoke', {
+        reqId,
+        path,
+        engine,
+        chain: engine === 'browser-speechSynthesis' ? null : chain,
+        chunks: chunkCount,
+        synthesized: synthesizedCount,
+      });
+    } catch (_) { /* instrumentation only — never break a reply */ }
+  }
+
+  // A voice picked in the HUD has to reach BOTH speech paths. The TTS chain is
+  // rebuilt by the route below; Gemini Live reads GEMINI_LIVE_VOICE once when a
+  // session is constructed, so it gets the override at that moment instead
+  // (liveConfigNow, used at createLiveSession). Sessions already open keep the
+  // voice they opened with — the same rule as a reply already in flight — so
+  // setLiveVoice closes them and lets liveForSpeech() reopen on the next turn.
+  let liveVoiceOverride = null;
+  function liveConfigNow() {
+    return liveVoiceOverride ? { ...config, GEMINI_LIVE_VOICE: liveVoiceOverride } : config;
+  }
+  function setLiveVoice(voice) {
+    // Wave 6 (2026-08-13): record what we're ABOUT to replace, before
+    // replacing it, so a later revertLiveVoice() has something to go back
+    // to. Recorded even when the outgoing value is null (the un-overridden,
+    // GEMINI_LIVE_VOICE-from-config default) — "revert" from a first switch
+    // must go back to no-override, not silently do nothing.
+    recordLiveVoiceSwitch(liveVoiceOverride);
+    liveVoiceOverride = voice || null;
+    let closed = 0;
+    // `wss` is created further down; this only ever runs from an HTTP request,
+    // long after boot.
+    try {
+      wss.clients.forEach((client) => {
+        const session = (typeof client.getLiveSession === 'function') ? client.getLiveSession() : null;
+        if (session && typeof session.isOpen === 'function' && session.isOpen()) {
+          try { session.close('voice-changed'); closed++; } catch (_) { /* already closing */ }
+        }
+      });
+    } catch (_) { /* no server yet — nothing open to reopen */ }
+    // `closedCount`, not `sessionsClosed`: LOG_REDACT_KEYS matches key names by
+    // SUBSTRING, so any key containing 'session' is replaced with [REDACTED] in
+    // the client-bound copy — this line's own count included. Renaming the field
+    // is the cheap half of the fix; the enforcing half is
+    // test/log-redaction-collateral.test.js, which fails when any NEW log payload
+    // key would be swallowed. See the LOG_REDACT_KEYS note for why the substring
+    // semantics are kept rather than narrowed.
+    if (closed) logger.info('live.voice-changed', { voice: liveVoiceOverride, closedCount: closed });
+    return closed;
+  }
+
+  // Wave 6 — "switch back to the previous voice". Reuses setLiveVoice's own
+  // close-reopen mechanism (that IS the switch; this only supplies WHAT to
+  // switch to). Returns undefined when there is nothing recorded — either no
+  // switch has happened yet this run, or a previous revert already consumed
+  // the one entry of history this keeps — so the caller can say so honestly
+  // instead of silently no-op'ing. A real revert can legitimately return
+  // null (reverting TO "no override"), which is why undefined and not null
+  // is the no-op sentinel here.
+  function revertLiveVoice() {
+    const previous = popPreviousLiveVoice();
+    if (previous === undefined) return undefined; // nothing recorded to revert to
+    setLiveVoice(previous);
+    return previous;
+  }
+
+  // Mounted HERE, between the chain holder it depends on and the /api 404
+  // catch-all below. Either side of that pair is wrong: above, currentTts does
+  // not exist yet; below, every request to it answers "No such route".
+  mountTtsVoiceRoutes(app, {
+    config, logger, getTts: currentTts, setTts: setTtsChain, setLiveVoice, revertLiveVoice, expensiveLimit,
+  });
+
   // Unknown /api routes answer honest JSON (the byte-identical NOVA views probe a
   // few NOVA-era routes — /api/kanban/assemble, /api/pipeline/:id/execute — whose
   // backing now lives in P7 effectors, not this REST surface; see ROADMAP.md P9).
@@ -1048,26 +1563,7 @@ function createServer(deps) {
   let resolveReady;
   const ready = new Promise((resolve) => { resolveReady = resolve; });
 
-  // ONE VOICE PER SESSION. The chain resolves once and sticks, so the boot greeting,
-  // every proactive announcement and every batch reply all come from the SAME engine
-  // — the operator must never hear the voice change partway through a session. It
-  // only moves on a real provider failure, and then stays moved (see providers/tts.js).
-  // synthesize() returns { audio, mime, provider }: the engines emit different
-  // containers (edge=MP3, gemini/piper=WAV) so the mime travels PER CHUNK.
-  // Test-only seam, undefined in production (same shape as createLiveSocket
-  // below): lets a test drive synthesis timing, which is the only way to observe
-  // a reply that is still IN FLIGHT. With the real chain unavailable, every chunk
-  // is emitted in one synchronous burst, so "mid-reply" — the entire premise of
-  // the Stage 5 handoff — cannot be expressed at all.
-  //
-  // Named `ttsChain`, NOT `tts`, deliberately. Several existing test files already
-  // pass a `tts:` dep that this file has never read, so those objects are inert
-  // fakes missing most of the chain's surface (chainNames, synthesize). Honouring
-  // `deps.tts` here activated all of them at once and broke 21 tests that had
-  // nothing to do with this feature. Left inert rather than "fixed": making them
-  // real would change what those tests exercise, which is their authors' call.
-  const tts = deps.ttsChain || createTtsChain({ config, logger });
-  logger.info('tts.chain', { chain: tts.chainNames.join(',') });
+
   const httpServer = app.listen(PORT, BIND, () => {
     logger.info('server.listening', { url: `http://${BIND}:${PORT}`, bind: BIND });
     resolveReady();
@@ -1089,18 +1585,57 @@ function createServer(deps) {
   // unconditional tokenOk() check, so a configured token is required on every
   // branch; tokenOk() itself is a no-op when no MYTHOS_AUTH_TOKEN is set, so
   // the loopback-no-token back-compat path is unaffected either way.
+  // BUG-292 — 2026-08-20. 147 `ws-upgrade-rejected` lines in one session, every
+  // one of them reading exactly "bad or missing token" and nothing else. That is
+  // a client retrying forever, and 147 identical lines cannot tell you which
+  // client, so there was no action available: you cannot hand the right client a
+  // token, or stop the wrong one retrying, until you can name it.
+  //
+  // Q2 — and this is the whole risk of the change. A fix for an auth problem must
+  // not become a credential leak in a log file. So: `credential` is PRESENCE and
+  // CHANNEL only, never the value; `path` is truncated at '?' so a `?token=`
+  // cannot ride in on the URL; and the Authorization header is never copied. The
+  // fields that identify a client (peer address, user-agent) are not secrets, and
+  // are already visible to anyone who can read this log.
+  //
+  // Q3 — WHO READS THIS? A human triaging a retry storm, which is why it goes in
+  // the existing warn rather than a new event: a second event name would split
+  // one storm across two greps.
+  function upgradeCallerFingerprint(req) {
+    const headers = (req && req.headers) || {};
+    const socket = (req && req.socket) || {};
+    const rawUrl = typeof (req && req.url) === 'string' ? req.url : '';
+    const queryIndex = rawUrl.indexOf('?');
+    const query = queryIndex >= 0 ? rawUrl.slice(queryIndex + 1) : '';
+    let credential = 'none';
+    if (typeof headers.authorization === 'string' && headers.authorization.length) credential = 'header';
+    // Deliberately a substring test rather than URLSearchParams: this must not be
+    // able to throw on a malformed upgrade URL, because the only thing worse than
+    // an unattributable rejection is an unattributable crash inside verifyClient.
+    else if (/(^|&)token=/.test(query)) credential = 'query';
+    const ua = typeof headers['user-agent'] === 'string' ? headers['user-agent'] : null;
+    return {
+      remote: socket.remoteAddress
+        ? String(socket.remoteAddress) + ':' + String(socket.remotePort == null ? '?' : socket.remotePort)
+        : null,
+      userAgent: ua ? ua.slice(0, 120) : null,
+      path: queryIndex >= 0 ? rawUrl.slice(0, queryIndex) : (rawUrl || null),
+      credential,
+    };
+  }
+
   function verifyClient(info, callback) {
     // H3(a) — checked before any origin/token logic, so a brute-force run
     // against the token check itself (not just successful connections) is
     // capped regardless of which branch below would otherwise accept or
     // reject it.
     if (wsUpgradeRateLimited(info.req)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'rate limit exceeded' });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'rate limit exceeded' }, upgradeCallerFingerprint(info.req)));
       return callback(false, 429, 'Too Many Requests');
     }
     const origin = info.origin;
     if (origin && !ALLOWED_ORIGINS.has(origin)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'foreign origin', origin });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'foreign origin', origin }, upgradeCallerFingerprint(info.req)));
       return callback(false, 403, 'Forbidden');
     }
     if (!origin && !isLoopback(info.req)) {
@@ -1121,7 +1656,7 @@ function createServer(deps) {
       // Reject stays the default: any of those three failing lands on the 403.
       const nodeTrusted = config.AETHER_NODE_TRUST === true && !!AUTH_TOKEN;
       if (!nodeTrusted) {
-        logger.warn('ws-upgrade-rejected', { reason: 'no origin, non-loopback' });
+        logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'no origin, non-loopback' }, upgradeCallerFingerprint(info.req)));
         return callback(false, 403, 'Forbidden');
       }
       // ...and the credential really is MYTHOS_AUTH_TOKEN and nothing else.
@@ -1133,18 +1668,32 @@ function createServer(deps) {
       // remote socket, which is exactly the widening this branch is supposed not
       // to be. So the node path checks the shared secret directly.
       if (!authTokenMatches(extractToken(info.req))) {
-        logger.warn('ws-upgrade-rejected', { reason: 'node trust: not the auth token' });
+        logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'node trust: not the auth token' }, upgradeCallerFingerprint(info.req)));
         return callback(false, 401, 'Unauthorized');
       }
     }
     if (!tokenOk(info.req)) {
-      logger.warn('ws-upgrade-rejected', { reason: 'bad or missing token' });
+      logger.warn('ws-upgrade-rejected', Object.assign({ reason: 'bad or missing token' }, upgradeCallerFingerprint(info.req)));
       return callback(false, 401, 'Unauthorized');
     }
     return callback(true);
   }
 
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws', verifyClient });
+  // maxPayload is an explicit bound, not a default. The ws library's default is
+  // 100 MiB per frame, while every HTTP body on this server is capped far lower
+  // (express.json at 1mb, the one raw audio route at 15mb). The upgrade rate
+  // limiter throttles NEW connections; it says nothing about how large a frame
+  // an already-authenticated socket may send, so a single client could make the
+  // server buffer 100 MiB at a time.
+  //
+  // 16 MiB is chosen to sit above the largest legitimate inbound frame with room
+  // to spare: the biggest one is a vision-query, which carries a base64 webcam
+  // JPEG at quality 0.7 and full sensor resolution (ui/public/js/vision/camera.js),
+  // and the phone node's audio chunks are orders of magnitude smaller. Raise it
+  // via WS_MAX_PAYLOAD_BYTES if a real frame is ever refused — a refused frame
+  // closes the socket with code 1009, which is loud, not silent.
+  const WS_MAX_PAYLOAD = Number(process.env.WS_MAX_PAYLOAD_BYTES) || 16 * 1024 * 1024;
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws', verifyClient, maxPayload: WS_MAX_PAYLOAD });
 
   function broadcastAll(msg) {
     const payload = JSON.stringify(msg);
@@ -1233,6 +1782,22 @@ function createServer(deps) {
   // node id is the SAME string everywhere — its entry in AETHER_NODE_IDS, its
   // position in the aggregator's --peers, and what it identifies as here.
   const voiceNodes = new Map();
+  // FIX-PLAN 3.4 (2026-08-17): damping state for the duplicate-identify
+  // anomaly — nodeId -> { at, suppressed }. BUG-253's largest untracked
+  // cluster was SIX reports of one reconnect loop in ~30 minutes, each
+  // narrated by the immune explainer as a fresh unexplained fault; one per
+  // nodeId per minute with a suppressedCount keeps it countable without
+  // re-alarming on every bounce. Same TTL-map shape as the healer's
+  // suppressedTools (BUG-013). Entries are bounded by distinct node ids.
+  const VOICE_NODE_DUP_ANOMALY_MIN_INTERVAL_MS = 60000;
+  const voiceNodeDupAnomalyLast = new Map();
+  // Wave 1 (2026-08-13): connectionId -> that connection's liveAdapter (set
+  // once liveOpen() creates it, deleted on ws close). leash/confirm.js's
+  // per-entry expiry timer fires with no connection context of its own — this
+  // is what lets the server route an EXPIRED confirm back to the SPECIFIC
+  // Live session that raised it, the same way handleConfirmReply already does
+  // for an explicit accept/reject on this same connection's closure.
+  const liveAdaptersByConnection = new Map();
   // The Aether aggregator's current election owner, cached from the sensor's
   // perception. Read at speak time rather than passed in, because the sensor
   // starts in a later boot step than the server and the owner changes as the
@@ -1268,6 +1833,69 @@ function createServer(deps) {
   // text-only copy would look harmless and isn't: playNextChunk() speaks any
   // chunk whose audioB64 is null via speechSynthesis, so the PC would narrate
   // the reply alongside the phone — the same two-voices defect as BUG-060.
+  // F2b (2026-08-15) — one speaker per connection.
+  //
+  // F2a stops sendSpokenReply from speaking OVER an open Live session, but a
+  // guard on one function is an instance, not the class: proactiveSpeak() fires
+  // from reminders, goal/build announcements and health notices on its own
+  // schedule, and can still land in the middle of a reply that is already
+  // streaming chunks. The two share no lock and no turn serialisation, and each
+  // side's mic gate polices only its own engine's capture.
+  //
+  // Queue, never discard — the risk of this change is a lost announcement, so a
+  // second utterance waits rather than being dropped. But the wait is BOUNDED:
+  // chunk synthesis has no global timeout, so an edge-tts request that hangs
+  // would otherwise mute every later utterance for the rest of the session.
+  // Past the ceiling we speak anyway, which is the same fail-open doctrine the
+  // half-duplex mic gate uses (a deaf assistant, or here a mute one, is the
+  // worse failure).
+  const SPEECH_LOCK_CEILING_MS = 20000;
+  const speechChains = new WeakMap();
+  const BROADCAST_SPEECH_KEY = Object.freeze({});   // WeakMap needs an object key
+  function serializeSpeech(target, fn) {
+    const key = (target && typeof target === 'object') ? target : BROADCAST_SPEECH_KEY;
+    const prev = speechChains.get(key) || Promise.resolve();
+    let timer = null;
+    const bounded = Promise.race([
+      prev,
+      new Promise((resolve) => {
+        timer = setTimeout(() => {
+          logger.warn('speech.lock-ceiling', { ceilingMs: SPEECH_LOCK_CEILING_MS });
+          resolve();
+        }, SPEECH_LOCK_CEILING_MS);
+      }),
+    ]).then(() => { if (timer) clearTimeout(timer); });
+    const next = bounded.then(fn);
+    // The stored tail swallows rejections so ONE failed utterance cannot wedge
+    // the queue for the connection; the caller still sees the real rejection.
+    speechChains.set(key, next.then(() => {}, () => {}));
+    return next;
+  }
+
+  // F2d — see the call site in sendSpokenReply. Latched, not per-turn: the
+  // condition is a property of the machine's TTS install, not of this reply.
+  let ttsChainDownReported = false;
+  function noteTtsChainDown(ttsUp, chain) {
+    if (ttsUp) { ttsChainDownReported = false; return; }   // recovered — re-arm
+    if (ttsChainDownReported) return;
+    ttsChainDownReported = true;
+    const chainNames = (chain && chain.chainNames) || [];
+    logger.warn('tts.chain-down', {
+      chain: chainNames.join(' -> '),
+      note: 'no configured TTS provider can speak; replies will use the browser voice, '
+        + 'which is a DIFFERENT voice from the entity\'s',
+    });
+    try {
+      bus.emit('health.anomaly', {
+        kind: 'tts-chain-down',
+        target: 'tts',
+        reason: 'No TTS provider can speak (' + (chainNames.join(', ') || 'empty chain')
+          + '). MYTHOS is falling back to the browser voice, which sounds different. '
+          + 'Start the edge-tts server or configure another provider.',
+      });
+    } catch (_) { /* health reporting must never break a reply */ }
+  }
+
   function sendSpeechChunk(localSend, target, msg, originWs) {
     // Stage 5: a deliberate, FSM-sequenced handoff may have moved this reply to
     // another device since the target was resolved. `target` is a live object so
@@ -1430,8 +2058,14 @@ function createServer(deps) {
     });
     if (p.phase === 'CONFIRM') moveActiveSpeechToCurrentOwner();
   });
+  // F2b: every entry point into this function is serialized per connection.
+  // The real work is proactiveSpeakNow(); this wrapper only owns the lock.
   async function proactiveSpeak(text, targetWs, opts) {
     if (!text || !wss) return;
+    return serializeSpeech(targetWs || lastActiveWs, () => proactiveSpeakNow(text, targetWs, opts));
+  }
+
+  async function proactiveSpeakNow(text, targetWs, opts) {
     targetWs = targetWs || lastActiveWs;
     // Stage 2 (BUG-060, "two voices speaking simultaneously" —
     // vault/Incidents/2026-07-31.jsonl): if this connection has an open Gemini
@@ -1479,7 +2113,12 @@ function createServer(deps) {
     if (liveSession && liveSession.isOpen()) {
       // BUG-117: same self-describing prefix the tool-outcome pushes use — a
       // proactive alert is even easier to misread as the operator speaking.
-      liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${text}`);
+      // BUG-273 D3: every injection names itself now. This is the entity speaking
+      // unprompted (an announcement, an anomaly, the boot greeting), which is exactly
+      // the class the operator described as "rambling on by yourself" — and the class
+      // that was indistinguishable in the log from a tool outcome or from the operator
+      // typing, because all thirteen sites called one unlabelled function.
+      liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${text}`, { site: 'proactive-speak' });
       try {
         memory.episodic.write({
           kind: 'proactive-speech', channel: 'proactive',
@@ -1519,9 +2158,12 @@ function createServer(deps) {
       return;
     }
     sendOut({ type: 'proactive-speech', reqId, text, speak });
+    // Captured ONCE for this announcement. A voice picked mid-announcement lands
+    // on the next one rather than halfway through this one.
+    const activeChain = currentTts();
     let ttsUp = false;
     try {
-      ttsUp = await tts.isAvailable();
+      ttsUp = await activeChain.isAvailable();
     } catch (err) {
       // The availability probe itself can throw (network error hitting the TTS
       // endpoint, provider init failure). Previously this rejected out of
@@ -1561,23 +2203,26 @@ function createServer(deps) {
         sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64: alertB64, mime: 'audio/wav', text: '' }, targetWs);
         idx++;
       }
+      let proactiveSynthesized = 0;
       for (let i = 0; i < textChunks.length; i++) {
         if (ctrl.signal.aborted) break;
         let audioB64 = null;
         let chunkMime;
         if (ttsUp) {
           try {
-            const out = await tts.synthesize({ text: textChunks[i], signal: ctrl.signal });
+            const out = await activeChain.synthesize({ text: textChunks[i], signal: ctrl.signal });
             audioB64 = out.audio.toString('base64');
             chunkMime = out.mime;
           } catch (err) {
             logger.warn('tts.proactive-chunk-failed', { error: err.message, index: i });
           }
         }
+        if (audioB64) proactiveSynthesized++;
         if (ctrl.signal.aborted) break;
         sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] }, targetWs);
         idx++;
       }
+      if (textChunks.length) logSpokenEngine(reqId, textChunks.length, proactiveSynthesized, 'proactive');
       // chunked forced true on abort, or when the alert tone alone was sent
       // (even with edge-tts down): routes the client's 'done' handling through
       // the session-checked chunk-queue path, never the non-chunked
@@ -1625,6 +2270,11 @@ function createServer(deps) {
       // primary (and originally only) caller is unaffected.
       channel: ctx.channel || 'voice',
       traceId: ctx.traceId || null,
+      // G4: which surface (click/gesture/unknown) produced this dispatch, and
+      // which confirm.accept() scope resolved it (connection/system) — see
+      // handleConfirmReply and dispatch-action.js's audit write.
+      surface: ctx.surface,
+      acceptedScope: ctx.acceptedScope,
     });
   }
 
@@ -1666,7 +2316,36 @@ function createServer(deps) {
   // speech was silently dropped. Route it through proactiveSpeak() so the
   // immune system has a real voice for critical health events.
   bus.subscribe('action.speak-requested', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (!(e && e.payload && e.payload.text)) return;
+    // 2026-08-10: an UNPLAYBOOKED internal diagnostic must not interrupt a live
+    // conversation. That session heard, mid-exchange and five times over, "One of
+    // my internal checks has no automatic fix: live-turn-no-user-transcript" —
+    // every one of them a false alarm (fixed at source in
+    // src/core/voice/live-session.js), and none of them anything the operator
+    // could act on while talking.
+    //
+    // Deliberately NOT solved by softening the words. AD-5 (BUG-123) requires the
+    // real condition to be NAMED rather than narrated into invented prose, and
+    // test/bug-123-anomaly-honest-phrasing.test.js pins exactly that — so the slug
+    // is the honest part, not the defect. What was wrong was the timing.
+    //
+    // Scope is narrow on purpose: only payloads the explainer marks
+    // internalDiagnostic, and only while a Live session is actually open. Genuine
+    // critical health speech is untouched, and the anomaly still reaches the HUD,
+    // the log and the audit either way — this drops one spoken interruption, not
+    // the record of it.
+    if (e.payload.internalDiagnostic) {
+      const ws = lastActiveWs;
+      const live = (ws && typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
+      if (live && live.isOpen()) {
+        logger.info('immune-explain.not-spoken-during-live', {
+          kind: e.payload.kind || null,
+          reason: 'a Live conversation is in progress — the anomaly is in the log, the audit and the HUD',
+        });
+        return;
+      }
+    }
+    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // ---- Boot greeting (JARVIS-style) ----
@@ -1699,9 +2378,21 @@ function createServer(deps) {
   let bootGreetingDelayMs = 2500;
   const LAST_BOOT_PATH = 'Identity/last-boot.json';
   const bootUpgrade = { upgraded: false, changes: [] };
+  // Genuine "since this entity was last alive" instant for the self-healing
+  // briefing fact (TASK B4 code review) — read from the SAME prev record
+  // bootUpgrade already diffs gitRef against, before it gets overwritten
+  // below with this boot's own bootDate. null on a first run (no
+  // Identity/last-boot.json yet) or if the version-check try below fails;
+  // briefing.js's buildBriefingFacts() falls back to a fixed window itself
+  // when this stays null.
+  let previousBootAt = null;
   try {
     const v = version.getVersion();
     const prev = memory.fs.readJSON(LAST_BOOT_PATH, null);
+    if (prev && prev.bootDate) {
+      const parsed = Date.parse(prev.bootDate);
+      if (!Number.isNaN(parsed)) previousBootAt = parsed;
+    }
     if (prev && prev.gitRef && prev.gitRef !== v.gitRef) {
       bootUpgrade.upgraded = true;
       // Commit subjects newer than the previous boot's ref (newest first,
@@ -1721,15 +2412,49 @@ function createServer(deps) {
     logger.warn('boot-greeting.version-check-failed', { error: err.message });
   }
 
-  // Two-brain key separation (.env.example's HERMES_PROVIDER_KEY block): the
-  // Hermes build engine and the Mythos brain must not share one Mistral
-  // workspace key — a 20-60-call build then eats the same rate limit as voice,
-  // vision and memory consolidation, and voice turns fall back to the weakest
-  // model in the chain mid-conversation. Logs a BOOLEAN only; never a key value.
-  if (config.MISTRAL_API_KEY && process.env.HERMES_PROVIDER_KEY &&
-      config.MISTRAL_API_KEY === process.env.HERMES_PROVIDER_KEY) {
-    logger.warn('hermes.shared-provider-key', { sameAsMistral: true });
+  // What the last update did, if anything — electron/main.js forwards
+  // unfinishedUpdate()'s result as MYTHOS_UPDATE_RESULT (JSON) just before
+  // forking this process. getUpdateReport() throws on a present-but-corrupt/
+  // malformed value rather than returning the same null it returns for
+  // "absent" — that distinction matters here: a caught parse failure is
+  // logged and otherwise ignored (no fact, no episodic entry), but it must
+  // never be silently treated as "no update happened".
+  let updateReport = null;
+  try {
+    updateReport = getUpdateReport();
+  } catch (err) {
+    logger.warn('boot-greeting.update-report-invalid', { error: err.message });
   }
+  if (updateReport) {
+    // One episodic entry, not one per fact — recallable later so "what
+    // changed recently" and self-knowledge answers stay truthful even after
+    // the boot greeting itself has scrolled out of the dedup window.
+    try {
+      memory.episodic.write({
+        kind: 'system',
+        summary: updateReport.completed
+          ? 'Update completed: v' + updateReport.from + ' -> v' + updateReport.version
+          : 'Update did not complete: still on v' + updateReport.from + ' (target v' + updateReport.version + ')',
+        detail: updateReport,
+        salience: 0.5,
+      });
+    } catch (_) { /* memory must never block boot */ }
+  }
+
+  // TWO-BRAIN KEY SEPARATION — REMOVED AS A CHECK, KEPT AS A NOTE (W6,
+  // 2026-08-22). This compared config.MISTRAL_API_KEY against
+  // HERMES_PROVIDER_KEY and warned when they matched, because Hermes held its
+  // OWN provider key and sharing one Mistral workspace key meant a 20-60-call
+  // build ate the same rate limit as voice, vision and memory consolidation —
+  // voice turns then fell back to the weakest model in the chain mid-conversation.
+  //
+  // Under dsh there is no separate key to compare. The engine authenticates with
+  // whatever credential the BUILD LANE names, which is MISTRAL_API_KEY, so the
+  // two are the same key BY CONSTRUCTION and this check would fire on every
+  // boot — a warning that always fires is noise, and one that can never fire is
+  // worse. The rate-limit arithmetic has NOT changed and is documented in
+  // .env.example: if you hold a second Mistral workspace key, express that by
+  // putting it first in the build lane, not by setting an env var nothing reads.
 
   // BUG-112: one greeting-shaped announcement per session, shared across every
   // source (boot greeting here, the daily planner's morning brief below) via
@@ -1740,41 +2465,31 @@ function createServer(deps) {
   async function deliverBootGreeting(targetWs) {
     const hour = new Date().getHours();
     const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-    const facts = [];
-    try {
-      facts.push('Local time: ' + new Date().toLocaleString(undefined, { weekday: 'long', hour: 'numeric', minute: '2-digit' }));
-    } catch (_) {}
-    try {
-      if (goalsEffector && typeof goalsEffector.stats === 'function') {
-        const gs = goalsEffector.stats();
-        facts.push('Goals: ' + gs.active + ' active, ' + gs.done + ' done');
-      }
-    } catch (_) {}
-    try {
-      if (probes) {
-        const st = await probes.getStatus();
-        const down = ['nim', 'groq', 'mistral'].filter((id) => {
-          try { return isProviderDown(id, st.providers); } catch (_) { return false; }
-        });
-        facts.push(down.length ? 'AI providers down: ' + down.join(', ') : 'All AI providers online');
-      }
-    } catch (_) {}
-    if (bootUpgrade.upgraded) {
-      facts.push('You received a code upgrade since your last boot' +
-        (bootUpgrade.changes.length ? ' — recent changes: ' + bootUpgrade.changes.join('; ') : ''));
-    }
-    // Session carryover: greet by picking up the thread instead of booting
-    // cold. recall('') with a kind filter scores by recency alone (episodic.js),
-    // so this is simply the three most recent conversation records — no new
-    // query path. Best-effort: a greeting must never depend on memory.
-    try {
-      const recent = memory.episodic.recall('', { kind: 'conversation', limit: 3, windowDays: 3 }) || [];
-      const lines = recent
-        .map((hit) => (hit.record && hit.record.summary) || hit.snippet || '')
-        .filter(Boolean)
-        .slice(0, 3);
-      if (lines.length) facts.push('Last time we spoke: ' + lines.join(' / '));
-    } catch (_) { /* no vault, fake fs, or empty history — greet cold */ }
+    // TASK B2: fact assembly lives in conversation/briefing.js now (extracted
+    // for the same reason electron/child-exit.js was — testable behaviorally,
+    // not just source-shape) and each source is individually time-boxed there.
+    // Deps below are exactly the closure state the inline code used to read.
+    // `dispatch` reaches read-only T0 tools (get_weather, reminder_list) via
+    // the same dispatchAction() wrapper every other caller uses — AD-1's
+    // "one execution surface" rule forbids briefing.js from calling
+    // effectors.invoke directly.
+    const facts = await buildBriefingFacts({
+      goalsEffector,
+      probes,
+      isProviderDown,
+      bootUpgrade,
+      updateReport,
+      // Also backs the self-healing fact (TASK B4) via memory.audit.query —
+      // no separate dep needed, briefing.js reads it off this same object.
+      memory,
+      // The self-healing fact's real window — see the comment where this is
+      // computed above.
+      previousBootAt,
+      kanbanEffector,
+      spend,
+      snapshotSystemMetrics,
+      dispatch: (tool, args) => dispatchAction({ tool, args: args || {} }, { tier: 0, channel: 'boot-briefing' }),
+    });
     let text = null;
     try {
       const result = await Promise.race([
@@ -1845,7 +2560,14 @@ function createServer(deps) {
   // Calendar reminders — proactive speech when a reminder fires due.
   bus.subscribe('reminder.due', (e) => {
     if (e && e.payload && e.payload.text) {
-      proactiveSpeak('Reminder: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) });
+      // F2 (2026-08-12, G5 diagnosis): 'Reminder: <text>' reads exactly like an
+      // instruction to CREATE a reminder, not a report that one already fired.
+      // On the Live path this notice necessarily arrives as user-role
+      // realtimeInput (BUG-117 — no system channel exists), so a model reading
+      // "Reminder: walk the dog" as the operator's own words called
+      // reminder_add on it — the reminder re-created itself, 9 seconds later.
+      // This wording is self-describing as a completed event instead.
+      proactiveSpeak('This reminder has just fired and is now complete: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) }).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     }
   });
 
@@ -1868,7 +2590,7 @@ function createServer(deps) {
         return;
       }
     } catch (_) {}
-    proactiveSpeak(e.payload.text);
+    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
         conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
@@ -1876,10 +2598,10 @@ function createServer(deps) {
     } catch (_) {}
   });
   bus.subscribe('plan.checkin', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
   bus.subscribe('plan.evening-review', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // Idle-mull follow-ups (cortex/index.js emits 'cortex.thought' after every
@@ -1903,7 +2625,7 @@ function createServer(deps) {
     if (lastTurnAt && now - lastTurnAt < quietMs) return;
     if (lastFollowupAt && now - lastFollowupAt < gapMs) return;
     lastFollowupAt = now;
-    proactiveSpeak(String(e.payload.text));
+    proactiveSpeak(String(e.payload.text)).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // Gmail triage — proactive speech when the gmail-sensor finds genuinely new
@@ -1951,7 +2673,7 @@ function createServer(deps) {
       logger.info('gmail.batch-deferred-to-greeting', { count: count });
       return;
     }
-    proactiveSpeak(text);
+    proactiveSpeak(text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
         conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
@@ -2034,7 +2756,27 @@ function createServer(deps) {
     history.push({ role, content: String(content).slice(0, 2000) });
     historyTrim();
     historyAt = Date.now();
-    try { memory.fs.writeJSON(SESSION_PATH, { turns: history, savedAt: historyAt }); } catch (_) {}
+    // BUG-306: still best-effort, no longer silent.
+    //
+    // This was `catch (_) {}`. A vault that had stopped accepting writes lost
+    // every conversation and said nothing — the next launch simply began with no
+    // history, which reads as a fresh session rather than as a failure. Best-
+    // effort and invisible are separate decisions and only the first one was
+    // ever made here.
+    //
+    // The catch stays, deliberately: the operator is mid-sentence and a disk
+    // problem must not end the turn. Note this also fires for a test fake whose
+    // fs exposes only vaultPath, which is a true statement about that fake —
+    // history is not being persisted — and those fakes inject a silent logger.
+    try {
+      memory.fs.writeJSON(SESSION_PATH, { turns: history, savedAt: historyAt });
+    } catch (err) {
+      logger.warn('session-history-write-failed', {
+        path: SESSION_PATH,
+        turns: history.length,
+        error: (err && err.message) || String(err),
+      });
+    }
   }
 
   wss.on('connection', (ws) => {
@@ -2143,23 +2885,77 @@ function createServer(deps) {
           getLiveSession: () => liveSession,
           sanitizeErrorForClient,
           goals, // BUG-113: commitment-ledger logging in onLiveTurnComplete
+          // Fix-plan 2.3: the schema key the .env.example doc points at —
+          // without this the documented dial silently did nothing.
+          toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS,
         });
+        liveAdaptersByConnection.set(connectionId, liveAdapter);
       }
       if (!liveSession) {
-        const { declarations, withheld } = buildFunctionDeclarations(effectors, {
+        // Hoisted into a named builder so it can be re-run. It used to be called
+        // exactly once, and its result handed to createLiveSession as a frozen
+        // array — which meant a session that rotated at the 10-minute ceiling
+        // came back declaring the capabilities the machine had before the
+        // rotation, contradicting this function's own comment below. Passed as a
+        // FUNCTION now, the same way buildLiveSystemInstruction is (BUG-079), so
+        // live-session.js rebuilds it on every open()/reconnect.
+        const rebuildDeclarations = () => buildFunctionDeclarations(effectors, {
           allowlist: String(config.LIVE_TOOL_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
+          // Do not declare a tool whose machinery is absent on this machine.
+          // The freshly installed build fired gmail_unread / media_status /
+          // spotify_status before the operator had spoken, against credentials
+          // and adapters the install does not have. Built HERE, per session, not
+          // at boot: an adapter that comes online later must become declarable
+          // on the next session without a restart. See core/voice/tool-capability.js.
+          capability: buildCapabilitySnapshot({
+            config,
+            // The adapter modules are singletons holding their own connection
+            // state, and pc-child is already require()d at the top of this file
+            // for exactly that reason. getStatus() is a pure read; requiring
+            // these starts nothing.
+            adapters: {
+              browser: browserAgentAdapter,
+              cua: cuaDriverAdapter,
+              pcChild,
+              android: androidChildAdapter,
+            },
+          }),
           log: (m) => logger.info('live-tools', { detail: m }),
         });
+        const { declarations, withheld, unavailable } = rebuildDeclarations();
+        // Only the tool NAMES go to the session; withheld/unavailable are
+        // reported here. Re-logging them on every rotation would turn a
+        // once-per-session diagnostic into a recurring one, so the rebuild
+        // closure below deliberately keeps just `declarations`.
+        const declarationsForSession = () => rebuildDeclarations().declarations;
         if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
+        // Logged as its own event, not folded into the line above: "withheld by
+        // curation" and "withheld because this machine cannot do it" are
+        // different findings and only one of them is a setup problem.
+        if (unavailable && unavailable.length) {
+          logger.warn('live-tools.unavailable', {
+            count: unavailable.length,
+            tools: unavailable.map((u) => u.name),
+            reasons: [...new Set(unavailable.map((u) => u.reason))],
+          });
+        }
         liveSession = createLiveSession({
-          config, bus, logger, spend, breakers: effectors.breakers,
+          // liveConfigNow() carries a voice picked in the HUD since boot.
+          // live-session.js reads GEMINI_LIVE_VOICE ONCE, at construction
+          // (:82), so a session built from the frozen boot config would keep
+          // speaking in the old voice while every other surface had switched —
+          // the picker would look broken precisely for the operator who is
+          // using Live, which is now the default whenever a Google key exists.
+          config: liveConfigNow(), bus, logger, spend, breakers: geminiLiveBreakers,
           createSocket: createLiveSocket, // test-only seam; undefined in production
           // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
           // buildSetup() calls it fresh on every open()/reconnect so the local
           // time (and anything else composed here) never goes stale across a
           // long-running or rotated session.
           systemInstruction: buildLiveSystemInstruction,
-          functionDeclarations: declarations,
+          // BUG-079's reasoning applied to the catalog, not just the prompt: a
+          // function, so a rotation re-reads which adapters are actually up.
+          functionDeclarations: declarationsForSession,
           onToolCall: liveAdapter.handleLiveToolCalls,
           onAudioOut: (b64) => {
             send({ type: 'live-audio-out', data: b64 });
@@ -2199,6 +2995,12 @@ function createServer(deps) {
             proactiveSpeak(text, ws, { skipLive: true })
               .catch((err) => logger.warn('live.turn-silent.tts-failed', { turnId, error: err.message }));
           },
+          // Wave 2 (2026-08-13, resume-on-activity watchdog): direct
+          // per-connection callback, same reason as onInterrupted above — tell
+          // THIS connection's bridge to check its own captureSuspended and
+          // clear early if set. The bridge (not us) knows whether it's
+          // actually suspended right now.
+          onSuspendedTurnAnomaly: () => send({ type: 'live-watchdog-clear' }),
         });
       }
       const ok = await liveSession.open();
@@ -2312,7 +3114,13 @@ function createServer(deps) {
     // is down, chunks are sent with audioB64:null and the client falls back
     // to browser speechSynthesis exactly as before. Shared by handleUtterance
     // and handleVisionQuery — one reply-emission path, one protocol.
+    // F2b: same per-connection lock as proactiveSpeak — a reminder firing
+    // mid-reply now queues behind it instead of playing over it.
     async function sendSpokenReply(reqId, say, meta, micStoppedAt) {
+      return serializeSpeech(ws, () => sendSpokenReplyNow(reqId, say, meta, micStoppedAt));
+    }
+
+    async function sendSpokenReplyNow(reqId, say, meta, micStoppedAt) {
       const speak = sanitizeSpoken(say);
       // Phase 2 (AETHER-WIRING): route the reply to the nearest device instead
       // of the local TTS chain. The client still gets its caption-only 'done'
@@ -2329,7 +3137,60 @@ function createServer(deps) {
         try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
         return;
       }
-      const ttsUp = await tts.isAvailable();
+      // F2 (2026-08-15) — THE THIRD SPEECH PATH. proactiveSpeak() and
+      // handleVisionQuery() have both had this guard since BUG-060; this one
+      // never got it, and BUGS.md has recorded it since 2026-07-31 as "Known
+      // remaining gap, NOT fixed in this pass" (BUG-083). The check two lines
+      // above LOOKS like the guard but only gates the Aether short-circuit —
+      // with an open Live session and no Aether device, control fell straight
+      // through into the synthesis loop below.
+      //
+      // What the operator heard on 2026-08-14: at 21:45:59 all three TTS
+      // providers failed within 4ms (gemini-tts 429, edge-tts not running,
+      // kokoro-tts unresolvable — see F2c). ttsUp is then false, every chunk
+      // ships audioB64:null, and voice-loop.js:528-601 speaks them through
+      // window.speechSynthesis — the OS voice — while Gemini Live's PCM
+      // playback was the entity's voice for the same connection. Two engines,
+      // one connection, guaranteed to differ in timbre.
+      //
+      // Route the text through the same [SYSTEM] channel proactiveSpeak uses so
+      // Gemini itself says it, and finish the turn caption-only (chunked:true,
+      // zero chunks) exactly as the Aether branch above does.
+      //
+      // The `!ws._mythosNodeId` term is load-bearing and was missing in the first
+      // cut of this guard, which broke aether-node-routing.test.js. A phone node
+      // may have its own Live session open on its own connection, but a
+      // node-origin utterance is deliberately answered by the BATCH pipeline (see
+      // the routing decision at the 'utterance' handler, which sends node turns
+      // to handleUtterance and only HUD turns to Live). Routing the reply into
+      // Live here would answer on the desktop a question that was asked at the
+      // phone. Same guard the utterance router uses, and for the same reason.
+      if (!ws._mythosNodeId && liveSession && liveSession.isOpen()) {
+        liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${speak}`, { site: 'reply-routed-to-live' });
+        logger.info('reply.routed-to-live', { reqId, chars: speak.length });
+        try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
+        return;
+      }
+      // Captured ONCE for this reply — see currentTts()/setTtsChain(). Every
+      // chunk below comes from this object even if the operator picks a new
+      // voice mid-reply; the new one starts at the next reply.
+      const activeChain = currentTts();
+      const ttsUp = await activeChain.isAvailable();
+      // F2d (2026-08-15): degrading to window.speechSynthesis is a CHANGE OF
+      // VOICE IDENTITY, not a graceful fallback — the operator hears a different
+      // entity and has no way to know why. On 2026-08-14 all three providers
+      // failed within 4ms (gemini-tts quota, edge-tts not running, kokoro-tts
+      // unresolvable) and nothing said so anywhere the operator could see.
+      //
+      // Reported through health.anomaly rather than a caption because that is
+      // this system's existing honest-failure channel (it reaches the HUD and
+      // the announcer), and because a caption would be overwritten by the reply
+      // text a moment later. Once per session — the condition does not change
+      // per turn, and a per-turn anomaly would be its own kind of noise.
+      // Deliberately does NOT suppress the browser-voice fallback: a mute
+      // assistant is the worse failure. The point is that it stops being silent
+      // about it (rules/core.md §11.2).
+      noteTtsChainDown(ttsUp, activeChain);
       // ALWAYS split, even with TTS down. This used to be `ttsUp ? split : []`,
       // which contradicted the comment directly above and truncated the entity's
       // speech: with no chunks the client fell through to speaking the WHOLE
@@ -2357,6 +3218,7 @@ function createServer(deps) {
       let latencyRecorded = false;
       try {
         if (chunks.length) {
+          let replySynthesized = 0;
           for (let i = 0; i < chunks.length; i++) {
             if (ctrl.signal.aborted) break;
             let audioB64 = null;
@@ -2367,13 +3229,14 @@ function createServer(deps) {
             // sentence per utterance instead of one utterance per reply.
             if (ttsUp) {
               try {
-                const out = await tts.synthesize({ text: chunks[i], signal: ctrl.signal });
+                const out = await activeChain.synthesize({ text: chunks[i], signal: ctrl.signal });
                 audioB64 = out.audio.toString('base64');
                 chunkMime = out.mime;
               } catch (err) {
                 logger.warn('tts.chunk-failed', { error: err.message, index: i });
               }
             }
+            if (audioB64) replySynthesized++;
             if (ctrl.signal.aborted) break;
             if (audioB64 && typeof micStoppedAt === 'number' && !latencyRecorded) {
               voiceLatencyTracker.record(Date.now() - micStoppedAt);
@@ -2381,6 +3244,7 @@ function createServer(deps) {
             }
             sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, mime: chunkMime, text: chunks[i] }, ws);
           }
+          logSpokenEngine(reqId, chunks.length, replySynthesized, 'reply');
         }
         // chunked forced true on abort (even with zero chunks sent): routes the
         // client's 'done' handling through the session-checked chunk-queue path,
@@ -2612,7 +3476,27 @@ function createServer(deps) {
         }
         const text = String(msg.text || 'Describe what you see, briefly.').slice(0, 500);
 
-        const ttsUp = await tts.isAvailable();
+        // BUG-060, third site (vault/Incidents/2026-07-31.jsonl): proactiveSpeak()
+        // and sendSpokenReply() are already guarded against emitting edge-tts
+        // speech-chunk audio while a Gemini Live session is open on this
+        // connection — Live's own PCM playback IS the entity's voice, and
+        // stacking edge-tts on top of it is the "two voices" bug. This path had
+        // no such check. Resolved the same way sendSpokenReply() does.
+        // NOTE: this closes a real hole in THIS source file. It does not
+        // establish that the installed/packaged build the operator was running
+        // even contains the BUG-060 fix — packaging drift is this whole repair
+        // plan's premise, and a stale packaged server/index.js would explain the
+        // original incident with no new mechanism at all.
+        const liveSession = (typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
+        const liveOpen = !!(liveSession && liveSession.isOpen());
+
+        // Captured ONCE for this vision answer, same rule as the other two speak
+        // paths — every streamed sentence below comes from this chain object.
+        // ttsUp forced false when Live is open: onToken below becomes undefined,
+        // so the streamer/enqueueChunk machinery is never invoked and no
+        // speech-chunk is ever synthesized or sent for this turn.
+        const activeChain = currentTts();
+        const ttsUp = liveOpen ? false : await activeChain.isAvailable();
         const streamer = createSentenceStreamer();
         // The third synthesis site. It streams sentences as the vision model
         // produces them, so it needs the same routing decision as the other two
@@ -2634,7 +3518,7 @@ function createServer(deps) {
             let audioB64 = null;
         let chunkMime;
             try {
-              const out = await tts.synthesize({ text: spoken });
+              const out = await activeChain.synthesize({ text: spoken, signal: AbortSignal.timeout(30000) }); // GAP-ANALYSIS M2-sibling: hung sidecar here stalled every later chunk and the vision turn (undici ~300s); 30s = ACTION_TIMEOUT_MS
               audioB64 = out.audio.toString('base64');
               chunkMime = out.mime;
             } catch (err) {
@@ -2676,6 +3560,17 @@ function createServer(deps) {
           });
         } catch (_) { /* best-effort */ }
 
+        if (liveOpen) {
+          // Mirror proactiveSpeak's Live-open branch exactly: never emit
+          // speech-chunk edge-tts audio on top of Live's own PCM playback.
+          // The final `done` still carries the caption so the HUD shows the
+          // answer, marked chunked so the client finishes the turn silently
+          // instead of speaking the reply again locally.
+          liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${say}`, { site: 'ask-answer-to-live' });
+          send({ type: 'done', reqId: msg.reqId, say, speak: sanitizeSpoken(say), chunked: true });
+          activeSpeech.delete(msg.reqId);
+          return;
+        }
         if (ttsUp) {
           const tail = streamer.flush();
           if (tail) enqueueChunk(tail);
@@ -2720,6 +3615,10 @@ function createServer(deps) {
 
     async function handleConfirmReply(msg) {
       const { confirmId, accept } = msg;
+      // G4: which surface produced this reply. Old clients (pre-dating this
+      // field) send nothing here — recorded as 'unknown', never defaulted to
+      // 'click', which would invent an attribution nobody can vouch for.
+      const surface = (typeof msg.surface === 'string' && msg.surface) ? msg.surface : 'unknown';
       if (!accept) {
         // B3: Audit-log the rejection for security accountability.
         // Peek BEFORE reject — once rejected, the entry is deleted and peek() returns null.
@@ -2757,10 +3656,14 @@ function createServer(deps) {
       // T3/T4 actions require the originating connection to approve — prevents
       // any local WS client from approving dangerous actions (browser_evaluate, etc.)
       let action = leash.confirm.accept(confirmId, connectionId);
+      // G4: which of the two accept() scopes actually resolved this confirm —
+      // material to attribution, and previously indistinguishable in the audit.
+      let acceptedScope = action ? 'connection' : null;
       if (!action) {
         const tier = typeof leash.confirm.peekTier === 'function' ? leash.confirm.peekTier(confirmId) : null;
         if (tier === null || tier <= 2) {
           action = leash.confirm.accept(confirmId, 'system');
+          if (action) acceptedScope = 'system';
         }
       }
       if (!action) {
@@ -2781,7 +3684,7 @@ function createServer(deps) {
         // on a T3+ popup), not the voice agent deciding on its own — label it
         // as such instead of the wrapper's default, and correlate it back to
         // the specific confirm popup that was approved.
-        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', traceId: confirmId });
+        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', traceId: confirmId, surface: surface, acceptedScope: acceptedScope });
         // S2S (Phase 5): feed the real outcome back to the Live session as a
         // realtimeInput text turn, so the model reports what ACTUALLY
         // happened (AD-4) rather than whatever it assumed while waiting. A
@@ -2858,6 +3761,10 @@ function createServer(deps) {
       // (VOICE_UNIFIED_LIVE_VOICE); the batch fallback below is unchanged and
       // still runs whenever a Live session genuinely isn't available.
       if (msg.type === 'utterance') {
+        // Proof that the mic-hot window that ducked the speakers was a person.
+        // See duckAudio/unduckAudio: two windows in a row WITHOUT this and
+        // ducking backs off, because the trigger was playback, not speech.
+        noteUtteranceHeard();
         // A voice node that cannot RENDER Live's audio must not be routed into
         // it. Live's reply leaves as 'live-audio-out' frames on this socket, and
         // a client with no case for them discards them silently while the ack
@@ -2875,13 +3782,19 @@ function createServer(deps) {
         if (ws._mythosNodeId && !ws._nodeLiveAudio) {
           queueTurn(function() { return handleUtterance(msg); });
         } else if (liveSession && liveSession.isOpen()) {
-          liveSession.sendText(String(msg.text || ''));
+          // BUG-273 D3: operator:true. This is the HUD text box — the operator's own
+          // words, arriving on the same wire frame as a pipeline injection because the
+          // Live protocol has no system role after setup. Marking it system-initiated
+          // (which is what an unlabelled call does) silently exempts the turn from the
+          // half-blind-transcript check, i.e. from the one monitor that notices when
+          // the operator was not heard.
+          liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
           send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
         } else {
           const typedText = String(msg.text || '');
           liveForSpeech().then((live) => {
             if (live && live.isOpen()) {
-              live.sendText(typedText);
+              live.sendText(typedText, { site: 'operator-typed', operator: true });
               send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
             } else {
               queueTurn(function() { return handleUtterance(msg); });
@@ -2903,11 +3816,127 @@ function createServer(deps) {
         const p = pendingFrames.get(msg.frameReqId);
         if (p) { clearTimeout(p.timer); pendingFrames.delete(msg.frameReqId); p.resolve(String(msg.image || '') || null); }
       }
+      else if (msg.type === 'camera-power-ack') {
+        // The HUD reports the state the camera loop actually reached, plus a
+        // reason when it did not come on (permission denied, model load failed,
+        // no camera). Passed through verbatim so camera_on can say WHY rather
+        // than a bare failure — see requestCameraPower's contract above.
+        const p = pendingCameraPower.get(msg.reqId);
+        if (p) {
+          clearTimeout(p.timer);
+          pendingCameraPower.delete(msg.reqId);
+          p.resolve({ on: !!msg.on, state: String(msg.state || ''), reason: String(msg.reason || '') });
+        }
+      }
       else if (msg.type === 'duck-audio') {
         duckAudio().catch(function() {}); // best-effort — never let a duck failure break voice
       }
       else if (msg.type === 'unduck-audio') {
         unduckAudio().catch(function() {});
+      }
+      // Wave 0 (2026-08-13): s2s-bridge.js's capture-suspend transition log —
+      // fire-and-forget, no reply expected. Gives Wave 2's lost-transcript
+      // diagnosis a server-side record of every suspend/clear instead of only
+      // inferring it after the fact from a blind turn.
+      else if (msg.type === 'voice-capture-suspend') {
+        // BUG-271: the own-voice-release transition also carries the ring/gate
+        // diagnostics the client has computed since 36561bd (and framesZeroed
+        // since the BUG-271 noise gate) — log them under their exact client
+        // names instead of discarding them. Only the transitions that send a
+        // field get it: a media-start line must not grow fabricated zeros.
+        // No wire change; numeric/boolean fields only, never transcript text.
+        const fields = { suspended: Boolean(msg.suspended), holdMs: msg.holdMs, reason: msg.reason, at: msg.at };
+        // BUG-272: bargeVetoed/bargeVetoTier/bleedFloor were added to the client's
+        // transition message by slice 3 and were NOT added here, so they were
+        // computed, sent over the wire, and thrown away — the exact defect BUG-271
+        // fixed for the fields above it, reintroduced by the commit that added new
+        // ones. Found on the first live run: the log line arrived with everything
+        // EXCEPT the three numbers needed to judge whether the new barge-in policy
+        // is calibrated. An allowlist is the right shape here (a transcript must
+        // never reach a log line by accident), but it means every new client field
+        // has to be added in two places, and forgetting the second is silent.
+        // BUG-273, and this is the THIRD time this exact bug has been fixed here.
+        // A1 added bleedPeak/learnedFloor and A2 added flushedFrames/flushedZeroed/
+        // flushedRaw to the client's transition message, and neither added them below —
+        // so they were computed, sent, and dropped, exactly as the paragraph above
+        // describes happening to BUG-272's three fields. flushedRaw is the ONE datum
+        // A2's remaining acoustic fix waits on: two live sessions were run to collect
+        // it, both produced nothing, and the verifier reported "log predates the
+        // instrumentation" because a discarded field and an old log look identical to
+        // it. A P0 sat blocked on "we need another session" over a missing line here.
+        //
+        // The list stays a list — a transcript must never reach a log line by accident.
+        // What was missing was a CHECK on it, which now exists and runs every commit:
+        // test/bug-273-suspend-fields-reach-the-log.test.js reads the fields the client
+        // actually sends and fails if any would be dropped. Third occurrence is where
+        // patching instances stops and the assertion gets written.
+        for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms',
+          'bargeVetoed', 'bargeVetoTier', 'bleedFloor',
+          // BUG-274: the policy's own veto reason and the level it refused. bargeVetoTier
+          // alone names the blocked BACKSTOP tier, which is the same string whichever of
+          // the four policy causes fired — and those causes want opposite fixes. The
+          // 2026-08-19 session's answer turned out to be 'already-confirmed', a veto
+          // revoking a release granted one frame earlier, which no amount of tuning the
+          // window or the floor would ever have reached.
+          'bargeVetoPolicyReason', 'bargeVetoLevel',
+          'bleedPeak', 'learnedFloor',
+          'flushedFrames', 'flushedZeroed', 'flushedRaw',
+          // BUG-274 W1 Q5: what Chromium actually GRANTED on the Live capture stream,
+          // as opposed to what mic-device.js requested. The own-voice gate exists to
+          // compensate for MYTHOS hearing itself, and the premise of removing it is
+          // that AEC3 is already on — a premise nothing had ever read back. If this
+          // logs false, the gate is patching a dropped constraint and the whole class
+          // of fix is aimed at the wrong layer. null means not measured, which stays
+          // distinguishable from measured-as-false.
+          'micEchoCancellation', 'micNoiseSuppression',
+          // BUG-274 step 5: how much of a model turn the barge-in suppression dropped
+          // after the operator interrupted, and for how long. A local flush only empties
+          // the queue — the server keeps streaming the rest of the turn — so the client
+          // now drops arriving chunks until the turn ends. That mechanism eats speech by
+          // design, and these two numbers are the only evidence of how much. Would have
+          // been the FOURTH field dropped at this seam; caught before the live session
+          // this time by bug-273-suspend-fields-reach-the-log.test.js, which now scans
+          // every logSuspendTransition() call site instead of two named ones.
+          'suppressedChunks', 'suppressedMs',
+          // BUG-274 step 5: pcm-player.js's jitter cushion, as it stood when the
+          // suppression lifted. cushionMs is how far ahead of the clock the player
+          // is scheduling audio, underruns is how many times the timeline ran dry
+          // anyway. Present only on a session that actually stuttered, so their
+          // ABSENCE means a clean link rather than a dropped field — the one
+          // reading this pair does not support, and the reason the client sends
+          // them as undefined rather than as zeros.
+          //
+          // These are the numbers that separate "the reply was chopped because the
+          // operator interrupted" from "because the audio arrived too late to play
+          // continuously". Both sound identical from the room, and step 4 was built
+          // on a grep that could not tell them apart.
+          'cushionMs', 'underruns',
+          // BUG-274 step 5b: how many times a model turn ran past the player's
+          // attribution ceiling while still claiming to be open — i.e. how many
+          // 'live-turn-complete' frames never reached the HUD. The cushion's
+          // underrun accounting depends on that boundary, so this is the field that
+          // says whether the accounting can be trusted at all. Non-zero means read
+          // the server's turn frames, not the cushion; it is a different fault from
+          // a slow link and is deliberately not folded into `underruns`.
+          'missedTurnEnds']) {
+          if (msg[k] !== undefined) fields[k] = msg[k];
+        }
+        logger.info('voice.capture-suspend', fields);
+      }
+      else if (msg.type === 'open-web-ack') {
+        // BUG-273 B3. `mounted` is the HUD reporting on its own DOM. Anything else
+        // — an older client, a malformed frame — is treated as NOT mounted rather
+        // than as a pass: a missing field must never read as a confirmation.
+        const w = pendingWidgetRender.get(msg.reqId);
+        if (w) {
+          clearTimeout(w.timer);
+          pendingWidgetRender.delete(msg.reqId);
+          w.resolve({
+            mounted: msg.mounted === true,
+            surface: typeof msg.surface === 'string' ? msg.surface.slice(0, 60) : null,
+            reason: typeof msg.reason === 'string' ? msg.reason.slice(0, 200) : null,
+          });
+        }
       }
       else if (msg.type === 'close-panel-ack') {
         const p = pendingClosePanel.get(msg.reqId);
@@ -2989,22 +4018,35 @@ function createServer(deps) {
         } else {
           const previous = voiceNodes.get(nodeId);
           if (previous && previous !== ws && previous.readyState === 1) {
-            bus.emit('health.anomaly', {
-              kind: 'voice-node-duplicate-identify',
-              summary: `Two open sockets claimed voice node "${nodeId}" — the newer one wins.`,
-              detail: { nodeId },
-              // 2026-08-10: `summary` is not a field the spoken path reads.
-              // immune/explainer.js narrates an unplaybooked anomaly from
-              // `target` + `reason` (AD-5 deterministic wording), so this fired
-              // repeatedly on 2026-08-09 and was announced as an unexplained
-              // fault — while the cause was written right here. Naming the
-              // benign case matters too: one phone reconnecting after a network
-              // drop produces this exactly like two misconfigured devices do,
-              // and the server genuinely cannot tell them apart.
-              target: nodeId,
-              reason: 'two open sockets claimed this voice node and the newer one won — ' +
-                'usually the same device reconnecting, but two devices sharing one node id look identical here',
-            });
+            // FIX-PLAN 3.4: rate-limit to one anomaly per nodeId per minute.
+            // Every suppressed bounce still increments the count, and the next
+            // EMITTED anomaly carries it as suppressedCount — so the storm
+            // stays countable in the vault exactly as before (rules/core.md
+            // §11.2), it just stops re-invoking the explainer per bounce.
+            const dupNow = Date.now();
+            const dupLast = voiceNodeDupAnomalyLast.get(nodeId);
+            if (dupLast && dupNow - dupLast.at < VOICE_NODE_DUP_ANOMALY_MIN_INTERVAL_MS) {
+              dupLast.suppressed += 1;
+            } else {
+              const suppressedSinceLast = dupLast ? dupLast.suppressed : 0;
+              voiceNodeDupAnomalyLast.set(nodeId, { at: dupNow, suppressed: 0 });
+              bus.emit('health.anomaly', {
+                kind: 'voice-node-duplicate-identify',
+                summary: `Two open sockets claimed voice node "${nodeId}" — the newer one wins.`,
+                detail: { nodeId, suppressedCount: suppressedSinceLast },
+                // 2026-08-10: `summary` is not a field the spoken path reads.
+                // immune/explainer.js narrates an unplaybooked anomaly from
+                // `target` + `reason` (AD-5 deterministic wording), so this fired
+                // repeatedly on 2026-08-09 and was announced as an unexplained
+                // fault — while the cause was written right here. Naming the
+                // benign case matters too: one phone reconnecting after a network
+                // drop produces this exactly like two misconfigured devices do,
+                // and the server genuinely cannot tell them apart.
+                target: nodeId,
+                reason: 'two open sockets claimed this voice node and the newer one won — ' +
+                  'usually the same device reconnecting, but two devices sharing one node id look identical here',
+              });
+            }
             // "Newer one wins" only ever applied to voiceNodes; the superseded
             // socket stayed open and kept receiving, because a reply goes to the
             // socket that ASKED, not to the map. A phone that opened three
@@ -3038,7 +4080,9 @@ function createServer(deps) {
         if (liveSession && config.LIVE_SCREEN_SHARE_ENABLED === true) liveSession.sendVideoFrame(msg.data);
       }
       else if (msg.type === 'live-close') { if (liveSession) liveSession.close('client-request'); }
-      else if (msg.type === 'live-text') { if (liveSession) liveSession.sendText(String(msg.text || '')); }
+      else if (msg.type === 'live-text') {
+        if (liveSession) liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
+      }
     });
 
     // Tear down any open Live session when the socket itself closes — a
@@ -3046,6 +4090,7 @@ function createServer(deps) {
     // with no client left to hear the reply.
     ws.on('close', () => {
       if (liveSession) liveSession.close('ws-closed');
+      liveAdaptersByConnection.delete(connectionId);
       // Drop this node's registration — but ONLY if the map still points at THIS
       // socket. A phone that reconnected before its old socket's close event
       // landed has already overwritten the entry, and unconditionally deleting
@@ -3131,15 +4176,48 @@ function createServer(deps) {
     broadcastAll({ type: 'perception', payload: { channel: p.channel, kind: p.kind, salience: p.salience, text: p.text || p.summary } });
   });
 
-  // 'action.denied' | 'action.blocked' | 'action.completed' — exact strings from cortex/index.js.
+  // 'action.denied' | 'action.blocked' | 'action.completed' — the three real
+  // action-outcome events, exact strings from cortex/index.js. `unverified` is
+  // relayed alongside `ok` (Wave 0 evidence contract): the HUD must be able to
+  // draw "attempted, unconfirmed" as its own state. Dropping it here is what
+  // made the Agent Actions panel tick three ui_type calls that had typed
+  // nothing into a visibly empty Notepad.
+  //
+  // Relaying only {tool, ok, ...} collapsed denied/blocked into "failed" in
+  // the HUD, because they carry no `ok` at all. The state travels explicitly
+  // now, and test/actions-widget-glyph.test.js pins this exact vocabulary
+  // against ui/public/js/widgets/kinds/actions.js's glyphFor() so the two
+  // sides cannot silently drift apart on a fourth outcome state.
+  //
+  // 'action.*' is a PREFIX glob (matchGlob in src/core/bus/index.js is
+  // startsWith), so it also catches 'action.speak-requested' — a fourth
+  // event, emitted by main.js's announcer shim and explainer.js, that has its
+  // own dedicated subscriber elsewhere in this file and carries no
+  // `tool`/`ok` at all. This relay is for outcome events only; anything else
+  // is ignored outright rather than painted as a nameless failed row and a
+  // false missing-tool warning.
   bus.subscribe('action.*', (e) => {
-    // `unverified` is relayed alongside `ok` (Wave 0 evidence contract): the HUD
-// must be able to draw "attempted, unconfirmed" as its own state. Dropping it
-    // here is what made the Agent Actions panel tick three ui_type calls that had
-    // typed nothing into a visibly empty Notepad.
+    const state = String(e.type || '').split('.')[1] || 'completed';
+    if (state !== 'completed' && state !== 'denied' && state !== 'blocked') return;
+    // `undefined` deliberately coerces to `null` here (not left as-is): the
+    // payload is JSON.stringified over the wire, which drops `undefined`
+    // keys entirely but keeps `null` ones — this keeps the `tool` key always
+    // present on the client so `p.tool || '(unnamed action)'` sees a stable
+    // shape instead of the key vanishing when `tool` is absent.
+    const tool = e.payload.tool || null;
+    if (!tool) logger.warn('action-relay.missing-tool', { state, reason: e.payload.reason, goalId: e.payload.goalId });
     const payload = {
-      tool: e.payload.tool, ok: e.payload.ok, goalId: e.payload.goalId,
+      tool, state, ok: e.payload.ok, goalId: e.payload.goalId,
       reason: e.payload.reason, unverified: e.payload.unverified,
+      // BUG-273 D2: the BUS event's own time, not the client's arrival time. The
+      // Agent Actions feed had no way to tell two calls of the SAME tool apart, and
+      // on 2026-08-18 that cost trust: an open_web widget rendered at 11:44:01 and a
+      // different open_web failed at 11:44:06, so the operator read the failure row as
+      // the widget's and filed *"main HUD shows incorrect error message"*. Relayed
+      // rather than stamped client-side because replayBuffers replays up to 200 old
+      // rows on subscribe — Date.now() at receipt would stamp all of session history
+      // with the moment the panel opened, which is a worse lie than no clock at all.
+      ts: e.ts,
     };
     pushReplay('action', payload);
     broadcastAll({ type: 'action', payload });
@@ -3197,6 +4275,8 @@ function createServer(deps) {
   // one media window exists at a time, so a single pending slot (not a Map
   // keyed by reqId, unlike requestClosePanel/requestCameraFrame) is enough.
   let pendingCloseMediaWindow = null; // { resolve, timer }
+  let pendingOpenExternal = null;     // { resolve, timer } — BUG-272 T2
+  let pendingOpenPath = null;
   if (typeof process.on === 'function') {
     process.on('message', (msg) => {
       if (msg && msg.channel === 'mythos:close-media-window-ack' && pendingCloseMediaWindow) {
@@ -3204,6 +4284,27 @@ function createServer(deps) {
         const pending = pendingCloseMediaWindow;
         pendingCloseMediaWindow = null;
         pending.resolve(Boolean(msg.closed));
+        return;
+      }
+      // BUG-272 T2 — the ack for mythos:open-external. Same single-pending-slot
+      // shape as close-media-window above: one browser hand-off at a time, so a
+      // reqId-keyed Map would be more machinery than the problem needs.
+      if (msg && msg.channel === 'mythos:open-external-ack' && pendingOpenExternal) {
+        clearTimeout(pendingOpenExternal.timer);
+        const pending = pendingOpenExternal;
+        pendingOpenExternal = null;
+        pending.resolve({ opened: Boolean(msg.opened), reason: msg.reason || null });
+        return;
+      }
+      // The ack for mythos:open-path (open_file, 2026-08-21). Its own pending
+      // slot, deliberately NOT shared with open-external: a file open and a
+      // browser hand-off are different requests, and one superseding the other
+      // would resolve the wrong promise.
+      if (msg && msg.channel === 'mythos:open-path-ack' && pendingOpenPath) {
+        clearTimeout(pendingOpenPath.timer);
+        const pending = pendingOpenPath;
+        pendingOpenPath = null;
+        pending.resolve({ opened: Boolean(msg.opened), reason: msg.reason || null });
         return;
       }
       // Slice 2 (Electron shell): Ctrl+Alt+X pressed in the Electron main
@@ -3214,9 +4315,26 @@ function createServer(deps) {
       // must surface as an honest ocr-result, never crash the server.
       if (msg && msg.channel === 'mythos:ocr-grab') {
         (async () => {
+          // BUG-268 instrumentation, boundary 2 of 3 (see electron/main.js's
+          // OCR-grab callback for the full read-in-order guide). Entry and
+          // outcome are logged separately on purpose: an entry with no outcome
+          // means screen_read_text hung rather than failed, which the previous
+          // single-log shape could not distinguish. ok:true with text.length 0
+          // localises it to GDI capture or the WinRT OCR call.
+          const startedAt = Date.now();
+          try { log.info('ocr.hotkey.received', {}); } catch { /* never break the handler to log */ }
           try {
             const r = await dispatchAction({ tool: 'screen_read_text', args: {} }, { tier: 0, channel: 'hotkey' });
             const ok = Boolean(r && r.ok);
+            try {
+              log.info('ocr.hotkey.dispatched', {
+                ok: ok,
+                textLength: ok ? String((r.result && r.result.text) || '').length : 0,
+                unverified: Boolean(r && r.unverified),
+                ms: Date.now() - startedAt,
+                error: ok ? undefined : String((r && r.result && r.result.error) || (r && r.error) || 'OCR failed'),
+              });
+            } catch { /* never break the handler to log */ }
             broadcastAll({
               type: 'ocr-result',
               payload: {
@@ -3245,6 +4363,69 @@ function createServer(deps) {
     });
   }
 
+  // BUG-272 T2 — hand a URL to the operator's real browser via the Electron main
+  // process. Mirrors requestCloseMediaWindow exactly, with one difference that
+  // matters: it resolves an OBJECT, not a boolean, because "it did not open" and
+  // "it did not open BECAUSE the scheme was refused" are different things the
+  // operator needs to hear, and a bare false is how the original failure stayed
+  // invisible for seven attempts.
+  //
+  // Not under Electron (plain `npm start`, or the batch launcher without the
+  // shell) resolves opened:false with a reason that says so, rather than hanging
+  // or pretending. The scheme allowlist lives in the main process, next to the
+  // shell.openExternal call it protects — validating here as well would be a
+  // second copy to drift.
+  // open_file's side of the shell hop (2026-08-21 audit). Mirrors
+  // requestOpenExternal below, including the honest answer when MYTHOS is not
+  // running under Electron at all — a batch/dev boot has no shell to ask.
+  function requestOpenPath(filePath) {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') {
+        resolve({ opened: false, reason: 'not running under the Electron shell, so there is nothing to open this with' });
+        return;
+      }
+      if (pendingOpenPath) {
+        clearTimeout(pendingOpenPath.timer);
+        pendingOpenPath.resolve({ opened: false, reason: 'superseded by a newer request' });
+      }
+      const timer = setTimeout(() => {
+        pendingOpenPath = null;
+        resolve({ opened: false, reason: 'the Electron shell did not acknowledge the request' });
+      }, 3000);
+      pendingOpenPath = { resolve, timer };
+      try { process.send({ channel: 'mythos:open-path', path: String(filePath || '') }); }
+      catch (err) {
+        pendingOpenPath = null;
+        clearTimeout(timer);
+        resolve({ opened: false, reason: err.message });
+      }
+    });
+  }
+
+  function requestOpenExternal(url) {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') {
+        resolve({ opened: false, reason: 'not running under the Electron shell, so there is no browser to hand this to' });
+        return;
+      }
+      if (pendingOpenExternal) {
+        clearTimeout(pendingOpenExternal.timer);
+        pendingOpenExternal.resolve({ opened: false, reason: 'superseded by a newer request' });
+      }
+      const timer = setTimeout(() => {
+        pendingOpenExternal = null;
+        resolve({ opened: false, reason: 'the Electron shell did not acknowledge the request' });
+      }, 3000);
+      pendingOpenExternal = { resolve, timer };
+      try { process.send({ channel: 'mythos:open-external', url: String(url || '') }); }
+      catch (err) {
+        pendingOpenExternal = null;
+        clearTimeout(timer);
+        resolve({ opened: false, reason: err.message });
+      }
+    });
+  }
+
   // Widget commands — voice-driven HUD widget hide/show (manage_widget
   // effector, from-widgets.js). Payload is a pre-resolved {mode, targets}
   // list; widget-host.js applies it verbatim and persists visibility.
@@ -3266,6 +4447,11 @@ function createServer(deps) {
   // already in anomalyLog, no fresh probe needed. Both spec triggers preserved.
   const anomalyLog = [];
   let lastStatus = null; // last probes.getStatus() result ({providers, quotas, probedAt})
+
+  // B2 (2026-08-14): what survives from an anomaly payload to the permanent
+  // record now lives in src/core/immune/anomaly-detail.js — a named allowlist
+  // plus its bounds, extracted so the round trip is testable without booting
+  // this server. See that file's header for the measured defect.
   bus.subscribe('health.anomaly', (e) => {
     anomalyLog.push(e.payload);
     if (anomalyLog.length > 200) anomalyLog.shift();
@@ -3277,8 +4463,13 @@ function createServer(deps) {
         // BUG-105: `tool` is read too — a late-outcome anomaly used to persist
         // as "anomaly: live-tool-outcome-late-for-turn — " with the one fact
         // worth having (which tool) missing from the record entirely.
-        summary: 'anomaly: ' + (e.payload.kind || 'unknown') + ' — ' + (e.payload.error || e.payload.target || e.payload.tool || ''),
-        detail: { kind: e.payload.kind, scope: e.payload.scope, error: e.payload.error, target: e.payload.target },
+        // B2 (2026-08-14): `reason` joins that chain. It is the field
+        // anomaly-payloads-need-reason establishes as load-bearing for the
+        // spoken explanation, and a payload carrying only a reason stored as
+        // "anomaly: live-turn-no-user-transcript — " — a trailing dash and
+        // nothing else.
+        summary: 'anomaly: ' + (e.payload.kind || 'unknown') + ' — ' + anomalySummaryDetail(e.payload),
+        detail: anomalyDetail(e.payload, e.id),
         outcome: 'anomaly', salience: 0.8,
       });
     } catch (_) {}
@@ -3306,12 +4497,19 @@ function createServer(deps) {
     if (anomalyLog.length > 200) anomalyLog.shift();
     broadcastHealth(lastStatus);
     try {
-      const label = actuallyHealed ? 'healed' : 'unhandled';
+      // Wave 0 (2026-08-13): a playbook suppressed by its own cooldown is
+      // intentional throttling, not a fix that failed — labeling it
+      // 'unhandled' alongside real no-match/error outcomes made a healthy
+      // suppression look like a problem the healer gave up on.
+      const label = actuallyHealed ? 'healed' : (p.outcome === 'cooldown' ? 'cooldown' : 'unhandled');
       memory.episodic.write({
         kind: 'anomaly', channel: 'immune',
         summary: label + ': ' + (p.kind || 'unknown') + ' — ' + (p.target || ''),
-        detail: { kind: p.kind, target: p.target, playbookId: p.playbookId, outcome: p.outcome },
-        outcome: label, salience: actuallyHealed ? 0.6 : 0.5,
+        // B2: eventId is the anomaly record's join key (see anomalyDetail). This
+        // record is the healer's VERDICT on that anomaly, not a second anomaly —
+        // the pair is kept, but is now countable rather than doubling every tally.
+        detail: { kind: p.kind, target: p.target, playbookId: p.playbookId, outcome: p.outcome, eventId: p.sourceEventId || null },
+        outcome: label, salience: label === 'cooldown' ? 0.3 : (actuallyHealed ? 0.6 : 0.5),
       });
     } catch (_) {}
   });
@@ -3386,6 +4584,20 @@ function createServer(deps) {
     broadcastAll({ type: 'checkpoint', payload: Object.assign({}, e.payload, { event: 'resolved' }) });
   });
 
+  // Wave 1 (2026-08-13): leash/confirm.js's per-entry expiry timer fires this
+  // for a T3+ confirm nobody answered in time — the gmail_send incident
+  // (1 confirm created, 0 completed, no trace of why). announceConfirmResolved
+  // dismisses the prompt on every surface still showing it; the connectionId
+  // routes an EXPIRED verdict to the SPECIFIC Live session that raised it, if
+  // any (a modal-only confirm has no liveAdapter registered and this is a
+  // silent no-op, same as resolveLiveConfirm already is for any confirm that
+  // never touched the Live path).
+  bus.subscribe('confirm-expired', (e) => {
+    announceConfirmResolved(e.payload.confirmId, 'expired');
+    const adapter = liveAdaptersByConnection.get(e.payload.connectionId);
+    if (adapter) { adapter.resolveLiveConfirm(e.payload.confirmId, null, false, { expired: true }).catch(() => {}); }
+  });
+
   bus.subscribe('confirm-request', (e) => {
     // ttlMs rides along so a surface that has to run its OWN expiry clock (the
     // phone — nothing tells a client when a confirm lapses; the registry sweeps
@@ -3407,8 +4619,13 @@ function createServer(deps) {
   // log — NOT a bus event; a logger hook (see logger.js onLog(fn) diff).
   if (typeof logger.onLog === 'function') {
     logger.onLog((line) => {
-      pushReplay('log', line);
-      broadcastAll({ type: 'log', payload: line });
+      // A2: scrub the client-bound copy BEFORE both the replay buffer and the
+      // live broadcast. redactLogEntry returns a new object — the original
+      // entry is left untouched (stdout already got it unredacted, and any
+      // other listener must see the same object logger.js emitted).
+      const safe = redactLogEntry(line);
+      pushReplay('log', safe);
+      broadcastAll({ type: 'log', payload: safe });
     });
   }
 
@@ -3427,8 +4644,9 @@ function createServer(deps) {
   // `ready` resolves once the ephemeral port is bound — httpServer.address() is
   // null until the 'listening' event fires (async on Windows), so tests await it.
   return {
-    app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestClosePanel,
-    requestCloseMediaWindow, setGmailPollCountGetter,
+    app, httpServer, wss, stop, dispatchAction, ready, requestCameraFrame, requestCameraPower, requestClosePanel,
+    requestWidgetRender,
+    requestCloseMediaWindow, requestOpenExternal, requestOpenPath, setGmailPollCountGetter,
     // Test-only introspection (Task 12) — never used by production callers.
     _internal: {
       voiceLatencyTracker, sanitizeErrorForClient, deliverBootGreeting, conversationAnnouncer, GREETING_DEDUP_KEY,
@@ -3449,6 +4667,12 @@ function createServer(deps) {
       // proximity telemetry several times a second must never become that
       // target. There is no other observable for it from outside.
       getLastActiveWs: () => lastActiveWs,
+      // BUG-306. historyAppend is a closure and the only production route to it
+      // is a full websocket voice turn — model call, dispatch, TTS. The thing
+      // under test is one line of error handling inside it, so the turn is not
+      // the subject and standing one up would test everything except the fix.
+      historyAppend: (role, content) => historyAppend(role, content),
+      historyGet: () => historyGet(),
     },
   };
 }

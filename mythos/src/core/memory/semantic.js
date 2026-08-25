@@ -179,12 +179,53 @@ function createSemanticStore({ fs, config, bus, logger }) {
       .trim();
   }
 
+  function normalizeTokens(s) {
+    return String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  }
+
+  // Remove the ONE bullet whose trimmed text equals `text` in the given
+  // topic file. Used by forget()'s fuzzy-match auto-resolve below — the
+  // fuzzy pass already knows exactly which line it means, so this is a
+  // targeted removal, not another search.
+  function removeExactLine(topicName, text) {
+    const path = 'Semantic/' + topicName + '.md';
+    const content = fs.readText(path, '');
+    if (!content) return { removed: [], error: 'topic file unreadable' };
+    const lines = content.split('\n');
+    let removedLine = null;
+    const kept = lines.filter(function(line) {
+      const m = line.match(/^-\s+(.+)$/);
+      if (m && m[1].trim() === text && !removedLine) { removedLine = m[1].trim(); return false; }
+      return true;
+    });
+    if (!removedLine) return { removed: [], error: 'fact no longer present' };
+    try {
+      fs.writeText(path, kept.join('\n'));
+    } catch (err) {
+      bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'semantic', error: err.message });
+      return { removed: [], error: 'write failed: ' + err.message };
+    }
+    return { removed: [removedLine], topic: topicName };
+  }
+
   // BUG-160: remove stored fact bullet(s) matching a query — the missing
   // counterpart to write(). Until this existed there was NO way, by voice or
   // by tool, to retire a wrong fact: corrections could only pile a new fact
   // next to the one they contradicted ("two brains"). Line-filter rewrite on
   // purpose — everything that is not a removed bullet (header, sidecars,
   // other facts) survives byte-for-byte.
+  //
+  // Wave 4 (2026-08-13): exact substring was the ONLY match mode, so a
+  // spoken correction phrased differently than the stored fact ("forget
+  // that I said kids come first" vs the stored "children/family priority")
+  // was a dead end — reported as "No stored fact contains ..." even though
+  // the intended fact was right there. When exact substring finds nothing,
+  // fall back to a normalized token-overlap pass (same half-the-terms floor
+  // recall() already uses, MIN_RECALL_SCORE below) across every candidate
+  // bullet. Exactly one match above the floor auto-resolves (same effect as
+  // an exact match); more than one comes back as `candidates` instead of
+  // deleting anything, so the caller can ask "which one?" rather than
+  // guessing at a fact the operator didn't actually mean.
   function forget(query, opts) {
     opts = opts || {};
     const q = String(query || '').trim().toLowerCase();
@@ -217,6 +258,40 @@ function createSemanticStore({ fs, config, bus, logger }) {
       }
       return { removed: removed, topic: files[i].name.replace('.md', ''), searched: searched };
     }
+
+    // Fuzzy fallback — nothing matched by exact substring in any searched file.
+    const qTokens = normalizeTokens(q);
+    if (qTokens.length) {
+      const candidates = [];
+      for (let i = 0; i < files.length; i++) {
+        const content = fs.readText(files[i].path, '');
+        if (!content) continue;
+        const topicName = files[i].name.replace('.md', '');
+        content.split('\n').forEach(function(line) {
+          const m = line.match(/^-\s+(.+)$/);
+          if (!m) return;
+          const factText = m[1].trim();
+          const factTokens = normalizeTokens(factText);
+          if (!factTokens.length) return;
+          const overlap = qTokens.filter(function(t) { return factTokens.indexOf(t) !== -1; }).length;
+          const score = overlap / qTokens.length;
+          if (score >= MIN_RECALL_SCORE) candidates.push({ text: factText, topic: topicName, score: score });
+        });
+      }
+      if (candidates.length === 1) {
+        const resolved = removeExactLine(candidates[0].topic, candidates[0].text);
+        if (resolved.error) return { removed: [], searched: searched, error: resolved.error };
+        return { removed: resolved.removed, topic: resolved.topic, searched: searched, matchedBy: 'fuzzy' };
+      }
+      if (candidates.length > 1) {
+        candidates.sort(function(a, b) { return b.score - a.score; });
+        return {
+          removed: [], searched: searched,
+          candidates: candidates.slice(0, 5).map(function(c) { return { text: c.text, topic: c.topic }; }),
+        };
+      }
+    }
+
     return { removed: [], searched: searched };
   }
 
@@ -279,6 +354,23 @@ function createSemanticStore({ fs, config, bus, logger }) {
     return hits.slice(0, limit);
   }
 
+  // BUG-251: read ONE topic's facts directly, no query scoring. recall() needs
+  // a query to score against; the Live session-open composer has none — it
+  // wants "everything durable about the operator" (Semantic/user-facts.md).
+  // Synchronous on purpose: live-session.js's buildSetup() cannot await.
+  // The name is sanitized to a single path segment so a caller-supplied value
+  // can never read outside Semantic/.
+  function topic(name) {
+    const safe = String(name || '').replace(/[^A-Za-z0-9_.-]/g, '');
+    if (!safe || safe === '.' || safe === '..') return null;
+    const content = fs.readText('Semantic/' + safe + '.md', '');
+    if (!content) return null;
+    const facts = parseFacts(content);
+    // Same reasoning as recall()'s BUG-172 guard: a factless file is not a hit.
+    if (!facts.length) return null;
+    return { topic: safe, facts: facts };
+  }
+
   function get(ref) {
     // Search all semantic files for a sidecar id match
     const files = activeTopicFiles();
@@ -336,7 +428,7 @@ function createSemanticStore({ fs, config, bus, logger }) {
     fs.ensureDir(fs.vaultPath('Semantic'));
   }
 
-  return { write, forget, recall, get, pruneLowConfidence, consolidate, stats, init };
+  return { write, forget, recall, get, topic, pruneLowConfidence, consolidate, stats, init };
 }
 
 module.exports = { createSemanticStore };

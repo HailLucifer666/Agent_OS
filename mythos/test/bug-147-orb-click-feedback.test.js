@@ -53,9 +53,12 @@ describe('BUG-147: the orb reacts to the click, and a silent failure becomes vis
     const startIdx = src.indexOf('async function start()');
     const sendIdx = src.indexOf("sendMessage({ type: 'live-open' })", startIdx);
     const preamble = src.slice(startIdx, sendIdx);
-    const used = rendered.filter((s) => preamble.includes("setState('" + s + "')"));
+    // Wave 2 (2026-08-13): setState('processing') became setVoiceState('processing')
+    // — the mic-mute overlay wrapper (see setVoiceState's own header) — which still
+    // forwards to setState() underneath, so the click-feedback contract is unchanged.
+    const used = rendered.filter((s) => preamble.includes("setState('" + s + "')") || preamble.includes("setVoiceState('" + s + "')"));
     assert.ok(used.length > 0,
-      'the pre-await setState must use a state core-orb.js renders, or the click is still invisible ' +
+      'the pre-await setState/setVoiceState must use a state core-orb.js renders, or the click is still invisible ' +
       '(found none of: ' + rendered.join(', ') + ')');
   });
 

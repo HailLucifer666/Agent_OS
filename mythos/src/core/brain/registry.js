@@ -186,11 +186,48 @@ function isProviderAlive(provider, model, c) {
   }
 }
 
+// An unknown lane name used to substitute BRAIN_TABLES.text in silence. That is
+// the worst shape a fallback can have: a misspelt lane name produced no error, no
+// log line and no failure — just quietly worse answers, from the one lane that
+// has no caller of its own and therefore nobody watching it. This repo has had
+// the same class of bug three times (the skills loader searching one root, an
+// act-tool shipped without its read-tool, and this very file counting dead
+// OpenRouter slugs alive on key presence), so the fallback is now audible.
+//
+// Deduped per lane name, on purpose: the substitution is a coding error, so the
+// FIRST report is the whole signal and a hot loop re-emitting it would only
+// crowd out other health events. The bus's health channel is storm-exempt, so
+// nothing else would throttle it.
+const unknownLanesReported = new Set();
+function reportUnknownLane(lane, bus) {
+  const name = String(lane);
+  if (unknownLanesReported.has(name)) return;
+  unknownLanesReported.add(name);
+  const detail = {
+    kind: 'brain-lane-unknown',
+    lane: name,
+    fallback: 'text',
+    known: Object.keys(BRAIN_TABLES),
+    reason: 'brain.think was called with a lane that is not registered in BRAIN_TABLES; '
+      + 'it fell back to the text lane, which no other caller uses',
+  };
+  try { if (bus && typeof bus.emit === 'function') bus.emit('health.anomaly', detail); } catch (_) { /* reporting must never break the call */ }
+  // Also to stderr: chain.js only forwards a bus when its caller passed one, and
+  // an unknown lane on a bus-less path is exactly as wrong as on a wired one.
+  try { console.warn('[brain] unknown lane "' + name + '" — falling back to the text lane. Known lanes: ' + Object.keys(BRAIN_TABLES).join(', ')); } catch (_) {}
+}
+
 // Ranked, alive-only chain for a brain lane. Never throws; empty array = nothing alive.
-// Supported kinds: 'voice' | 'build' | 'simple' | 'text' | 'vision' | 'embed'
-async function chainFor(kind) {
+// Supported kinds: 'voice' | 'build' | 'simple' | 'reasoning' | 'memory' | 'text' | 'vision' | 'embed'
+// `opts.bus` is optional — supplied by chain.js so the unknown-lane report above
+// reaches the Health view rather than only stderr.
+async function chainFor(kind, opts) {
   const c = await refresh();
-  const table = BRAIN_TABLES[kind] || BRAIN_TABLES.text;
+  let table = BRAIN_TABLES[kind];
+  if (!table) {
+    reportUnknownLane(kind, opts && opts.bus);
+    table = BRAIN_TABLES.text;
+  }
   const override = parseOverride(process.env[table.env]);
   const prefs = override.length ? override : table.prefs;
   return prefs.filter((p) => isProviderAlive(p.provider, p.model, c));
@@ -210,13 +247,19 @@ async function getStatus() {
     cerebras:   { configured: !!process.env.CEREBRAS_API_KEY, aliveModels: c.cerebrasModels.length },
     google:     { configured: !!process.env.GOOGLE_API_KEY, aliveModels: c.googleModels.length },
     openrouter: { configured: !!process.env.OPENROUTER_API_KEY, alive: c.openrouterAlive },
+    // Observability only — checked 2026-08-14, `chains` has NO consumer in src/
+    // or ui/. It is here so an operator reading provider status can see which
+    // models a lane would actually walk. Nothing depends on its shape, so adding
+    // a lane here is safe; do not build on that.
     chains: {
-      voice:  await chainFor('voice'),
-      build:  await chainFor('build'),
-      simple: await chainFor('simple'),
-      text:   await chainFor('text'),
-      vision: await chainFor('vision'),
-      embed:  await chainFor('embed'),
+      voice:     await chainFor('voice'),
+      build:     await chainFor('build'),
+      simple:    await chainFor('simple'),
+      reasoning: await chainFor('reasoning'),
+      memory:    await chainFor('memory'),
+      text:      await chainFor('text'),
+      vision:    await chainFor('vision'),
+      embed:     await chainFor('embed'),
     },
     probedAt: c.at,
   };

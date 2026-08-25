@@ -9,6 +9,17 @@ const MIC_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 const GEAR_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
 const SEND_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`;
 const CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`;
+// Setup (provider keys + local PIN). The first-run wizard had no entry point at
+// all once dismissed, so "I signed up for a provider, where do I put the key?"
+// had no answer inside the product. Same 34px circle idiom as the gear/cam.
+const KEY_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 20 3"/><path d="m17 5 3 3"/><path d="m15 7 3 3"/></svg>`;
+// Voice (which voice the entity SPEAKS in — the mic gear beside it is about the
+// microphone it LISTENS with; the two are deliberately separate buttons because
+// they answer opposite questions). Same 34px circle idiom as the rest.
+const SPEAKER_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>`;
+// Transcript toggle (F7 — the full-session chat panel). Opens/closes the
+// 'conversation' overlay panel. Same 34px circle idiom as the rest.
+const TRANSCRIPT_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`;
 
 const HINTS = [
   'What can you do?',
@@ -18,7 +29,19 @@ const HINTS = [
   'Check the weather',
 ];
 
-export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings }) {
+// Pure: phase + text -> what the strip should read. Exported for node:test.
+// An ended turn returns the idle hint rather than the last phrase \u2014 a stale
+// utterance sitting above the chat button reads as state, not as history.
+export const IDLE_CAPTION = "Say 'Hey MYTHOS' to activate";
+
+export function captionFor(state) {
+  const s = state || {};
+  if (s.phase === 'error') return { text: s.text || 'something went wrong', kind: 'error' };
+  if (s.phase === 'idle' || !s.text) return { text: IDLE_CAPTION, kind: 'idle' };
+  return { text: s.text, kind: s.kind || 'heard' };
+}
+
+export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onActivity, onSubmitText, onCamToggle, onMicSettings, onVoiceSettings, onSetup, onTranscript }) {
   const root = document.getElementById('compose-bar');
 
   // xss-safe: static template, no interpolation
@@ -30,6 +53,9 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
       <button class="compose-mic-settings-btn" id="compose-mic-settings-btn" aria-label="Microphone settings" title="Mic device + test">${GEAR_SVG}</button>
       <input class="compose-input" id="compose-input" type="text" placeholder="Ask MYTHOS anything\u2026" autocomplete="off" aria-label="Message MYTHOS" />
       <button class="compose-cam-btn cam-idle" id="compose-cam-btn" aria-label="Toggle camera" title="Toggle camera">${CAM_SVG}</button>
+      <button class="compose-voice-settings-btn" id="compose-voice-settings-btn" aria-label="Voice: choose which voice MYTHOS speaks in" title="Choose the speaking voice">${SPEAKER_SVG}</button>
+      <button class="compose-transcript-btn" id="compose-transcript-btn" aria-label="Toggle the full conversation transcript" title="Full conversation transcript" aria-pressed="false">${TRANSCRIPT_SVG}</button>
+      <button class="compose-setup-btn" id="compose-setup-btn" aria-label="Setup: provider keys and local PIN" title="Provider keys + PIN">${KEY_SVG}</button>
       <button class="compose-send-btn" id="compose-send-btn" aria-label="Send message">${SEND_SVG}</button>
       <canvas class="compose-wave-line" id="compose-wave" width="240" height="4"></canvas>
     </div>
@@ -40,6 +66,9 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   const input = document.getElementById('compose-input');
   const camBtn = document.getElementById('compose-cam-btn');
   const micSettingsBtn = document.getElementById('compose-mic-settings-btn');
+  const voiceSettingsBtn = document.getElementById('compose-voice-settings-btn');
+  const transcriptBtn = document.getElementById('compose-transcript-btn');
+  const setupBtn = document.getElementById('compose-setup-btn');
   const sendBtn = document.getElementById('compose-send-btn');
   const captionEl = document.getElementById('compose-caption');
   const waveEl = document.getElementById('compose-wave');
@@ -126,6 +155,24 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
     if (onMicSettings) onMicSettings();
   });
 
+  // Voice panel (which voice the entity speaks in + a sample of each).
+  voiceSettingsBtn.addEventListener('click', () => {
+    if (onVoiceSettings) onVoiceSettings();
+  });
+
+  // Full conversation transcript (F7) — the compose bar only raises the
+  // click; the caller owns open/close state (mirrors onCamToggle/
+  // onMicSettings) and syncs the icon back via setTranscriptOpen().
+  transcriptBtn.addEventListener('click', () => {
+    if (onTranscript) onTranscript();
+  });
+
+  // Setup wizard (provider keys + local PIN). The only in-product route back to
+  // it after first run — see setup/first-run-wizard.js.
+  setupBtn.addEventListener('click', () => {
+    if (onSetup) onSetup();
+  });
+
   // Keyboard shortcut: "/" focuses the input (like YouTube, GitHub)
   document.addEventListener('keydown', (e) => {
     if (e.key === '/' && document.activeElement !== input && !e.target.matches('input, textarea, [contenteditable]')) {
@@ -146,20 +193,29 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // Caption passthrough (reused by app.js for the old mic.setCaption calls).
   // Every voice/build/mission status string already funnels through this one
   // function, so it's also the one place that needs to feed #hud-status-live
-  // (one of exactly two aria-live regions in the HUD) — no new call sites.
+  // (one of exactly three aria-live regions in the HUD) — no new call sites.
+  //
+  // Routed through captionFor() so "turn ended" (kind: 'idle', or the old
+  // empty-text clear) resolves to the idle hint instead of a blank strip —
+  // that hint reads as an affordance, not as leftover output. It deliberately
+  // does NOT reach statusLiveEl: build/mission status strings funnel through
+  // this same function on every turn, and announcing "Say 'Hey MYTHOS' to
+  // activate" to a screen reader after every single utterance would be an
+  // accessibility regression, not a fix.
   const statusLiveEl = document.getElementById('hud-status-live');
   function setCaption(text, kind) {
     // xss-safe: static template, no interpolation
-    if (!text) { captionEl.innerHTML = ''; return; }
+    const phase = kind === 'idle' ? 'idle' : kind === 'error' ? 'error' : undefined;
+    const result = captionFor({ phase, text, kind });
     let captionDiv = captionEl.querySelector('.mic-caption');
     if (!captionDiv) {
       captionDiv = document.createElement('div');
       captionDiv.className = 'mic-caption';
       captionEl.appendChild(captionDiv);
     }
-    captionDiv.textContent = text;
-    captionDiv.setAttribute('data-kind', kind || 'info');
-    if (statusLiveEl) statusLiveEl.textContent = text;
+    captionDiv.textContent = result.text;
+    captionDiv.setAttribute('data-kind', result.kind);
+    if (statusLiveEl && result.kind !== 'idle') statusLiveEl.textContent = result.text;
   }
 
   // Waveform passthrough
@@ -189,11 +245,20 @@ export function createComposeBar({ onVoiceToggle, onVoiceState, onCaption, onAct
   // Sync camera button state from app.js's ensureCamera()
   function setCamState(s) { camBtn.className = `compose-cam-btn cam-${s}`; }
 
+  // Sync transcript button state from whoever owns the panel's open/close
+  // (mirrors setCamState above). Reflected as both a class (visual) and
+  // aria-pressed (a11y) rather than compose-bar guessing panel state itself.
+  function setTranscriptOpen(isOpen) {
+    transcriptBtn.classList.toggle('transcript-open', !!isOpen);
+    transcriptBtn.setAttribute('aria-pressed', isOpen ? 'true' : 'false');
+  }
+
   return {
     setVoiceState,
     setCaption,
     setActivity,
     setCamState,
+    setTranscriptOpen,
     focus: () => input.focus(),
     element: root,
   };

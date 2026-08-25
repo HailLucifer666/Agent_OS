@@ -14,6 +14,74 @@ function humanizeArgs(args) {
   return entries.map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
 }
 
+// BUG-282 (2026-08-20): a stable identity for "this exact action", used to stop
+// the cortex re-asking for a confirmation it is already waiting on.
+//
+// Pure and exported so the keying rule can be tested without building a cortex.
+// Keys are SORTED: two arg objects with the same content in a different
+// insertion order are the same action, and a raw JSON.stringify of the object
+// would call them two.
+//
+// Every value goes through JSON.stringify, including strings. The first version
+// passed strings through unquoted, which made the string "12" and the number 12
+// produce an identical key — two different actions collapsing into one, i.e. a
+// real confirmation silently dropped. A direct test for that pair now exists.
+//
+// Deliberately keyed on the FULL arg set, not the tool alone. browser_click
+// {ref:"e12"} and browser_click{ref:"e13"} are different actions and each needs
+// its own confirmation.
+function confirmSuppressionKey(decision) {
+  const tool = (decision && decision.tool) || '';
+  const args = (decision && decision.args) || {};
+  const canon = Object.keys(args).sort().map(function (k) {
+    return k + '=' + JSON.stringify(args[k]);
+  }).join('&');
+  return tool + '|' + canon;
+}
+
+// F4: iterative two-row Levenshtein — no recursion, no per-character
+// allocation. Mirrors effectors/hub.js's own editDistance(), but duplicated
+// here (rather than imported) because this check runs BEFORE the hub's
+// invoke() call and must not depend on the hub's internals.
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  var prev = new Array(b.length + 1);
+  var cur = new Array(b.length + 1);
+  for (var j = 0; j <= b.length; j++) prev[j] = j;
+  for (var i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    for (var k = 1; k <= b.length; k++) {
+      var cost = a.charCodeAt(i - 1) === b.charCodeAt(k - 1) ? 0 : 1;
+      cur[k] = Math.min(cur[k - 1] + 1, prev[k] + 1, prev[k - 1] + cost);
+    }
+    for (var m = 0; m <= b.length; m++) prev[m] = cur[m];
+  }
+  return prev[b.length];
+}
+
+// F4: the model invoked google_news_fetch (never a real tool) and the
+// RC#2 pre-flight check below said only "unknown-effector" — nothing
+// naming google_search_fetch or google_calendar_fetch as real neighbours.
+// Bounded edit distance over the registered names, closest first; a
+// confidently wrong suggestion is worse than none, so anything past a
+// third of the candidate's length is dropped rather than offered.
+function nearestEffectorNames(name, registeredNames, limit) {
+  var wanted = String(name || '').toLowerCase();
+  if (!wanted) return [];
+  var scored = [];
+  for (var i = 0; i < registeredNames.length; i++) {
+    var candidate = registeredNames[i];
+    var lower = candidate.toLowerCase();
+    var d = editDistance(wanted, lower);
+    var threshold = Math.max(2, Math.floor(lower.length / 3));
+    if (d <= threshold) scored.push({ name: candidate, score: d });
+  }
+  scored.sort(function(x, y) { return x.score - y.score || x.name.length - y.name.length; });
+  return scored.slice(0, limit || 3).map(function(s) { return s.name; });
+}
+
 function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   if (!leash || typeof leash.check !== 'function') {
     throw new Error('createCortex requires a leash with a check() method — fail-closed gating cannot be skipped');
@@ -25,7 +93,22 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   let timer = null;
   let running = false;
   let generation = 0;
+  // BUG-282: confirmSuppressionKey(decision) -> { confirmId, suppressedCount }.
+  // Per-cortex-instance, so two cortexes (or two tests) never share it.
+  // There is no expiry timer here on purpose: leash.confirm owns the TTL, and
+  // peek() returning null (consumed) or expired:true is the single source of
+  // truth for whether this key is still blocked. A second timer would be a
+  // second thing that can disagree with the first.
+  const pendingConfirmsByKey = new Map();
   const lastTickAt = { value: 0 };
+  // BUG-273: WHETHER A TICK IS ACTUALLY RUNNING, which lastTickAt cannot say.
+  // lastTickAt is stamped once at the top of the body and the reentrancy guard
+  // stops a second tick starting, so during any awaited call inside the tick
+  // "time since the last tick began" grows without bound and looks exactly like
+  // a dead loop. It is how mull()'s reasoning-lane call — one await, every 300
+  // ticks — got the cortex restarted every five minutes on the operator's
+  // machine, pausing the active goal each time. 0 means idle.
+  const inFlightSince = { value: 0 };
   // mull() below speaks only when its thought actually changed — see diff-gate.js.
   const diffGate = createDiffGate();
 
@@ -41,6 +124,7 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     // Reentrancy guard
     if (tickOnce._inFlight) return;
     tickOnce._inFlight = true;
+    inFlightSince.value = Date.now();
 
     // REMEDIATION P1-5: capture the generation this specific invocation
     // belongs to. stop()+start() (a healer 'restart-cortex' heal) bumps
@@ -120,8 +204,18 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // thoughts about the operator's situation during quiet moments. The mull
       // cadence is config-driven (MYTHOS_MULL_EVERY_TICKS, default 300 = ~5min);
       // setting it to 0 reverts to pure zero-cost idle.
+      //
+      // FIX-PLAN 3.1 (2026-08-17): TIMER HEARTBEATS ARE NOT EVENTS. This gate
+      // used to test bare `perceptions.length === 0`, but sensors/timer.js
+      // pushes a perception.tick heartbeat every single tick, so the branch
+      // NEVER opened in real operation — confirmed on live boots (45/45, 65/65
+      // ticks, never 0 perceptions), and the same gate is what made mull()
+      // structurally unreachable (BUGS.md, Phase 4 live-tested-broken note).
+      // Both mull and the idle consolidate below were dead code. The timer's
+      // payload carries kind:'timer', so excluding those restores idle.
       var hasActive = goals && typeof goals.hasActive === 'function' && goals.hasActive();
-      if (perceptions.length === 0 && !hasActive) {
+      var nonTimer = perceptions.filter(function (p) { return !p || p.kind !== 'timer'; });
+      if (nonTimer.length === 0 && !hasActive) {
         working.activeGoalId = null;
         var mullFired = false;
         if (shouldMull(working.tick, config)) {
@@ -169,6 +263,17 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // resuming here must not commit further mutations (spend, action
       // dispatch) on behalf of a generation that's already been superseded.
       if (generation !== myGen) return;
+      // FIX-PLAN 3.1 (2026-08-17): consolidate runs BEFORE the goalless
+      // early-return. decide() returns null whenever no goal arbitrates out —
+      // which is the NORMAL state of a purely conversational session — so the
+      // consolidate call that used to sit at the bottom of this branch was
+      // unreachable for exactly the sessions that produce the memories worth
+      // distilling. Hoisted here (and removed from below) so goalless ticks
+      // consolidate on cadence; ticks WITH a decision consolidate once, here,
+      // not twice.
+      if (ooda.shouldConsolidate(working.tick, config)) {
+        await memory.consolidate({});
+      }
       if (!decision) return;
 
       // RC#3: account for the planner's brain-call spend. Previously addSpend()
@@ -201,9 +306,8 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       if (ooda.shouldReflect(working.tick, config)) {
         reflect(working, memory, bus);
       }
-      if (ooda.shouldConsolidate(working.tick, config)) {
-        await memory.consolidate({});
-      }
+      // (consolidate used to run here too — moved above the goalless
+      // early-return; see the FIX-PLAN 3.1 comment there.)
       // D4: Reset consecutive error counter on successful tick.
       tickOnce._consecutiveErrors = 0;
     } catch (err) {
@@ -221,7 +325,11 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // let the new generation's ticks proceed) could reset _inFlight back to
       // false WHILE a new-generation tick is genuinely still in flight,
       // letting a third, overlapping tick start.
-      if (generation === myGen) tickOnce._inFlight = false;
+      // BUG-273: cleared under the SAME generation rule as _inFlight, and for the
+      // same reason — a stale tick resuming after a restart must not clear the
+      // stamp a live tick is relying on, or the watchdog would read "idle" while
+      // the current generation is mid-await.
+      if (generation === myGen) { tickOnce._inFlight = false; inFlightSince.value = 0; }
     }
   }
 
@@ -269,7 +377,19 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     if (effectors && typeof effectors.count === 'function' && decision && decision.tool) {
       var regMap = effectors.effectors;
       if (regMap && typeof regMap.has === 'function' && !regMap.has(decision.tool)) {
-        bus.emit('action.completed', { tool: decision.tool, ok: false, goalId: working.activeGoalId, reason: 'unknown-effector' });
+        // F4: this check runs before the hub's own invoke() is ever called,
+        // so the hub's own BUG-076/Wave-6 suggestion machinery never sees
+        // this call — compute the same kind of near-match here instead of
+        // leaving the model with a bare, un-actionable failure.
+        var registeredNames = typeof regMap.keys === 'function' ? Array.from(regMap.keys()) : [];
+        var near = nearestEffectorNames(decision.tool, registeredNames, 3);
+        var message = 'unknown-effector' + (near.length
+          ? ': no tool named "' + decision.tool + '". Did you mean ' + near.join(', ') + '?'
+          : ': no tool named "' + decision.tool + '".');
+        bus.emit('action.completed', {
+          tool: decision.tool, ok: false, goalId: working.activeGoalId,
+          reason: 'unknown-effector', suggestions: near, message: message
+        });
         return;
       }
     }
@@ -284,6 +404,59 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // connectionId is the sentinel 'system': cortex-initiated actions have no
       // single waiting client, so the server accepts 'system'-scoped confirms
       // from any connected client (open question resolved in ROADMAP.md P9).
+      // BUG-282 (2026-08-20): this branch used to create a confirm, emit, and
+      // return recording NOTHING — so the next tick re-proposed the same action,
+      // minted a FRESH confirmId, and emitted again. Measured in the audited
+      // session: 42 browser_click records, all actor:"cortex", all
+      // reason:"tier-3-requires-confirm", all args {"ref":"e12"}, one per second
+      // for 41.6 seconds. 42 of that session's 45 confirms were that one action.
+      //
+      // The leash was right to refuse; the cortex had no memory of the refusal.
+      // This is the third instance of "retry something that cannot succeed until
+      // a human acts" — see the unknown-effector pre-flight above (whose comment
+      // describes this same stall) and mull's _consecutiveFailures below.
+      //
+      // Suppression is keyed off the registry's own lifecycle rather than a
+      // timer: peek() is null once the confirm is consumed by accept or reject,
+      // and reports expired:true once its TTL passes. Either way the key frees
+      // itself and the action can be proposed again — the fix must not turn into
+      // "the cortex can never ask twice".
+      var suppressKey = confirmSuppressionKey(decision);
+      var priorConfirm = pendingConfirmsByKey.get(suppressKey);
+      if (priorConfirm) {
+        var stillPending = leash.confirm.peek(priorConfirm.confirmId);
+        if (stillPending && !stillPending.expired) {
+          priorConfirm.suppressedCount += 1;
+          // Q2: suppressing 41 of 42 emissions deletes 41 log lines. Silence
+          // would turn a visible spin into an invisible stall, which is strictly
+          // worse than the bug being fixed — so the suppression reports itself,
+          // with a running count, and stays measurable.
+          bus.emit('cortex.confirm-suppressed', {
+            tool: decision.tool,
+            args: decision.args,
+            confirmId: priorConfirm.confirmId,
+            suppressedCount: priorConfirm.suppressedCount,
+            reason: 'already-awaiting-confirmation'
+          });
+          return;
+        }
+        // Falls through to create a fresh confirm: peek() said this one is
+        // consumed (accepted or rejected) or expired. No delete here — the
+        // set() below overwrites this key unconditionally, and mutation testing
+        // proved a delete on this line was dead: removing it changed no
+        // behaviour and failed no test.
+      }
+      // Drop every key whose confirm is no longer pending. Without this the map
+      // keeps one entry per distinct (tool, args) forever — the single-key
+      // delete this replaced only ever tidied the key being re-proposed, so a
+      // long session accumulated an entry per unique action that was confirmed
+      // once and never proposed again. Same peek() truth source, no timer, and
+      // the cost is one pass over a map whose size is the number of
+      // confirm-requiring actions seen, not the number of ticks.
+      pendingConfirmsByKey.forEach(function (entry, key) {
+        var live = leash.confirm.peek(entry.confirmId);
+        if (!live || live.expired) pendingConfirmsByKey.delete(key);
+      });
       var argsText = humanizeArgs(decision.args).slice(0, 120);
       var summary = decision.tool + (argsText ? ' (' + argsText + ')' : '');
       var confirmId = leash.confirm.create(
@@ -291,6 +464,7 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
         { decision: decision, goalId: working.activeGoalId, tier: leashResult.tier },
         'system'
       );
+      pendingConfirmsByKey.set(suppressKey, { confirmId: confirmId, suppressedCount: 0 });
       bus.emit('confirm-request', Object.assign({}, decision, {
         confirmId: confirmId, summary: summary, tier: leashResult.tier
       }));
@@ -345,7 +519,13 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
   // mentioning to the operator next time they speak. Thoughts are stored in
   // episodic memory (kind: 'thought') and surface in the next conversation via
   // the server's recall-before-respond path. Best-effort: never throws, never
-  // blocks the tick loop. Disabled when MYTHOS_MULL_EVERY_TICKS is 0.
+  // BUG-273: this comment used to promise the opposite — that mull could not hold
+  // up the loop — directly above an `await` that held it up for as long as a
+  // reasoning-lane call takes, which is why nobody looked here. It
+  // block the tick, by design — nothing else may run mid-tick. What it must not do
+  // is look like a stall while it does, which is now the watchdog's problem to
+  // measure rather than this function's to deny. Disabled when
+  // MYTHOS_MULL_EVERY_TICKS is 0.
   function shouldMull(tick, cfg) {
     var every = (cfg && cfg.MYTHOS_MULL_EVERY_TICKS) || 300;
     if (every === 0) return false;
@@ -364,8 +544,14 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       // Skip if there's nothing to think about — pure zero-cost idle
       if (!convoSummaries.trim() && !eventSummaries.trim()) return;
 
+      // lane 'reasoning', not 'simple' (2026-08-14). mull()'s whole job is
+      // noticing loose ends worth raising — and it was doing it on
+      // llama-3.1-8b-instant, the weakest model in the fleet, which led
+      // PREF_SIMPLE for "224ms — fastest measured anywhere". NOTHING WAITS ON
+      // THIS CALL: it runs in a quiet moment and its output is a maybe-mention.
+      // The latency bought nothing and cost the reasoning.
       var result = await brain.think({
-        lane: 'simple',
+        lane: 'reasoning',
         messages: [{ role: 'user', content:
           'You are MYTHOS, reflecting during a quiet moment. Here is your recent context:\n\n' +
           'Recent conversations:\n' + (convoSummaries || '(none)') + '\n\n' +
@@ -507,8 +693,15 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     stop: stop,
     tickOnce: tickOnce,
     get lastTickAt() { return lastTickAt; },
+    // BUG-273: read by immune/watchdog.js to tell BUSY from DEAD.
+    get inFlightSince() { return inFlightSince; },
+    // BUG-282: how many actions this cortex currently believes are awaiting the
+    // operator. Read-only, and a test seam rather than a feature — the
+    // suppression map is otherwise unobservable, and an unobservable cache is
+    // one whose pruning cannot be proven. Mutation testing needed this.
+    get pendingConfirmKeyCount() { return pendingConfirmsByKey.size; },
     get generation() { return generation; }
   };
 }
 
-module.exports = { createCortex };
+module.exports = { createCortex, confirmSuppressionKey };

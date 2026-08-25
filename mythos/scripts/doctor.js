@@ -42,6 +42,14 @@ const REPO_ROOT = path.resolve(MYTHOS_DIR, '..');
 const silero = require('./setup-silero.js');
 const wakeword = require('./setup-wakeword.js');
 const android = require('./setup-android.js');
+const dsh = require('./setup-dsh.js');
+const { findModelFile, userDataModelsDir } = require('../src/core/setup/model-paths');
+
+// Does this directory hold at least one .onnx voice? Mirrors piper-child.js's own
+// test so the two never disagree about "installed".
+function dirHasOnnx(dir) {
+  try { return fs.readdirSync(dir).some((f) => f.endsWith('.onnx')); } catch { return false; }
+}
 
 // ---- environment ------------------------------------------------------------
 // Same convention as src/main.js: .env is loaded into process.env, and a real
@@ -71,11 +79,19 @@ function keyStoreNames() {
   // Resolved from the environment (never a hardcoded user path) and treated as
   // absent rather than fatal when it is not there, because a headless install
   // has no Electron store at all.
-  // TWO product names, both real: Electron names userData after build.productName
-  // ("MYTHOS") in a packaged build, and after package.json's `name` ("agent-os")
-  // in an unpackaged dev run. Checking only one silently reports "no key store"
-  // on whichever install the operator is actually using.
-  const products = ['MYTHOS', 'agent-os'];
+  // THREE product names, all real on a machine with any history. Checking only
+  // one silently reports "no key store" on whichever install the operator is
+  // actually using.
+  //
+  // CORRECTED 2026-08-11 (installer parity): this used to say userData is
+  // "MYTHOS in a packaged build and agent-os in an unpackaged dev run", which is
+  // backwards and misses a third directory. electron/main.js never called
+  // app.setName, so Electron used package.json's `name` ("agent-os") for the
+  // PACKAGED app and the literal "Electron" for a dev run out of node_modules,
+  // while build.productName ("MYTHOS") is only what NSIS wrote to. main.js now
+  // pins app.setName('MYTHOS'), so new runs of both use the first name here; the
+  // other two remain because existing machines still hold keys under them.
+  const products = ['MYTHOS', 'agent-os', 'Electron'];
   const candidates = [];
   for (const product of products) {
     if (process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, product, 'keys.json'));
@@ -151,22 +167,37 @@ function fileAtLeast(file, minBytes) {
 }
 
 function assetChecks() {
-  const wakewordDir = path.join(MYTHOS_DIR, 'ui', 'public', 'models', 'wakeword');
+  // Installer parity (2026-08-11): search EVERY model directory, not just the
+  // install tree. The downloaders now write to a userData-scoped directory
+  // (mythos/ui/public/models is excluded from build.files and is replaced by
+  // every update), so a hardcoded install-tree path would report "missing" on
+  // exactly the machine that just installed the models — and this report is what
+  // the wizard's Components step trusts to decide whether an install worked.
+  // See src/core/setup/model-paths.js.
   const missingWakeword = wakeword.REQUIRED_ASSETS
-    .filter((name) => !fileAtLeast(path.join(wakewordDir, name), 100 * 1024));
+    .filter((name) => !findModelFile('wakeword', name));
 
-  const piperDir = process.env.PIPER_MODEL_DIR || path.join(MYTHOS_DIR, 'models', 'piper');
+  const userModels = userDataModelsDir();
+  const legacyPiperDir = path.join(MYTHOS_DIR, 'models', 'piper');
+  // Same order piper-child.js's defaultModelDir() applies, so doctor and the
+  // runtime can never disagree about where the voices are.
+  const piperDir = process.env.PIPER_MODEL_DIR
+    || (userModels && dirHasOnnx(path.join(userModels, 'piper')) ? path.join(userModels, 'piper') : legacyPiperDir);
   let piperVoices = [];
   try {
     piperVoices = fs.readdirSync(piperDir).filter((f) => f.endsWith('.onnx'));
   } catch { /* absent dir — reported as a gap below */ }
 
-  // setup-hermes.js has no export guard, so requiring it would RUN the
-  // installer. The path is restated here from that file's binaryPath() instead,
-  // deliberately and with the citation.
-  const hermesBin = process.platform === 'win32'
-    ? path.join(REPO_ROOT, 'Hermes Agent', 'hermes-agent', 'venv', 'Scripts', 'hermes.exe')
-    : path.join(REPO_ROOT, 'Hermes Agent', 'hermes-agent', 'venv', 'bin', 'hermes');
+  // setup-dsh.js has a require.main guard and exports its own path resolution,
+  // so this asks it rather than restating one hardcoded path.
+  //
+  // That restatement was a real defect under Hermes, not just duplication: it
+  // named ONLY <repo>/Hermes Agent, so on a packaged install — where the repo is
+  // inside the install tree an update deletes — the engine read as missing after
+  // every update and the wizard re-offered an install the operator had already
+  // done. Both sides search userData/tools (MYTHOS_TOOLS_DIR) first and the repo
+  // second, and setup-dsh.js keeps that rule.
+  const dshFound = dsh.findInstalled();
 
   return [
     {
@@ -193,20 +224,26 @@ function assetChecks() {
       ok: piperVoices.length > 0,
       detail: piperVoices.length ? `${piperVoices.length} voice(s) in ${piperDir}` : `no .onnx voices in ${piperDir}`,
       why: 'the last link of VOICE_TTS_CHAIN; without it a network failure means no speech at all',
-      // NOT setup-piper.js: that script does not exist in this repo even though
-      // effectors/piper-child.js prints it as its install hint. Naming a command
-      // that cannot be run is exactly the dishonesty this report is for.
-      fix: 'download a piper voice .onnx + .onnx.json into ' + piperDir +
-        '  (note: piper-child.js advertises scripts/setup-piper.js, which does NOT exist here)',
+      // setup-piper.js genuinely exists as of 2026-08-11 (it did not for months,
+      // which is why this row used to spell out that the advertised command was
+      // fictional). Verified by pointing at the file, not by memory.
+      fix: 'node scripts/setup-piper.js --install   (installs into ' + piperDir + ')',
     },
     {
-      id: 'hermes',
-      label: 'Hermes-Agent (build engine)',
+      id: 'dsh',
+      label: 'DeepSeek Harness (build engine)',
       required: false,
-      ok: fileAtLeast(hermesBin, 1),
-      detail: hermesBin,
+      // A present-but-wrong-version install is NOT ok. The adapter asserts the
+      // pin before every task, so reporting "installed" for a version it refuses
+      // would be the same half-truth that let six consecutive builds fail
+      // silently (BUG-168).
+      ok: Boolean(dshFound && dshFound.entry && dshFound.version === dsh.DSH_VERSION),
+      detail: dshFound
+        ? (dshFound.entry || dshFound.pkgDir) + ' (version ' + dshFound.version
+          + (dshFound.version === dsh.DSH_VERSION ? ', pinned)' : ', PINNED IS ' + dsh.DSH_VERSION + ')')
+        : 'not found in ' + dsh.dshSearchHomes().map(dsh.packageDirFor).join(' | '),
       why: 'the only build-content engine — builds FAIL without it (boot still succeeds)',
-      fix: 'node scripts/setup-hermes.js --install',
+      fix: 'node scripts/setup-dsh.js --install',
     },
     {
       id: 'adb',
@@ -315,12 +352,21 @@ function compareSettings(mine, theirs) {
 }
 
 // ---- report assembly --------------------------------------------------------
-function evaluateKeyChecks() {
+// storeNames: key NAMES from the Electron desktop key store, optional. A key
+// the operator saved through the setup screen lives THERE, not in process.env,
+// until the next launch injects it into the child env — so a report that only
+// checked process.env would tell the setup screen "GOOGLE_API_KEY missing"
+// five seconds after the operator stored it. Counting store names as present
+// is the documented intent (see keyStoreNames() below: "a key set through the
+// desktop setup screen therefore shows as present-by-name"). Values never
+// reach this function — names only, by construction.
+function evaluateKeyChecks(storeNames) {
+  const store = new Set(storeNames || []);
   return KEY_CHECKS.map((check) => {
     const names = check.anyOf || check.allOf || [];
-    const present = names.filter(envPresent);
+    const present = names.filter((n) => envPresent(n) || store.has(n));
     const ok = check.allOf ? present.length === names.length : present.length > 0;
-    const missing = names.filter((n) => !envPresent(n));
+    const missing = names.filter((n) => !envPresent(n) && !store.has(n));
     return {
       id: check.id,
       label: check.label,
@@ -332,14 +378,21 @@ function evaluateKeyChecks() {
         : (check.allOf ? `missing: ${missing.join(', ')}` : `none of: ${names.join(', ')}`),
       why: check.why,
       fix: check.fix,
+      // The requirement's key names, structured. `detail` above is prose for a
+      // human terminal; the setup screen needs the list itself, and used to
+      // recover it by regexing that prose — so a reworded sentence produced a
+      // key row with no input box and no way to fix the gap it was reporting.
+      // Names only: this whole file is forbidden from touching a value (AD-8),
+      // and test/setup-route.test.js pins that a planted canary cannot appear.
+      keyNames: names.slice(),
     };
   });
 }
 
-function buildReport(envDir) {
+function buildReport(envDir, opts) {
   const env = loadEnv(envDir);
   const store = keyStoreNames();
-  const keys = evaluateKeyChecks();
+  const keys = evaluateKeyChecks((opts && opts.keyStoreNames) ? opts.keyStoreNames : store.names);
   const assets = assetChecks();
   const gaps = [...keys, ...assets].filter((r) => !r.ok);
   return {
@@ -426,6 +479,12 @@ function printReport(report) {
 // never passes it.
 function main(argv, opts) {
   const envDir = (opts && opts.envDir) || MYTHOS_DIR;
+  // opts.keyStoreNames lets a test simulate a machine with no desktop key store
+  // (or a specific one). Production passes nothing and gets the real store.
+  // Evaluated once here so --strict and the printed report agree with each other
+  // and with /api/setup/status (which calls buildReport with the same default).
+  if (opts && opts.keyStoreNames === undefined) opts = { ...opts, keyStoreNames: keyStoreNames().names };
+  else if (!opts) opts = { keyStoreNames: keyStoreNames().names };
   const wantsJson = argv.includes('--json');
   const strict = argv.includes('--strict');
   const exportIdx = argv.indexOf('--export');
@@ -462,7 +521,7 @@ function main(argv, opts) {
     return strict ? 1 : 0;
   }
 
-  const report = buildReport(envDir);
+  const report = buildReport(envDir, opts);
 
   if (exportIdx !== -1) {
     const file = argv[exportIdx + 1] || path.join(MYTHOS_DIR, 'mythos-settings.json');

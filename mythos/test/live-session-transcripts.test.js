@@ -248,6 +248,33 @@ describe('BUG-118 — a modelTurn part flagged as the model\'s own thinking is n
     session.close();
   });
 
+  test('every turn reports how much mic audio WE sent — the other half of the empty-transcript question', async () => {
+    const { session, sockets, logs } = sessionWithCapture();
+    await openIt(session, sockets);
+
+    // scFields already says whether inputTranscription came back. Without a
+    // count of what went up, a turn with an empty operator transcript is equally
+    // consistent with "nobody spoke" and "the browser stopped sending the mic",
+    // which need opposite fixes — and every logged turn so far has had that
+    // exact ambiguity.
+    session.sendAudio('AAAA');
+    session.sendAudio('AAAA');
+    session.sendAudio('AAAA');
+    sockets[0].serverFrame({ serverContent: { turnComplete: true } });
+
+    const line = logs.find((l) => l.event === 'live.turn-parts');
+    assert.equal(line.detail.audioIn, 3, 'the count is of frames put on the wire, not of anything said');
+
+    // ...and it must reset, or turn 2 inherits turn 1's audio and a genuinely
+    // deaf turn reads as a healthy one.
+    session.sendAudio('AAAA');
+    sockets[0].serverFrame({ serverContent: { turnComplete: true } });
+    const lines = logs.filter((l) => l.event === 'live.turn-parts');
+    assert.equal(lines[1].detail.audioIn, 1);
+
+    session.close();
+  });
+
   test('the counters reset per turn — turn 2 must not inherit turn 1\'s totals', async () => {
     const { session, sockets, logs } = sessionWithCapture();
     await openIt(session, sockets);

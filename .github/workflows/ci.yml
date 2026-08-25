@@ -7,9 +7,20 @@ jobs:
     runs-on: windows-latest
     defaults: { run: { working-directory: mythos } }
     steps:
+      # Full history, not the default shallow clone: test/build-release-notes
+      # runs collectCommitLog() against this repo's REAL git history, and a
+      # fetch-depth:1 checkout makes those tests fail on CI while passing on
+      # every dev machine (found 2026-08-16 via the annotation channel).
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 22 }
+      # Root deps too, not just mythos/: test/electron-builder-files-allowlist
+      # requires app-builder-lib, a ROOT devDependency (electron-builder) —
+      # with only mythos/node_modules present every build.files test fails on
+      # CI and passes locally (same e2e-job precedent: root first).
+      - run: npm ci
+        working-directory: .
       - run: npm ci
       - name: Run test suite + verify test-count docs are in sync (baseline 0 known failures)
         shell: pwsh
@@ -19,10 +30,31 @@ jobs:
           node --test --test-reporter=tap 2>&1 | Tee-Object -Variable out
           $failLine = $out | Select-String -Pattern '^# fail (\d+)' | Select-Object -Last 1
           $fails = if ($failLine) { [int]$failLine.Matches[0].Groups[1].Value } else { 999 }
-          Write-Host "fail count: $fails (baseline allows 0)"
-          if ($fails -gt 0) { exit 1 }
+          $cancelLine = $out | Select-String -Pattern '^# cancelled (\d+)' | Select-Object -Last 1
+          $cancelled = if ($cancelLine) { [int]$cancelLine.Matches[0].Groups[1].Value } else { 0 }
+          Write-Host "fail count: $fails (baseline allows 0); cancelled: $cancelled"
+          # BUG-258/259 lesson (2026-08-13..16): CI sat red for three days with
+          # only "exit code 1" to show for it, because nothing surfaced WHICH
+          # tests failed into a place readable without log access. `::error::`
+          # lines become check-run annotations, which ARE readable via the
+          # public API — name the failures where they can be seen.
+          if ($fails -gt 0 -or $cancelled -gt 0) {
+            # Indented 'not ok' lines are SUBTESTS — the parent alone hid which
+            # subtest actually failed on the first round of this diagnostics.
+            $bad = $out | Select-String -Pattern '^\s*not ok ' | Select-Object -First 6
+            foreach ($line in $bad) { Write-Host ("::error::" + $line.Line.Trim()) }
+            # ...and the TAP diagnostic error lines say WHY (assert messages),
+            # which the titles alone never showed.
+            $errs = $out | Select-String -Pattern '^\s+error: ' | Select-Object -First 6
+            foreach ($line in $errs) { Write-Host ("::error::" + $line.Line.Trim()) }
+            if (-not $bad -or $bad.Count -eq 0) { Write-Host "::error:: summary reported failures/cancellations but no 'not ok' lines matched" }
+          }
+          if ($fails -gt 0 -or $cancelled -gt 0) { exit 1 }
           $out | node scripts/sync-test-count.js --check
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error:: sync-test-count --check failed — the counts above do not match the committed README/ROADMAP numbers"
+            exit 1
+          }
 
   # Separate job on purpose: the unit baseline must stay readable even when a
   # real boot is flaky. A green `node --test` cannot tell you the app STARTS —
@@ -34,7 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: 20 }
+        with: { node-version: 22 }
       # Root deps provide electron for the shell phase; mythos deps provide the server.
       - run: npm ci
       - run: npm ci

@@ -28,17 +28,27 @@ describe('config', () => {
     assert.equal(result.config.SHUTDOWN_MS, 10000);
   });
 
-  it('Hermes build-driver knobs (hermes-runner.js) default sensibly and accept overrides', () => {
+  it('build-driver knobs (forge-runner.js) default sensibly and accept overrides', () => {
+    // RENAMED HERMES_* -> DSH_* by W6 (2026-08-22).
     const defaults = validate({}, SCHEMA);
-    assert.equal(defaults.config.HERMES_PLAN_TIMEOUT_MS, 300000);
-    assert.equal(defaults.config.HERMES_BUILD_TIMEOUT_MS, 1800000);
-    assert.equal(defaults.config.HERMES_POLL_MS, 2000);
-    assert.equal(defaults.config.HERMES_BUILD_TERMINAL_ENV, 'local');
+    assert.equal(defaults.config.DSH_PLAN_TIMEOUT_MS, 300000);
+    assert.equal(defaults.config.DSH_BUILD_TIMEOUT_MS, 1800000);
+    assert.equal(defaults.config.DSH_POLL_MS, 2000);
+    assert.equal(defaults.config.DSH_BUILD_TERMINAL_ENV, 'local');
 
-    const overridden = validate({ HERMES_BUILD_TIMEOUT_MS: '600000', HERMES_POLL_MS: '500' }, SCHEMA);
+    const overridden = validate({ DSH_BUILD_TIMEOUT_MS: '600000', DSH_POLL_MS: '500' }, SCHEMA);
     assert.equal(overridden.ok, true);
-    assert.equal(overridden.config.HERMES_BUILD_TIMEOUT_MS, 600000);
-    assert.equal(overridden.config.HERMES_POLL_MS, 500);
+    assert.equal(overridden.config.DSH_BUILD_TIMEOUT_MS, 600000);
+    assert.equal(overridden.config.DSH_POLL_MS, 500);
+  });
+
+  it('the old HERMES_* build-driver keys are NOT accepted as aliases', () => {
+    // Deliberate, and the reason it is pinned: a silently-accepted
+    // HERMES_BUILD_TIMEOUT_MS would look like it was working while forge-runner
+    // read the DSH_ default instead. An unknown key must not become a live one.
+    const res = validate({ HERMES_BUILD_TIMEOUT_MS: '600000' }, SCHEMA);
+    assert.equal(res.config.HERMES_BUILD_TIMEOUT_MS, undefined);
+    assert.equal(res.config.DSH_BUILD_TIMEOUT_MS, 1800000, 'the DSH_ default must still apply');
   });
 
   it('overrides defaults with env values', () => {
@@ -141,6 +151,22 @@ describe('config', () => {
     const overridden = validate({ VOICE_S2S_ENABLED: 'true' }, SCHEMA);
     assert.equal(overridden.ok, true);
     assert.equal(overridden.config.VOICE_S2S_ENABLED, true);
+  });
+
+  // Task A2 (v0.1.10 closeout, operator decision 2026-08-17: "whenever we
+  // start the app, it should ask for the PIN"): PIN_SESSION_ENFORCE defaults
+  // to ON. Safe to default on because pinSessionRequired() (server/index.js)
+  // requires BOTH the flag AND a PIN actually configured — no PIN, no
+  // lockout (pinned by test/pin-session.test.js). Set false to opt out.
+  it('PIN_SESSION_ENFORCE defaults to ON (no-PIN-no-lockout keeps it safe) and accepts a false override', () => {
+    const defaults = validate({}, SCHEMA);
+    assert.equal(defaults.ok, true);
+    assert.equal(defaults.config.PIN_SESSION_ENFORCE, true,
+      'the PIN lock screen must be real access control by default; enforcement still requires a configured PIN');
+
+    const overridden = validate({ PIN_SESSION_ENFORCE: 'false' }, SCHEMA);
+    assert.equal(overridden.ok, true);
+    assert.equal(overridden.config.PIN_SESSION_ENFORCE, false);
   });
 
   it('rejects PLANNER_MORNING_HOUR outside its 0-23 range and PLANNER_CHECKIN_EVERY_MS below its floor', () => {

@@ -36,56 +36,17 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { TIER_TABLE } = require('../src/core/leash/tiers');
-
-function realBus() {
-  const { createBus } = require('../src/core/bus');
-  return createBus({ historySize: 200 });
-}
-
-function fakeConfig(overrides) {
-  return Object.assign({
-    AUTONOMOUS_MAX_TIER: 2,
-    MYTHOS_DRY_RUN: false,
-    LEASH_CONFIRM_TTL_MS: 30000,
-    CHECKPOINT_TTL_MS: 1800000,
-    TRUSTED_TOOLS: '',
-    TRUSTED_TOOLS_DISABLED: false
-  }, overrides);
-}
-
-function noopIdentity() {
-  return { checkBoundary: function() { return null; }, getMaxAutonomousTier: function() { return 4; } };
-}
-
-function noopEffectors() {
-  return { get: function() { return undefined; } };
-}
-
-function recordingAuditWriter(result) {
-  const writes = [];
-  return {
-    write: function(e) { writes.push(e); return result || { ok: true }; },
-    _writes: function() { return writes; }
-  };
-}
+const { makeLeash, realBus, noopIdentity, noopEffectors, recordingAuditWriter } = require('./helpers/leash-fixture');
 
 // One real Leash. No mocks of the thing under test — same real-instance
-// discipline as test/leash-grant-scope.test.js, whose helpers this mirrors.
+// discipline as test/leash-grant-scope.test.js. Thin adapter over the shared
+// makeLeash() fixture (test/helpers/leash-fixture.js, also used by
+// test/leash-tier2-gate.test.js) so this file's existing harness(opts).leash /
+// .audit / .bus call sites below don't need touching.
 function harness(opts) {
   const o = opts || {};
-  const { createLeash } = require('../src/core/leash');
-  const bus = realBus();
-  const audit = recordingAuditWriter(o.auditResult);
-  const leash = createLeash({
-    bus: bus,
-    config: fakeConfig(o.config),
-    identity: o.identity || noopIdentity(),
-    auditWriter: audit,
-    goals: { get: function() { return null; } },
-    effectors: noopEffectors(),
-    scanner: o.scanner
-  });
-  return { bus: bus, leash: leash, audit: audit };
+  const leash = makeLeash(o.config, { identity: o.identity, auditResult: o.auditResult, scanner: o.scanner });
+  return { bus: leash.bus, leash: leash, audit: leash.audit };
 }
 
 const CONN = 'conn-operator';
@@ -219,7 +180,7 @@ describe('leash operator-present trust — the hard line', function() {
     const mustStillConfirm = [
       'gmail_send', 'compose_email', 'whatsapp_send',
       'phone_call', 'phone_sms_send', 'phone_whatsapp_send', 'phone_file_push',
-      'run_command', 'install_from_github', 'mcp_call_tool', 'hermes_task', 'security_scan',
+      'run_command', 'install_from_github', 'mcp_call_tool', 'dsh_task', 'security_scan',
       'build_project', 'revise_project', 'pipeline_execute', 'kanban_assemble',
       'kanban_build_card', 'start_project', 'run_mission',
       'delete_file', 'delete_goal', 'delete_artifact', 'reminder_approve_action'
@@ -375,16 +336,10 @@ describe('leash operator-present trust — the operator knob', function() {
     // restart: the real config object is frozen at boot (config/index.js), so it
     // does need one. What this pins is that the value is re-read, so a future
     // config reload works and a test can flip it.
-    const { createLeash } = require('../src/core/leash');
-    const config = fakeConfig();
-    const leash = createLeash({
-      bus: realBus(), config: config, identity: noopIdentity(),
-      auditWriter: recordingAuditWriter(), goals: { get: function() { return null; } },
-      effectors: noopEffectors()
-    });
+    const leash = makeLeash();
 
     assert.equal(leash.check({ tool: 'ui_click', args: {} }, { connectionId: CONN }).allow, true);
-    config.TRUSTED_TOOLS_DISABLED = true;
+    leash.config.TRUSTED_TOOLS_DISABLED = true;
     assert.equal(leash.check({ tool: 'ui_click', args: {} }, { connectionId: CONN }).requireConfirm, true,
       'flipping the switch must take effect on the next call');
   });

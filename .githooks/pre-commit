@@ -2,6 +2,59 @@
 # Blocks commits that raise the mythos test-failure count above the known baseline (0),
 # or that leave README.md/ROADMAP.md test-count mentions stale (see sync-test-count.js).
 cd "$(git rev-parse --show-toplevel)/mythos" || exit 1
+
+# --- Environment, decided here rather than left to whoever is committing -----
+#
+# Audit 2026-08-22, item 15. Two environmental faults made this gate report
+# failures that were not real: the SAME unchanged working tree scored 1, then 3,
+# then 2, then 0 failures across four consecutive runs. Both are fixed inside the
+# hook, because "remember to export these first" is documentation, not a control
+# — and the failure text never points at the environment, so every agent who
+# works on this repo pays for it exactly once.
+#
+# FAULT 1 — the temp directory in Windows 8.3 short form ('<NAME>~1').
+# os.tmpdir() inherits the short spelling, fs.mkdtempSync() hands a spawned
+# server a short-name vault path, and the watcher over it trips a libuv bug: the
+# child aborts on `Assertion failed: !_wcsnicmp(filename, dir, dirlen)` and the
+# test reports only `connect ECONNREFUSED` after its full timeout, because the
+# child's stderr is captured and never printed.
+#
+# THIS HOOK WAS THE VICTIM, WHICH IS THE PART THAT HID IT. Measured 2026-08-22:
+# git does not pass the invoking shell's TEMP to a hook — it sets TEMP=/tmp and
+# TMP=/tmp. That string has no '~' in it, so every check written against the
+# shell's own TEMP concluded the environment was fine. But Git Bash's /tmp maps
+# to the profile's local AppData temp folder spelled with its 8.3 SHORT name, so
+# node's os.tmpdir() inside the suite resolved to the short form on every commit
+# this repo has ever gated.
+# `deploy-config-conformance.test.js`'s real-boot test failed at its 30s timeout
+# because of it, and that failure was repeatedly written off as flakiness.
+#
+# So the question to ask is not "does this shell's TEMP look wrong" but "what
+# will node actually use" — ask node, expand that, and hand it back. Unconditional
+# and idempotent: on a machine with no short names it resolves to itself.
+# realpathSync.native is the expander because node is already a hard dependency
+# of this hook and cygpath is not guaranteed to exist.
+canon=$(node -e 'const fs=require("fs"),os=require("os");try{process.stdout.write(fs.realpathSync.native(os.tmpdir()))}catch(e){process.stdout.write("")}')
+if [ -n "$canon" ]; then
+  TEMP="$canon"
+  TMP="$canon"
+  export TEMP TMP
+  echo "pre-commit: temp dir pinned to $TEMP"
+fi
+
+# FAULT 2 — a running MYTHOS instance holding the real default ports.
+# test/boot.test.js spawns src/main.js on 4478 and the legacy proactive-speak
+# path needs the edge-tts server on 5050 — the same two ports the desktop
+# launcher frees on start. With the app open they fail as EADDRINUSE and as "the
+# legacy path must still complete a proactive turn", both of which read as broken
+# code. Defaults rather than overrides, so an operator who set one deliberately
+# keeps it. MYTHOS_PORT=0 is NOT an ephemeral port here: the config schema
+# enforces a minimum of 1024 and rejects it as a config error.
+: "${MYTHOS_PORT:=4997}"
+: "${EDGE_TTS_PORT:=5097}"
+: "${EDGE_TTS_URL:=http://127.0.0.1:$EDGE_TTS_PORT}"
+export MYTHOS_PORT EDGE_TTS_PORT EDGE_TTS_URL
+
 # No path args: node's own recursive discovery, not a shallow test/*.test.js glob
 # (which silently skipped test/assistant/*.test.js + test/engagements/*.test.js —
 # 14 files / ~188 tests never gated by this hook. Found 2026-07-30.)
@@ -10,7 +63,20 @@ fails=$(printf '%s' "$out" | grep -Eo '^# fail [0-9]+' | tail -1 | grep -Eo '[0-
 [ -z "$fails" ] && fails=999
 echo "pre-commit: mythos test failures = $fails (baseline 0)"
 if [ "$fails" -gt 0 ]; then
-  printf '%s\n' "$out" | tail -40
+  # Name the tests. This used to be `tail -40` of raw TAP, which is the last few
+  # PASSING tests plus the summary counts — a blocked commit told you a number
+  # and nothing else, so the first move was always to re-run the suite by hand
+  # just to find out what broke.
+  if printf '%s' "$out" | grep -qE '^not ok'; then
+    echo "pre-commit: failing tests —"
+    printf '%s\n' "$out" | grep -E '^not ok' | head -40
+  else
+    # A suite that dies without a summary emits no 'not ok' at all (exit 127,
+    # fork exhaustion, a crash in a helper). Showing an empty list there would be
+    # worse than the tail it replaced, so fall back deliberately.
+    echo "pre-commit: no 'not ok' lines — the suite died without a summary. Last 40 lines:"
+    printf '%s\n' "$out" | tail -40
+  fi
   echo "pre-commit: BLOCKED — failure count above baseline. Fix or revert."
   exit 1
 fi

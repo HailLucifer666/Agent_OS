@@ -40,14 +40,16 @@ const SCHEMA = {
   // Until this, the PIN screen was a client-side visual/pointer deterrent
   // ONLY: tokenOk() (server/index.js) passes every request when
   // MYTHOS_AUTH_TOKEN is unset, so `curl 127.0.0.1/api/...` bypassed the
-  // lock screen entirely on the default loopback install. OFF by default so
-  // an existing loopback-without-token install (headless/Docker/Render, and
-  // every pre-existing test) is completely unaffected — enforcement only
-  // activates once this is true AND a PIN has actually been configured via
-  // POST /api/pin/set (fresh installs with the flag on but no PIN set yet
-  // stay open, honestly, rather than locking the operator out of their own
-  // server). See .env.example for the full story and its caveats.
-  PIN_SESSION_ENFORCE:      { type: 'bool', default: false },
+  // lock screen entirely on the default loopback install. ON by default
+  // (operator decision, 2026-08-17: "whenever we start the app, it should
+  // ask for the PIN") — and safe to be on because pinSessionRequired()
+  // (server/index.js) requires BOTH this flag AND a PIN actually configured
+  // via POST /api/pin/set: with no PIN set there is nothing to enforce, so a
+  // fresh install stays open rather than locking the operator out of their
+  // own server. Set false to opt out — a loopback-without-token install then
+  // exercises none of the enforcement paths, exactly as before Track B1.
+  // See .env.example for the full story and its caveats.
+  PIN_SESSION_ENFORCE:      { type: 'bool', default: true },
   // How long a PIN-unlocked session stays valid with no further activity
   // (sliding — src/core/security/pin-session.js extends it on every
   // authenticated request), ms.
@@ -140,9 +142,16 @@ const SCHEMA = {
   VOICE_STT_CHAIN:          { type: 'string', default: '' },
 
   // Voice VAD tuning (BUG-020 — client-side voice-loop.js speech-detection
-  // thresholds; defaults match the previously-hardcoded constants exactly,
-  // zero behavior change until overridden). Exposed to the HUD via
-  // GET /api/config/vad so mic sensitivity can be tuned without a rebuild.
+  // thresholds; defaults match the previously-hardcoded constants). Exposed
+  // to the HUD via GET /api/config/vad so mic sensitivity can be tuned
+  // without a rebuild.
+  // VAD_SILENCE_MS default is 1800. The 2026-08-17 experiment of 900
+  // (faster endpointing) was live-falsified the same day: natural
+  // mid-sentence pauses of 0.9–1.8s split one utterance into two clips,
+  // MYTHOS answered mid-thought, and the assistantSpeaking half-duplex gate
+  // then swallowed the operator's continuation — read live as "it interrupts
+  // and breaks in between things". 1800 restored; still env-tunable for
+  // anyone who wants faster endpointing: VAD_SILENCE_MS=900 in mythos/.env.
   VAD_SPEECH_RMS:           { type: 'number', default: 0.035, min: 0, max: 1 },
   VAD_MIN_PEAK_RMS:         { type: 'number', default: 0.06,  min: 0, max: 1 },
   VAD_HOLD_TICKS:           { type: 'number', default: 3,     min: 1, max: 20 },
@@ -265,6 +274,16 @@ const SCHEMA = {
   CONSOLIDATE_EVERY:        { type: 'number', default: 300, min: 1 },
   EPISODIC_RETENTION_DAYS:  { type: 'number', default: 30, min: 1 },
   CHAIN_COOLDOWN_MS:        { type: 'number', default: 60000, min: 1000 },
+  // B1 (2026-08-14): per-(provider,model) circuit breakers in brain/chain.js, on
+  // top of CHAIN_COOLDOWN_MS. The cooldown is a flat 60s single-failure skip and
+  // lapses between calls that are minutes apart — which is the measured pattern
+  // that let NVIDIA NIM sit at the head of the vision lane costing 8s of dead
+  // time per look, all day (screen_look median 10,254ms against a 12,000ms
+  // budget). The breaker adds escalating backoff so a sustained outage is skipped
+  // for minutes, with HALF_OPEN's single probe restoring a recovered provider
+  // automatically. Default ON; this key exists as a kill switch because chain.js
+  // serves EVERY brain lane, so a defect here would degrade the whole brain.
+  CHAIN_BREAKERS_ENABLED:   { type: 'boolean', default: true },
   MODEL_REGISTRY_TTL_MS:    { type: 'number', default: 300000, min: 10000 },
 
   // Caveman/terse output style (src/core/brain/style-terse.js), comma-separated
@@ -275,16 +294,60 @@ const SCHEMA = {
   // aloud, and clipped fragments sound like a malfunction rather than brevity.
   // 'build' is also excluded — that lane emits artifact CONTENT (source files),
   // where a brevity instruction is actively destructive.
-  // 'simple' is the prose-heavy lane (memory consolidation, reflection, goal and
-  // engagement summaries) and is where the savings actually are. Individual
-  // callers on a spoken path opt out per call with think({ terse: false }) —
-  // the boot greeting (server/index.js) does exactly that.
+  // 'simple' is the trivial/formatting lane and is where the savings are.
+  // Individual callers on a spoken path opt out per call with
+  // think({ terse: false }) — the boot greeting (server/index.js) and
+  // immune/explainer.js both do exactly that, which is why they were left on
+  // 'simple' when the reasoning/memory lanes were split out.
+  //
+  // 'memory' WAS ADDED 2026-08-14 WITH THAT SPLIT, DELIBERATELY, and this is the
+  // only place the decision is visible. Memory consolidation and document
+  // answering moved off 'simple' onto their own lane; without naming 'memory'
+  // here they would have silently lost terse compression — longer summaries,
+  // more tokens, no error, nothing in a diff to notice. Compact summaries are
+  // the point of consolidation, so terse follows it.
+  //
+  // 'reasoning' is deliberately EXCLUDED for the mirror-image reason. mull(),
+  // reflection, the reviewer/reality-check seats and think_deeply were moved to
+  // that lane precisely so they could think properly; compressing their output
+  // is working against the change that created the lane. A reasoning answer that
+  // has to drop articles to fit is the wrong trade.
+  //
   // Empty string disables the layer entirely.
-  BRAIN_TERSE_LANES:        { type: 'string', default: 'simple' },
+  BRAIN_TERSE_LANES:        { type: 'string', default: 'simple,memory' },
 
   // Autonomy
   AUTONOMOUS_MAX_TIER:      { type: 'number', default: 2, min: 0, max: 4 },
-  GOAL_TOKEN_BUDGET:        { type: 'number', default: 20000, min: 0 },
+  // B4 (2026-08-14) — RAISED FROM 20000 AGAINST A MEASUREMENT, not a guess.
+  //
+  // Three goals were created at 17:32:12 and two auto-paused five seconds later,
+  // before either had done anything. From vault/Goals/*.json:
+  //   "Set up the backend API endpoints"  spent {tokens:31272, actions:2}  budget {tokens:20000, actions:25}
+  //   "Develop the frontend components"   spent {tokens:31200, actions:2}  budget {tokens:20000, actions:25}
+  // ~15,600 tokens per action against a 20,000 total. The operator asked for
+  // structured project tracking and got two of three tasks paused on arrival.
+  //
+  // WHAT IS COUNTED IS NOT WHAT THE GOAL SPENT. brain/index.js debits
+  // `spend.estimate(result.content) + spend.estimate(inputText)`, and inputText is
+  // the ENTIRE prompt — system instruction, tool catalogue, recalled memory,
+  // history. That fixed per-call overhead is identical whether the goal is one
+  // line or fifty, so this budget was denominated in a unit dominated by the cost
+  // of thinking once rather than by anything the goal did.
+  //
+  // 250,000 = 16 planner-sized calls at the measured ~15.6k, which is well past
+  // any ordinary multi-step goal while still bounding a true runaway. The number
+  // is deliberately NOT "large enough to never trip": GOAL_ACTION_BUDGET is the
+  // real runaway ceiling (see below) and this stays a genuine backstop.
+  //
+  // NOT fixed here, and noted because a budget decision resting on an estimate
+  // deserves the caveat: spend.estimate() is a chars/4-ish approximation while the
+  // providers return real usage. Whether the ledger should switch to reported
+  // usage is its own change.
+  GOAL_TOKEN_BUDGET:        { type: 'number', default: 250000, min: 0 },
+  // The primary ceiling, and the dimension that actually bounds a loop. On
+  // 2026-08-14 it never came close: 2 actions of 25. Left exactly as it was —
+  // raising the token budget only works because this one is still doing the real
+  // work of stopping a goal that will not terminate.
   GOAL_ACTION_BUDGET:       { type: 'number', default: 25, min: 0 },
   MAX_ACTIVE_GOALS:         { type: 'number', default: 5, min: 1, max: 20 },
   // V3 (Phase 4): procedural-skill gate. Skills with uses>0 below this
@@ -337,6 +400,12 @@ const SCHEMA = {
   // a truly hung loop fires it.
   STALL_MS:                 { type: 'number', default: 30000, min: 1000 },
   WATCHDOG_MS:              { type: 'number', default: 2000, min: 500 },
+  // BUG-273: how long a SINGLE cortex tick may stay in flight before it counts as
+  // wedged. Not derived from STALL_MS, which answers a different question on a
+  // TICK_MS scale (is the timer firing at all). 120000 is well past the longest
+  // legitimate await in a tick body — act()'s dispatch, capped at ACTION_TIMEOUT_MS
+  // = 30000 — and well short of anything an operator would sit through.
+  TICK_WEDGED_MS:           { type: 'number', default: 120000, min: 5000 },
   BREAKER_FAIL_THRESHOLD:   { type: 'number', default: 3, min: 1 },
   BREAKER_WINDOW_MS:        { type: 'number', default: 30000, min: 1000 },
   BREAKER_RESET_MS:         { type: 'number', default: 15000, min: 1000 },
@@ -355,6 +424,16 @@ const SCHEMA = {
   MYTHOS_BUILD_CONCURRENCY:  { type: 'number', default: 3, min: 1, max: 8 },
   MYTHOS_JOBS_MAX_PERSISTED: { type: 'number', default: 100, min: 10 },
   MYTHOS_WATCH_DIRS:         { type: 'string', default: '' },
+  // Notes directory (memory/notes.js). Empty = <vault>/Notes, which is what a
+  // fresh clone uses. Set it to an existing Obsidian vault folder and MYTHOS's
+  // notes land there as ordinary .md files — no Obsidian plugin or CLI needed.
+  MYTHOS_NOTES_DIR:          { type: 'string', default: '' },
+  // Build refine loop (2026-08-14, the "snake game test"). ON by default: a
+  // build that has never been rendered is the problem this closes. The refiner
+  // is CONSTRUCTED INSIDE this flag check in main.js — an opt-out flag protects
+  // nothing that runs before it is read (Slice-5 lesson).
+  BUILD_REFINE_ENABLED:        { type: 'bool',   default: true },
+  BUILD_REFINE_MAX_ITERATIONS: { type: 'number', default: 2, min: 1, max: 4 },
   MYTHOS_FILE_DEBOUNCE_MS:   { type: 'number', default: 500, min: 50 },
 
   // Conversation brain (idle reasoning) — how often the entity "mulls" during
@@ -426,14 +505,22 @@ const SCHEMA = {
   // build run for the whole project rather than per-file brain.think calls,
   // so neither knob has anything left to read it.
   FORGE_MAX_FILES:             { type: 'number', default: 12,      min: 1,     max: 40 },
-  // Hermes build driver (hermes-runner.js) — Forge now drives the hermes-agent
-  // CLI instead of brain.think(). Plan runs are sandboxed/short; builds run a
-  // real agent loop and need real headroom (30 min default, per THE DECISION's
-  // Mistral-primary arithmetic — see the Hermes orchestration handoff).
-  HERMES_PLAN_TIMEOUT_MS:      { type: 'number', default: 300000,   min: 10000,  max: 900000 },
-  HERMES_BUILD_TIMEOUT_MS:     { type: 'number', default: 1800000,  min: 60000,  max: 3600000 },
-  HERMES_POLL_MS:              { type: 'number', default: 2000,     min: 500,    max: 30000 },
-  HERMES_BUILD_TERMINAL_ENV:   { type: 'string', default: 'local' },
+  // Build driver (forge-runner.js) — Forge drives the build-engine adapter
+  // instead of brain.think(). Plan runs are sandboxed/short; builds run a real
+  // agent loop and need real headroom (30 min default).
+  //
+  // RENAMED HERMES_* -> DSH_* by W6 (2026-08-22) when the engine became DeepSeek
+  // Harness. There is NO alias for the old names, deliberately: a config key
+  // named after a deleted program is exactly the contradiction this repo treats
+  // as a defect, and a silently-accepted HERMES_BUILD_TIMEOUT_MS would look like
+  // it was working while the runner read the DSH_ default instead. An operator
+  // with the old names in .env gets the documented defaults and a settings panel
+  // that no longer lists them — see .env.example, where the whole block moved in
+  // the same commit.
+  DSH_PLAN_TIMEOUT_MS:         { type: 'number', default: 300000,   min: 10000,  max: 900000 },
+  DSH_BUILD_TIMEOUT_MS:        { type: 'number', default: 1800000,  min: 60000,  max: 3600000 },
+  DSH_POLL_MS:                 { type: 'number', default: 2000,     min: 500,    max: 30000 },
+  DSH_BUILD_TERMINAL_ENV:      { type: 'string', default: 'local' },
   // Checkpoints (P22 — workflow approval gates, distinct from LEASH_CONFIRM_TTL_MS)
   CHECKPOINT_TTL_MS:           { type: 'number', default: 1800000, min: 60000 },
   CHECKPOINT_SWEEP_MS:         { type: 'number', default: 60000,   min: 5000 },
@@ -465,6 +552,51 @@ const SCHEMA = {
   // bounds the whole dispatch; ollama keep-alive for vision lane)
   CHAIN_ATTEMPT_TIMEOUT_MS:    { type: 'number', default: 30000, min: 1000 },
   VOICE_OLLAMA_KEEP_ALIVE:     { type: 'string', default: '10m' },
+  // Bound on ONE vision look (screen_look / camera_look), deliberately far below
+  // CHAIN_ATTEMPT_TIMEOUT_MS: that is 30s PER ATTEMPT across a seven-model lane,
+  // so a starved free-tier provider can hold a "quick look" past a minute — two
+  // real screen_look calls on 2026-08-10 took 16s and 63s while the operator was
+  // mid-sentence, which is how the model ended up narrating a guess. A look that
+  // outlives this fails honestly instead of arriving after the conversation has
+  // moved on. Raise it only if a slow provider is genuinely preferred to a
+  // truthful "I could not see it in time".
+  VISION_CALL_TIMEOUT_MS:      { type: 'number', default: 12000, min: 1000 },
+  // Bound on ONE PROVIDER ATTEMPT inside that look, and the 2026-08-14 fix for
+  // two screen_look calls that failed with the lane fully alive. The pair above
+  // was not merely different from CHAIN_ATTEMPT_TIMEOUT_MS, it was incompatible
+  // with it: a 12s total budget against a 30s per-attempt step means the first
+  // slow model consumes the entire budget and the remaining four are never tried,
+  // so the lane's failover existed but could never run. 4s per attempt lets the
+  // 12s budget actually walk 2-3 models; vision-call.js clamps it below
+  // VISION_CALL_TIMEOUT_MS, because a per-attempt bound at or above the total
+  // bound reintroduces the bug rather than configuring it.
+  // BUG-273 C3 — was 4000, and 4000 could not tell a slow provider from a dead
+  // one. PREF_VISION's own recorded latencies include 3090ms, and the screen_look
+  // that SUCCEEDED on 2026-08-18 took 2672ms; three minutes later nine models
+  // across five providers all aborted within 15ms of the 4000ms ceiling. A budget
+  // only ~30% above the known-good case turns one slow minute into a lane-wide
+  // outage. 7000ms clears the slowest recorded good latency by ~2.3x while still
+  // leaving room for THREE attempts inside the raised total budget. screen_look has
+  // been a SLOW_TOOL since BUG-272 T4 (it acks 'started' and reports its real
+  // outcome later), so a longer budget no longer stalls a voice turn the way it
+  // would have when these two numbers were first chosen.
+  VISION_ATTEMPT_TIMEOUT_MS:   { type: 'number', default: 7000, min: 500 },
+
+  // think_deeply (effectors/deep-think.js) — same two-bound shape as vision
+  // above, and for the same reason: a total budget shorter than chain.js's
+  // per-attempt step means the lane's failover can never run. Longer than
+  // vision's 12s deliberately — a look answers "what is on screen right now",
+  // this one is the explicit "go away and think about it properly" verb. Past
+  // 20s the operator has moved on and an honest "that took too long" beats a
+  // late answer. deep-think.js clamps the per-attempt bound below the total.
+  DEEP_THINK_TIMEOUT_MS:       { type: 'number', default: 20000, min: 1000 },
+  DEEP_THINK_ATTEMPT_TIMEOUT_MS: { type: 'number', default: 7000, min: 500 },
+  // BUG-287: minimum gap between think_deeply calls. The 2026-08-20 session made
+  // four inside 91 seconds, each restating the same diagnosis, and the operator
+  // asked "why are you thinking deeply for everything?". 60s is the cut that
+  // blocks the three rapid calls measured (12s, 17s, 22s) and allows the four
+  // spaced ones (61s, 153s, 416s). 0 disables it — the deliberate opt-out.
+  DEEP_THINK_MIN_INTERVAL_MS:  { type: 'number', default: 60000, min: 0 },
 
   // Voice loop tuning
   VOICE_RECALL_TIMEOUT_MS:     { type: 'number', default: 3500, min: 500 },     // RAG recall bound before reply
@@ -576,11 +708,72 @@ const SCHEMA = {
   // (V2 §16). See .env.example for the full story on each key, including the
   // voice choice.
   VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
+
+  // BUG-251: inject Semantic/user-facts.md into the Live session instruction so
+  // the spoken path knows what the vault knows. Default ON — the amnesia it
+  // fixes was operator-visible. Setting it false restores the pre-fix frame
+  // exactly, with no code change (see server/index.js's OPERATOR FACTS block).
+  LIVE_MEMORY_INJECT:          { type: 'bool',   default: true },
+
+  // ---- record-window volume ducking, and its anti-feedback bounds ----
+  //
+  // ADDED TO THE SCHEMA 2026-08-11 (installer parity). All five were
+  // `Number(process.env.X) || default` inside server/index.js, which put them
+  // OUTSIDE the config schema — and therefore outside userData/config.json, the
+  // only place a packaged install can put a setting. So the exact bounds that stop
+  // the volume feedback loop could not be tuned on the build that reported the
+  // loop. Defaults are transcribed from those expressions unchanged, so .env and
+  // every existing deployment behave identically. See server/index.js's duckAudio
+  // comment for what each one does and the incident that produced them.
+  //
+  // An operator on VOICE_S2S_ENABLED (the dev configuration, and the derived
+  // default when a Google key is present) never reaches this code at all — Live
+  // duplex has no record-window ducking.
+  DUCK_VOLUME_LEVEL:           { type: 'number', default: 15, min: 0, max: 100 },
+  DUCK_MIN_HOLD_MS:            { type: 'number', default: 800, min: 0 },
+  DUCK_COOLDOWN_MS:            { type: 'number', default: 1200, min: 0 },
+  // Consecutive mic-hot windows that ended with no utterance dispatched before
+  // ducking backs off entirely. A window that heard nobody was not a person.
+  DUCK_FALSE_MAX:              { type: 'number', default: 2, min: 1 },
+  DUCK_SUPPRESS_MS:            { type: 'number', default: 30000, min: 0 },
+  // Restores the volume even if the client never sends unduck (dropped
+  // connection, crash). In the schema for the same reason as the four above.
+  UNDUCK_SAFETY_MS:            { type: 'number', default: 15000, min: 1000 },
+  // MEASURED 2026-08-14 on the operator's real key, with actual BidiGenerateContent
+  // connects (catalog listings lie here, so reachability means a real setupComplete):
+  //
+  //   REACHABLE  gemini-3.1-flash-live-preview           setup 468ms, first audio  951ms
+  //   REACHABLE  gemini-2.5-flash-native-audio-latest    setup 556ms, first audio 2126ms
+  //   REACHABLE  gemini-2.5-flash-native-audio-preview-12-2025   (same timings)
+  //   setup ok, never completes a text turn: gemini-3.5-live-translate-preview
+  //   NOT FOUND (close 1008): gemini-3.1-pro-live-preview, gemini-live-2.5-flash-preview
+  //
+  // **There is no Pro-tier Live model.** ListModels advertises 6 models supporting
+  // bidiGenerateContent and every one is flash or a flash native-audio variant, so
+  // "move voice to a stronger model" is not a lever that exists — unlike the TEXT
+  // lanes, where Pro is merely 429-blocked on a free key (see lanes.default.js) and
+  // billing would plausibly unlock it. Do not swap this default hoping for more
+  // intelligence: on a 4-question set the two families scored identically (4/4
+  // each, including refusing to invent a fact and getting a two-step age puzzle
+  // right), and native-audio is 2.2x slower to first audio. The set was too easy
+  // to discriminate them, which is itself the finding — reach for prompt and
+  // tool-visibility work (BUG-222) before reaching for the model name.
   GEMINI_LIVE_MODEL:           { type: 'string', default: 'models/gemini-3.1-flash-live-preview' },
   // Aoede | Kore | Leda | Zephyr | Puck | Charon — Aoede kept as default (see
   // .env.example): auditioning by ear across all six needs a human with
   // speakers, which cannot happen in this environment.
   GEMINI_LIVE_VOICE:           { type: 'string', default: 'Aoede' },
+  // Wave 6 (2026-08-13): unset (empty string) means auto-detect, Gemini's own
+  // default and this project's — pinning a language is opt-in, not a new
+  // default nobody asked for. An operator whose session drifts into Korean
+  // or Spanish STT mid-conversation can pin e.g. 'en-US' to stop it. BCP-47
+  // tag, passed through verbatim — no validation here, since Gemini Live's
+  // supported set is theirs to define and can change without a schema edit
+  // on this side. KNOWN CAVEAT, not fixed by this: per the Gemini Live docs,
+  // Hindi/Bengali (and some other languages) are speech-INPUT-only for this
+  // API — pinning one of those changes what the model expects to HEAR, not
+  // what it can SPEAK back in.
+  GEMINI_LIVE_LANGUAGE:        { type: 'string', default: '' },
   // BUG-059: was 45000. The browser bridge (s2s-bridge.js) suspends mic
   // capture for up to 30s (MAX_SUSPEND_MS) while MYTHOS's own TTS or media
   // playback is out of the speakers — sendAudio() stops being called for
@@ -592,6 +785,16 @@ const SCHEMA = {
   // Comma-separated tool-name allowlist; empty = live-tools.js's curated
   // DEFAULT_ALLOWLIST (accuracy degrades with 107 raw registered tools).
   LIVE_TOOL_ALLOWLIST:         { type: 'string', default: '' },
+  // BUG-128's net (live-tool-adapter.js): any tool call not resolved by this
+  // deadline gets a status:'started' ack so the Live turn never ends holding an
+  // unanswered call id. Config-driven since 2026-08-17 (fix-plan 2.3) because
+  // the 1500 default produced 4 late acks on web_search/web_fetch in one
+  // measured session — network calls that routinely exceed 1.5s. The number is
+  // the OPERATOR's call, evidence-first: count `live.tool-ack-deadline` log
+  // lines per session and raise it until the storms stop (each line names the
+  // tool and the deadline it blew). Default UNCHANGED at 1500; min 250 stops a
+  // typo from acking before the dispatch round-trip even starts.
+  TOOL_ACK_DEADLINE_MS:        { type: 'number', default: 1500, min: 250 },
 
   // One voice on every surface (operator report, 2026-08-06: "when mythos boots
   // there is one voice, when I speak another, when I type another").

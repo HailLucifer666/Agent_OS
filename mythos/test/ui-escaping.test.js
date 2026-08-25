@@ -11,6 +11,13 @@
 // LLM-authored from operator prompts, so `[x](" onmouseover=alert(1) y=")` broke
 // out of the attribute. safeHref() is the pure, DOM-free function that closes it,
 // so it can be tested directly with no jsdom and no new dependency.
+//
+// It used to import from components/engagement/SpecPreviewCard.js, which no
+// panel ever loaded — the live views/engagements.js carried a verbatim copy of
+// safeHref, so the tested copy and the rendering copy were different functions
+// that merely happened to agree. The dead component tree is gone and safeHref
+// now lives in the HUD's shared url.js alongside safeUrl/safeSameOriginUrl,
+// which is what views/engagements.js actually imports.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -18,7 +25,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 const MODULE_URL = pathToFileURL(
-  path.join(__dirname, '..', 'ui', 'public', 'js', 'components', 'engagement', 'SpecPreviewCard.js')
+  path.join(__dirname, '..', 'ui', 'public', 'js', 'url.js')
 ).href;
 
 async function loadSafeHref() {

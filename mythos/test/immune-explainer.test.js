@@ -136,4 +136,32 @@ describe('immune explainer', () => {
     assert.equal(spoken.length, 1);
     assert.match(spoken[0], /Reported reason: typed into the wrong window/);
   });
+
+  // 2026-08-10: five of these interrupted a live voice conversation to recite
+  // "live-turn-no-user-transcript" at the operator, mid-sentence. The words are
+  // NOT the defect — AD-5 (bug-123-anomaly-honest-phrasing.test.js) requires the
+  // real condition to be named rather than narrated into invented prose. The
+  // timing was. So the payload now carries a marker, and server/index.js's
+  // action.speak-requested subscriber holds the spoken form back while a Live
+  // session is open; the log, the audit and the HUD are unaffected.
+  it('marks its speech as an internal diagnostic so a live conversation is not interrupted', async () => {
+    const payloads = [];
+    const origEmit = bus.emit.bind(bus);
+    bus.emit = (type, payload) => {
+      if (type === 'action.speak-requested') { spoken.push(payload.text); payloads.push(payload); }
+      return origEmit(type, payload);
+    };
+    const explainer = createExplainer({
+      bus, memory: fakeMemory(), config: {},
+      brain: fakeBrain({ remedy: 'none' })
+    });
+    await explainer._onHealed(noMatchEvent('live-turn-no-user-transcript', null));
+    assert.equal(payloads.length, 1);
+    assert.equal(payloads[0].internalDiagnostic, true,
+      'everything this module explains is by construction an unplaybooked internal check');
+    assert.equal(payloads[0].kind, 'live-turn-no-user-transcript',
+      'the kind rides along so a suppressed announcement is still diagnosable');
+    // AD-5 still holds: the condition is named in the text itself.
+    assert.match(payloads[0].text, /live-turn-no-user-transcript/);
+  });
 });

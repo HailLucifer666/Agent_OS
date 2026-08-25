@@ -64,6 +64,35 @@ async function isAvailable() {
   }
 }
 
+// The voice ids this engine can actually speak, for the HUD picker.
+//
+// It reads them off the LOADED model rather than a list copied into this repo.
+// kokoro-js does export a static VOICES table, but only in its type
+// declarations — the runtime entry point exposes just { KokoroTTS,
+// TextSplitterStream, env }, and list_voices() is an INSTANCE method. A
+// hardcoded copy here would drift silently the first time upstream adds a
+// voice, and offering a voice the installed model cannot speak is worse than
+// offering none.
+//
+// So: no model, no list. That costs nothing in practice, because the picker only
+// asks engines that reported isAvailable() — and for kokoro that probe has
+// already loaded (or failed to load) the model. Never triggers a download of its
+// own: a cold, uncached machine fails the probe first and is never asked.
+async function listVoices() {
+  if (modelFailed) return [];
+  try {
+    const tts = await withTimeout(loadModel(), LOAD_TIMEOUT_MS);
+    const raw = typeof tts.list_voices === 'function' ? tts.list_voices() : (tts.voices || {});
+    const ids = Array.isArray(raw) ? raw : Object.keys(raw);
+    return ids.map((id) => {
+      const meta = (tts.voices && tts.voices[id]) || {};
+      return { id: String(id), label: meta.name || String(id) };
+    });
+  } catch {
+    return [];
+  }
+}
+
 // Synthesize to a WAV Buffer. Throws on failure so the chain moves to the
 // next provider rather than shipping silence.
 async function synthesize({ text, voice, signal }) {
@@ -80,5 +109,6 @@ module.exports = {
   name: 'kokoro-tts',
   mime: 'audio/wav',
   isAvailable,
+  listVoices,
   synthesize,
 };

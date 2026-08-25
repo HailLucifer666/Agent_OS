@@ -1,11 +1,11 @@
 'use strict';
 
 // effectors/forge-prompts.js — pure, dependency-free JSON/path helpers shared
-// by the Forge build pipeline (P22) and hermes-runner.js (Phase 2 of the
+// by the Forge build pipeline (P22) and forge-runner.js (Phase 2 of the
 // Hermes orchestration change). No fs, no brain, no LLM client. Phase 3
 // removed the brain.think-era prompt builders (buildManifestPrompt et al.) —
-// Hermes builds its own prompts now (see hermes-runner.js) — but the
-// extraction/safety primitives below are still load-bearing: hermes-runner.js
+// The build engine gets its own prompts now (see forge-runner.js) — but the
+// extraction/safety primitives below are still load-bearing: forge-runner.js
 // reuses extractJsonObject/sanitizeManifestFiles to parse Hermes's plan
 // output rather than reimplementing a second JSON extractor (Invariant 7).
 

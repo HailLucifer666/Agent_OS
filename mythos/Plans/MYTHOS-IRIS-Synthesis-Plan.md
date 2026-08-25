@@ -6,11 +6,1585 @@
 > plan document — the V2 spine was lost precisely because planning lived in untracked
 > files (see the blocking-gap section below).
 
-**Post-parity backlog (not part of this build):** `mythos/Plans/MYTHOS-Post-Parity-Plan.md` holds scope that starts only after merged-order step 7 — social platforms, a multi-agent business layer, phone/multi-device control surfaces, multi-device wake-word arbitration. It is downstream by construction and **this file wins on any overlap**; it exists so that scope does not bury this build's RESUME HERE loop.
+**Post-parity backlog (not part of this build):** `mythos/Plans/MYTHOS-Post-Parity-Plan.md` holds scope that starts only after merged-order step 7 — social platforms, a multi-agent business layer, phone/multi-device control surfaces, multi-device wake-word arbitration. It is downstream by construction and **this file wins on any overlap**; it exists so that scope does not bury this build's RESUME HERE loop. It also
+carries **Appendix COMM — commercial readiness** (added 2026-08-17): the
+open-core split, the demo-critical reliability list, and — relevant to *this*
+file — the reason the product name gates **release** rather than step 7's tick
+(`build.appId` is Windows' install/upgrade key and is free to change only until
+the first external user exists).
 
 ## RESUME HERE
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
+
+### 2026-08-22 (latest) — **W6 is closed, and the thing it measured turned out to matter more than the swap itself: build quality was a PROMPT gap, not an engine gap.**
+
+**W6 COMPLETE, all 8 steps, pushed on `docs/w6-deepseek-harness-build-engine` (PR #18).**
+`512debd` the swap, `7e4f498` the deletion, `24b75c8` the close-out, `38300be` the two
+measured fixes. DeepSeek Harness (`dsh`, pinned `0.1.1-rc.2`) is the only build-content
+engine; Hermes-Agent is gone from the codebase. Ruling A is re-pointed, not weakened.
+
+**The swap was quality-NEUTRAL, and that was the correct result.** dsh and Hermes scored
+**3/9 each on the same model, prompt for prompt**, and all 12 rejections across both
+engines named ONE rule: `no @media queries (not responsive)`. A single rule dominating on
+two independent engines is a defect in the INSTRUCTION. `OUTPUT_CONTRACT` asked for a ready
+state and a visible scale and never asked for a page that works on a phone.
+
+**Two fixes, both measured with the clause as the only variable.**
+
+| fix | before | after |
+| --- | --- | --- |
+| responsive clause in `OUTPUT_CONTRACT` (`codestral-latest`) | 2/9 | **8/9** |
+| Whisper recognition hints (`providers/stt-hints.js`) | 4/8 | **8/8** |
+
+The first measurement of the responsive fix was **discarded as uncontrolled** — it moved the
+model *and* the contract (3/9 → 8/9) and could attribute the gain to neither. The controlled
+re-run is the number above. The STT fix came from Claude Code's published dictation
+behaviour ("project name and git branch are added as recognition hints automatically"); that
+*service* is unusable here (needs a Claude.ai session, explicitly unavailable to an API key)
+but the technique ported: `groq-stt.js` was sending Whisper **no `prompt` at all**.
+
+**NEXT ACTION — one open item, and it needs the operator.** The 8/8 STT number is on
+**synthesized** speech, which is cleaner than a human on a laptop microphone with music
+playing. It is a LOWER bound and says nothing about the operator's accent, and two of six
+cases were lost to a Google TTS 429 (n=1 per term). **Re-run `scripts/verify-stt-hints.js`
+against a real recording before deciding anything else about the voice path.** A dual-path
+change — dictation-grade transcription separate from the conversational Live stream — is the
+candidate that measurement would justify or kill; it is deliberately NOT started, because it
+touches the path the operator reports as working.
+
+**The one surviving verifier failure is `interactive-snake`** — a game canvas is the case a
+general "be responsive" instruction reaches least well. Left as its own question rather than
+answered by widening the clause on a guess.
+
+**Also settled:** the dsh licence closure is enumerated (434 packages, one non-permissive —
+`@img/sharp-win32-x64`, `Apache-2.0 AND LGPL-3.0-or-later`, the **same** libvips exposure
+this repo already ships and documents). No legal conclusion written, per root `CLAUDE.md`.
+### 2026-08-20 — **Stage 3 is pulled. The vetoes were refusing the operator for not LASTING, not for being quiet, and the operator scored the result 7-8/10.**
+
+**`PENDING_HOLD_MS` 350 → 200**, on the operator's instruction and on measured evidence rather than
+feel. The live session vetoed 24 barge-ins, **11 `pending-sustaining`**, at levels up to **0.2144**
+— five of eight above the room's own bleed peak of **0.1193**, i.e. unmistakably the operator,
+refused for not lasting. A one- or two-word interruption is 200-400ms and could not clear a 350ms
+bar plus the backstop's 3-frame cadence. **10 barge-ins reached the stop door; exactly ONE cut real
+audio**, the rest arriving after the reply had ended.
+
+**Two things the code itself predicted, both now recorded.** The deferred branch in
+`s2s-bridge.js` said in writing that lowering this below 300 would make it *"unreachable — dead,
+not broken. Say so in the commit if you do that."* It is, and the commit says so; it is **kept** as
+the safety net if the sustain ever rises again, with a test proving unreachability by equality
+rather than by reading the constant. And the `KNOWN FAILING SHAPE` test — which asserted that
+syllable-spaced speech could never authorise, deliberately left so *"a session which changes the
+sustain test sees this flip"* — has flipped, now names this session, and pins that the same shape
+still fails at 350 so the cause is attributable.
+
+**THE RISK, and the number that settles it next time.** The policy's own comment calls this sustain
+the **primary bleed discriminator**, and the room measured worse than when that was written: bleed
+**0.1193 against a 0.035 floor**, where the design assumed ~0.0309 *below* it. **Self-interruption
+is the counter-failure** and already ran at **26/89 turns** before this change. If it climbs, raise
+`INITIAL_BLEED_FLOOR` toward 0.04 — **do not lengthen the sustain again.** One lever moved; Stage 2
+stays unpulled because the dominant veto reason was never a threshold refusal.
+
+**None of this is a cure.** Echo cancellation is not removing MYTHOS's voice at all (bleed 0.1193
+with `micEchoCancellation` reporting `true`) — every threshold here compensates for that, and T4 is
+where it gets fixed.
+
+**NEXT ACTION — one more live session, reading two numbers:** `self-interruption` must not climb,
+and `barge-in(s) reached the stop door / actually cut audio` should stop being 1-in-10.
+
+### 2026-08-20 — **The cushion now learns from the gaps that actually hurt: the server's own turn boundary tells the player when a reply is over, so a 1486ms stall is finally counted as one.**
+
+**BUG-274 T4 step 5b, committed with this block.** Suite **5329/5329, 0 fail, 0 skipped** (+5). Merged-order
+position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐). **Still NOT live-verified — same gate as step 5, below.**
+
+**WHAT WAS LEFT UNDONE YESTERDAY, and the operator asked for it.** Step 5's jitter cushion grew
+only while the player believed it was mid-reply, which `END_GRACE_MS` ends 250ms after the audio
+runs out. So a 477ms stall grew it and the **954ms and 1486ms stalls — the ones that sound like
+one word per second — grew nothing.** The self-tuning was inert for exactly the gaps that produced
+the report.
+
+**THE FIX.** `live-turn-complete` (broadcast by the server since it was written; step 4 taught the
+HUD to read it) is now forwarded to the player as `endTurn()`, alongside `live-interrupted`.
+Growth is gated on `turnOpen` rather than on a timer. **A model turn is open or it is not — there
+is no window to tune.** On a live clock the 1486ms gap now sizes the cushion to ~1.39s.
+
+**THE FAIL-SAFE, which is why this was deferred once rather than just done.** If
+`live-turn-complete` is ever lost, `turnOpen` would stay true and the next reply's first chunk —
+after however long the operator spoke — would be scored as one huge underrun and **pin the cushion
+at 2s for the session**, i.e. the exact outcome the mechanism exists to prevent, reached by a lost
+frame. So a dry period past **`UNDERRUN_ATTRIBUTION_MAX_SEC` (3s)** is read as a lost boundary
+instead: growth declined, run closed, and **`missedTurnEnds` counts it** so a broken turn signal is
+visible rather than silently degrading. Charged once per gap, not per chunk.
+
+**Also corrected from step 5:** `cushionMs`/`underruns` were on the barge-in suppression line, so
+they only reached the log on turns the operator interrupted. They now ride every suspend
+transition, with `missedTurnEnds` on its own condition (a lost boundary is a different fault from a
+slow link and can happen with zero underruns).
+
+**Three things the adversarial pass caught before commit**, recorded because two of them are
+repo-classic shapes: the three new fields were first **spread** into the payload from a helper, and
+the guard that exists to catch dropped fields **cannot see a spread** — it would have printed PASS
+while they were dropped, so a new test now pins that the scanner can SEE them. A test expectation
+was wrong before the code was (two boundary-less gaps really are two lost boundaries; the code was
+right). And a first attempt at widening a brittle regex window used a **lazy** quantifier, which
+stops at the first newline exactly like the original — widening a window with a lazy quantifier
+widens nothing.
+
+**Q8 pinned, unchanged:** every threshold listed in the block below, plus `TAIL_GUARD_SEC` and the
+cushion's base/margin/max. `endTurn()` is driven by a frame the server **already** sends, so
+nothing new goes upstream and AD-1 is untouched.
+
+**STEP 5c, same day — the gate asked the operator to read numbers the tool never printed.**
+Steps 5 and 5b added four measurements and `scripts/verify-voice-session.js` reported **none** of
+them, so judging the continuity half meant hand-grepping raw JSON — which is how every false
+finding in this ticket was produced, including the `grep -c` that returned 0 for a session with
+129 interrupted turns. Four criteria added: starved turns and the worst gap (informational — a
+starved turn is the network's fact, not a defect); a **FAIL** when the server saw starvation and
+the client reported no cushion at all (pre-step-5 bundle, or fields dropped at the allowlist — a
+seam that has eaten a client field four times); a **FAIL** on `missedTurnEnds > 0`, saying the
+cushion numbers cannot be trusted; and a cross-check of `live.interrupted` lines against
+`scFields`. **Every new FAIL is conditional on the instrumentation being present**, so an older
+log reads as unmeasured rather than as broken — and "measured and fine" never prints the same
+string as "never measured". **One bug in that criterion, caught by re-reading it:** it compared
+the server's starve count against a `cushionMs` the client only sent when there WAS an underrun —
+so on a session where the cushion did its job and absorbed the late chunks, it would have reported
+"the two halves disagree, reload your HUD". It failed hardest on success. `cushionMs` is now sent
+on every transition regardless of health. Suite **5339/5339, 0 fail, 0 skipped** (+10).
+
+**T4's "do first" three-engine echo measurement — MADE SCORABLE, and its suspect questioned.**
+Asked to run it; a session cannot (no way to make sound cross a real room — the precedent is
+`verify-tts-echo-gate.js`, and MYTHOS was not even running). What WAS fixable is that the
+measurement could not be scored **even from a perfect session**: falling back to `speechSynthesis`
+is a client-side decision on a null `audioB64`, so the server never recorded which of the two TTS
+engines actually spoke. `tts.spoke` now does, and `verify-voice-session.js` attributes each
+`live.echo-check` to the engine that spoke before it and prints a verdict — **capability gap**
+(every engine echoed), **routing difference** (one did), or **nothing echoed**, which it refuses to
+call success because headphones or a muted speaker look identical to perfect cancellation.
+
+**Two research findings that change what the run should look for.** The claim that Chrome's AEC
+only references WebRTC peer-connection audio — which would mean *no* MYTHOS engine is cancellable —
+appears in search summaries but **is in neither cited source**, and Chrome's own blog says its
+canceller "uses an internal loopback to get the playout audio". Left explicitly unresolved rather
+than written down as fact. Separately, and absent from the plan: **MYTHOS runs in Electron, and
+there is an open `status/confirmed` Electron issue where `echoCancellation: true` does nothing
+while working in Chrome** (Electron 37 / Win11 ARM64; this machine is Electron 43.3.0 / x64, so
+plausible, not established). That matters because W1 Q5 measured the constraint as **granted** —
+and a granted constraint with an inert implementation is indistinguishable from a working one.
+**So run the measurement twice: once in the Electron shell, once in plain Chrome at the same
+`http://127.0.0.1:4478`.** One extra axis separates "MYTHOS bypasses AEC" from "Electron's AEC is
+inert", which engine-swapping alone never could.
+
+**NEXT ACTION — unchanged: the ONE live session described in the block below**, which gates both
+the step-4 interruption behaviour and the step-5/5b continuity behaviour. The verifier now prints
+the continuity numbers directly, so the gate no longer depends on reading raw JSON by hand. The T4
+echo measurement rides the same session for free — speak over **open speakers, not headphones**,
+and read the `T4 verdict:` line. One caveat there is now
+withdrawn: *"a repeat of any gap over ~600ms will still be audible"* was step 5's limit and is what
+step 5b removes. The criterion **"at most one audible gap per link degradation"** now applies at
+any stall length up to the 2s cap. The quiet-interruption band (peak ~0.024–0.031) is still
+expected to fail and is still an operator scope decision.
+
+### 2026-08-19 — **The reply came out one word at a time, and nobody had interrupted it. 40ms of scheduling lead met 1486ms of jitter. Both open voice behaviours now wait on ONE live session.**
+
+> **One limit in this block was closed the next day by step 5b (above):** the cushion's growth no
+> longer depends on `END_GRACE_MS`, so the 954ms and 1486ms stalls it says are uncounted are now
+> counted. Everything else here stands.
+
+**BUG-274 T4 step 5, committed with this block.** Suite **5324/5324, 0 fail, 0 skipped** (+2).
+Merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).
+
+**A DIFFERENT FAULT ON THE SAME SURFACE.** Steps 0–4 were all about *interruption* — something
+stopping the speech. The operator's newest report is speech **nobody interrupted** arriving too
+slowly to play continuously: *"after every word, there is a second delay, and then it speaks the
+other word."* Those two are indistinguishable from the room, and nothing on either side of the
+wire recorded a number that could separate them. Now measured: consecutive audio chunks arrive
+**272 / 298 / 477 / 954 / 1486 ms** apart on roughly half of all turns. A chunk holds **~100ms**
+of PCM and `pcm-player.js` led the clock by **40ms**, so every gap past ~140ms drained the
+timeline and the room heard silence. **Nothing was dropped.** The audio was played exactly as
+fast as it arrived, and it does not arrive evenly.
+
+**THE FIX — no threshold, window or sustain constant changed.**
+
+1. **A jitter cushion.** A drained timeline restarts at `currentTime + cushionSec` (base
+   **250ms**) instead of `+40ms`, growing on a real underrun to *(the dry period measured + 250ms)*,
+   capped at 2s, reset on `close()`.
+2. **`live.interrupted` is a real log line now**, with per-turn `interrupts`,
+   `audioStarveEvents` and `audioStarveMaxMs` on `live.turn-parts`. Starve > 0 means transport;
+   interrupts > 1 with no starve means the client flushed mid-reply. **Opposite fixes**, and
+   until now neither was countable.
+
+**THE CORRECTION THAT MATTERS MOST TO THE NEXT READER — the block below this one, and step 4's
+BUGS.md entry, both cite this as decisive:**
+
+```
+grep -c '"msg":"voice.live.interrupted"' mythos-server.log   ->   0
+```
+
+**That 0 is not evidence.** `voice.live.interrupted` is a **bus event name**; no logger has ever
+written it, so the grep returns 0 against every log this project has ever produced. The same
+session's log had `interrupted` in `live.turn-parts.scFields` on **129 turns** — Gemini's VAD
+fired repeatedly. **Step 4's fix is unaffected and stays** (a local flush cannot stop a turn the
+server is still streaming — true by construction, never dependent on the VAD being silent); only
+the "zero interrupts" reading is withdrawn. **Second occurrence of "a gate that passes on a metric
+it cannot read"** — `verify-voice-session.js:205-232` documents the first, where the same phantom
+name printed `0/61 = 0%` and a PASS while the real figure was 43%.
+
+**THE HONEST LIMIT — read this before judging the live session.** The cushion's **growth** is
+gated on the player believing it is mid-reply, and `END_GRACE_MS` (250ms) ends that belief shortly
+after the timeline empties. Measured on a live clock: a **477ms** gap grows the cushion; **954ms
+and 1486ms gaps do not**. Deliberate, and pinned by two tests: the player cannot tell a stalled
+network from a finished reply followed by an operator turn, and counting the latter would pin the
+cushion at 2s and put that much latency in front of every first word for the rest of the session.
+Under-learning is recoverable by ear; that is not. **If the live session still hears word-by-word
+playback with `audioStarveMaxMs > 600`, the remedy is to feed the `live-turn-complete` broadcast
+the HUD already receives into the player** — not a bigger base cushion.
+
+**Q8 pinned, unchanged:** `PENDING_HOLD_MS` 350, `PROTECTED_MS` 500, `INITIAL_BLEED_FLOOR` 0.035,
+both backstop tiers, the dormant learned floor, `pcm-player`'s `TAIL_GUARD_SEC`. The staged
+**Stage 2 / Stage 3** sensitivity widenings (incl. `PENDING_HOLD_MS` 350 → 200) stay **unshipped** —
+a previous session's stray edit of that constant was already reverted once. Nothing new goes to the
+server; the frozen Live protocol (V2 spine §3 / AD-1) has no client-initiated cancel and none was
+invented.
+
+**NEXT ACTION — ONE live session, gating BOTH open behaviours, and nothing else.** The operator
+reloads the HUD (files are served `no-cache`), converses 4–5 turns, **interrupts 4–5 times mixing
+normal and quiet voice**, then:
+
+```
+node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
+```
+
+- **Interruption half (step 4):** ≥1 hold reporting `stopped playback`, a
+  `barge-in-suppression-*` line with non-zero `suppressedChunks`, **and the operator confirming by
+  ear that MYTHOS went quiet and stayed quiet.** A released mic beside continuing speech is the
+  exact trap that produced the earlier false success.
+- **Continuity half (step 5):** replies continuous **by ear**, `audioStarveEvents` visible per
+  turn, `live.interrupted` lines present where Gemini actually cut a turn.
+- **Expected to fail, not regressions:** the 0.024–0.031 quiet band (roughly half of quiet
+  attempts — needs speaker verification or a self-interruption tolerance, an operator scope call),
+  and a repeat of any gap over ~600ms per THE HONEST LIMIT above.
+
+**Still open, unchanged:** interruption **with media playing**, first-word loss, the packaged
+installer. BUG-275 and BUG-276 remain filed and untouched per the operator.
+
+### 2026-08-19 — **The "interruption that landed" did not stop the speech, and a local flush never could. Two corrections, one fix, no threshold touched. Awaiting the live session.**
+
+> **Superseded in one detail by the block above:** this entry's decisive `grep -c
+> '"msg":"voice.live.interrupted"'` → 0 matches a bus event name no logger writes, so it proves
+> nothing. Gemini's VAD *did* fire (129 turns). The fix below stands; the "zero interrupts"
+> reasoning does not.
+
+**Uncommitted at time of writing → see the commit that carries this block.** Suite
+**5207/5207, 0 fail, 0 skipped** (was 5198; +9 tests). Merged-order position UNCHANGED
+(6.5 ☐ · 6.6 ☐ · 7 ☐).
+
+**CORRECTION 1 — the previous block's headline was wrong, and the instrument agreed with it
+wrongly.** The one live `barge-in-confirmed` came from the **eager** backstop tier, which
+released the half-duplex gate and **never touched the player** (`releaseOwnVoiceGate()`'s
+every "flush" refers to the preroll ring). So it reopened the microphone while MYTHOS carried
+on talking — the operator's complaint verbatim — and `verify-voice-session.js` counted it as
+an *operator interruption that landed*. Run against that same log now, it prints
+`0 stopped playback, 1 reopened the mic ONLY (MYTHOS kept talking)`.
+
+**CORRECTION 2 — and this is the one that explains the LOUD failures too.**
+`player.flush()` discards only the chunks already queued in the browser. The local barge-in
+deliberately sends nothing to the server, so Gemini keeps generating, the server keeps
+forwarding `live-audio-out`, and the handler enqueued every chunk unconditionally: emptied,
+then instantly refilled. The decisive number, from the same session log every earlier step
+was derived from:
+
+```
+grep -c '"msg":"voice.live.interrupted"' mythos-server.log   ->   0
+```
+
+**Zero server-side interrupts all session.** Gemini's VAD — the only thing that can stop the
+model mid-turn — never fired once, so no hold's turn was ever cut, whatever the client
+flushed. Why it never fired is on the same lines and is a **separate open defect**: the held
+speech reaches Gemini as the preroll replay with the noise gate having zeroed most of it
+(`flushedFrames 84 / flushedZeroed 80 / flushedRaw 4` on the hold that "landed"). Four raw
+frames is not something a VAD interrupts on. That is BUG-273 A2's acoustic question, and it
+is why stopping the speech has to be done locally.
+
+**THE FIX — and it widens nothing. No threshold, window or sustain constant changed.**
+
+1. **One door.** `stopAssistantSpeech()` flushes the player, arms the suppression, releases
+   the gate. All three routes (`barge-in`, `barge-in-confirmed`, `barge-in-deferred`) use it.
+2. **The suppression.** After an authorised barge-in, arriving audio is **dropped for the
+   rest of that model turn**. Ended by `live-turn-complete` — a frame the server has
+   broadcast since it was written and which **nothing in the HUD read**: the exact turn
+   boundary needed, already on the wire, unused. Also ended by `live-interrupted`, by
+   `stop()`, and by a `SUPPRESS_IDLE_MS` fail-open, because a suppression that can stick is a
+   permanently mute assistant.
+3. **The instrument.** Criterion renamed to *operator interruptions that STOPPED THE SPEECH*
+   and split by tier; the new `barge-in-suppression-*` reasons are excluded from the landed
+   count, which the old `barge-in` prefix match would have inflated. Its note now says
+   outright that the operator's ear is the oracle.
+
+**DELIBERATELY NOT SHIPPED.** The staged plan's **Stage 2** (`BACKSTOP_RELEASE_RMS_THRESHOLD`
+0.05 → 0.035) and **Stage 3** (`PENDING_HOLD_MS` 350 → 200) both widen sensitivity and are
+conditional on this being insufficient. An uncommitted 350 → 200 edit from the previous
+session was reverted before any work started. **Pull them one at a time, and only after a
+live session says this was not enough.**
+
+**Q8 pinned, unchanged:** `PENDING_HOLD_MS` 350, `PROTECTED_MS` 500, `INITIAL_BLEED_FLOOR`
+0.035, both backstop tiers, the dormant learned floor, `pcm-player`'s `TAIL_GUARD_SEC`.
+Nothing new goes to the server — the frozen Live protocol (V2 spine §3) has no
+client-initiated cancel and AD-1 forbids inventing one; a test now fails if such a route
+appears, so adding one is a decision rather than drift.
+
+**NEXT ACTION — the live gate, and nothing else.** The operator reloads the HUD (files are
+served `no-cache`), interrupts 4–5 times mixing normal and quiet, then:
+
+```
+node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
+```
+
+Pass = at least one hold reporting `stopped playback`, a `barge-in-suppression-*` line with a
+non-zero `suppressedChunks`, **and the operator confirming by ear that it went quiet.** The
+log alone cannot close this — a released gate beside continuing speech is exactly the trap
+that produced the previous block's false success.
+
+**Still open, named so it is not mistaken for done:** the 0.024–0.031 band no scalar floor can
+separate (roughly half the observed attempts), interruption **with media playing**
+(`setCaptureSuspended` returns before the policy sees a frame), first-word loss, and the
+packaged installer. BUG-275 and BUG-276 remain filed and untouched per the operator.
+
+### 2026-08-19 — **Three fixes shipped, one interruption landed live, and the last one is awaiting a reload. The blocker turned out to be two thresholds 2.5x apart answering the same question.**
+
+**Commits: `fbd4484` (step 1) · `2696a1a` (step 2) · `57d6fbe` (step 3).** Suite
+**5198/5198, 0 fail, 0 skipped**. Merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).
+
+**Live-verified so far:** one real `barge-in-confirmed` (held 8132ms, peak 0.1344) — the
+first in this repo's recorded history. Steps 2 and 3's remaining effects are NOT yet
+live-verified; the tell on the next reload is hold lines reading `floor=0.035`.
+
+**The three faults, all the same shape and none of them acoustic.** AEC3 is granted and
+working (`micEchoCancellation: true`, clean bleed 0.0031-0.0309). No echo canceller was
+missing and none was added.
+
+1. **Step 1** — the policy authorised on ONE frame then revoked it; the backstop only
+   delivers every THIRD. 5 is not a multiple of 3.
+2. **Step 2** — the backstop fires at 300ms, the policy confirms at 350ms, so the backstop
+   was *always* early, refused, and spent its shot. The two conditions may now be met at
+   different instants (`barge-in-deferred`).
+3. **Step 3** — **two floors, 2.5x apart, answering one question**: the noise gate's 0.02
+   ("send it to Gemini") and the policy's 0.05 ("stop talking"). The operator lived in the
+   gap: audible, transmitted, transcribed, answered, and invisible to barge-in. The
+   decisive hold peaked at **0.0480 against the 0.05 floor** — refused by 0.002 — with 3.4s
+   of their speech reaching the model in the same hold. Floor now **0.035**.
+
+**A correction this build should keep:** step 2 concluded the floor was fine "because
+`below-bleed-floor` never appears". That was structurally unsound — a veto is only recorded
+when a backstop tier fires, and those tiers sit at or above the floor, so a too-high floor
+produces **silence**, not that reason. Absence of evidence on a signal that cannot appear.
+
+**THE HONEST LIMIT, and it is large.** Five measured holds peaked at 0.0242-0.0343, on top
+of this room's bleed. **No scalar floor separates them**; 0.0343 fails even at 0.035 by
+0.0007. So roughly half the observed attempts remain unfixed. The designed third
+discriminator (the echo filter's transcript verdict — meaning, not volume) is **inert**, and
+the log says wiring it would not help: `live.echo-check` reads `no-reference` essentially
+always, so the verdict would be `null` anyway. Closing that band needs speaker verification
+or a deliberate tolerance for some self-interruption — **an operator scope call, not a
+session's invention.**
+
+**Q8 pinned, and the next session must read this before touching a constant:**
+`PENDING_HOLD_MS` stays 350. It is now the PRIMARY bleed discriminator (at 0.05 nothing ever
+reached it). If self-interruption rises, **raise the FLOOR toward 0.04 — do NOT lengthen the
+sustain**, which re-breaks step 2's fix.
+
+**Still open from W1's checklist:** interruption **with music playing** is untouched
+(`setCaptureSuspended` returns before the policy sees a frame), first-word loss is
+unmeasured, and none of it is tested on the packaged installer.
+
+### 2026-08-19 — **AN INTERRUPTION LANDED, LIVE. First one in this repo's recorded history. Roughly 1 in 5 — and the log named the remaining fault itself.**
+
+**Live-watched session, 385 log entries, 21 turns, `npm start`.** Result:
+`barge-in-confirmed`, held 8132ms, peak 0.1344. Every previous session on record ended
+every hold with MYTHOS finishing or with a ceiling — never a barge-in. The step-1 fix
+works.
+
+**Still partial: 7 ceilings and 14 vetoes in the same session.** It works when the operator
+sustains a phrase, fails when they do not.
+
+**The remaining fault was diagnosed by the log, not by a hypothesis, because step 1 added
+the field.** Three holds, identical: `why=pending-sustaining` at 0.0814 / 0.0883 / 0.1077
+against a 0.05 floor. Never `already-confirmed` (step 1 holds). Never `below-bleed-floor` —
+**so the floor is right and the sensitivity theory is withdrawn; it was wrong.**
+
+Same handoff bug one step earlier, and structural: the backstop fires at 3 frames = 300ms,
+the policy confirms at 350ms, so the backstop is always early, is refused, and spends its
+shot (eager tier latches, flush tier zeroes its counter → next chance frame 6, by which
+time a two-word interruption is over). **Fixed** by letting the two conditions be met at
+different instants — a refused-for-being-early attempt is delivered on the frame the policy
+confirms. Not a bypass: a tier still had to fire and the full sustain still had to pass.
+Q1 tightened it — the attempt is cleared when its candidacy dies, so a stale one cannot be
+cashed in by an unrelated later sound.
+
+**`verify-voice-session.js` now counts landed barge-ins.** It never did: it counted vetoes,
+ceilings and self-interruptions — three measures of failure and none of success — while the
+release gate's first line asks for a landed rate.
+
+**Two live findings recorded and NOT fixed, both in BUGS.md:** `bleedPeak` has been poisoned
+to 0.1041 by the operator's own voice being learned inside a protected window (harmless
+today because the learned floor is dormant, misleading to any future session that reads
+`learnedFloor` to decide whether to re-enable it); and the verifier's "self-interruption"
+criterion counts operator-caused interrupts too, so this session's 42.9% is **not**
+comparable to 2026-08-18's 43%.
+
+**Next: one more boot.** Expect `barge-in-deferred` to appear and the landed count to rise.
+Still open from W1's own checklist: interruption **with music playing** is untouched
+(`setCaptureSuspended` returns before the policy sees a frame), first-word loss is
+unmeasured, and none of this is tested on the packaged installer.
+
+### 2026-08-19 — **T4's measurement RAN. AEC3 works, the plan's premise is refuted, and interruption was a frame-handoff bug inside the veto. Fixed; needs one live boot to confirm.**
+
+The operator booted, spoke, and reported "interruptions still fails". The log answers T4 and
+answers it against the plan.
+
+**AEC3 is granted and working.** `micEchoCancellation: true` on all 12
+`voice.capture-suspend` lines, read off the live track's own `getSettings()`. Corroborated
+twice more: `peakRms 0.0056` on the hold where the operator stayed silent, and
+`bleedPeak 0.0186` — **under** the 0.05 floor, in a room the policy was designed for at
+0.09-0.38. **There is no missing echo canceller.** Drop `speexdsp` / WebRTC `aec3` from the
+plan; they were contingency for a premise that did not survive.
+
+**The floor was not the fault either.** The operator's speech measured 0.0921, 0.1222 and
+0.2715 — two to five times the floor — while one hold ran **17,565ms** and ended on the
+ceiling instead of an interruption, with **13 vetoed barge-ins**.
+
+**The actual defect: the two halves of the barge-in path count to different numbers.**
+`barge-in-policy.js` authorises on **one** frame (350ms sustain → the 5th frame of a 100ms
+run) and then returned `release: false` forever from `already-confirmed`.
+`barge-in-backstop.js` delivers on **every third** frame, because `decideBargeIn()` zeroes
+its counter when it fires. **5 is not a multiple of 3**, so the single authorised frame was
+handed to a caller that was not listening on it. Measured with both real modules wired as
+`s2s-bridge.js` wires them, at the operator's own 0.27 RMS: **0 releases, 11 vetoes. Not
+intermittent — impossible.** Which is exactly why the operator is right that it "worked
+flawlessly before": before BUG-272 added the veto, the backstop's frame-3 fire went straight
+through.
+
+**Fixed in one line of behaviour, and it is not a retune.** `already-confirmed` now returns
+`release: true` while MYTHOS is still speaking — the policy is a veto, not the issuer, and
+idempotency was already downstream. `PROTECTED_MS`, `PENDING_HOLD_MS`,
+`INITIAL_BLEED_FLOOR`, the dormant learned floor and both backstop tiers are **unchanged**.
+RED-then-GREEN in `test/bug-274-barge-in-authorisation-is-deliverable.test.js`.
+
+**Two BUG-272 tests failed against the fix and they were the assumption**, counting authorised
+frames and demanding exactly one. Their stated invariants — confirmed once via the sustain
+path, and a louder voice must not be harder to confirm — are untouched; they now count
+`confirmed-sustained` transitions. Measurement changed, invariant did not.
+
+**Second defect found, deliberately NOT fixed.** With 100ms dips every 400ms — ordinary
+syllable spacing — PENDING resets on each dip, 350ms is never reached, no authorisation is
+ever issued, and this fix cannot reach it. That is a tuning call on the sustain test, this
+repo has twice shipped opposite-direction failures by guessing at these constants, and it is
+now **measurable** rather than guessable because the veto reason reaches the log. Pinned as a
+known-failing shape. **Do not pick a grace value without reading the next session's log.**
+
+**Next action — one live boot, then read the reasons:**
+
+```bash
+node mythos/scripts/verify-voice-session.js "$APPDATA/MYTHOS/mythos-server.log"
+```
+
+`already-confirmed` should now be **absent**; its presence means the fix regressed. If
+`pending-decayed` dominates, the sustain test is the remaining fault and the dip tolerance is
+worth deciding. If `below-bleed-floor` dominates, the floor is too high for that room.
+
+**Also revised: the full-duplex rewrite is now unblocked but no longer required.** It was the
+planned fix for "cannot be interrupted"; that fault is fixed without deleting anything, so
+deleting `ownVoiceGate` is a refactor with a benefit rather than a bug fix. Note
+`setCaptureSuspended()` is a separate capture-muting path (Spotify/YouTube) that would still
+block interruption with music playing.
+
+### 2026-08-19 — **step 6.6's mechanical half is done and gated. Two items remain, and both need the operator physically present.**
+
+The operator asked for the whole of BUG-274 with T3 (wake-word weights) skipped. Everything
+in it that does **not** require a live microphone, a signing certificate or a second human is
+now either shipped or measured-and-refuted. What was still open and actionable without them
+was **step 6.6**, and it is now closed on the mechanical side.
+
+**Shipped this session (`eb4cf22`):** `scripts/audit-licences.js` (+ `--check`) and
+`test/licence-audit.test.js`. Suite **5179/5179, 0 fail, 0 skipped**. Merged-order position
+**UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐)** — 6.6's mechanical half is done and repeatable, but the
+step cannot be ticked while the legal call is outstanding, and 6.5 still needs T3. The release gate's licence line had no oracle — the notices
+file opened with "npm dependency licenses are not repeated here", so the tree had never been
+enumerated. It is now: **265 shipped production packages**, read from the two lockfiles'
+non-dev entries because electron-builder prunes devDependencies and packs off disk.
+
+**Four previously-unrecorded obligations**, all now in `THIRD_PARTY_NOTICES.md`:
+`@img/sharp-win32-x64` bundles **eight LGPLv3 libraries** and it both ships and loads
+(`require('kokoro-js')` initialises libvips 8.17.3 — measured, not inferred);
+`buffers@0.1.1` declares **no licence at all**; `jszip` is `(MIT OR GPL-3.0-or-later)` with
+the MIT election now stated; **twelve MPL-2.0 packages** ship and the notices file did not
+contain the string "MPL-2.0". The gate fails in both directions — an exception missing from
+the notices file, **and** an exception for a package that no longer ships.
+
+**This qualifies T1 and the qualification matters.** T1 promoted Kokoro partly to move off
+edge-tts's LGPLv3. True of edge-tts, which is BYO and ships no code — but Kokoro's own
+dependency tree ships an LGPLv3 **binary**, which edge-tts never did. Exposure moved rather
+than vanished. Also corrected: adbkit / NodeRT / speexdsp / the MCP monorepo are **not in the
+shipped tree at all**, so their `NOASSERTION` is a pre-adoption task, not a 6.6 blocker.
+
+**The two things left, and why no session can do them alone.**
+
+1. **T4's measurement** — one live boot, mic live, `micEchoCancellation` read off
+   `voice.capture-suspend`, then one sentence through each of the three output paths to see
+   which return as `inputTranscription`. The instrument shipped in `d0fe19b`; the reading has
+   not been taken. **T4's remedy (full duplex, deleting `ownVoiceGate`) must not start before
+   it** — three BUG-273 hypotheses died to exactly that measurement.
+2. **Fresh-machine install** — the release gate's last line asks for someone who is not the
+   author to install it and reach a working voice conversation. That is a second person, plus
+   a signing certificate the repo does not hold.
+
+**W2 is closed and stays closed.** Every client-side hypothesis is refuted (`d9f2ad2`,
+`ae3a40a`); the residual defect is in Notepad's own UIA provider and the honest failure is
+correct. Do not add a fourth UIA rung. **T3 skipped by the operator, 2026-08-19** — it still
+hard-blocks a *paid* release, so 6.5 cannot close without it; nothing else waits on it.
+
+**W6 IS NOW OPEN — see the `W6` section at the end of this document.** The operator
+instructed the swap on **2026-08-21** ("So i want that to change it to Deepseek Harness"),
+so the line that used to sit here — naming `deepseek-harness` as a deferred "build brain"
+and defining it nowhere — is superseded. W6 is now specified: upstream contract verified
+against `deepseek-ai/deepseek-harness@master`, seam mapped, anti-drift contract, build
+order, mutations. It still begins with a standalone spike, not an integration, and it is
+blocked on ONE operator ruling (W6.4) because root `CLAUDE.md` currently names Hermes-Agent
+the single build-content engine.
+
+**Still not started, and deliberately:** W5 (LanceDB / tesseract.js / extra MCP servers) is
+YAGNI until something reads it. Not blocked — simply behind the two items above in the
+operator's stated order.
+
+### 2026-08-19 — **BUG-274 is the plan of record. Read `BUGS.md`'s BUG-274 entry before anything else.** T1+T2 shipped (`fb574ce`). T4 step 0 shipped (`d0fe19b`) — the AEC readback instrument, because the measurement T4 depends on could not be run: nothing on the Live capture path had ever read `getSettings().echoCancellation` back, so the plan's premise was unfalsifiable. T5 MEASURED (`d9f2ad2`) — **three of its premises did not survive.** The evidence contract was never escaped (every `uia-invoke` ACTION route is oracle-backed; the no-op is in a discovery helper that returns `$null` and fails honestly). The window-station / desktop / integrity hypothesis is **refuted** — pc-child and a direct spawn report an identical interaction context on every axis. And the ticket's own checklist **passes live**: launch/focus/type/click are oracle-confirmed on both a Win32 app (charmap) and an MSIX one (notepad), via `scripts/verify-desktop-automation.js`. What is left of W2 is the narrow WinUI3 **save** path, which already fails honestly — re-set its priority against that, not against the original "failed drastically" report.
+
+**Next actions, in order.** (1) **T4's measurement session** — one live boot: read `micEchoCancellation` off `voice.capture-suspend` in the server log, then play one sentence through each of the three output paths with the mic live and record which return as `inputTranscription`. Do not start T4's remedy before that. (2) **W2 needs no more engineering.** The message-pump axis was measured and **refuted** (`uia_pump_probe`: four variants including a fresh pumped STA thread, two hosts, two independent oracles — `ExpandCollapseState` reports `Expanded` every time and nothing renders anywhere). Every client-side hypothesis is now closed, so the remaining defect is in **Notepad's own UIA provider** and the existing honest failure is the correct behaviour. **Do not add a fourth UIA rung.** The only thing still open is a measurement an operator must take in a terminal they opened themselves — `scripts/probe-uia-pump.js` and `scripts/probe-pc-child-context.js` each print the exact command. Note also that the direct spawn fails identically, so the 2026-08-13 "works standalone" claim is **unconfirmed** and should not be chased as a baseline.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** BUG-273 closed except
+A2's symptom. Suite **5163/5163/0 fail/0 skipped** — do not hand-edit this; `scripts/sync-test-count.js` emits it.
+
+**The operator's priorities, stated 2026-08-19:** interruption first ("it worked flawlessly
+before" — correct, and BUG-272's learned bleed floor is what broke it), desktop automation
+second, all features wanted, **WhatsApp deferred** on the ban risk. A competitor (irisxai.in,
+v1.7.6) ships this same feature set — the scope is achievable, which is worth knowing.
+
+**BUG-274 execution order (full detail, evidence and per-item verification live on the
+BUGS.md entry — not duplicated here):**
+
+1. **T1 + T2** — put Kokoro first in the TTS chain; correct `providers/piper-tts.js`'s stale
+   licence claim. A config line and a comment. `rhasspy/piper` was **archived 2025-08-26** and
+   the only maintained fork is **GPL-3.0**, so the file's "Piper is MIT … the only one of the
+   three usable in a product that is sold" is now false. Kokoro is Apache-2.0 for code *and*
+   weights and is **already an installed dependency**.
+2. **T4 measurement** — one session: play the same line through each voice engine with the mic
+   live, see which come back as a transcript. HuggingFace's production `speech-to-speech`
+   (12,612 stars) uses the *identical* `echoCancellation: true` mic config MYTHOS already has
+   and ships **no** echo canceller — so MYTHOS is not missing a library, its AEC3 is being
+   bypassed. Prime suspect: `speechSynthesis` renders outside the page audio graph.
+3. **T4 remedy** — if AEC proves fixable, adopt the reference full-duplex design (mic live
+   throughout, VAD cancels the in-flight response, playback queue cleared **with a fade-out**).
+   That **deletes** the own-voice gate, the preroll ring, the lost first word and A2's class.
+4. **T5** — find out **why** UIA `Invoke` no-ops under pc-child. The old wording ("host it as a
+   persistent daemon instead of a per-command spawn") was **withdrawn 2026-08-19: pc-child is
+   already a persistent daemon** — one long-lived `powershell.exe` (`index.js:254`) driving a
+   `while ($true)` stdin loop (`ps-automation.ps1:4199`). There was no per-command spawn to
+   remove, and building the daemon that already exists would have been a week on a mechanism
+   that was never the fault. Suspects now, in test order: `-NonInteractive`, window-station /
+   desktop isolation, integrity level — probed through a real Node→pc-child round trip, since a
+   PowerShell self-test is itself UIPI-blocked and will lie. `uia-setvalue` already works.
+   Windows-MCP was rejected here **against its own source** — it drives with
+   `uia.Click`/`SendKeys`/`SetForegroundWindow` and reproduces all three failures.
+5. **T3** — train wake-word weights MYTHOS owns. openWakeWord's pretrained weights are
+   CC BY-NC-SA 4.0. Last by sequence only because it parallelises; it is the item that hard-
+   blocks a paid release. **Porcupine is not the free answer** — proprietary metered models.
+
+**A release gate now exists.** BUG-274 carries a written definition of "shippable" — seven
+lines, each needing an oracle rather than an opinion. It was written because this repo has
+never stated one, and a finish line that is never defined cannot be reached. **Nothing is added
+to that list without removing something.**
+
+**And read BUG-274's "why the backlog keeps regenerating" note before filing anything.** On
+2026-08-19, two of four open items turned out not to be faults and a third had its hypothesis
+refuted by measurement. The common cause — across those and BUG-273's three corrected
+diagnoses — is mechanisms that look like coverage and do nothing. Every new guard, allowlist,
+threshold or cooldown now ships with a test that fails when the guard is absent.
+
+### 2026-08-19 (latest) — BUG-273 has **no code items left**. The two faults the last entry listed as still open were both misdiagnosed, and neither needed a live session to settle. Next action: **A2’s acoustic remedy**, which is now genuinely one session from decidable.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
+Two commits on `main`: `ada7572` (the `voice.capture-suspend` allowlist — A2 was
+never blocked on a session at all) and `26f6360` (the cortex stalls and the heal
+announcements). Suite **5143/5143/0 fail/0 skipped**.
+
+**Three corrections to this session’s own earlier conclusions.** All three came from
+reading evidence that was already on disk, and all three are the reason the
+"remaining backlog" shrank rather than grew:
+
+1. **A2 was never waiting on a live session.** `flushedRaw` — the single datum its
+   remedy turns on — was being discarded by a hand-maintained allowlist in
+   `server/index.js` that copies client fields onto the log line. **Third occurrence
+   of that exact two-places bug** (BUG-271 fixed it, BUG-272 and BUG-273 each
+   reintroduced it), with the allowlist’s own comment predicting it. Two sessions
+   were spent collecting a field that could not arrive. A class-level assertion now
+   reads the fields the client actually sends and fails at commit time.
+2. **The cortex was never stalling.** The anomalies are +307195ms apart — 300 ticks
+   at ~1.024s, i.e. `mull()`’s cadence, not the healer’s 300000ms cooldown.
+   `lastTickAt` is stamped once per tick body and the reentrancy guard holds across
+   every await, so a cortex that is THINKING is indistinguishable from one that is
+   dead. Each false stall restarted the cortex and **paused the active goal**. It had
+   been found once before and papered over by raising `STALL_MS`’s default — which a
+   stale `.env` silently reverts, and this machine’s `.env` does.
+3. **D3’s backoff ladder went into the wrong file.** The four repeats came from
+   `immune/announcer.js`’s heal line, whose dedup map was declared, documented as
+   unused, and never applied — not from `conversation/announcer.js`, whose
+   `SERIOUS_KINDS` allowlist does not contain `cortex-stall` and listed two kinds no
+   emitter produces. D3’s own regression test used one of those phantoms as its
+   fixture.
+
+**The pattern worth carrying forward:** every one of the three was a mechanism that
+LOOKED present — a documented cooldown, a named allowlist entry, a raised default —
+and did nothing. None of them failed loudly; each made the next reader believe the
+case was handled. When a fault recurs after a fix, check that the fix is on the path
+the evidence names before adding a second one.
+
+**Still open, and now the whole list:**
+
+- **A2 (P0) — MEASURED 2026-08-19, and the carrier is NOT the flush.** 771 frames
+  replayed across 14 releases, 695 zeroed, **76 raw**, worst single release 25
+  frames (2.5s) against a predicted 133. The louder of the two sessions, too (peak
+  RMS 0.1136 vs 0.0454). Do NOT build the "stop replaying frames the policy never
+  believed" remedy — it has nothing to act on. The SYMPTOM remains: self-
+  interruption at 15.4% (2/13), down from 43% but still over criterion. A new
+  carrier has to be found; the flush is excluded by measurement.
+
+- *(historical, now answered)* — the release flush replays the preroll ring in one burst. (The other
+  red line that session, `max preroll under 2000ms`, turned out to be unpassable by
+  construction and redundant with the eviction criterion — it is informational now,
+  so **A2 is the only code item left in BUG-273**.) The plan’s first remedy (a higher
+  floor) is already
+  ruled out by measurement: bleed 0.123 vs operator speech 0.069. Needs one session
+  that reports `flushedRaw` — which the pipeline can finally deliver.
+- **Gmail** — operator action, not a code item: `node mythos/scripts/google-auth.js`,
+  then update **both** `mythos/.env` and the packaged app’s key store, and move the
+  Google Cloud OAuth app out of Testing so tokens stop expiring every 7 days.
+
+### 2026-08-18 (latest, third entry) — the post-BUG-272 sessions RAN and BUG-273 is CLOSED except for A2’s acoustic half, which is blocked on a live session by design. Twelve items shipped; D4 and D3 both turned out to be answerable without another session. Next action: **the operator’s voice session**, then `node mythos/scripts/verify-voice-session.js <log>`.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).**
+Fourteen commits on `main`, `f0f63f9..2d82ba5`: `7eb3920` (B1, `unverified` was
+narrated as success), `33090e1` (A1, the learned bleed floor went dormant),
+`8d61547` (the verifier’s headline criterion could never fire), `1d58765` (A2’s
+measurement + the BUG-273 record), `24c95c5` + `1d01c79` (D2), `a910767` +
+`619c5b1` (A3), `e1684ab` + `ea5f1dd` (B2), `025ceba` (B3), `e8777ee` (C1),
+`12b6ada` (C3), `5fe9368` (A4), `2d82ba5` (C2), plus D4.
+Suite **5090/5090/0 fail/0 skipped**, from 4963 at the start of the session.
+
+**Read BUGS.md's BUG-273 entry before touching anything.** It is the full
+handoff: the measured evidence table, what is now closed out, the remaining
+backlog in order, and — load-bearing — **three corrections to the BUG-273 fix
+plan's own diagnoses**, all found by reading the code before writing any:
+
+1. **B1's cause was an asymmetry BUG-272 slice 4 created**, not the
+   instruction-following failure it looked like. Three paths narrate an
+   unverified outcome and they carried three different hedges;
+   `reportLateOutcome` had none. Slice 4 (`190cd74`) moved `launch_app` into
+   `SLOW_TOOLS` for sound duration reasons, which moved its narration onto the
+   weakest of the three, three commits before the session that caught it.
+2. **A2's carrier is the release FLUSH, not bleed passed during a hold.**
+   Nothing reaches Gemini during a hold — the capture handler `return`s before
+   any send. The replay at `releaseOwnVoiceGate()` pushes the whole preroll ring
+   (133 frames = 13.3 s of audio the code's own comment calls "mostly MYTHOS")
+   in one burst, and a test now shows the noise gate silences **0 of 133** at
+   the measured levels: floor 0.02 vs bleed 0.123. That also rules out the
+   plan's own first remedy — a floor high enough to reject 0.123 bleed rejects
+   operator speech at 0.069 too.
+3. **The verifier was lying on the plan's headline metric.** It counted a `msg`
+   that is a bus event and is never logged, so "self-interruption under 15%"
+   printed PASS on every session ever run, including one at 43%.
+
+**THREE BUG-272 ITEMS ARE NOW LIVE-VERIFIED** and can stop being re-litigated:
+slice 1 (wake word listening all session), slice 2 (echo attribution — and its
+37/39 `no-reference` decisions **close the deferred V3 wire-message question with
+data: do not build it**), and slice 4b (`open_web(browser:true)`, four successful
+hand-offs against 7/7 silent failure).
+
+**D2 IS DONE, and it was not what it looked like.** The HUD banner was never
+false. The audit shows one `open_web` succeeding at 11:44:01 and a DIFFERENT one
+failing at 11:44:06, with nothing in the Agent Actions feed to tell two same-tool
+rows apart. Two real defects behind it, both fixed in `24c95c5`: a bare
+"A URL is required for web embedding." that the 2026-08-14 fix had already
+condemned but only removed from one of its two branches (the same asymmetry as
+B1, four days apart), and a feed row carrying no timestamp. The `propose_goal`
+half was a misattribution — all 6 calls carry `actor:'cortex'` and `propose_goal`
+is not in the Live allowlist, so voice cannot reach it.
+
+**A3 IS DONE, and it was not the case it was filed as.** The premise was "at boot
+there is no Live session yet, so proactive TTS really plays". There WAS one —
+`live.tool-call-batch` with three tools is logged at 11:33:01.976, eighteen seconds
+before the detection. The real defect is that a wake-word score is evidence about
+the previous ~1,960ms (76 + 15*8 = 196 mel frames at a 10ms hop) while all five
+guards asked "is MYTHOS speaking NOW?", so a greeting that stopped playing shortly
+before the score crossed the threshold defeated every one of them. `a910767` adds a
+sixth guard over the detector-reported window, tracking WHEN MYTHOS last had speech
+audio rather than whether it has some right now. Q1 held: only MYTHOS’s own speech
+feeds the window, and a test pins that Spotify never does.
+
+**Left behind for whoever wants it:** `s2s.isActive()` reads false while a Live
+session is making tool calls, because that flag tracks the CLIENT bridge’s session.
+That is why the batch TTS chain ran at all instead of BUG-060/061 routing the
+greeting through `sendText()`. Not filed as its own item yet.
+
+**TEN OF THE ELEVEN BUG-273 ITEMS ARE SHIPPED.** Read BUGS.md’s BUG-273 entry for
+the detail; what belongs here is the pattern, because it decided most of the work:
+**five of these fixes were caused by earlier fixes**, and every one was found by
+reading what the consumer actually receives rather than what the branch intends to
+say.
+
+- BUG-272 slice 4 moved `launch_app` into SLOW_TOOLS, which moved its narration onto
+  the weakest of three hedges → **B1**.
+- **B1**’s blanket prohibition then gagged the one tool whose partial success was
+  worth stating → **B2**.
+- BUG-272-era B1 (the vision one) made a timeout take a cooldown against a budget
+  too tight to tell slow from dead → **C3**.
+- BUG-272 renamed one shared ceiling label but left one timer serving two purposes
+  → **A4**.
+- And the verifier’s own headline criterion had never once fired, so "self-
+  interruption under 15%" printed PASS on every session ever run, including one at
+  43%.
+
+**Four times a PRE-EXISTING test caught a real defect in the first attempt** —
+most sharply in C3, where the cooldown settlement ran only on the exhausted path and
+would have disabled the fix for every call that eventually got an answer. Run the
+whole suite, not the new file.
+
+**NEXT ACTION — the operator’s voice session.** Everything acoustic is now waiting on
+measurement rather than on code:
+
+```
+npm start 2>&1 | tee "$env:TEMP\mythos-terminal.log"
+node mythos/scripts/verify-voice-session.js "$env:APPDATA\MYTHOS\mythos-server.log"
+```
+
+Target deltas: interrupted turns well under 15% (from 43%), max hold under 2s (from
+13,396ms), `framesDropped` still 0, `bleedFloor` still 0.05, `flushedRaw` reported at
+all (it never has been), zero `wakeword.detected` while MYTHOS is speaking, zero
+incidents of the "tools are lying" class. Capture the terminal because **D4** exists:
+one run died with no Crashpad dump, no child exit line, and no trail at all.
+
+**WHAT IS LEFT, and why none of it is code-ready:**
+- **A2’s acoustic fix (P0)** — diagnosed (the release flush is the carrier; the noise
+  gate silences 0 of 133 frames at measured levels) and deliberately NOT written.
+  `flushedRaw` from one real session confirms or kills it, and changing the acoustic
+  path blind is how BUG-272 traded V1 for V2 in the first place.
+- **C2’s other half** — an operator action, not a patch: move the Google Cloud OAuth
+  app to Production/External, or accept weekly re-consent. MYTHOS now warns
+  proactively either way.
+**D3 IS AUDITED, and the audit ran against the log already on disk.** 26 of 61 turns
+(43%) were started by MYTHOS; 8 of those had no tool call anywhere near them; there
+are 6 chains of 2-3 consecutive self-started turns — and nothing in the log could
+say what caused any of them, because all **thirteen** injection sites called one
+unlabelled `sendText`. **One of the thirteen is the operator typing**, which both
+inflated the count and — because `turnSystemInitiated` guards the
+half-blind-transcript anomaly — exempted typed turns from the very monitor A2 exists
+to serve. One argument and one log line at the one door fixes both. Coalescing (the
+likely cause of the 2-3 chains: `reportLateOutcome` is per-tool with no batching) is
+deliberately unwritten — consistent is not demonstrated, and two `live.text-injected`
+lines inside one turn gap will settle it.
+
+**D4 IS FIXED, and it is the sixth fix in this ticket caused by an earlier one.** It
+was filed as "the missing trail is the bug — capture stderr until it recurs", i.e.
+parked on evidence. Reading the logging path instead found the trail being destroyed:
+`startChild()` opened the server log with `flags:'w'`, and `startChild()` is also the
+crash-restart path, so **a crashing child erased its own log about a second later,**
+**every time.** `logs/main.log` capped itself with `truncateSync(file, 0)`, throwing
+away the run leading up to the overflow. Both were deliberate, both were defended in
+comments, and neither was wrong about wanting a bound — only about paying for it with
+the evidence. Rotation with one kept generation gives the same ceiling
+(`electron/log-rotate.js`; extracted from main.js precisely so "the log survives a
+crash" rests on 8 tests against real files rather than on a regex over source text).
+Four silent death modes now log (`unhandledRejection`, `render-process-gone`,
+`child-process-gone`, the fork's `error`), and `app.on('quit')` finally makes a clean
+exit distinguishable from a disappearance. `verify-voice-session.js` moved with the
+seam: it scopes to the last run by default now that a log can hold several.
+**A1's escape hatch, and the one thing to check first if barge-in feels worse:**
+the learned floor is now dormant and the floor in force is pinned at
+`INITIAL_BLEED_FLOOR` (0.05). Turn it back on with
+`MYTHOS_BARGE_LEARNED_FLOOR=1` in localStorage. Note the honest limit, which is
+locked by a test: 0.05 clears the loud end of measured operator speech (0.069)
+and still sits **above** the quiet end (0.0395), so a very quiet interruption
+still will not open a candidacy. Lowering it further is A2's call, because below
+0.05 the only thing rejecting 0.123 bleed is the 350 ms sustain test. The other
+hatches are unchanged: `MYTHOS_BARGE_PROTECTED_MS`,
+`MYTHOS_BARGE_PENDING_HOLD_MS`, `MYTHOS_BARGE_BLEED_MARGIN`,
+`MYTHOS_LIVE_HALF_DUPLEX=off`.
+
+**The gate for the acoustic work is another live session**, and
+`node mythos/scripts/verify-voice-session.js <log>` now measures what it claims
+to. Target deltas: interrupted turns well under 15% (from 43%), max hold under
+2 s (from 13,396 ms), `framesDropped` still 0, `bleedFloor` still 0.05,
+`flushedRaw` reported at all (it never has been), zero `wakeword.detected` while
+MYTHOS is speaking, zero incidents of the "tools are lying" class. Capture the
+terminal this time:
+`npm start 2>&1 | tee "$env:TEMP\mythos-terminal.log"` — D4 exists because one
+run died with no trail at all.
+
+### 2026-08-18 (superseded by the block above, second entry) — BUG-272 slices 1–5 are SHIPPED IN CODE and pushed. Next action: the operator's scripted mic session, then `node scripts/verify-voice-session.js <log>`.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** Four commits
+on `main`: `6d1dc34` (slice 1, wake word survives a stale mic device id + bounded
+backoff/devicechange re-arm), `8bf1acc` (slice 2, `live.echo-check` on every
+decision), `daf89d4` (slice 3, the playback-aware barge-in state machine),
+`190cd74` (slice 4, tool honesty). Suite **4940/4940/0 fail/0 skipped**.
+
+**NOTHING HERE IS LIVE-VERIFIED, and slices 1 and 3 cannot be.** They are
+acoustic and device-dependent. This repo has already shipped a slice with 16
+green tests that could not boot the app — unit-green proves the state machine,
+not that the operator's room stopped interrupting MYTHOS.
+
+**NEXT ACTION — the scripted ~10-minute session** (MYTHOS speaks ~60s in a quiet
+room; interrupt at 1s/3s/8s into its speech; speaker volume low/med/high; wake
+word attempted before and after s2s starts; `launch_app`/`focus_window` twice
+each). Then run **`node scripts/verify-voice-session.js <path-to-log>`**, which
+prints every BUG-272 pass criterion green/red. The criteria live in that script
+deliberately: two hand-count errors from the 2026-08-17 analysis survived into a
+written fix plan, and a script cannot make them.
+
+**Read BUGS.md's BUG-272 status block before touching anything** — it records
+five corrections to that entry's own fix plan, found by reading the code. The
+load-bearing ones: there is no 13-second ceiling (an 8s ceiling refreshed by
+arriving audio); "preroll cap 150 frames (1.5s)" is off by 10× and the cap must
+stay a derived expression; and the adaptive bleed floor must rise ABOVE the flush
+tier, not be clamped below it, because this room's bleed is above both tiers.
+
+**T2's browser surface is now BUILT** (`open_web(browser:true)` -> the new
+`mythos:open-external` fork-IPC channel -> `shell.openExternal`, http/https only,
+validated with WHATWG `URL` before the hand-off because that call runs whatever is
+registered for a scheme and the URL comes from a model-composed tool call). No
+surface is now a FAILURE rather than an unverified success. `bug-075`'s test did
+NOT need changing after all - its assertion is still correct, because this adds a
+different surface rather than widening the media window.
+
+**Nothing in BUG-272 is left unbuilt.** What remains is the operator's session.
+
+**If the session still self-interrupts:** the escape hatches are
+`MYTHOS_BARGE_PROTECTED_MS` (0 disables the protection window),
+`MYTHOS_BARGE_PENDING_HOLD_MS`, `MYTHOS_BARGE_BLEED_MARGIN`, and
+`MYTHOS_LIVE_HALF_DUPLEX=off` for the whole gate — all localStorage, all
+absolute-precedence, no code change needed. Read `bargeVetoed` and `bleedFloor`
+on the `voice.capture-suspend` lines first: high vetoes with a happy operator
+means bleed is being correctly rejected; high vetoes plus "it still ignores me"
+means the window or the floor is too aggressive.
+
+### 2026-08-18 (superseded by the block above) — BUG-271's live re-test HAPPENED: the evidence is inventoried as BUG-272, and the fix plan is written.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** The
+operator ran the 20-minute post-BUG-271 voice session in the noisy room
+(2026-08-17 21:35–21:56 UTC, 72 live turns). **Everything it proved and
+broke is recorded in BUGS.md's BUG-272 entry — that entry is the full
+handoff; read it before touching anything.** Summary:
+
+- **What BUG-271's fixes demonstrably did:** the noise gate zeroed 5,000+
+  frames and dropped ZERO (no operator speech lost); the suspend-log
+  evidence fields delivered the diagnosis below — the data that was missing
+  on 2026-08-16 existed for the first time.
+- **What they did NOT fix:** self-interruption at 63% of turns (45/72
+  interrupted) — the raised eager tier 0.05 sits BELOW this room's measured
+  speaker-bleed floor of 0.09–0.38 RMS, so no static constant can work;
+  real barge-ins held 10–13s by the ceiling (16 `ceiling-fail-open`
+  events); the echo filter fired ZERO times (`live.echo-dropped` absent all
+  session); phantom ASR persists; the wake word died at boot
+  (OverconstrainedError, stale `deviceId:{exact}` the surviving cause) and
+  never re-armed; `launch_app` resolved "code" to the ZCode process via the
+  unanchored substring rung; `open_web(browser:true)` failed 7/7 silently
+  under Electron (no working surface; breaker counted unverified as
+  success).
+- **The agreed fix order (do not tune the eager threshold alone — V1 and V2
+  are opposite failures of one RMS-only policy, and bleed overlaps the
+  speech band):** audio ownership → echo attribution → barge-in policy →
+  tool honesty. Slices, in the BUG-272 entry: **1** wake-word relaxed retry
+  + backoff re-arm + constraint logging; **2** echo-check instrumentation
+  (privacy-safe fields only — never transcript text); **3** playback-aware
+  barge-in state machine (IDLE/PROTECTED/INTERRUPTIBLE/PENDING/CONFIRMED),
+  2s ceiling replacing 13s, preroll cap ~150 frames; **4** launch_app
+  partial-match demotion + resolvedName + open_web `shell.openExternal`
+  surface + breaker counts unverified as failure + cross-turn dedupe +
+  per-tool-class ack deadlines; **5** records + scripted verification
+  session with pass criteria.
+
+**NEXT ACTION — implement BUG-272 slice 1 (wake word survives mic
+failure).** Full spec in the BUG-272 entry's "Slice 1" section. RED-first.
+Then slices 2–4 in order, each its own commit, pushed immediately
+(concurrent-session rule). The scripted verification session (Slice 5)
+needs the operator at the mic on the machine with the noisy room. **The
+Part B gating is unchanged:** steps 6.5, 6.6 and 7 tick only after Part B
+passes, then Part C releases v0.1.10. This block supersedes the two
+BUG-271/BUG-270 re-test asks below — the re-test happened and its results
+are the BUG-272 inventory.
+
+### 2026-08-17 — BUG-271 CODE-COMPLETE + PUSHED: the Live-path fix for what BUG-270 fixed on the wrong path. Next action: the live acoustic re-test in the noisy room.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** The block
+below fixed BUG-270 on the batch path — but the operator's machine runs the
+Gemini Live path (`VOICE_S2S_ENABLED`), which is why nothing changed after
+that fix shipped. **BUG-271** is the Live-path diagnosis and fix, shipped in
+code across `d3d6226`, `bb10623`, `952580e` plus the records commit (see the
+Progress-log row and BUGS.md):
+
+1. **The self-interruption echo loop** — MYTHOS's own voice replayed into
+   Gemini's `START_SENSITIVITY_HIGH` VAD, transcribed as the operator,
+   interrupting itself mid-word. The Live path now has the batch path's
+   battle-tested echo filter (`src/core/voice/echo-filter.js`, ≥60% word
+   overlap vs the last 3s of MYTHOS speech); a matching transcript behaves
+   as if it never arrived and logs `live.echo-dropped` (ratio only, never
+   transcript text).
+2. **Phantom words from ungated noise** — the Live send path streamed every
+   frame with no gate. `ui/public/js/voice/live-noise-gate.js` now ZEROES
+   below-floor frames (never drops — wire shape and Gemini's VAD timeline
+   untouched) at BOTH `live-audio` send points, and the eager barge-in tier
+   is raised 0.035/200ms → 0.05/300ms (above the measured speaker bleed,
+   still below the 0.056 flush tier).
+3. **The hidden evidence** — the client has sent ring/gate diagnostics on
+   the own-voice-release transition since `36561bd`, and the server
+   discarded every one of them. `voice.capture-suspend` now logs them all
+   under their exact client names (`prerollFrames`, `prerollCap`, `heldMs`,
+   `framesDropped`, `framesZeroed`, `peakRms`, `ownVoiceGate`). No wire
+   change — the server only logs more of what it already receives.
+
+**NEXT ACTION — the operator's live acoustic re-test:** restart the app and
+converse in the noisy room. Watch for phantom words (defect 2) and
+self-interruption/echo turns (defect 1). If anything persists, the new log
+lines in mythos-server.log name the responsible gate: `live.echo-dropped`
+(the echo filter fired), `peakRms` (how loud the bleed got), `framesZeroed`
+(what the noise gate silenced), `framesDropped` (what the preroll ring
+lost). This re-test subsumes the voice checks of the block below; everything
+else there stands. **The Part B gating is unchanged:** steps 6.5, 6.6 and 7
+tick only after Part B passes, then Part C releases v0.1.10.
+
+### 2026-08-17 — Part B's FIRST live voice check FAILED — and it falsified a same-day change. BUG-270 fixed in code; voice checks must be re-run.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** The
+operator ran the first real voice conversation (Part B's voice checks, batch
+path — `VOICE_S2S_ENABLED` unset). Verdict: "It is very glitchy. It
+interrupts and it's breaking in between all sorts of things… It's not
+picking up words from the noise." Two findings, both now fixed in code
+(**BUG-270**, see BUGS.md and the Progress-log row):
+
+1. **The interruptions were the 900ms endpointing experiment (`e19ac07`,
+   shipped the same morning, flagged unit-green-only) failing its own
+   predicted live test.** Natural pauses >900ms split one utterance into two
+   clips; MYTHOS answered mid-thought; the BUG-027 half-duplex gate then
+   swallowed the continuation. **Reverted to 1800** (schema + voice-loop
+   literal + `.env.example`, doc-truth-pinned). Still env-tunable.
+2. **The missed words were undiagnosable because the drop was silent.** The
+   batch path's clip gates (peak RMS, min length) used to `return` with zero
+   evidence anywhere. **Both drops are now loud** — console.warn with the
+   measured value + floor, and a HUD caption ("🎤 too quiet — not sent").
+   Pinned red-first by `test/bug-270-clip-drop-observability.test.js`. The
+   BUG-020 thresholds deliberately UNCHANGED — the new observability makes
+   the next tuning step evidence-based (`VAD_SPEECH_RMS=0.025` first, or
+   `VAD_ENGINE=silero` for the trained speech-vs-noise detector).
+
+**NEXT ACTION — the operator re-runs the voice checks of Part B** (the other
+checks stand as listed in the block below): a conversation WITH natural
+pauses — MYTHOS must no longer jump in mid-thought; speech in the noisy
+room — if still missed, note whether the "too quiet" hint appears, which
+names the gate to tune. Everything else in the Part A summary below is
+unchanged; steps tick only after Part B passes.
+
+### 2026-08-17 — v0.1.10 closeout, Part A CODE-COMPLETE: BUG-269 fixed, PIN defaults ON, the 6.5/6.6 audit work done. Steps still ☐ — the operator's Part B sitting is the only gate left.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐) — by design,
+not drift.** The "Closing 6.5, 6.6 and 7 — the path to releasing v0.1.10"
+plan's Part A (all the code work) shipped in four commits, each unit-green,
+independently reviewed, pushed:
+
+- `9b98bc3` — **A1 / BUG-269**, the intermittent press-to-talk hotkey, fixed
+  at three independent defects: the lost-IPC race (a press between hotkey
+  registration and the renderer's listener was lost forever — now a
+  `mythos:renderer-ready` signal + a single-press latch that re-arms on
+  reload), toggle re-entrancy (concurrent presses interleaved — now an
+  in-flight guard that drops, never queues), and structural lag (`arming`
+  state sets synchronously before any await; `vadTick()` runs once
+  immediately, removing up to 100ms of dead time). New behavioural tests were
+  red-first: 8/14 failing before the fix, 20/20 after.
+- `a847894` — **A2**, `PIN_SESSION_ENFORCE` schema default false→true,
+  enacting the operator's 2026-08-17 answer. Safe by construction:
+  `pinSessionRequired()` requires BOTH the flag and a configured PIN — no
+  PIN, no lockout. `.env.example` documents the opt-out.
+- `e62acbd` — **A3 / step 6.5**, informed consent at the install point: the
+  setup wizard's wakeword component now states the weights are openWakeWord,
+  CC BY-NC-SA 4.0, non-commercial, and downloading them is the user's own
+  action; the allowlist test pins the notice. Decision 4 recorded in the 6.5
+  section; the own-model training workstream is superseded.
+- `1bee47f` — **A4 / step 6.6**, the last named audit gap closed: NVIDIA
+  NIM's production-use definition quoted verbatim with source + fetch date in
+  `THIRD_PARTY_NOTICES.md` (free hosted tier is development/evaluation only;
+  production needs an NVIDIA AI Enterprise licence), a note beside the NIM
+  keys in `.env.example`, and a lane audit: NIM leads NO default lane, so no
+  de-ranking was needed. Facts recorded, no legal conclusion — per the
+  standing limit.
+
+Suite **4823 / 4821 pass / 0 fail / 2 skip** (both skips pre-existing
+environment skips), `sync-test-count --check` OK.
+
+**NEXT ACTION — the operator's Part B sitting, one session, in order (a fail
+is more useful than a retry):**
+
+1. **Merged vault loads.** Launch the app once; confirm a clean start and
+   that it recalls something old. The 2026-08-17 merge added 734 episodic
+   entries to a file the app reads at boot, never verified inside the running
+   app.
+2. **PIN.** Set a fresh PIN, fully quit, relaunch — the PIN screen must
+   appear. Then confirm an app with NO PIN configured is not locked out —
+   the safety property the default-on relies on. (Do NOT import the orphaned
+   `%APPDATA%\agent-os\pin.json`; set a fresh one.)
+3. **Hotkey (the A1 fix).** Press the talk hotkey twenty times from another
+   application: ten cold presses right after launch (what A1a fixes), ten
+   warm. Count misses; the visible state must change instantly on every press
+   even when audio is slow.
+4. **Screen share.** `LIVE_SCREEN_SHARE_ENABLED=true`, then ask "what's on my
+   screen".
+5. **Cursor overlay.** `Ctrl+Alt+C`.
+6. **Persona and voice by ear.** Judge the persona and the `Aoede` voice
+   across a greeting, a status check, pushback, a build request and a failing
+   tool — also the first real chance to hear the CRLF fix (the authored
+   persona had never reached the model on a Windows-edited vault before
+   2026-08-16).
+7. **Barge-in.** Interrupt mid-sentence; confirm it stops.
+8. **Installer.** Install the built installer on a clean path; confirm the
+   app launches from it.
+9. **Watch for the second voice throughout.** When the Live path returns text
+   with no audio, MYTHOS finishes through the local TTS chain in a different
+   voice — architecture, not a glitch. If you hear it, note which check.
+
+**When Part B passes, the next session:** tick 6.5, 6.6 and 7 in the
+merged-order line below (a tick is only valid once the matching Part B check
+was performed — this repo once shipped six-of-eleven broken behind green
+tests), then run **Part C**: `node scripts/release.js patch --yes --ci` —
+bumps 0.1.9 → 0.1.10, commits, tags, smoke-builds, pushes; the tag push
+triggers the release CI. Do NOT touch `build.appId` (`com.mythos.assistant`)
+or `package.json` `name` (`agent-os`) — that is Windows' install/upgrade
+identity. The build stays unsigned by design (SmartScreen warns;
+`latest.yml` still enforces SHA512).
+
+**Step 8 (six lanes, AD-11…AD-21) remains planned-not-started** and unlocks
+only when 6.5, 6.6 and 7 are ticked; its design lives in the blocks below.
+
+### 2026-08-17 — step 8 grew two lanes: 8E (Agency roster) and 8F (the four TencentDB assets). PLANNING ONLY, NO CODE. Position unchanged.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐). Next action
+UNCHANGED. Step 8 still does not start until 6.5, 6.6 and 7 are ticked** — the
+operator re-confirmed *plan only, nothing built* when asking for this.
+
+The operator named three upstream repos to fold into MYTHOS — `prime-agent`,
+`TencentDB-Agent-Memory`, and (new) `msitarzewski/agency-agents` — asking for
+"the best of the best: memory, agent skills". Two of the three were **already
+designed in** by the step-8 block below, so this pass added only what was
+genuinely missing:
+
+- **8E — the Agency roster reaches the seats.** The finding that sized the lane:
+  agency-agents is **already half-vendored** — six personas ship as
+  `mythos/skills/persona-*/SKILL.md` (MIT, in `skills.allowlist`, credited in
+  `THIRD_PARTY_NOTICES.md`) — but they are **catalogue-only**. There are two
+  persona layers that cannot see each other: `skills/loader.js` serves those six to
+  the model via `use_skill`, while `agents/personas.js` serves the *seats* from a
+  different directory holding four files. And `pickBuilderPersona()` is a two-way
+  keyword coin flip — one frontend keyword list, else `backend-builder` — so cards
+  about deploy, schema, credentials or test coverage all get the backend builder and
+  the roster is never consulted. 8E bridges the roots (8E.1), makes the router
+  scored and self-reporting (8E.2), and vendors **eight** more personas that each
+  have a named reader (8E.3), leaving ~220 unvendored on purpose.
+- **8F — the four TencentDB assets 8C did not take.** 8C took only the L0→L3
+  layering. The operator wanted all four of the rest: **8F.1** versioned skills
+  (`memory/skills.js` overwrites in place, so a worse auto-distillation silently
+  destroys a better one — and `recordUse()` must *not* snapshot or it is a disk
+  leak), **8F.2** `[[wiki-link]]` resolution + backlinks over the existing
+  Obsidian-compatible Notes store with **no index file**, **8F.3** scoped recall
+  (`meta.scope`/`meta.audience` tags first, the filter second, applied at the one
+  place `excludeKinds` already is — its team/ACL half is explicitly not built, no
+  reader in a single-operator product), **8F.4** CodeGraph, which opens with an
+  **adopt-vs-build decision** because the adoption matrix already carries
+  `tirth8205/code-review-graph` at 🟢 P1 for exactly this.
+- **Five new invariants, AD-17…AD-21**, mirrored into V2 spine §1: one persona
+  loader; a routed seat states which seat and why; a skill body is never overwritten
+  without keeping its predecessor; a graph answer carries its freshness; a scope
+  filter removes, never fabricates, and says what it withheld.
+
+Upstream filenames for 8E.3 were enumerated from the **real** tree with
+`gh api repos/msitarzewski/agency-agents/git/trees/main?recursive=1` — the
+`tree/main/...` web path 404s, so do not guess them. All three upstreams are MIT,
+so the commercial gate (6.5) is unaffected; **extend** the single agency-agents row
+in `THIRD_PARTY_NOTICES.md` rather than adding a second.
+
+### 2026-08-17 — the FIRST real operator Electron sitting. Three step-7 items verified by a human, two defects found, and the forked vault merged.
+
+**Status: 6.5 ☐ · 6.6 ☐ · 7 ☐ — step 7 is NOT ticked, but it moved for the first
+time since 2026-08-04.** The operator ran the sitting this file has been asking
+for since then. `npm start` (which is `electron electron/main.js` — the real
+desktop app) launches and runs correctly from an ordinary right-click terminal.
+
+**Verified by a human, first time ever:**
+1. **The app launches and runs** — Slice 1, previously unit-green only.
+2. **Close-and-reopen works.** `MYTHOS.exe` disappears from Task Manager and a
+   double-click relaunches it. **This is BUG-225's quit seam, fixed 2026-08-17
+   and never before checked by a person.**
+3. **The press-to-talk hotkey fires while another application holds focus** —
+   Slice 2's core claim.
+
+**Two defects found, both green in the automated suite — the Slice 5 lesson
+again, and it is now three-for-three: a green suite is not evidence that the
+desktop app works.**
+- **BUG-268 — `Ctrl+Alt+X` (screen text capture) does nothing.** A popup fires,
+  then no result appears anywhere. **Operator explicitly DEPRIORITISED it the
+  same day** ("not one of the most important features right now"). Undiagnosed on
+  purpose — the BUGS.md entry records only what was observed and refuses to guess
+  a cause.
+- **BUG-269 — the press-to-talk hotkey is intermittent**, with variable lag and
+  occasional total silence. Reliability defect, not absence. Kept separate from
+  268 deliberately so a fix for one cannot close both.
+
+**The PIN question is answered and is NOT a bug.** No PIN screen appears from the
+Start Menu. Cause: the PIN was set in the pre-rename vault and the current build
+never reads it (see the vault fork below). When `PIN_SESSION_ENFORCE` is decided,
+set a fresh PIN — do not import the old `pin.json`.
+
+**The vault had FORKED, and it is now merged.** Before `electron/main.js` began
+calling `app.setName('MYTHOS')`, dev runs wrote `%APPDATA%\agent-os` while the
+packaged app wrote `%APPDATA%\MYTHOS`; both were live on the same days.
+`%APPDATA%\MYTHOS` and `%APPDATA%\mythos` are ONE directory (Windows is
+case-insensitive) — so two vaults, not the four an earlier note implied.
+Stranded in the orphan and now recovered **additively, with a backup, nothing
+overwritten**: **734 episodic entries** (203 on 08-11, 499 on 08-12, 32 on
+08-13), **572 audit lines**, **31 lessons** (90 → 121) and **2 operator facts**
+(37 → 39). Verified afterwards: every merged line parses, zero duplicate ids, and
+a re-run finds nothing left to move. Backup at
+`%APPDATA%\MYTHOS\_backup-before-vault-merge-2026-08-17T08-14-22`; the orphan
+directory was left in place, so the whole operation is reversible.
+**Deliberately NOT merged, each for a reason:** 6 goals still marked `proposed`
+and five days stale (copying them lets the autonomous loop act on week-old
+conversational commitments), an expired all-`fired:true` reminders file, the old
+`pin.json`, six Identity files whose live copies are NEWER, and 10 byte-identical
+Skills files.
+
+**Two of step 7's three product decisions were answered by the operator on
+2026-08-17:**
+- **PIN — ANSWERED: `PIN_SESSION_ENFORCE` defaults ON.** *"If we have set it, it
+  should default to the main home screen. Whenever we start the app, it should
+  ask for the PIN."* So: enforcement on by default, and it self-disables when no
+  PIN exists (`pinSessionRequired()` already requires both the flag AND
+  `pinLock.isConfigured()`), which is what makes an on-by-default safe — no PIN
+  set means no lockout. **Do NOT import the orphaned `%APPDATA%\agent-os`
+  `pin.json` to satisfy this** — the operator sets a fresh PIN once enforcement
+  is on. The operator also asked for an **on-demand + AFK lock** ("lock and go…
+  once we are back we can type, just like Windows lock") and placed it
+  explicitly in future scope, so it is recorded in
+  `MYTHOS-Post-Parity-Plan.md`, NOT here.
+- **Product name — STILL OPEN, and actively being worked.** The operator is
+  researching names because most candidates are taken. **Consequence that matters
+  before any public release:** `build.appId` is `com.mythos.assistant` and that
+  string is Windows' install/upgrade key. Change it after users exist and Windows
+  installs a SECOND copy side by side instead of updating. Today the only install
+  is the operator's, so the change is still free — it stops being free at the
+  first external user. Leave `appId` as-is until the name lands; do not
+  "tidy" `package.json`'s `name: agent-os` into something else in the meantime,
+  because that is what derives the dev userData path and the vault fork below is
+  what that costs.
+- Gesture model licence — unchanged, still open (excluded from the installer).
+
+**Next action — the operator's:** the remaining step-7 checks that still need a
+human — `LIVE_SCREEN_SHARE_ENABLED=true` then "what's on my screen"; the cursor
+overlay via `Ctrl+Alt+C`; judging the persona and the `Aoede` voice by ear;
+barge-in; and installing the built installer on a clean path. **Plus one new
+check created by this session: launch the app once and confirm the merged vault
+loads cleanly** — 734 recovered episodic entries changed a file the app reads at
+boot, and that merge is not yet verified inside the running app.
+
+### 2026-08-17 — step 8 planned and tracked. NO CODE WRITTEN. Position unchanged.
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐). Next action
+UNCHANGED.** This session was planning only. The operator asked for three
+upstream repos to be wired into MYTHOS end-to-end —
+`PrimeIntellect-ai/prime-agent`, `addyosmani/agent-skills`,
+`TencentCloud/TencentDB-Agent-Memory` — and then set the sequence explicitly:
+**write the plan now, build it only after 6.5, 6.6 and 7 close.** The whole
+design therefore landed in this file as **Step 8**, with nothing implemented.
+(One `loader.js` edit was started before that instruction arrived and was
+reverted; `git status` confirmed clean.)
+
+**What step 8 contains:** **six** lanes — 8A skills truth + curated vendoring, 8B
+the Continual Harness, 8C memory budget + Live depth, 8D budgets + quality
+gates, and (added later the same day, see the block below) 8E the Agency roster
+reaching the seats, 8F the four TencentDB assets 8A-8D had not taken — each with
+its architecture, a wiring table naming every writer and every reader, real code
+snippets, and eleven new anti-drift invariants **AD-11…AD-21**
+(mirrored into the V2 spine §1 table). Two operator decisions are recorded there
+and should not be relitigated: prime-agent and TencentDB are **patterns-only,
+never dependencies** — prime-agent installs by `curl | sh` (forbidden by the root
+`CLAUDE.md`, where Hermes is the single deliberate exception) and TencentDB needs
+a 3-service Docker stack that breaks portability and the sold-installer story.
+Only addyosmani's skills and agency-agents' persona markdown get vendored — six
+addyosmani skills (8A.4) and eight personas on top of the six already on disk
+(8E.3) — by the process `mythos/skills/README.md` already documents.
+Infrastructure delta: zero — no dependency, service, port or container.
+
+**The research finding worth keeping:** MYTHOS already has most of what those
+repos are known for. `skills/loader.js` is multi-root resolution with progressive
+disclosure (prime-agent's own shape); `memory/index.js:243 recallHybrid()`
+already fuses keyword and vector ranking by RRF (TencentDB's headline retrieval
+design); and `Identity/operator-profile.txt` is already TencentDB's "L3 persona",
+reaching every surface through `persona()`. Step 8 is gap-closing, not importing
+— which is why 8C.3 (L2 scenario blocks) is marked provisional and gated behind
+8C.2 proving insufficient.
+
+**Two live bugs were reproduced while planning and are deliberately NOT fixed**
+(they are lane 8A's first two items; fixing them now would jump the operator's
+sequence). **BUG-266** — six skill names are hardcoded into prompt text
+(`voice-agent.js:275`/`:93`, `from-skills.js:37`) that are PHANTOM on any fresh
+clone, proven by running the real loader with `USERPROFILE`/`HOME` pointed at a
+non-existent directory; `ui-ux-pro-max` is phantom even on this machine, because
+it is vendored essence-only and `loadContent()` reads `SKILL.md` exclusively.
+**BUG-267** — `buildLiveSystemInstruction()` injects a 43-skill catalogue whose
+header tells the model to "call use_skill", while `use_skill` sits in
+`VOICE_ALLOWLIST_EXEMPT` and Live declares only `DEFAULT_ALLOWLIST` — so the
+primary spoken surface is told to call a tool it was never given. Both are cheap.
+Neither is urgent enough to reorder the build.
+
+**Next action — unchanged by this session:** whatever the block below names.
+Step 8 waits for 6.5 / 6.6 / 7.
+
+### 2026-08-17 — the nine open coding defects (fix-plan waves 1–3), all shipped
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** The
+operator-approved fix plan for the nine open coding defects executed end to
+end: nine commits, one per verified fix, each through the hook gate and pushed
+immediately (BUG-037). **BUG-260..BUG-265** in BUGS.md carry the detail; the
+2026-08-15 RCA's wakeword and TOOL_ACK_DEADLINE_MS bullets are closed too, and
+BUG-225's quit seam is fixed at all four structural defects. Suite
+**4760 / 4758 pass / 0 fail / 2 skip**, counts synced per commit.
+
+The headline items: **BUG-225's zombie-on-close** had four independent holes
+(re-fork race in the window-all-closed→before-quit gap, media/overlay windows
+pinning `window-all-closed` un-fired, no kill ladder on the ordinary close
+path, no hard-exit backstop for a wedged before-quit) — all fixed, pinned by
+8 source-shape tests, and one trap the fix itself forced: `before-quit`'s
+vault-push skip now keys off an explicit `installerHandover` flag, because
+pre-setting `isQuitting` in `window-all-closed` would otherwise have skipped
+the vault push on every ordinary quit. **BUG-262's distillation dead gates:**
+the cortex idle gate never opened (timer heartbeats — the same gate that
+blocked `mull()`, per this file's own Phase-4 live-tested-broken note) and the
+active branch's consolidate sat below the goalless early-return; both fixed,
+and every skip now emits `memory.consolidate-skip` with a reason, so "did it
+ever distill" is answerable from the next session's log for the first time.
+**The WebView2 caret false-refusal (BUG-263)** is split on the landed title:
+real app names keep the hard failure (the 2026-07-31 MYTHOS-dashboard and
+Antigravity guards are intact and pinned), the "Chrome Legacy Window"
+hosting-artifact shape returns honest-unverified before the read-back oracle.
+
+**Concurrent-session note:** a second session (freebuff worktree) was live
+throughout and landed `42f370d` (dockerignore) between this plan's commits —
+stacked cleanly, no conflict. Hook-blocked commits twice on suite-load flakes
+from the two sessions' overlapping full-suite runs; retried clean each time.
+
+**Next action — the operator's, now four sittings, all cheap:**
+1. **One X-close sitting** (BUG-225): close the app with Task Manager open —
+   `MYTHOS.exe` must exit within ~10s, and a double-click must relaunch
+   immediately.
+2. **One packaged-install check** (wakeword): on the installed build with no
+   userData weights, the HUD must report the wake word honestly unavailable —
+   not arm off source-tree leftovers.
+3. **One voice session** (BUG-262): afterwards grep the log for
+   `memory.consolidate-skip` — the reasons observed there answer "did it ever
+   distill" factually; also covers the 08-15 persona/facts checks still owed.
+4. **Aether side** (BUG-265 root cause): the reconnect-storm diagnosis needs
+   the live aggregator — operator-side, honestly open.
+
+### 2026-08-16 — gap analysis, then the CI-red double root cause (BUG-258 + BUG-259)
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** A deep
+gap-analysis pass over plans-vs-code-vs-repo state, and the red CI it forced
+into the open. **CI's `test` job had been failing on every push since
+2026-08-13** while the local hook stayed green and the e2e job passed — two
+independent, both machine-dependent causes, both now fixed and verified in
+CI's exact conditions: **BUG-258** (the immune reprobe test needed a
+machine-local hermes; now pins `HERMES_CLI` to `process.execPath`) and
+**BUG-259** (`briefing.js`/`from-pc.js`/`electron/child-exit.js` unref'd
+one-shot timers whose only job is to settle a promise — in a quiet process
+(the Node 22 runner child) they never fire, the test is killed as pending,
+and siblings cascade to `cancelledByParent`; CI's summary said `fail 0` and
+the test-count gate failed on the number mismatch, a shape that pointed away
+from a test failure). Local runs were green because Node 24's runner child
+behaves differently — the suite is now reproducibly green under Node 22,
+clean env, UTC, browser-less: **4718 / 4716 / 0 fail / 0 cancelled / 2 skip.**
+
+**Also landed:** hygiene (`.freebuff/` + graph-data gitignored, orphaned
+ADOPTION-MATRIX/EXPLAINER adopted, 0-byte stray deleted), the doc-truth pass
+(phantom paths, tool-count comments, seams 23→21, ROADMAP D-05 ticked,
+spine §18.4 supersession note, `mythos/docs/DRIFT-LOG.md` created), and
+**step 6.6's first audit pass** in THIRD_PARTY_NOTICES.md: Hermes MIT
+re-verified live; MediaPipe gesture weights re-confirmed UNVERIFIED (both
+canonical docs URLs now 404); provider ToS for resale recorded verbatim for
+Google/Groq/Mistral/Cerebras/OpenRouter with sources and dates; **NVIDIA NIM
+is the named remaining gap** (its terms pages render empty). 6.6 stays ☐
+pending that gap + operator/lawyer review of the recorded facts.
+
+**CI is GREEN — run 181 on `f16c0fd`, the first green `ci` since 2026-08-13.**
+Six causes in total, peeled one annotation round at a time after the
+`::error::` channel was added to ci.yml (itself now permanent: failing-test
+names AND their assert messages surface as check annotations, readable via
+the public API — no more three-day-silent red): BUG-258 (hermes ENOENT),
+BUG-259 (three unref'd one-shot timers), the test job's missing root deps
+(app-builder-lib), its shallow clone (real-history tests), a machine-coupled
+count gate (strict pass/skipped comparison vs honest fixture-skips — the gate
+is now machine-independent: strict on tests/fail + a partition invariant),
+two fixture-dependent tests (openWakeWord allowlist hard-assert, wakeword
+static-asset subtest vs the SPA fallback), and a same-millisecond
+`updatedAt` race in engagements/store (now monotonic by construction).
+
+**Next action — the operator's:** the single voice session the 08-15 block
+asks for (persona sounds like `self.md`; `think_deeply` rare; user-facts
+recall without a tool call). The CI badge needs no attention — it is green.
+
+### 2026-08-15 (latest) — the persona that was never loaded, and the cost of a tool call
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** The operator
+reported the spoken path felt slower and sometimes did not answer at all. Four
+defects, measured from the real session log and the real vault rather than
+theorised. **Suite 4687 → 4700 / 4700 pass / 0 fail / 0 skip.**
+
+**BUG-254 is the one that matters, and it is not about performance.** The
+operator's authored `self.md` — a full JARVIS character brief — had **never
+reached the model, on this machine or any other with a Windows-edited vault**.
+`extractSection()` required a literal `\n` after each `## header`; the file is
+CRLF, so `Purpose`, `Persona`, `Values` and `Origin` all parsed as `null` and
+`persona()` fell back to "You are MYTHOS. Helpfulness, honesty, efficiency."
+Nothing surfaced it, because a parse miss and a section the operator never
+wrote both return `null` and both receive a plausible default. Verified against
+the real vault: four sections `null` before, real content after. This is the
+same shape as the gitignored-personas miss — **a loader that cannot find
+anything returns exactly what a loader with nothing to find returns.**
+
+**The performance finding, stated correctly: a tool call is two inference
+passes.** `think_deeply` was 10 of ~34 tool calls in one conversation, and the
+tool itself is blameless — 471-1081ms, 10/10 successful, zero 429s. Turn 32 is
+the measurement: tool answered in 580ms, speech arrived 19 seconds later, and
+the 10s `live.turn-stalled` detector fired in between. That is the "doesn't
+reply" the operator heard. Fixed at the only lever the model actually reads —
+the tool description — by making answering the default, naming the cost, and
+giving it a self-check it can apply. Same reasoning raised the facts cap
+(BUG-256): a fact the model cannot see becomes a `recall_memory` round-trip,
+and the frame is composed once per session while a round-trip is paid per turn.
+
+**Next action — the operator's, and it is one voice session:** talk normally,
+then count `live.tool-call-batch` by tool in `%APPDATA%\MYTHOS\mythos-server.log`.
+`think_deeply` should be rare rather than ten-in-thirty-four. **Watch the other
+direction too** — if it never fires on a genuinely hard question, the wording
+swung too far and needs loosening, not reverting. While there: MYTHOS should
+now sound like the `self.md` brief (dry, British-butler), which is the visible
+proof of BUG-254.
+
+**Deliberately NOT done:** the Aether reconnect backoff is unchanged (retrying
+forever is correct for a sensor whose aggregator may appear at any time; only
+the muteness was wrong), and `AETHER_ENABLED=false` is set in the operator's
+**untracked** `.env`, not in tracked config — anyone running the BLE bridge
+should leave it on.
+
+### 2026-08-15 (late) — the full-history log audit: what the pattern was
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** Not parity
+work and not a bug wave. The operator asked for the PATTERN across all logs
+rather than the next defect, so three read-only analysts were run over the live
+vault (88 lesson files, 26 episodic days, the 30-incident ledger, the session
+server log) and this repo. **Suite 4674 → 4687 / 4687 pass / 0 fail / 0 skip.**
+
+**Four patterns found. Two were structural, and those two are fixed:**
+
+1. **BUG-251 — the learning loop was write-only on the surface that matters.**
+   The Live voice path's system instruction carried rules, persona, version,
+   capabilities, skills and time, and **no memory of any kind**. Everything
+   durable the vault knew (`Semantic/user-facts.md`) was reachable only from
+   the TYPED compose-bar path's `recallHybrid()`. So "you never remember my
+   songs" described the surface accurately while the songs sat on disk — and
+   the "two brains" complaint a week earlier was the same mechanism. Fixed with
+   a synchronous `semantic.topic()` read injected as a labelled, size-capped
+   `OPERATOR FACTS` block. **This is the READ half of BUG-249's WRITE half,
+   fixed the same day: they were independently broken, so neither alone would
+   have changed anything the operator experienced.**
+2. **BUG-252/253 — the incident ledger and BUGS.md had no mechanical
+   relationship.** 30 incidents recorded, **2** cited by id. Nothing hid the
+   other 28; there was no way to ask, so nobody asked. `scripts/triage-incidents.js`
+   asks it (id citation only — a same-symptom BUG never clears a report), and
+   BUG-253 dispositions all 28. Ledger now reads 30 / 30 / 0.
+3. **Chronic failures re-fail forever, each treated as fresh** — `gmail_unread`
+   `invalid_grant` 25× over 5 days, CDP-unattached across 8 days in a month, a
+   TTS chain whose first three links are structurally dead in a packaged build.
+   Partly closed already by BUG-238's `terminal:true`; the general counter is
+   **deliberately not built** (see below).
+4. **Repeat reports dominate.** Five classes recur across separate weeks: media
+   playing the wrong item, browser/window targeting, voice duplication,
+   false-success verification, `screen_look` finding nothing. This is the
+   finding behind items 1-3, not a separate one.
+
+**Next action — the operator's, and it is one voice session:** ask MYTHOS
+something only `user-facts.md` knows (a music preference) and confirm it
+answers **without calling a tool**. That is the only thing a green suite cannot
+show about BUG-251. While there, the previous block's checks still stand
+(`brain-spend` distribution, `vision.attempt` at 1 attempt, `think_deeply`).
+
+**Deliberately NOT built, so nobody "finishes" it blind:** the general
+chronic-signature counter. The threshold that turns it into a useful standing
+notice rather than a second stream of noise needs live evidence, and BUG-238
+already covers the sharpest instance (a non-retryable failure now disables its
+tool and serves the remedy). Guessing the threshold ships the noise.
+
+**Still open, now NAMED rather than merely recorded** (from BUG-253's table):
+the six-report voice-node-duplicate loop, `whatsapp_send` typing into Chrome
+Legacy Window instead of WhatsApp, `open_web` opening a widget where a browser
+was expected, and `open_folder` reporting `unverified` for a folder that opened.
+Everything in the blocks below is still open and still the operator's.
+
+### 2026-08-15 — brain-lane rewire + the personas that were never loading
+
+**Status: merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐).** Not parity
+work. Every MYTHOS role was re-pointed at the model measured best for that job,
+and one silent long-standing defect was found and fixed on the way.
+
+**Suite: 4592 / 4592 pass / 0 fail / 0 skip.** Landed and pushed: `08b0e3e`
+(lanes + `think_deeply`), `34fbf90` (personas). Full measurement data and an
+authoritative AS BUILT section: `docs/free-tier-model-map.md`.
+
+**Note for anyone reading an older suite number in this file:** the "4323 / 1
+skip" below and the "4389" some notes carry are both stale. The 1 skip was the
+short-`TEMP` artefact the root `CLAUDE.md` documents; with long-form `TEMP` the
+honest figure is 0 skipped. Trust `sync-test-count.js`, not prose.
+
+**What changed:**
+- **Two new brain lanes.** `reasoning` (Cerebras `gpt-oss-120b` first) now serves
+  `mull`, both reflection calls, the reviewer and reality-checker seats, design
+  verify, orchestrator synthesize, `ask_agent` and engagement interviews — all of
+  which ran on `llama-3.1-8b-instant`, the weakest model in the fleet, because
+  `PREF_SIMPLE` was ranked on latency. `memory` (Google `gemini-3-flash-preview`)
+  serves consolidation and document answering.
+- **Load is now a first-class ranking reason.** Google's quota is per MODEL, so
+  vision, memory and voice sit on three different Google models and get three
+  independent buckets. Vision leads on Google rather than Mistral to keep
+  Mistral's 4 req/min free for Hermes builds and embeddings — a load decision,
+  not a quality one, and written in the code so it does not get "fixed" back.
+- **`think_deeply` (new tool, T0, in the Live allowlist).** The only thing here
+  that can change conversational quality: the Live path makes zero `brain.think`
+  calls and its own model is capped at Flash tier on a free key, so no lane
+  re-ranking reaches a spoken answer. A tool is the mechanism.
+- **Personas were never loading, on any machine, ever.** `personas.js` searched
+  only `mythos/vault/Personas/` — gitignored, and absent — so `loadPersona()`
+  returned `null` for every role and every specialised seat silently ran as
+  generic MYTHOS. Now an ordered search ending in a tracked `mythos/personas/`,
+  with four authored defaults.
+- Three silent breakages the lane split would otherwise have caused (persona
+  injection scoped to the old lane list; terse styling implicitly attached to
+  `simple`; `chainFor()` substituting the caller-less `text` lane for an unknown
+  name without a word) are fixed and each is pinned by a test.
+
+**Next action — the operator's, and it is small:** one voice session with the app
+running, then read `%APPDATA%\MYTHOS\vault`. Three things to confirm, none of
+which a green suite can show: `brain-spend` shows the new distribution (Cerebras
+for reasoning, Google for vision/memory, Groq only for trivial); `vision.attempt`
+shows Google first at ~1.5s with `attemptsTried: 1` rather than 3; and asking
+something genuinely hard actually reaches `think_deeply`. Watch for Cerebras
+429s — 5 req/min is the tightest budget in the new layout, and seven
+low-frequency roles now share it.
+
+**Blocked on / not done:**
+- **Hermes's own build model.** `devstral-medium-latest` (12/12 @ 1593ms) is the
+  candidate and `lanes.default.js`'s "41s" exclusion contradicts that
+  measurement. Needs `build-refine.js`'s real render check over real builds. The
+  model lives in `Hermes Agent/config.yaml`, which forwarded env does not
+  override, so it is a Hermes-side change either way.
+- **The benchmark is thin** — one sample per probe, ~50-token prompts, seven
+  models tied at 4/4. Real prompts are 10k+ tokens. Re-probe at realistic size
+  before treating the reasoning order as settled.
+- Everything in the 2026-08-14 block below is still open and still the operator's.
+
+### 2026-08-14 — operator-reported basics wave (BUG-221 … BUG-224)
+
+**Status:** merged-order position UNCHANGED (6.5 ☐ · 6.6 ☐ · 7 ☐, all gating
+shipping, not building). This session was not parity work — the operator reported
+that the basics had regressed and was considering scrapping the project. Four bugs
+found, four fixed, two live-verified.
+
+**Suite: 4323 / 4322 pass / 0 fail / 1 skip.** Landed and pushed:
+`cb505e5` `899daeb` `55f96c1` `0757cb4` (+ the runbook commit).
+
+**The headline correction, because it invalidates a premise several documents
+still carry: the installed app was never stale.** It is **v0.1.9, installed
+2026-08-13 04:06**, which IS the latest published GitHub release (0.1.9,
+2026-08-12). What made it look abandoned is that **v0.1.9 renamed the app's
+userData directory from `%APPDATA%\agent-os` to `%APPDATA%\MYTHOS`** — so the old
+vault and logs simply stop, and a forensic search of the old paths finds an app
+that appears to have died two days ago. There are now FOUR vault locations on
+that machine. Resolve the live one from the running build before concluding
+anything from an absent log.
+
+**What was actually wrong:**
+- **BUG-221** (fixed, live-verified) — `ui_type` aborted on an unguarded advisory
+  `SetFocus()`, the only unguarded one of four in `ps-automation.ps1`. Win11's
+  WinUI3 Notepad refuses focus, and the exception killed the whole handler
+  *before* `uia-setvalue`/`wm-char-post` — the two routes that need no focus and
+  are the measured-working ones on MSIX apps. The ladder was intact; its entrance
+  was not.
+- **BUG-222** (fixed, NOT live-verified) — `self_capabilities` was withheld from
+  the Live allowlist, so "what can you do?" and "what did you fix?" had no honest
+  answer and the model improvised around them (the operator heard this as endless
+  web-search suggestions). `capabilities.js` has been writing the true answer —
+  tools, adapters, recent git changes — to `vault/Identity/capabilities.md` on
+  every boot the whole time, with no reader on the voice surface.
+- **BUG-223** (fixed, live-verified) — `close_window` reported `ok:true` for a
+  window that was still open. The handler was honest (BUG-103 made it return a
+  failure STRING); the dispatcher arm that converts a string to `ok:false` was
+  missing, as it was on eight other commands. Fixed by hoisting that conversion
+  to one gate instead of adding a 25th per-arm copy.
+- **BUG-224** (fixed, NOT live-verified) — the interruptions AND the clipped last
+  word are ONE mechanism: MYTHOS's own Live voice re-entered the mic and was
+  streamed to Gemini's `START_SENSITIVITY_HIGH` VAD, which heard it finish a
+  sentence, called it a barge-in, and **stopped synthesizing server-side**. That
+  is why BUG-084's client-side tail guard never cured the clipping. A half-duplex
+  gate now holds mic frames while MYTHOS is audible — gating the send only, so
+  the local barge-in backstop still runs and opens the gate, with a 1.2s preroll
+  replayed on release.
+
+**Next action — the operator's, and it is now ONE sitting, not six:**
+`docs/live-verification-runbook.md` Group C, in the order given there
+(C1 wake word → C5 self-capabilities → C6 typing/close → C2+C3 echo and barge-in
+→ C4 noise). C2 carries the four BUG-224 pass signals and names the regression
+risk to watch: while the gate is held the LOCAL backstop is the only detector and
+its threshold is higher than the server VAD's, so a soft interruption may need to
+be firmer. Kill switch `localStorage.MYTHOS_LIVE_HALF_DUPLEX = 'off'` for an A/B.
+**Read the transport warning at the top of Group C first** — C2/C3 were written
+for the legacy `voice-loop.js` path, and every 2026-08-14 turn was `"s2s"`.
+
+**Blocked on / not done:**
+- **P0, UNCLAIMED as of this writing: the zombie-on-close bug.** Closing the app
+  with X leaves the process alive; it then refuses to relaunch until the operator
+  ends the task. This blocks daily use of the installed app and NOBODY has taken
+  it — a second session was expected to and there is no commit or working-tree
+  evidence that it did. Root area: `electron/main.js` teardown (child server
+  fork, pc-child PowerShell child, ports 4478/5050) plus the single-instance
+  lock, which currently swallows the relaunch silently. Related: BUG-029's
+  pidfile is a mitigation that only kills orphans on the NEXT launch; proper
+  graceful shutdown is ROADMAP D-07.
+- **The updater is NOT broken — verified, do not "fix" it.** Feed reachable
+  (public repo, releases through 0.1.9), progress/notification/install/
+  post-restart notice/rollback detection all present and wired
+  (`unfinishedUpdate()` → `MYTHOS_UPDATE_RESULT` → `update-report.js` → the boot
+  greeting), 38/38 tests green. The v0.1.9 install *looked* dead only because
+  NSIS `/S` hides its progress UI; the visible-notification work that fixes that
+  perception landed 2026-08-13, i.e. AFTER that install. Next real update is the
+  first one that will show itself.
+- **6.5 / 6.6** unchanged: wake-word weights decision (train own model, separate
+  workstream — **SUPERSEDED 2026-08-17 by Decision 4: wake word stays BYO with
+  the non-commercial notice at the install point; there is no training
+  workstream**), wider licence audit, and the money items (code-signing cert,
+  update host). Standing operator-only: suspend the exposed Render instance, add
+  a LICENSE, physical-phone checks.
+- **Superseded claim:** any earlier note in this file that there is "no delegable
+  work left" is false — the P0 above is delegable, and unclaimed.
 
 ### 2026-08-08 — pre-release security audit remediation (interleaved with the Stage 0-5 voice-node session)
 
@@ -140,15 +1714,26 @@ installed copy are not the same test.
 | **⚠ CORRECTION — read before anything else in this block** | **Slice 5 shipped BROKEN and boot-fatal, and two claims written below on 2026-08-04 were wrong.** The operator ran Track C, and the Electron shell did not start at all: `Error: The 'screen' module can't be used before the app 'ready' event`, raised from `cursor-overlay-window.js`'s constructor via `main.js`'s module-scope construction. So (a) **"Slice 5 is unit-green"** understated it — it was not merely unverified, it was fatal; and (b) **"step 7 is code-complete at all 6 slices"** was false, because one slice prevented the product from launching. **Fixed and LIVE-VERIFIED 2026-08-04** (see the Progress log row): the app now boots with the overlay off (the default) and on, `Ctrl+Alt+C` registers, and the controller is constructed against the real Electron `screen` only after `app.whenReady()`. **The lesson is the valuable part and it vindicates this document's own tick discipline:** 2598 passing tests, ten green Anti-Drift invariants and a walked 298MB installer artifact, and the app still could not open a window. A green suite is not evidence that the desktop app runs. Everything below stands except those two claims. |
 | **Next action** | ## ⇢ THE NEXT ACTION IS YOURS, NOT A BUILD STEP.
 | | **2026-08-05 — still true, with three items retired and one new finding.** Nothing in the merged order advanced today; two voice-session incident batches landed beside it (BUG-099..BUG-105 in the morning, BUG-106..BUG-116 in the afternoon, 12 commits, suite 2664→2759, 0 fail) and the Progress log carries the row. Retired from the list below: the missing installer icon (item 5 of the Slice-4 open list, now `build/icon.ico`), the stale `AETHER-WIRING.md` drive-path flag (closed by `d5eb2ec`, re-verified), and a false test failure that was silently blocking **every** commit — `test/electron-builder-files-allowlist.test.js` hard-asserted that kokoro-js's Hugging Face cache weight exists inside `node_modules`, which is downloaded on first TTS use, so any checkout that had never spoken failed a packaging test for environmental reasons. **The new finding, which changes what "step 7 verified" will mean:** the Slice 3 screen-share surface streams the operator's whole desktop to Gemini and had never been security-reviewed (the building session was told not to spawn agents); a review is now under way, and its findings should land before the operator's Electron sitting rather than after, because that sitting is what first grants a real `getDisplayMedia()`. Also confirmed by reading the code, not inferred: BUG-116's fix covers the **Live** path only (`5b8afc9` touches `live-tool-adapter.js` alone), and `voice-agent.js`'s batch path still composes its sentence before the actions run — mitigated since 2026-07-31 by a corrective re-derivation pass plus a deterministic truthful prefix, but that prefix fires only when the ENTIRE turn failed, so a partial-success turn still depends on the model choosing to admit the failed half. That residual is documented at `voice-agent.js:829-831` as a deliberate design decision and is not a regression. |
-| | **As of 2026-08-04 (second session, two waves, 10 commits) there is no delegable work left in this document.** Step 7 is **code-complete at all 6 slices**, the Anti-Drift Contract is **10/10** with executable tests, and all **six remaining unchecked items require the operator or physical hardware.** Do not go looking for the next `- [ ]` to build — there isn't one. What remains, in the order that retires the most risk per minute: **(1) Track C, one Electron sitting (~15 min).** Slices 1, 2, 3 and 5 are unit-green only; Slice 4 is the sole slice verified against a real artifact. `npm install` at repo root then `npm start` — **but NOT from a VS Code terminal**: `ELECTRON_RUN_AS_NODE=1` is inherited from the extension host, which makes `electron.exe` run as plain Node so `require('electron')` returns the npm path shim and every destructured API is undefined (crash at `electron/main.js` on `ipcMain.handle`). Second trap: electron's postinstall extraction fails **silently** (npm exit 0, `dist/` holding only `locales`, no `path.txt`) — check for `path.txt` before debugging anything else. In that one sitting: press-to-talk from another app, `Ctrl+Alt+X` OCR, `LIVE_SCREEN_SHARE_ENABLED=true` then ask "what's on my screen" (Slice 3 end-to-end), `MYTHOS_CURSOR_OVERLAY_ENABLED=true` then `Ctrl+Alt+C` (Slice 5), and while you are there close the four long-open operator items: judge the persona by ear across the five scenarios, judge the `Aoede` voice, test barge-in, and read the real p50 from `/api/status` → `voiceLatency`. **(2) Install the built installer** (`dist/MYTHOS Setup 0.1.0.exe`, 298MB) on a clean path and confirm it boots and resolves the real vault. **(3) Four decisions only you can make**, all cheap now and expensive later: whether `PIN_SESSION_ENFORCE` should default **ON** in packaged builds (it defaults false for back-compat, which means the shipped desktop app still has the `curl` bypass — recommended ON, since enforcement self-disables unless a PIN exists so lockout is already handled); whether `appId: com.mythos.assistant` is the real product identity, given OD-1 is undecided and `package.json`'s `name` is still `agent-os` (appId is the Windows install/upgrade key); what to do about `gesture_recognizer.task`, whose model licence was chased to Google's primary sources and is **stated nowhere** (page content is CC BY 4.0, code samples Apache-2.0, and the linked model card asset 404s) so it is excluded from the installer and gesture recognition is absent from packaged builds until it resolves or gets a `setup-gesture.js`; and how the paid product handles the NC wake-word weights. **(4) Track E1 needs your authorisation** — it means writing into the Aether-BLE repo, outside this project directory. **(5) Track G is gated on OD-1** (the product name; every account handle, OAuth app name and redirect URI depends on it), and P8 must not be designed before reading your own wake-word-collision repo. **(6) Wake-word training** needs Piper installed and your ear. *Superseded build-status detail follows.* **2026-08-04 (second session): Slice 4 — the electron-builder installer — is DONE and is the first step-7 slice verified beyond unit-green.** `npm run dist` produces a real `dist/MYTHOS Setup 0.1.0.exe` (298MB, unsigned by design), and the licence gate was verified by **walking `dist/win-unpacked` itself**, not by trusting the globs: zero `.onnx`, zero `.task`, no `edge-tts-server.py`, no `.env`, no `vault/`, no `.cache/`. **The finding that made this real, and the one to carry forward: `electron-builder` packages the WORKING DIRECTORY, not the git tree — `.gitignore` is not a packaging boundary.** Because every model here is deliberately fetched per-machine and never committed, a developer's checkout holds weights git has never seen, and the first build shipped three of them: `gesture_recognizer.task` (the only model actually tracked in git, and step 6.6 could NOT establish its licence), `silero_vad.onnx`, and a Hugging Face `.cache` copy of Kokoro-82M living inside `node_modules/kokoro-js` — that last one invisible to any check looking at this repo's own model directory or at git. The openWakeWord weights escaped only because the first pattern named that exact directory. Now excluded as a class (`!mythos/ui/public/models{,/**/*}`, `!**/.cache{,/**/*}`), which matches the architecture rather than breaking it — those files are absent on a fresh clone too and `setup-silero.js`/`setup-wakeword.js`/`setup-piper.js` exist to fetch them. `test/electron-builder-files-allowlist.test.js` (10 tests) asserts all of it through electron-builder's OWN `FileMatcher`, with a positive control so an over-broad pattern fails loudly instead of passing vacuously. Two build facts pinned there so nobody "fixes" them: **`asar` must stay false** (main.js:242 forks the child server with `cwd: MYTHOS_DIR`; a fork cannot cwd into an asar archive and the child writes `vault/` there — electron-builder's "strongly not recommended" warning is wrong for this architecture and the breakage would appear only in a packaged build), and **`includeSubNodeModules: true`** (without it AppFileWalker silently drops `mythos/node_modules` entirely — caught by a real build that shipped it empty). **Open, flagged, NOT decided by this session:** (1) `gesture_recognizer.task`'s model licence is still UNVERIFIED, so gesture recognition is absent from packaged builds until it resolves or gets a `setup-gesture.js` like every other model; (2) the app is **1.2GB unpacked** — the bulk is `onnxruntime`/`@huggingface/transformers`/`kokoro-js`, all there for LOCAL TTS/STT while the default architecture is BYO cloud, so cutting them is a product call not a build fix; (3) `kokoro-js/voices/*.bin` (56 voice embeddings) still ship, lower-risk since they arrive as published npm package contents; (4) **`appId: com.mythos.assistant` bakes in a product name that is still an open operator decision**, while `package.json`'s `name` is `agent-os` (hence artifact `agent-os-0.1.0-x64`) — appId is the Windows install/upgrade identity and is expensive to change once anyone has installed; (5) **CLOSED 2026-08-05** — there was no icon asset anywhere in the repo, and electron-builder does not fail on a missing icon: it silently falls back to Electron's own and exits 0, so a 298MB installer wore somebody else's logo. `build/icon.ico` now exists (7 entries, 16-256px), generated reproducibly by `mythos/scripts/make-icon.js` (dependency-free, deterministic, `--check` mode for CI) and pinned by `test/electron-builder-icon.test.js`, which asserts the file exists and parses as a real multi-size ICO rather than merely that a config key is set. `build.icon` is now explicit instead of relying on the implicit default. Deliberately a placeholder mark, not a logo — a wordmark cannot be designed before OD-1 settles the product name. **Next is Slice 5 (cursor overlay), then Slice 6 (OSS hygiene: SECURITY.md, CONTRIBUTING.md, issue templates, CODEOWNERS, dependabot, plus spine §13's directory-scoped `CLAUDE.md` split).** Slices 1-3 remain unverified live and still need the operator at a desktop — that is unchanged and is the highest-value remaining risk retirement. *Superseded context follows:* **Slice 3 (desktopCapturer) is SHIPPED IN CODE as of 2026-08-04 (see the Progress log row). Next is Slice 4 of 6: the electron-builder installer, which MUST honour Decision 1 — the step-7 installer never bundles the LGPL edge-tts package; TTS stays BYO. Then Slice 5 (cursor overlay) and Slice 6 (OSS hygiene: SECURITY.md, CONTRIBUTING.md, issue templates, CODEOWNERS, dependabot, plus spine §13's directory-scoped `CLAUDE.md` split).** Slice 3 added `sendVideoFrame` to `live-session.js`, a `live-video` WS branch, `setDisplayMediaRequestHandler` in `electron/main.js`, and `ui/public/js/voice/screen-share.js`, all opt-in behind `LIVE_SCREEN_SHARE_ENABLED` (default false) and **with `electron/preload.js` untouched, so AD-8 still holds**. Suite 2539/2538/0 fail/1 skip. **Two things it did NOT do, both worth picking up:** no security-reviewer ran on a surface that streams the desktop to a third party (the session was instructed not to spawn agents), and nothing is live-verified — a real `getDisplayMedia()` grant, real pixels, and Gemini actually answering from them all need the operator at an Electron desktop. **Beside the merged order, also landed 2026-08-04:** `feat/aether-focus-sensor` was fast-forwarded into `main` (Aether-BLE proximity sensor, Phase 1 of 5 — see `AETHER-WIRING.md`), and the test-count gates were repaired: commits `73818e2`/`bf95f35`/`b571ab4` had each added test files without running `sync-test-count.js`, so `main` carried 2488 while the suite really ran 2513 and `--check` — which CI gates on — was failing. **CLOSED 2026-08-05 — this item is stale and was still being read as open work.** It claimed `AETHER-WIRING.md` hardcoded drive-rooted absolute paths for both repos and that AD-7 could not catch them. AD-7 was subsequently widened in `d5eb2ec` to match any drive-rooted machine-specific path and cleared 54 hits across 19 tracked files, that document included. Re-verified 2026-08-05 by sweeping every tracked file for the shape: the only surviving matches are comment examples in `mythos/src/core/brain/index.js` that demonstrate the illegal-JSON-escape bug, i.e. illustrations rather than real paths. **When editing this row, do not spell the literal path shape out again — doing so is what tripped AD-7 inside this very document twice before.** **Slice 1 (FOUNDATION) shipped `5f6108d` and, as of 2026-07-31, BOOTS FOR REAL: `npm install` + `npm start` at repo root opens a window titled "MYTHOS" whose forked child server answers on 127.0.0.1:4478 and serves the HUD (index.html 200, `app.js` 8,800B gzipped). Two install-time gotchas cost an hour and are written up in the Progress log — electron's postinstall extraction failed SILENTLY (npm exit 0, `dist/` containing only `locales`, no `path.txt`), and `ELECTRON_RUN_AS_NODE=1` inherited from a VS Code extension host makes `electron.exe` run as plain Node so `require('electron')` returns the npm path shim and every destructured API is undefined. Neither is a MYTHOS defect.** Slice 2 (globalShortcut) is now SHIPPED in code: the press-to-talk half was found already fully implemented and test-pinned (`registerTalkHotkey()` + `onHotkey`→`toggleVoice()`), so the remaining work was the **Ctrl+Alt+X OCR grab** — `registerOcrGrabHotkey()` in electron/main.js (fallbacks `Control+Alt+X`→`Control+Shift+X`→`Control+Alt+S`, `MYTHOS_HOTKEY_OCR` override, never steals focus, guarded `child.send({channel:'mythos:ocr-grab'})`) → server/index.js's existing fork-IPC `process.on('message')` handler dispatches the already-registered `screen_read_text` effector through shared `dispatchAction` with `channel:'hotkey'` (audit-honest) → `broadcastAll({type:'ocr-result'})` → app.js captions the first line via `mic.setCaption` (PIN-gate respected) and best-effort `navigator.clipboard.writeText` (rejects unfocused by design — caption is the always-surface). As predicted in this block, Slice 2 needed NO preload-surface change — AD-8 intact, `electron-preload-surface.test.js` untouched and green. New `test/electron-ocr-hotkey.test.js` (9 tests, source-shape for the Electron half per the talk-hotkey precedent + server/HUD wiring guards). Full suite 2425/2425/0 fail. **Unit-tested only — the OS-global keypress + real OCR needs the operator at the desktop, so the slice is NOT live-ticked.** Next is Slice 3 (desktopCapturer). The full step-7 slice list is logged in the Progress log row for `5f6108d`. **6.5 now has ZERO open decisions** — all three answered AND the wake-word path locked (train own `hey_mythos` model, free/open only, BYOK product-wide); the wake-word *training* itself is a separate workstream needing Piper installed + the operator's ear, and does not block the Electron build. To actually SEE the app so far: `npm install` at the repo root (pulls electron/electron-builder), then `npm start` — done 2026-07-31, it works. **CORRECTION: `GOOGLE_API_KEY` is NOT absent on this machine — it is set in `mythos/.env` and verified Live-capable** (`scripts/verify-gemini-live.js` → PASS, 41,282B of real audio from `models/gemini-3.1-flash-live-preview`). The earlier "absent" claim in this block was stale and blocked S2S on paper for no reason. **S2S is now ENABLED and verified end to end** (see the Progress log row); what still needs a human is a microphone, not a key. Do not write a legal conclusion into this file. **Landed beside step 7 on 2026-07-31 (see the row below and the Progress log):** a cross-cutting hardening wave — a CRITICAL tier-wide T3 leash bypass, a CRITICAL corrupt-JSON data loss in three vault stores, and installed agent skills never reaching builds. It advanced no merged-order step but it changed load-bearing behaviour in `leash/`, `goals/`, `fs-store.js` and `skills/loader.js`, so read that row before touching those. |
-| **Blocked on** | **Nothing in step 7 blocks the next slice.** Wake-word training (a separate workstream, closes the last 6.5 sub-item) needs Piper installed + the operator's ear to validate the trained model. Still open, needing the operator in person: (1) the persona has **not been judged by ear**; (2) V2 §14's live items 1-4 + Task 12 Step 5 need a microphone and speakers — **narrowed 2026-07-31**: everything on the S2S path that does NOT require a mic is now verified against the real API (session open, transcripts, audio-out bytes, tool calls through the leash, T3 confirm), because `live-text` (server/index.js:1600) lets a headless WS client drive a whole Live turn; what remains is genuinely mic-only, i.e. speaking to it, barge-in, and judging the `Aoede` voice by ear; (3) **§7.3's PIN lock is now REAL access control as of 2026-08-04 — the "visual deterrent only" state is closed.** New `src/core/security/pin-session.js`: `POST /api/pin/verify` mints a CSPRNG session token (32 bytes) stored server-side with a sliding 30-min TTL and returned as an `HttpOnly`/`SameSite=Strict` cookie (`Secure` when `req.secure`). Enforcement extends the EXISTING `extractToken()` chain rather than adding a fourth mechanism, so one change closed both gates at once — `requireToken` (REST) and the WS `verifyClient` upgrade both already routed through `tokenOk(extractToken(...))`. `tokenOk()` became `if (pinSession.isValid(presented)) return true; if (!AUTH_TOKEN) return !pinSessionRequired();`. Proven red-first: against the unmodified server the new `test/pin-session.test.js` failed 6 of 8 with `expected 401 with no session; got 200`; after the fix 8/8, plus 75/75 across every existing file touching `tokenOk`/`requireToken`/`verifyClient`/`mythos_token`/`pinLock`. Two design points worth keeping: `/pin/status` and `/pin/verify` are exempt or enforcement is an unrecoverable lockout (and the exemption matches on the MOUNT-RELATIVE path — inside `app.use('/api', …)` `req.path` is `/pin/verify`, so matching the full path would have made it silently dead), while `/pin/set` stays gated; and `pinSessionRequired()` returns false unless the operator opted in AND a PIN actually exists, so flipping the flag on a fresh install cannot lock anyone out. **Two residual items, both deliberate:** `PIN_SESSION_ENFORCE` defaults to **false** (required for back-compat — headless/Docker/Render and the whole existing suite rely on loopback-without-token), which means the bypass still exists on a default install and **the packaged desktop build should almost certainly default it ON** — that is an unmade product decision, not an oversight; and `/api/pin/set` needs no session on FIRST-TIME setup, so on a fresh server whoever reaches it first claims the PIN (pre-existing trust-on-first-use in `pin-lock.js`, loopback-only, unchanged here). Note the pre-existing hard boot refusal for non-loopback binds without `MYTHOS_AUTH_TOKEN` is untouched — the two layers stay independent (network vs local-physical) by design; (4) §7.10's `generate_image` needs billing enabled on the Google AI Studio project; (5) §7.6's `calendar_upcoming` success path needs real Google OAuth creds; (6) Task 9 Step 5, Task 10 Step 9 and the option-(a) `phone_tap` alternative all need a physical Android phone; (7) Task 7's `--install` needs an account that can register a scheduled task (it hit a real Access-denied here, and escalation was deliberately refused); (8) **booting the actual Electron app** (Slice 1's runtime) needs `npm install` at repo root + a desktop GUI — unit-tested only so far. Open but unowned/low priority: (9) the S2S health-tile design decision from step 4; (10) the pre-existing `resolveSandboxed()`/`allowedRoots()` Windows 8.3 short-name mismatch (the new symlink test works around it via `realpathSync`; the underlying helper gap remains); (11) V2 §7.12's Scheduled-Task-backed alarms, judged not a thin reuse of Task 7's machinery and documented rather than built. |
+| | **As of 2026-08-04 (second session, two waves, 10 commits) there is no delegable work left in this document.** Step 7 is **code-complete at all 6 slices**, the Anti-Drift Contract is **10/10** with executable tests, and all **six remaining unchecked items require the operator or physical hardware.** Do not go looking for the next `- [ ]` to build — there isn't one. What remains, in the order that retires the most risk per minute: **(1) Track C, one Electron sitting (~15 min).** Slices 1, 2, 3 and 5 are unit-green only; Slice 4 is the sole slice verified against a real artifact. `npm install` at repo root then `npm start` — **but NOT from a VS Code terminal**: `ELECTRON_RUN_AS_NODE=1` is inherited from the extension host, which makes `electron.exe` run as plain Node so `require('electron')` returns the npm path shim and every destructured API is undefined (crash at `electron/main.js` on `ipcMain.handle`). Second trap: electron's postinstall extraction fails **silently** (npm exit 0, `dist/` holding only `locales`, no `path.txt`) — check for `path.txt` before debugging anything else. In that one sitting: press-to-talk from another app, `Ctrl+Alt+X` OCR, `LIVE_SCREEN_SHARE_ENABLED=true` then ask "what's on my screen" (Slice 3 end-to-end), `MYTHOS_CURSOR_OVERLAY_ENABLED=true` then `Ctrl+Alt+C` (Slice 5), and while you are there close the four long-open operator items: judge the persona by ear across the five scenarios, judge the `Aoede` voice, test barge-in, and read the real p50 from `/api/status` → `voiceLatency`. **(2) Install the built installer** (`dist/MYTHOS Setup 0.1.0.exe`, 298MB) on a clean path and confirm it boots and resolves the real vault. **(3) Four decisions only you can make**, all cheap now and expensive later: whether `PIN_SESSION_ENFORCE` should default **ON** in packaged builds (it defaults false for back-compat, which means the shipped desktop app still has the `curl` bypass — recommended ON, since enforcement self-disables unless a PIN exists so lockout is already handled); whether `appId: com.mythos.assistant` is the real product identity, given OD-1 is undecided and `package.json`'s `name` is still `agent-os` (appId is the Windows install/upgrade key); what to do about `gesture_recognizer.task`, whose model licence was chased to Google's primary sources and is **stated nowhere** (page content is CC BY 4.0, code samples Apache-2.0, and the linked model card asset 404s) so it is excluded from the installer and gesture recognition is absent from packaged builds until it resolves or gets a `setup-gesture.js`; and how the paid product handles the NC wake-word weights. **(4) Track E1 needs your authorisation** — it means writing into the Aether-BLE repo, outside this project directory. **(5) Track G is gated on OD-1** (the product name; every account handle, OAuth app name and redirect URI depends on it), and P8 must not be designed before reading your own wake-word-collision repo. **(6) Wake-word training** needs Piper installed and your ear. **SUPERSEDED 2026-08-17 by Decision 4 — wake word stays BYO with the non-commercial notice; no training workstream exists.** *Superseded build-status detail follows.* **2026-08-04 (second session): Slice 4 — the electron-builder installer — is DONE and is the first step-7 slice verified beyond unit-green.** `npm run dist` produces a real `dist/MYTHOS Setup 0.1.0.exe` (298MB, unsigned by design), and the licence gate was verified by **walking `dist/win-unpacked` itself**, not by trusting the globs: zero `.onnx`, zero `.task`, no `edge-tts-server.py`, no `.env`, no `vault/`, no `.cache/`. **The finding that made this real, and the one to carry forward: `electron-builder` packages the WORKING DIRECTORY, not the git tree — `.gitignore` is not a packaging boundary.** Because every model here is deliberately fetched per-machine and never committed, a developer's checkout holds weights git has never seen, and the first build shipped three of them: `gesture_recognizer.task` (the only model actually tracked in git, and step 6.6 could NOT establish its licence), `silero_vad.onnx`, and a Hugging Face `.cache` copy of Kokoro-82M living inside `node_modules/kokoro-js` — that last one invisible to any check looking at this repo's own model directory or at git. The openWakeWord weights escaped only because the first pattern named that exact directory. Now excluded as a class (`!mythos/ui/public/models{,/**/*}`, `!**/.cache{,/**/*}`), which matches the architecture rather than breaking it — those files are absent on a fresh clone too and `setup-silero.js`/`setup-wakeword.js`/`setup-piper.js` exist to fetch them. `test/electron-builder-files-allowlist.test.js` (10 tests) asserts all of it through electron-builder's OWN `FileMatcher`, with a positive control so an over-broad pattern fails loudly instead of passing vacuously. Two build facts pinned there so nobody "fixes" them: **`asar` must stay false** (main.js:242 forks the child server with `cwd: MYTHOS_DIR`; a fork cannot cwd into an asar archive and the child writes `vault/` there — electron-builder's "strongly not recommended" warning is wrong for this architecture and the breakage would appear only in a packaged build), and **`includeSubNodeModules: true`** (without it AppFileWalker silently drops `mythos/node_modules` entirely — caught by a real build that shipped it empty). **Open, flagged, NOT decided by this session:** (1) `gesture_recognizer.task`'s model licence is still UNVERIFIED, so gesture recognition is absent from packaged builds until it resolves or gets a `setup-gesture.js` like every other model; (2) the app is **1.2GB unpacked** — the bulk is `onnxruntime`/`@huggingface/transformers`/`kokoro-js`, all there for LOCAL TTS/STT while the default architecture is BYO cloud, so cutting them is a product call not a build fix; (3) `kokoro-js/voices/*.bin` (56 voice embeddings) still ship, lower-risk since they arrive as published npm package contents; (4) **`appId: com.mythos.assistant` bakes in a product name that is still an open operator decision**, while `package.json`'s `name` is `agent-os` (hence artifact `agent-os-0.1.0-x64`) — appId is the Windows install/upgrade identity and is expensive to change once anyone has installed; (5) **CLOSED 2026-08-05** — there was no icon asset anywhere in the repo, and electron-builder does not fail on a missing icon: it silently falls back to Electron's own and exits 0, so a 298MB installer wore somebody else's logo. `build/icon.ico` now exists (7 entries, 16-256px), generated reproducibly by `mythos/scripts/make-icon.js` (dependency-free, deterministic, `--check` mode for CI) and pinned by `test/electron-builder-icon.test.js`, which asserts the file exists and parses as a real multi-size ICO rather than merely that a config key is set. `build.icon` is now explicit instead of relying on the implicit default. Deliberately a placeholder mark, not a logo — a wordmark cannot be designed before OD-1 settles the product name. **Next is Slice 5 (cursor overlay), then Slice 6 (OSS hygiene: SECURITY.md, CONTRIBUTING.md, issue templates, CODEOWNERS, dependabot, plus spine §13's directory-scoped `CLAUDE.md` split).** Slices 1-3 remain unverified live and still need the operator at a desktop — that is unchanged and is the highest-value remaining risk retirement. *Superseded context follows:* **Slice 3 (desktopCapturer) is SHIPPED IN CODE as of 2026-08-04 (see the Progress log row). Next is Slice 4 of 6: the electron-builder installer, which MUST honour Decision 1 — the step-7 installer never bundles the LGPL edge-tts package; TTS stays BYO. Then Slice 5 (cursor overlay) and Slice 6 (OSS hygiene: SECURITY.md, CONTRIBUTING.md, issue templates, CODEOWNERS, dependabot, plus spine §13's directory-scoped `CLAUDE.md` split).** Slice 3 added `sendVideoFrame` to `live-session.js`, a `live-video` WS branch, `setDisplayMediaRequestHandler` in `electron/main.js`, and `ui/public/js/voice/screen-share.js`, all opt-in behind `LIVE_SCREEN_SHARE_ENABLED` (default false) and **with `electron/preload.js` untouched, so AD-8 still holds**. Suite 2539/2538/0 fail/1 skip. **Two things it did NOT do, both worth picking up:** no security-reviewer ran on a surface that streams the desktop to a third party (the session was instructed not to spawn agents), and nothing is live-verified — a real `getDisplayMedia()` grant, real pixels, and Gemini actually answering from them all need the operator at an Electron desktop. **Beside the merged order, also landed 2026-08-04:** `feat/aether-focus-sensor` was fast-forwarded into `main` (Aether-BLE proximity sensor, Phase 1 of 5 — see `AETHER-WIRING.md`), and the test-count gates were repaired: commits `73818e2`/`bf95f35`/`b571ab4` had each added test files without running `sync-test-count.js`, so `main` carried 2488 while the suite really ran 2513 and `--check` — which CI gates on — was failing. **CLOSED 2026-08-05 — this item is stale and was still being read as open work.** It claimed `AETHER-WIRING.md` hardcoded drive-rooted absolute paths for both repos and that AD-7 could not catch them. AD-7 was subsequently widened in `d5eb2ec` to match any drive-rooted machine-specific path and cleared 54 hits across 19 tracked files, that document included. Re-verified 2026-08-05 by sweeping every tracked file for the shape: the only surviving matches are comment examples in `mythos/src/core/brain/index.js` that demonstrate the illegal-JSON-escape bug, i.e. illustrations rather than real paths. **When editing this row, do not spell the literal path shape out again — doing so is what tripped AD-7 inside this very document twice before.** **Slice 1 (FOUNDATION) shipped `5f6108d` and, as of 2026-07-31, BOOTS FOR REAL: `npm install` + `npm start` at repo root opens a window titled "MYTHOS" whose forked child server answers on 127.0.0.1:4478 and serves the HUD (index.html 200, `app.js` 8,800B gzipped). Two install-time gotchas cost an hour and are written up in the Progress log — electron's postinstall extraction failed SILENTLY (npm exit 0, `dist/` containing only `locales`, no `path.txt`), and `ELECTRON_RUN_AS_NODE=1` inherited from a VS Code extension host makes `electron.exe` run as plain Node so `require('electron')` returns the npm path shim and every destructured API is undefined. Neither is a MYTHOS defect.** Slice 2 (globalShortcut) is now SHIPPED in code: the press-to-talk half was found already fully implemented and test-pinned (`registerTalkHotkey()` + `onHotkey`→`toggleVoice()`), so the remaining work was the **Ctrl+Alt+X OCR grab** — `registerOcrGrabHotkey()` in electron/main.js (fallbacks `Control+Alt+X`→`Control+Shift+X`→`Control+Alt+S`, `MYTHOS_HOTKEY_OCR` override, never steals focus, guarded `child.send({channel:'mythos:ocr-grab'})`) → server/index.js's existing fork-IPC `process.on('message')` handler dispatches the already-registered `screen_read_text` effector through shared `dispatchAction` with `channel:'hotkey'` (audit-honest) → `broadcastAll({type:'ocr-result'})` → app.js captions the first line via `mic.setCaption` (PIN-gate respected) and best-effort `navigator.clipboard.writeText` (rejects unfocused by design — caption is the always-surface). As predicted in this block, Slice 2 needed NO preload-surface change — AD-8 intact, `electron-preload-surface.test.js` untouched and green. New `test/electron-ocr-hotkey.test.js` (9 tests, source-shape for the Electron half per the talk-hotkey precedent + server/HUD wiring guards). Full suite 2425/2425/0 fail. **Unit-tested only — the OS-global keypress + real OCR needs the operator at the desktop, so the slice is NOT live-ticked.** Next is Slice 3 (desktopCapturer). The full step-7 slice list is logged in the Progress log row for `5f6108d`. **6.5 now has ZERO open decisions** — all three answered AND the wake-word path locked (train own `hey_mythos` model, free/open only, BYOK product-wide — **SUPERSEDED 2026-08-17 by Decision 4: wake word stays BYO with the non-commercial notice at the install point; no training workstream**); the wake-word *training* itself is a separate workstream needing Piper installed + the operator's ear, and does not block the Electron build. To actually SEE the app so far: `npm install` at the repo root (pulls electron/electron-builder), then `npm start` — done 2026-07-31, it works. **CORRECTION: `GOOGLE_API_KEY` is NOT absent on this machine — it is set in `mythos/.env` and verified Live-capable** (`scripts/verify-gemini-live.js` → PASS, 41,282B of real audio from `models/gemini-3.1-flash-live-preview`). The earlier "absent" claim in this block was stale and blocked S2S on paper for no reason. **S2S is now ENABLED and verified end to end** (see the Progress log row); what still needs a human is a microphone, not a key. Do not write a legal conclusion into this file. **Landed beside step 7 on 2026-07-31 (see the row below and the Progress log):** a cross-cutting hardening wave — a CRITICAL tier-wide T3 leash bypass, a CRITICAL corrupt-JSON data loss in three vault stores, and installed agent skills never reaching builds. It advanced no merged-order step but it changed load-bearing behaviour in `leash/`, `goals/`, `fs-store.js` and `skills/loader.js`, so read that row before touching those. |
+| **Blocked on** | **Nothing in step 7 blocks the next slice.** Wake-word training (a separate workstream, closes the last 6.5 sub-item) needs Piper installed + the operator's ear to validate the trained model. **SUPERSEDED 2026-08-17 by Decision 4 — wake word stays BYO with the non-commercial notice; no training workstream.** Still open, needing the operator in person: (1) the persona has **not been judged by ear**; (2) V2 §14's live items 1-4 + Task 12 Step 5 need a microphone and speakers — **narrowed 2026-07-31**: everything on the S2S path that does NOT require a mic is now verified against the real API (session open, transcripts, audio-out bytes, tool calls through the leash, T3 confirm), because `live-text` (server/index.js:1600) lets a headless WS client drive a whole Live turn; what remains is genuinely mic-only, i.e. speaking to it, barge-in, and judging the `Aoede` voice by ear; (3) **§7.3's PIN lock is now REAL access control as of 2026-08-04 — the "visual deterrent only" state is closed.** New `src/core/security/pin-session.js`: `POST /api/pin/verify` mints a CSPRNG session token (32 bytes) stored server-side with a sliding 30-min TTL and returned as an `HttpOnly`/`SameSite=Strict` cookie (`Secure` when `req.secure`). Enforcement extends the EXISTING `extractToken()` chain rather than adding a fourth mechanism, so one change closed both gates at once — `requireToken` (REST) and the WS `verifyClient` upgrade both already routed through `tokenOk(extractToken(...))`. `tokenOk()` became `if (pinSession.isValid(presented)) return true; if (!AUTH_TOKEN) return !pinSessionRequired();`. Proven red-first: against the unmodified server the new `test/pin-session.test.js` failed 6 of 8 with `expected 401 with no session; got 200`; after the fix 8/8, plus 75/75 across every existing file touching `tokenOk`/`requireToken`/`verifyClient`/`mythos_token`/`pinLock`. Two design points worth keeping: `/pin/status` and `/pin/verify` are exempt or enforcement is an unrecoverable lockout (and the exemption matches on the MOUNT-RELATIVE path — inside `app.use('/api', …)` `req.path` is `/pin/verify`, so matching the full path would have made it silently dead), while `/pin/set` stays gated; and `pinSessionRequired()` returns false unless the operator opted in AND a PIN actually exists, so flipping the flag on a fresh install cannot lock anyone out. **Two residual items, both deliberate:** `PIN_SESSION_ENFORCE` defaults to **false** (required for back-compat — headless/Docker/Render and the whole existing suite rely on loopback-without-token), which means the bypass still exists on a default install and **the packaged desktop build should almost certainly default it ON** — that is an unmade product decision, not an oversight; and `/api/pin/set` needs no session on FIRST-TIME setup, so on a fresh server whoever reaches it first claims the PIN (pre-existing trust-on-first-use in `pin-lock.js`, loopback-only, unchanged here). Note the pre-existing hard boot refusal for non-loopback binds without `MYTHOS_AUTH_TOKEN` is untouched — the two layers stay independent (network vs local-physical) by design; (4) §7.10's `generate_image` needs billing enabled on the Google AI Studio project; (5) §7.6's `calendar_upcoming` success path needs real Google OAuth creds; (6) Task 9 Step 5, Task 10 Step 9 and the option-(a) `phone_tap` alternative all need a physical Android phone; (7) Task 7's `--install` needs an account that can register a scheduled task (it hit a real Access-denied here, and escalation was deliberately refused); (8) **booting the actual Electron app** (Slice 1's runtime) needs `npm install` at repo root + a desktop GUI — unit-tested only so far. Open but unowned/low priority: (9) the S2S health-tile design decision from step 4; (10) the pre-existing `resolveSandboxed()`/`allowedRoots()` Windows 8.3 short-name mismatch (the new symlink test works around it via `realpathSync`; the underlying helper gap remains); (11) V2 §7.12's Scheduled-Task-backed alarms, judged not a thin reuse of Task 7's machinery and documented rather than built. |
 | **2026-07-31 hardening session (no merged-order step advanced — read this before assuming 6.5 is still the whole story)** | A full-codebase audit ran *beside* the merged order rather than inside it: 5 read-only auditors (security, silent-failure, wiring, gap-sweep, OSS-licence research), then a 6-agent fix wave, then 3 adversarial reviewers on independent lenses (correctness / honesty / security). **All three reviewers returned DEFECTIVE on the first fix wave**, which is the single most useful result of the session — every one of their findings was real and a second round fixed them. What landed: **(1) a CRITICAL leash bypass.** `goals.grantTier(id, 3)` stored a bare `true` and `leash.check()` honoured it tier-wide, so approving ONE Forge plan-approval checkpoint pre-authorised *every* T3 tool carrying that goalId — `gmail_send`, `run_command`, `delete_file`, `phone_call`, `phone_sms_send`, `browser_click`, `install_from_github`. Reachable with no external attacker via `engagements/executor.js` (checks LLM-authored `{tool,args}` stages against the gate with `goalId` set, so untrusted text reaching a spec could steer it) and via `cortex/index.js` (passes its own `activeGoalId` every autonomous tick). Grants are now an **array of tool names**; `checkpoints.js` passes `PLAN_APPROVAL_GRANT_TOOLS = ['build_project','revise_project']`; a legacy boolean grant fails closed and emits `goal-grant-legacy-unscoped`. Two existing tests *asserted the vulnerable behaviour* (`leash.test.js:306`, `checkpoints.test.js:59`) and were rewritten with the reasoning recorded, not deleted. **(2) a CRITICAL silent data loss, fixed at the root on the second attempt.** `fs-store.readJSON()` returns the fallback for a CORRUPT file as well as a missing one, so three read-mutate-write stores turned one corrupt read into a truncated store while reporting success — proven end-to-end by seeding a real `reminders.json` with two real reminders and a truncated brace: `reminder_add` returned `ok:true` and both were permanently gone. The first fix only closed the *throwing* variant (EBUSY/EPERM) and the honesty reviewer caught that; new `fs-store.readJSONStrict()` throws on **both** shapes and `from-calendar.js`/`goals.js`/`forge.js` use it. `readJSON` keeps its lenient contract for the other 18 callers that legitimately want "no usable file → default". **(3) installed agent skills never reached builds.** `skills/loader.js` resolved exactly one external root, `~/.zcode/skills`, which does not exist on a Claude Code machine — so every non-vendored skill silently failed and every UI build fell through to `design/system.js`'s bundled-CSV substitute while the operator believed their `ui-ux-pro-max` install was driving output. Now an ordered candidate list (`$MYTHOS_SKILLS_DIR` → `~/.claude/skills` → `~/.claude/plugins/marketplaces/*/{src,.claude/skills}` → `~/.zcode/skills`), with `externalSkillRoots()` exported as a diagnostic. **Live-verified:** the real `ui-ux-pro-max/scripts/search.py` now resolves and returns 2,661 chars of genuine design system; catalog 5 → 9 skills. **(4)** dead `speak` effector removed (it had no `describeMeta()`, so it never appeared in any catalog the model sees — unreachable, not merely untiered) + phantom `monitor_snapshot` tier row removed, both now guarded by a new two-way `tier-table-conformance.test.js`. **(5)** four android tools stopped claiming success from `adb`'s exit code — real read-back via `settings get global wifi_on`/`bluetooth_on`/`pidof`, three honest outcomes, `needs_result:true` so the honest one actually reaches the user instead of `voice-agent.js`'s flat `"<tool> done."`. **(6)** S2S browser bridge, PIN lock screen and the `voiceLatency` tile were all fully built and loaded by **nothing** — now wired. **(7)** goals-bridge degraded paths stopped auditing `'ok'` for mutations that never reached disk. **Still open and honest:** the PIN lock is a visual/pointer deterrent only — the default install ships `MYTHOS_AUTH_TOKEN` commented out and `tokenOk()` returns `true` when unset, so `curl 127.0.0.1/api/...` bypasses it; real enforcement needs a server-side PIN session, which is **not built**. |
 | **2026-08-03 — Hermes as the generation engine + pattern ports (no merged-order step advanced)** | A second beside-the-order initiative, commits `47158de`..`bf147fb`, all pushed. **Phase A — provider failover.** `HERMES_PROVIDER_KEY_2..4` / `_BASE_URL_n` / `_MODEL_n`, additive so a single-key install is unchanged. Rotation fires only on provider-class failure (spawn error, non-zero exit, timeout, or an exit-0 reply matching Hermes's own anchored error prefix), never on a bad prompt; each rotation logs `hermes.provider-rotated` and reaches the bus as a `health.anomaly`. The guarded brain fallback is kept. **The finding that made this real:** `<HERMES_HOME>/.env` loads with `override=True` (`env_loader.py:325`, and `HERMES_HOME` is `<repo>/Hermes Agent` here, NOT `~/.hermes`) and beat every forwarded key — a deliberately invalid slot-1 key returned a correct artifact, so rotation would have passed every test while reusing one credential forever. Both lines are now commented out there (operator-approved; backup `Hermes Agent/.env.bak-2026-08-03`). Re-probed after: invalid slot 1 → `HTTP 401`, rotation logged, slot 2 produced the answer, `activeSlot=2`. An apparent escape hatch was tested and **refuted** — `HERMES_INFERENCE_PROVIDER=lmstudio` with unpinned `LM_API_KEY` still authenticated with an invalid key, because `config.yaml`'s `provider: openai-api` wins on the `-z` path. **Phase B** routes interview, spec-builder, plan-builder and the executor research stage through `buildEngine`; 4/4 live-verified with no brain wired (`scripts/verify-phase-b-hermes.js`). **Phase C:** C1 RAG citations 6/6 with every cited ref re-checked against its chunk file on disk; C2 watcher diff-gate 4/4 (suppresses repeats AND stays audible on real change); C3 was **broken and is fixed** — sampled 3× it was 0/3 because the model decorated static kinds with `title`/`layout`, which the validator rejects by design; the schema hint never said the static form carries only `kind`. Saying so → 3/3. Fixed the prompt, not the validator. **Phase D not built** (post-parity scope, deliberate). Also: the widget fork with the other machine was reconciled in `f9042b8` — remote's hardened widgets kept, this machine's `sanitizeErrorForClient` kept, chosen by a mechanical superset check, decision record in `Plans/widget-fork-reconciliation-2026-08-03.md`. Baseline 2428→2488, 0 fail. **CORRECTION, found by running real builds (commit `972ba62`) — Phase A delivers LESS than its plan claimed. Cross-provider failover DOES NOT WORK.** Hermes takes `model.base_url` from its own `config.yaml` and ignores the forwarded `OPENAI_BASE_URL`; proven by forwarding an unroutable base_url (`http://127.0.0.1:9/v1`) and still getting a correct reply. No generic `HERMES_INFERENCE_BASE_URL` exists — only `_MODEL` and `_PROVIDER`. So slots rotate the KEY and the MODEL, never the PROVIDER. This hid because the rotation proof used two MISTRAL keys, which share config.yaml's endpoint; a **valid** Cerebras key returns 401 because its key is sent to Mistral. The A1 slot table (Mistral/InferX/Cerebras/Kilo) therefore cannot function as designed — slots 2-4 are useful today only as extra keys for the SAME provider (e.g. a second Mistral key to escape a 429). Genuine cross-provider failover needs `config.yaml` rewritten per attempt, which the env-only design deliberately refuses; **that tradeoff is now an open operator decision.** `setup-hermes --check` flags any slot whose base_url differs from config.yaml as UNREACHABLE, and `.env.example` leads with the limitation. **Slot-1 bake-off DONE** (artifacts graded, not latency): `mistral-medium-latest` 6/6 clean, `mistral-large-2512` 6/6 but wraps output in a markdown fence after being told not to, `mistral-vibe-cli-with-tools` HTTP 429 — so mistral-medium-latest stands as slot 1 on evidence. The 429 is the shared-rate-bucket problem appearing unprompted. **Endurance NOW MEASURED, and it fails (`scripts/verify-hermes-build-endurance.js`, 12K-char prompts):** unpaced → HTTP 429 at **call 3 of 60**; 8s pacing → still 429 at call 3; 45s pacing → 4/4 clean. So it is a time-window rate limit and the usable spacing sits between 8s and 45s — a 60-call build at 45s spacing is ~45 minutes of waiting alone. **Slot 1's entire premise ("the only provider with TPM headroom for a whole build") is false on a free-tier key.** Rotation does not rescue this: it cannot change provider, and two slots holding same-provider keys share one bucket — backoff-and-retry is the mechanism that would help, and it is deliberately NOT built because that is an operator design choice, not a verification-session change. **Open decision for the operator: paid tier, throttling, or accept that multi-call builds are impractical on free keys.** **Slots 2 and 4 are MOOT, not merely untested.** An earlier line here said they were blocked on missing Kilo/InferX keys; that was the wrong conclusion. Those slots name endpoints `config.yaml` does not use, so per the endpoint finding above they are unreachable *by construction* — a valid key would still 401, exactly as a valid Cerebras key did. No credential unblocks them; only the config.yaml decision does. Sustained endurance still unmeasured for Slots 2 and 4 remain untested because no Kilo or InferX key exists in any env file on this machine — the operator declined to rotate the exposed Kilo/InferX/NVIDIA keys (free tier, accepted risk) and no separate Mistral key exists, so `HERMES_PROVIDER_KEY` and `MISTRAL_API_KEY` still share one rate bucket and slot 1's 500K-TPM justification is unproven. Slots 2-4 stay commented in `.env.example` until each survives a real build. |
 | **Operator decisions captured 2026-07-31** | Outward-facing actions (email/WhatsApp/SMS/posts/spend): **approve-a-plan-once**, not approve-each — which is exactly the shape of the bypass fixed above, so it is only safe *because* a grant now enumerates its tools. Any batch-approval UI must therefore disclose and grant a specific tool list, never a tier. Lead sourcing: **deferred**, build the product first. "Very smart": **all three** of memory-that-grows, better reasoning/routing, and prediction-from-real-stats (the last one honestly reports "not enough data" until a dataset exists — AD-5). Autonomous outbound voice calls: **roadmap/future**, not now. Product name: still undecided. |
 | **Two documents → now three** | This file = delta/roadmap. V2 spine = source-level detail. `MYTHOS-Post-Parity-Plan.md` = everything after step 7 (social, business-agent layer, multi-surface, wake-word arbitration). The "do not start a third plan document" rule exists to stop planning living in **untracked** files; all three are tracked and cross-linked, and this file still wins on any overlap. Precedence rules in the V2-spine section below. |
-| **Last updated** | 2026-08-05 |
+| **Last updated** | 2026-08-16 (status-table rows below the dated RESUME HERE blocks still describe 2026-08-05 state; the dated blocks above are newer and win) |
 
-**Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ (all 5 phases + Task 12 shipped and unit/integration-tested; V2 §14's live items 1-4 need the operator's microphone — see RESUME HERE) · 5 ✅ (nine buildable items shipped and committed; WhatsApp-desktop-scheduling deliberately deferred to its Task 10 dependency in step 6 — see RESUME HERE) · 6 ✅ (ADB phone bridge: adapter + setup script + 14 tools/13 rows, WhatsApp resolved as honest-open-only, physical-phone checks left unticked — see RESUME HERE) · 6.5 ☐ (3 decisions answered + licences verified; wake-word path LOCKED — train own model, separate workstream) · **6.6 ☐** (wider audit, split from 6.5 by Decision 3) · 7 ☐ **(all 6 slices now shipped IN CODE as of 2026-08-04 — Slice 5 cursor overlay `3050889`, Slice 6 OSS hygiene + the directory-scoped `CLAUDE.md` split. What keeps step 7 unticked is live verification, not missing code: Slices 1, 2, 3 and 5 are unit-green only and need the operator at an Electron desktop. Slice 4 is the sole slice verified against a real artifact.)** Earlier state for the record: (**Slices 1-4 of 6 shipped in code**: `5f6108d` foundation, globalShortcut, desktopCapturer, and — 2026-08-04 — the electron-builder installer, which honours Decision 1 and is the first slice verified against a real artifact rather than only unit-green: a real `MYTHOS Setup 0.1.0.exe` with the licence exclusions confirmed by walking `dist/win-unpacked`. Slices 1-3 remain NOT live-verified — all three need the operator at an Electron desktop. Next: Slice 5, the cursor overlay, then Slice 6, OSS hygiene)
+**Merged order (the only sequence — see V2 §18.4 below):** 0 ✅ · 1 ✅ · 2 ✅ · 3 ✅ · 4 ✅ (all 5 phases + Task 12 shipped and unit/integration-tested; V2 §14's live items 1-4 need the operator's microphone — see RESUME HERE) · 5 ✅ (nine buildable items shipped and committed; WhatsApp-desktop-scheduling deliberately deferred to its Task 10 dependency in step 6 — see RESUME HERE) · 6 ✅ (ADB phone bridge: adapter + setup script + 14 tools/13 rows, WhatsApp resolved as honest-open-only, physical-phone checks left unticked — see RESUME HERE) · 6.5 ☐ (4 decisions answered + licences verified; wake word stays BYO with the non-commercial notice at the install point — Decision 4, 2026-08-17; the own-model training workstream is superseded) · **6.6 ☐** (wider audit, split from 6.5 by Decision 3) · 7 ☐ **(all 6 slices now shipped IN CODE as of 2026-08-04 — Slice 5 cursor overlay `3050889`, Slice 6 OSS hygiene + the directory-scoped `CLAUDE.md` split. What keeps step 7 unticked is live verification, not missing code: Slices 1, 2, 3 and 5 are unit-green only and need the operator at an Electron desktop. Slice 4 is the sole slice verified against a real artifact.)** Earlier state for the record: (**Slices 1-4 of 6 shipped in code**: `5f6108d` foundation, globalShortcut, desktopCapturer, and — 2026-08-04 — the electron-builder installer, which honours Decision 1 and is the first slice verified against a real artifact rather than only unit-green: a real `MYTHOS Setup 0.1.0.exe` with the licence exclusions confirmed by walking `dist/win-unpacked`. Slices 1-3 remain NOT live-verified — all three need the operator at an Electron desktop. Next: Slice 5, the cursor overlay, then Slice 6, OSS hygiene)
+
+**· 8 ☐ (planned 2026-08-17, TRACKED NOT STARTED — "Step 8 — Upstream synthesis:
+prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory · agency-agents",
+below. **Six** lanes 8A-8F (8E/8F added later the same day when the operator named
+`msitarzewski/agency-agents` and asked for the four TencentDB assets 8A-8D had not
+taken), full design + code snippets + AD-11…AD-21 written out so the build
+is an execution pass, not an investigation. Operator set the sequence explicitly:
+**step 8 does not start until 6.5, 6.6 and 7 are ticked.** It carries two live,
+already-reproduced bugs — BUG-266 phantom skill names on a fresh clone, BUG-267
+the Live prompt naming a tool Live was never given — which are cheap and are
+lane 8A's first two items.)**
 
 Ignore the older "Wave 0/1/1.5/2/3/4" numbering where it conflicts — the merged order table is authoritative.
 
@@ -215,6 +1800,19 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 | 2026-08-04 | **Step 7 / Phase 8 — Electron shell, Slice 3 (desktopCapturer).** Implements spine §13's "`desktopCapturer` — Live accepts video… the one IRIS capability that genuinely needs Electron." Four seams, no new transport and no new dependency: (1) `live-session.js` gains `sendVideoFrame(base64Jpeg)` → `realtimeInput:{video:{mimeType:'image/jpeg',data}}`, §3-legal (exactly one top-level key) and returned on the session object; (2) `server/index.js` gains a `live-video` WS branch guarded exactly like `live-audio`, so a frame racing `live-open`/close is a no-op not a throw; (3) `electron/main.js` registers `session.setDisplayMediaRequestHandler` resolving the primary screen via `desktopCapturer.getSources({types:['screen']})`, plus `'display-capture'` on the permission-check handler — without it Electron denies `getDisplayMedia()` silently, the same shape as the Slice 1 mic denial; (4) new `ui/public/js/voice/screen-share.js` captures via `getDisplayMedia()` → detached `<video>` → canvas → JPEG → `{type:'live-video'}`, lazily imported by `s2s-bridge.js` so an opt-out install never fetches it. **AD-8 intact and this drove the design:** granting the request in the main process means the renderer calls `getDisplayMedia()` natively, so `electron/preload.js` is UNCHANGED — the contextBridge surface stays exactly `{getKeyNames,setKey,hasKey}` and the new test pins that no `getDisplayMedia`/`desktopCapturer`/`getSources` channel appeared. A preload-mediated capture would have worked and widened that surface for nothing. **Three deliberate non-obvious calls, each test-pinned:** (a) `sendVideoFrame` does NOT call `armIdle()` unlike `sendAudio` — the idle timer is what stops an unattended room holding a Live session open on the operator's BYO quota, and a desktop streams frames just as happily to an empty room, so speech extends a session and wallpaper does not; (b) `audio:false` on the capture — loopback audio would feed MYTHOS's own TTS back as operator speech, the exact self-answering failure `s2s-bridge.js`'s capture-suspend logic exists to prevent; (c) capture is torn down FIRST in `stop()`, because a capture outliving its session both keeps the OS screen-share indicator lit (the UI lying to the user) and pushes billed frames into a closed socket. Frames are downscaled to a 1280px long edge and default to 0.5 fps / 0.6 quality — every frame is a billed image input, so the defaults are cost floors, not compromises. **Opt-in and fail-closed:** `LIVE_SCREEN_SHARE_ENABLED` defaults false, reaching the HUD via `/api/config/s2s` (the same route whose absence once left `s2s-bridge.js` unreachable); a failed or missing fetch leaves capture off, since the failure mode is streaming a desktop unasked. `screen-sensor.js` is NOT replaced — it polls, hashes and spends a vision-lane call to describe a screen into prose for the cortex, which is the right shape for ambient awareness and the wrong shape for a live turn; both run and answer different questions. **Four existing `/api/config/s2s` tests were rewritten, not deleted** — they asserted `deepEqual(body,{enabled})`, the whole body exactly, which over-constrained the route's actual guarantee; the two things that file guards (a real boolean, never a secret) are both kept, and the exact-key-set assertion is still exact against the new two-key shape so the next field added has to justify itself there too. New `test/electron-screen-share.test.js` (13 tests, red-first: wire shape via live-session's own `createSocket` injection seam, the idle-arm guard, the server branch, the Electron handler's explicit-deny paths, the AD-8 surface, config fail-closed, `.env.example` coverage, capture lifecycle). Suite 2525→2539, 0 fail. **Slice 3 of 6** (remaining: electron-builder installer w/ Decision-1 no-edge-tts-bundle constraint, cursor overlay, OSS hygiene). | this commit | **Unit-tested only, NOT live-verified — and the gap is wider than Slice 2's.** No agent shell can grant a real `getDisplayMedia()`, read real pixels off a real display, or confirm Gemini answers from the frames; all three need the operator at an Electron desktop with `LIVE_SCREEN_SHARE_ENABLED=true` and a mic. What IS proven: the wire frame is §3-legal against a real session object, the AD-8 surface did not grow, and the full suite is green. **Also NOT done: no security-reviewer was dispatched**, which breaks the precedent Slices 1 and 2 set for a privacy-sensitive surface (this one streams the desktop to a third party) — the session was instructed not to spawn agents. Worth running before this ships. |
 | 2026-08-05 | **No merged-order step advanced. Two voice-session incident batches, the first security review of the screen-share surface (which found two CRITICALs), the installer icon, and one scope correction. Suite 2664→2777, 0 fail throughout.** **(1) The morning batch was never committed.** BUGS.md claimed BUG-099..BUG-105 were fixed while all 25 files, `ps-automation.ps1` among them, sat uncommitted in the working tree — precisely the BUG-037 shape where another machine's clean `git pull --ff-only` silently reverts live-verified work. Committed as `daeee69` first. **(2) A false test failure was silently blocking EVERY commit**, and it is the reusable lesson: `test/electron-builder-files-allowlist.test.js` hard-asserted that kokoro-js's Hugging Face cache weight exists under `node_modules`. That file downloads on first TTS use, so any checkout that had never spoken failed a *packaging* test for environmental reasons — the same class as the wakeword rename race, a test depending on machine-local gitignored data. Now materializes a stand-in only when the real file is absent and removes exactly what it created; deliberately NOT generalised to the wakeword/silero fixtures, because faking those is how the ONNX weights got destroyed before. **(3) BUG-106..BUG-116, eleven root-caused defects, all red→green** (`ed919e7`..`de2013d`): stale browser identity driving Chrome while calling it Brave, a wrong-browser refusal that was a dead end, whole-screen OCR reading MYTHOS's own window instead of the page, a string `window_id`, `get_directions` unreachable from voice, 14 Gmail polls no stored preference could stop, four greetings in three minutes including "Good morning" at 5:08 PM, dropped spoken commitments, YouTube error 153, an ad blocker that could never work (a throwaway debug profile has no extensions), and the systemic honesty defect of narrating a click as successful in the same second the tool failed. Two of those closed a CLASS rather than an instance, which is the pattern worth repeating: `get_directions` shipped with a reachability gate asserting every T0/T1 read-only effector is either allowlisted or on a commented exclusion list, and the browser fix clears `attachedBrowser` on any non-ONLINE state so the stale window is impossible rather than merely narrow. **(4) BUG-107 was only half fixed, caught by review after it was called done** (`572a157`) — the remedy landed in `checkBrowserTarget()` but `browser_launch_debug`'s own already-ONLINE mismatch branch still said "close it first", and that is the branch a model asked to switch browsers reaches FIRST. Lesson recorded in BUGS.md: a "name the remedy in the refusal" fix must cover every site that refuses, not the one the incident came through. **(5) SECURITY — the Slice 3 screen-share surface got its first review, and it should have had one before it shipped.** Two CRITICALs, both confirmed by reading the code rather than inferred, both now fixed with tests: **C1** — `setDisplayMediaRequestHandler` never inspected `request`, so it granted the primary screen to ANY webContents on the shared default session, and `electron/media-window.js` is a second window on that same session which loads a URL supplied by the `open_web` tool. A prompt-injected or mistyped URL could therefore run attacker JS that calls `getDisplayMedia()` and receives the whole desktop with no prompt and no picker, exfiltrating it over its own `fetch()` without touching MYTHOS's socket or Gemini at all — so `LIVE_SCREEN_SHARE_ENABLED` never gated that path. Every capture grant (mic included — the same blanket-by-permission-name bug applied to `getUserMedia`) is now scoped to the HUD's own webContents, and it fails closed when the requester cannot be identified. Deliberately NOT fixed by giving the media window its own partition, because the ad/tracker blocking is registered on the default session and isolating that window would silently disable ad blocking on the one surface that shows ads — a test records that tradeoff so nobody "hardens" it into BUG-115 again. **C2** — the `live-video` branch forwarded frames to Gemini with no server-side flag check; enforcement lived ONLY in renderer JS, so `main.js`'s own comment claiming the flag "gates it server-side" was false, and on stock defaults (no `MYTHOS_AUTH_TOKEN`, `PIN_SESSION_ENFORCE` false, `VOICE_S2S_ENABLED` true) any local non-browser process could open the loopback socket with no `Origin` header and bill arbitrary images to the operator's own key. The gate now lives in `live-session.js`'s `sendVideoFrame` — the choke point every caller must pass — plus the server branch, and fails closed on an absent flag. The same review's HIGH is fixed alongside: nothing bounded a frame below the WebSocket library's 100MB default, so there is now a per-frame ceiling (`LIVE_SCREEN_MAX_FRAME_KB`, 2MB) and a server-side rate limit derived from `LIVE_SCREEN_FPS`, with refused frames deliberately not consuming the rate budget so a malformed burst cannot lock out the operator's next real frame. Reported clean on the axes that were clean: no frame content is logged or persisted anywhere, nothing beyond pixels reaches Gemini, the WS's cross-origin rejection does stop ordinary web pages, and AD-8 still holds. **(6) The installer icon** — see the Slice-4 open-items list, item 5, now closed. **(7) Scope correction on BUG-116:** `5b8afc9` touches `live-tool-adapter.js` alone, so that fix is Live-path only; `voice-agent.js` still composes its sentence before the actions run, mitigated since 2026-07-31 by a corrective re-derivation pass and a deterministic truthful prefix — but the prefix fires only when the ENTIRE turn failed, so a partial-success turn still rests on the model admitting the failed half. Documented at `voice-agent.js:829-831` as deliberate; not a regression, and still open. | `daeee69`, `ed919e7`, `a022c55`, `df84c7d`, `bc4936e`, `a05b1ae`, `1e00889`, `5b8afc9`, `19f81d9`, `178bf16`, `f3b807a`, `572a157`, `de2013d` + this commit | **No, and the distinction matters more than usual here.** The eleven bug fixes are unit-verified only and need an operator voice session; the app was running throughout, so none of them is in the live process yet. The 9-item live gate is in BUGS.md's new afternoon section. The security fixes are unit-verified and source-pinned; the C1 handler cannot execute outside a real Electron app, so **the operator's Electron sitting is now also the live test for the capture scoping** — screen share must still work from the HUD, and must be refused in a media window. Suite numbers were reproduced independently from a cold `git status` rather than trusted from the orchestrating agent's report, which mattered: that agent reported seven sub-agents as having delivered work that was not on disk at the time, and its own central wiring pass shipped a boot-fatal `serverHandle is not defined` caught by `boot.test.js` on the next full run. **Two orchestration lessons worth carrying:** a background agent's completion notification can fire while its own children are still running, so `git status` is the only proof work happened; and `sync-test-count.js --write` chained with a commit in one shell call exceeds the 10-minute tool ceiling, after which the commit silently never lands while the index still looks staged. |
 | 2026-08-08 (evening) | **No merged-order step advanced. Two release-layer items closed instead: H11 (asar) and the buildable half of B6 (signing + auto-update), both live-verified against a real packaged app rather than left unit-green.** The work was already partly in the working tree when this session picked it up — `asar:true` + `asarUnpack: ["mythos/**/*"]`, `toRealPathIfPackaged()` in `electron/main.js`, `electron-updater` wired behind `MYTHOS_UPDATE_URL`, `forceCodeSigning:false`, `publish:null`, and a CONTRIBUTING section — and finishing it meant building and RUNNING it, which is where the two real findings came from. **(1) The packaged app did not boot, and every test said it would.** `dist/win-unpacked/MYTHOS.exe` exited 1 instantly with a completely empty stderr while dev `npm start` booted fine — the classic "green suite cannot tell you the Electron app starts". Cause: `const { autoUpdater } = require('electron-updater')` at module scope. That export is a **getter** that constructs the platform updater on first property read, so the destructure ran it before `app.whenReady()` — the Slice-5 `screen` lesson repeating, this time inside a dependency rather than our own code. Requiring it lazily inside `checkForUpdates()` fixed boot; the two builds differed in nothing else, so this is measured, not inferred. Pinned by a source-shape test that itself is proven against a known-bad fixture, so the checker cannot silently stop checking. **(2) "Just set `MYTHOS_UPDATE_URL`" was an overclaim** in both the code comment and CONTRIBUTING: true for the client (the URL is read at runtime and `setFeedURL` bypasses the absent `app-update.yml`), false for the release, because electron-builder writes the `latest.yml` a generic feed is polled FOR only when a publish config exists. CONTRIBUTING now carries the real release recipe, including that automatic download must stay off until the build is signed — an unsigned build gives electron-updater's Windows publisher check nothing to verify against. **H11 evidence:** the packaged app boots, forks the server out of `app.asar.unpacked/mythos`, completes all 24 boot steps, creates its vault under `userData`, and `pc-child` (PowerShell, spawned from the unpacked tree) answers `media_status` in 150-700ms. **(3) A test-environment trap worth more than the feature**, now in root CLAUDE.md: an agent shell exports `TEMP` in Windows' 8.3 short form (the profile folder written as `<NAME>~1`), so `fs.mkdtempSync(os.tmpdir())` hands a spawned server a short-name vault path and the watcher aborts it in libuv (`fs-event.c` line 72 assertion, exit `0xC0000409`). The test reports only `ECONNREFUSED` after its 30s timeout because the child's stderr is captured and never printed — it reads exactly like a regression you just caused. Re-running with the long-form `TEMP` turned `deploy-config-conformance.test.js` green with no code change. Suite 3255→**3283, 3283 pass, 0 fail, 0 skip** (the 1 skip also disappears once `TEMP` is long — same libuv fault). **Still not done, unchanged and still the operator's:** a purchased code-signing certificate and an update host; and the NSIS installer itself has been built but never run, which is a different test from `win-unpacked`. | this commit | **Yes for H11 and the update-check wiring** — real `npm run dist`, real packaged launch, real child server and pc-child traffic, and the honest-inert log line observed in both dev and packaged runs. **No for signing and for updates end-to-end** — nothing was signed (no cert) and no feed was ever polled (no host), so those remain shape-verified only. |
+| 2026-08-15 | **No merged-order step advanced — a cross-cutting model-routing rewire plus one long-standing silent defect.** **(1) Every MYTHOS role re-pointed at the model measured best for that job.** Almost every "thinking" role ran on `llama-3.1-8b-instant` because `PREF_SIMPLE` was ranked on latency ("224ms — fastest measured anywhere"), including cortex's `mull()`, whose entire job is noticing loose ends and which nothing waits on — the latency bought nothing and cost the reasoning. Two new lanes: `reasoning` (Cerebras `gpt-oss-120b` first; serves `mull`, both reflections, the reviewer and reality-checker seats, design verify, orchestrator synthesize, `ask_agent`, engagement interviews) and `memory` (Google `gemini-3-flash-preview`; consolidation ×3 + document answering). Vision and voice re-ranked; the 404 OpenRouter slug and a 27.9s NIM model deleted. **Load is treated as a first-class ranking reason, not a tiebreak:** Google's quota is per MODEL, so vision, memory and voice sit on three DIFFERENT Google models for three independent buckets, and vision leads on Google rather than Mistral specifically to keep Mistral's 4 req/min free for Hermes builds and embeddings. That reasoning is written into `lanes.default.js` because it is invisible from the ranking alone and a later session would otherwise "fix" it back on a quality argument. **(2) `think_deeply`** (new tool, T0, in the Live allowlist, `effectors/deep-think.js`) — the only change here that can affect conversational quality, because `live-session.js`/`live-tool-adapter.js` make ZERO `brain.think` calls and the Live model is capped at Flash tier on a free key. Bounds and instrumentation copied from `vision-call.js` rather than re-derived. **(3) Three silent breakages the lane split would otherwise have caused, all found by walking the full `think()` argument list rather than only the lane name** — persona injection was scoped to `voice/build/simple`, so moving the persona-passing seats would have dropped the argument with no error; `BRAIN_TERSE_LANES` defaulted to `simple`, so the callers moving off it would have silently lost compression; and `chainFor()` substituted the caller-less `text` lane for any unknown lane name, so a typo produced no error at all. Each is fixed and pinned; the last now emits `health.anomaly` plus stderr, and a test resolves every literal `lane:` string in `src/` (the one dynamic site is whitelisted BY NAME with both branches asserted, rather than claiming coverage it lacks). **(4) The specialised agent seats were never specialised.** `personas.js` searched only `mythos/vault/Personas/` — gitignored and absent — so `loadPersona()` returned `null` for every role on every machine and each seat silently ran as generic MYTHOS. Ordered resolution now ends in a tracked `mythos/personas/` with four authored defaults; the test derives required roles from the source, and was proven non-vacuous by deleting `reviewer.md` and watching it fail. **(5) A clean re-probe** of the two Google models that scored low on 2026-08-14 confirmed both were throttling artefacts (`gemini-3.7-flash` 1/4→4/4, `gemini-3.6-flash` 3/4→4/4). That re-probe's own first pass scored every model 3/4 on one probe because the expected answer had been carried over from a different phrasing — recorded in the doc, because a benchmark disagreeing with a previous run on EVERY model at once is a broken probe, not simultaneous regressions. Suite 4551→**4592, 0 fail, 0 skip**. | `08b0e3e`, `34fbf90` | **No — and the honest gap is narrow but real.** Everything here is unit-green and source-pinned; a green suite cannot show which model actually answered. Needs one operator voice session, then `%APPDATA%\MYTHOS\vault`: `brain-spend` showing the new distribution, `vision.attempt` showing Google first at ~1.5s with `attemptsTried: 1` (3 today), and a hard question actually reaching `think_deeply`. Watch for Cerebras 429s — 5 req/min is the tightest budget in the new layout and seven low-frequency roles now share it. The Google re-probe IS live-verified (real API calls against the operator's key). |
+| 2026-08-15 | **No merged-order step advanced — a full-history log audit, and the two structural findings it produced.** Not a bug wave: three read-only analysts were run over the operator's live vault (88 lesson files, 26 episodic days, the 30-incident ledger, the session server log) and this repo, to find the PATTERN rather than the next defect. Two findings were structural and are fixed here. **(1) BUG-251 — the Live voice path had no memory of the operator.** `buildLiveSystemInstruction()` composed rules + persona + version + capabilities + skills + time and no memory of any kind; everything durable the vault held (`Semantic/user-facts.md` — including seven lines of music taste) was reachable only from `handleUtterance()`'s `recallHybrid()`, i.e. the TYPED path. So "you never remember my songs" was true of the surface while the facts sat on disk, and the operator's earlier "two brains" complaint was the same mechanism a week apart. New `semantic.topic()` direct read (synchronous — this composer runs inside `buildSetup()` and cannot await, and an embeddings round-trip on every session open/rotation is not a thing to add), injected as an `OPERATOR FACTS` block labelled as-of-session-start per BUG-136, capped at 4000 chars keeping the TAIL because the store is append-only and newest-last. `LIVE_MEMORY_INJECT=false` is an exact zero-code rollback. Note this is the READ half of the same day's BUG-249, which fixed the WRITE half — the two were independently broken, which is why neither alone would have changed what the operator experienced. **(2) BUG-252/253 — the incident ledger and BUGS.md had no mechanical relationship.** Of 30 incidents recorded since 2026-08-07, **2** were cited by id in BUGS.md; six copies of one voice-node-duplicate loop, whatsapp typing into the wrong window, both camera misidentifications and the HUD colour report had no entry at all. Nothing hid them — there was no way to ask the question, so it was never asked, which is `memory/lessons.js`'s own documented trap ("wrote Incidents/ that nothing read back") re-emerged one layer up. New `scripts/triage-incidents.js` is a reporter, not a filer (auto-filing would produce 30 entries and a triage problem one layer up, which IS the bug); tracked is decided by id citation only, never text similarity, because a false "tracked" hides work while a false "untracked" costs one look. BUG-253 then triages all 28 in one table: 9 already closed elsewhere, 3 by-design, 1 informational, and **the open remainder named** — the six-report voice-node loop, whatsapp window targeting, `open_web` opening a widget where a browser was expected, `open_folder` reporting unverified when it worked. Ledger now reads 30 recorded / 30 cited / 0 untracked. **Deliberately NOT built:** the general chronic-signature counter (BUG-238's `terminal:true` already covers the sharpest instance; the threshold that makes it a useful notice rather than a second noise stream needs live evidence, and guessing it ships the noise). Suite 4674→**4687, 0 fail, 0 skip**. | (this commit) | **Partly.** `triage-incidents.js` is live-verified against the operator's real vault (30 recorded / 2 cited / 28 untracked before the entries, 30/30/0 after — a real run, not a fixture). BUG-251 is unit-green plus a real setup-frame assertion driven through the server's live-open path with a fake Gemini socket; what it cannot show is the model USING the facts, which needs one voice session — ask for something only `user-facts.md` knows and confirm no tool was called. |
+| 2026-08-15 (late) | **No merged-order step advanced — a live-session performance investigation, and the silent defect it turned up on the way.** The operator reported the spoken path felt slower and sometimes did not reply at all. Measured from the real session log rather than theorised. **(1) BUG-254, and it is the one that matters: the operator's authored persona had NEVER reached the model, on this machine or any other with a Windows-edited `self.md`.** `extractSection()` required a literal `\n` after each `## header`; the operator's `self.md` is CRLF, so `Purpose`/`Persona`/`Values`/`Origin` all returned `null` and `persona()` composed "You are MYTHOS. Helpfulness, honesty, efficiency." while a full JARVIS brief sat on disk. Nothing surfaced it because a parse miss and an unwritten section both return `null` and both get a plausible default — the same shape as the gitignored-personas miss. `topLearnedPrefs()` had the identical bug and LOOKED healthy only because `learn()` prepends a second, LF-written copy of that header further down the file. Verified against the real vault: four sections, all `null` before, all real content after. **(2) BUG-255 — `think_deeply` was 10 of ~34 tool calls in one conversation.** The tool is innocent on timings (471-1081ms, 10/10 ok, no 429s); the cost is that **every tool call is two inference passes**, so turn 32 spent 19 of its 20 seconds AFTER the tool had answered, and tripped the 10s `live.turn-stalled` detector — which is precisely the "doesn't reply" the operator heard. Its description named the failure modes but framed calling as normal ("planning an approach, checking whether an argument holds" covers most of a conversation). Rewritten so the default is answering, the cost is stated in weighable terms, and the trigger is an applicable self-check (would you otherwise guess?). **(3) BUG-256** — the facts cap kept 26 of the operator's 37 durable facts; raised 4000→8000, because a fact the model cannot see is a `recall_memory` round-trip, and the frame is composed once per session while the round-trip is paid per turn. **(4) BUG-257** — 151 anonymous `sensors.aether.socket_error` lines in 12 minutes; the handler now logs `url` and `code`, and the operator's local `.env` turns the sensor off since the BLE bridge is not running. Explicitly NOT claimed as the latency cause — it is fixed so it stops burying the next investigation. Suite 4687→**4700, 0 fail, 0 skip**. | (this commit) | **Partly, and the split matters.** BUG-254 is verified against the operator's REAL `self.md` (all four sections null before, real content after) — the strongest evidence in this row. BUG-257's diagnosis is from the real session log. BUG-255 and BUG-256 are unit-green and reasoned from measured call counts, but their effect is behavioural: only the NEXT session's `live.tool-call-batch` count answers whether the restraint wording works, and whether it swung too far. That is the single live check outstanding. |
+| 2026-08-16 | **No merged-order step advanced (6.5 ☐ · 6.6 ☐ · 7 ☐ unchanged) — a full gap-analysis pass over plans vs code vs repo state, and the CI-red it surfaced.** **(1) BUG-258: the `ci` workflow's test job had been failing on EVERY push since 2026-08-13** (runs 164-173; e2e green throughout) while the operator's local pre-commit hook ran green — `test/immune.test.js`'s build-engine-reprobe test did a "genuine live re-probe" against whatever `hermes` resolution the surrounding machine offered (PATH / exported `HERMES_CLI` / running gateway), true on the operator's shell, `spawn hermes ENOENT` on CI and any fresh clone. Tests do not load `mythos/.env`; only `src/main.js` does. Fixed by pinning `HERMES_CLI` to `process.execPath` for the test (real adapter probe, real child spawn, exit-code→ONLINE — only the target binary is made portable; save/restore per the `hermes-adapter.test.js` convention). Nobody noticed the red badge; `gh` is not even installed locally. **(2) Hygiene:** `.freebuff/` (23MB third-party tool state incl. a personal-data SQLite DB and a full nested repo copy) and `mythos/.graph-data.json` (regenerable graphify output) gitignored; `mythos/Plans/ADOPTION-MATRIX.md` (6 days untracked) and `MYTHOS-EXPLAINER.html` adopted into git; 0-byte stray `MYTHOS-Post-Parity-Plan` (no extension) deleted. **(3) Doc-truth:** MYTHOS-ARCHITECTURE.md's four phantom paths (`brain/interpret.js`, `effectors/index.js`, `memory/store.js`, `mythos/server.js`) corrected and its `F:/Projects` example genericised (the last AD-7 portability violation, doc-side); stale tool-count comments unpinned ("45"/"107"/"171" — real figure via `sync-test-count.js`, measured 146); seam count corrected 23→21 in BOTH plan documents with a dated note at spine §4 (the table never had 23 rows); ROADMAP **D-05 ticked** (B3 evidence re-verified against `schema.js:9-22` before ticking; MAJOR backlog 10→9); spine §18.4's superseded "blocks 7"/Piper-swap wording annotated in place (frozen table kept, supersession note added); `mythos/docs/DRIFT-LOG.md` created per the spine's own AD drift-log contract, seeded with this pass's corrections. Suite **4718 / 4716 pass / 0 fail / 2 skip**, docs-sync OK. | this commit | **Yes for BUG-258** — reproduced in isolation with the exact ENOENT diagnostic before the fix, 54/54 after, full suite green, `sync-test-count --check` OK. Doc changes verified against the code they describe (schema.js, the spine's own table row count, effectors count from sync-test-count). CI itself will confirm on push — the one thing a local run cannot. |
+| 2026-08-16 (second wave) | **No merged-order step advanced — BUG-258's fix was pushed and CI STAYED RED, which forced the deeper reproduction and found the second, independent cause.** With the immune test fixed, CI's failure signature became readable: `fail 0` — so the pwsh fail-gate PASSED — and the `sync-test-count.js --check` gate failed on the number mismatch instead. A local reproduction in CI's exact conditions (Node 22.23.2, `env -i` clean environment, `TZ=UTC`, no discoverable browser; local Node 24 runs were green throughout) reproduced it exactly: `fail 0 / cancelled 64 / pass 4652`. **BUG-259, root cause:** three one-shot timers were `unref()`'d whose only job is to settle a promise someone awaits — `briefing.js`'s `withTimeout()`, `from-pc.js`'s `delegateWithRetry` backoff, `electron/child-exit.js`'s SIGKILL deadline (where the unref defeated the function's own "never waits forever: escalates and resolves anyway" contract). In a quiet process — precisely the Node 22 test-runner child with an otherwise-empty event loop — an unref'd timer never fires; the awaited race never settles; the runner kills the pending test ("Promise resolution is still pending but the event loop has already resolved") and its siblings cascade `cancelledByParent` (64 via briefing, 18 more via the from-pc/child-exit families after the first fix). All three timers are ref'd again — an unref'd timeout is a timeout that never fires in the process that most needs it. One more env-dependence fixed alongside, different shape: `browser_launch_debug()` ran browser discovery BEFORE `BROWSER_EXTENSIONS` validation, so on a browser-less machine (fresh contributor, stripped runner) the loud config error was masked by "No supported browser found" and `test/bug-115`'s loud-failure test failed there; validation now runs first, machine-independent. **Step 6.6 first audit pass recorded** in THIRD_PARTY_NOTICES.md (Hermes MIT re-verified live; MediaPipe gesture weights re-confirmed UNVERIFIED with both canonical docs URLs now 404; Google/Groq/Mistral/Cerebras/OpenRouter ToS quoted verbatim with sources+dates; NVIDIA NIM named as the remaining gap). 6.6 stays ☐. **Final verification: 4718 / 4716 pass / 0 fail / 0 cancelled / 2 skip in CI's exact conditions — matching the committed numbers both CI gates check.** | this commit | BUG-259 reproduced under Node 22.23.2 before each fix (64 then 18 cancellations), zero after; the five affected test files pass 46/46 browser-less under Node 22; the full CI-faithful run matches the committed counts exactly. **CI CONFIRMED GREEN — run 181, `f16c0fd`, 2026-08-17, the first since 2026-08-13** — after four more environment layers surfaced by the new annotation channel and fixed in `22c9dc4` (root deps + full clone), `b9969bd` (machine-independent count gate + honest fixture-skips), `39c13b0` (SPA-fallback wakeword subtest), `f16c0fd` (monotonic `updatedAt` race). |
+| 2026-08-17 (operator sitting) | **Step 7 moved for the first time since 2026-08-04 — three slices verified by a human, two defects found, and the forked vault merged. Step 7 still ☐** (screen-share, cursor overlay, persona-by-ear, barge-in and the clean-path installer check remain). Verified live: the app launches and runs from `npm start` (the real Electron shell); **close-and-reopen works — BUG-225's quit seam, fixed the same day and never before checked by a person**; press-to-talk fires while another app holds focus. Found live, both green in the automated suite: **BUG-268** (`Ctrl+Alt+X` screen-text capture does nothing — popup fires, no result; operator-deprioritised, left undiagnosed rather than guessed at) and **BUG-269** (press-to-talk intermittent with variable lag; kept separate from 268 so one fix cannot close both). The PIN prompt was resolved as NOT a bug. **The vault fork is the substantive finding:** before `app.setName('MYTHOS')`, dev runs wrote `%APPDATA%\agent-os` and the packaged app wrote `%APPDATA%\MYTHOS`, both live on the same days — and `MYTHOS`/`mythos` are one directory, Windows being case-insensitive, so two vaults not four. Merged additively with a backup and nothing overwritten: **734 episodic entries, 572 audit lines, 31 lessons (90→121), 2 operator facts (37→39)**; every merged line parses, zero duplicate ids, re-run finds nothing left. Stale `proposed` goals, an all-`fired` reminders file, `pin.json` and six older Identity files deliberately left behind. **BUG-266/267 recorded in BUGS.md as reserved ids** so a concurrent session cannot reuse them. | this commit | **Yes — this row is itself the live verification**, performed by the operator at a real Electron desktop, which is the only thing that could have produced it. The merge is verified by re-run + JSON validation, not by assumption. BUG-268/269 are verified as REAL and deliberately NOT diagnosed. |
+| 2026-08-17 (planning only) | **No merged-order step advanced, NO CODE WRITTEN — merged-order step 8 designed and tracked.** The operator asked for three upstream repos wired into MYTHOS end-to-end (`PrimeIntellect-ai/prime-agent`, `addyosmani/agent-skills`, `TencentCloud/TencentDB-Agent-Memory`) and then set the sequence explicitly: plan now, build only after 6.5/6.6/7. The full design landed in this file as **Step 8** — four lanes (8A skills truth + curated vendoring, 8B Continual Harness, 8C memory budget + Live depth, 8D budgets + quality gates), each with architecture, a wiring table naming every writer and reader, code snippets, and six new invariants **AD-11…AD-16** mirrored into the V2 spine §1. Two operator decisions recorded so they are not relitigated: prime-agent and TencentDB are **patterns-only, never dependencies** (prime-agent installs by `curl \| sh`, forbidden by the root `CLAUDE.md`; TencentDB needs a 3-service Docker stack that breaks portability and the sold-installer story). Infrastructure delta zero. **Research finding that reframed the scope:** MYTHOS already has most of what those repos are known for — `skills/loader.js` is multi-root resolution with progressive disclosure, `memory/index.js:243 recallHybrid()` already does keyword+vector RRF (TencentDB's headline design), and `Identity/operator-profile.txt` is already its "L3 persona" reaching every surface via `persona()`; hence 8C.3 is provisional and gated behind 8C.2 proving insufficient. **Two live bugs reproduced and deliberately left unfixed** (they are 8A's first two items; fixing them now would jump the operator's sequence): **BUG-266** — six skill names hardcoded into prompt text (`voice-agent.js:275`/`:93`, `from-skills.js:37`) are PHANTOM on any fresh clone, proven by running the real loader with `USERPROFILE`/`HOME` pointed at a non-existent directory, and `ui-ux-pro-max` is phantom even here because it is vendored essence-only while `loadContent()` reads `SKILL.md` exclusively; **BUG-267** — `buildLiveSystemInstruction()` injects a 43-skill catalogue whose header says "call use_skill" while `use_skill` sits in `VOICE_ALLOWLIST_EXEMPT` and Live declares only `DEFAULT_ALLOWLIST`, so the primary spoken surface is told to call a tool it was never given. One `loader.js` edit was begun before the plan-only instruction arrived and was reverted; `git status` confirmed clean before this commit. | this commit | n/a (docs) — **nothing in step 8 is implemented, so nothing is verifiable yet.** The two bugs above ARE verified as real: reproduced against the live loader in the fresh-clone environment shape, output recorded verbatim in the Step 8 section. |
+| 2026-08-17 | **No merged-order step advanced (6.5 ☐ · 6.6 ☐ · 7 ☐ unchanged) — the operator-approved fix plan for the NINE open coding defects, executed in three waves, one commit per verified fix, each pushed immediately.** **Wave 1:** BUG-225's quit seam fixed at all four structural defects (re-fork race: `window-all-closed` sets `isQuitting` before `stopChild` non-darwin + `startChild` refuses once quitting; secondary windows: the main window's `closed` handler now releases media window + overlay so `window-all-closed` can fire; kill ladder: `stopChild` returns `awaitChildExit`'s SIGKILL-at-3s escalation; backstop: a ref'd 10s quit watchdog tree-killing via `taskkill /T /F` then `app.exit(0)` — armed BEFORE the blocking vault push) — with the trap the fix forced: an explicit `installerHandover` flag now feeds `before-quit`'s push-skip, since pre-setting `isQuitting` in `window-all-closed` would have skipped the vault push on every ordinary quit. Packaged builds no longer arm wake-word models from the install tree (`MYTHOS_PACKAGED=1` injected; `modelSearchDirs` drops the install tree there — userData-or-nothing, dev keeps the search). **Wave 2:** BUG-260 (`sensors/job.js` emitted the artifact OBJECT, the announcer spoke "[object Object]" — now the PATH string, announcer accepts both shapes); BUG-261 (open_folder's single 700ms coin-flip oracle → 4×400ms bounded poll, exact-then-contains title match, distinct pc-child-offline vs no-window reasons); `TOOL_ACK_DEADLINE_MS` operator-tunable (schema key default 1500 UNCHANGED, seam fed, `.env.example` names `live.tool-ack-deadline` counts as the evidence source). **Wave 3:** BUG-262 (distillation's two dead gates: idle count excludes `kind:'timer'` heartbeats — also revives `mull()`, the Phase-4-broken routing — and the active-branch consolidate hoisted above the goalless early-return; every skip now emits `memory.consolidate-skip` with a reason); BUG-263 (the fields-absent WebView2 caret false-refusal: split on the landed title — real app names still hard-fail with the 2026-07-31/Antigravity guards intact and pinned, the "Chrome Legacy Window" artifact shape returns honest-unverified BEFORE the read-back oracle); BUG-264 (`open_web browser:true` — the explicit in-tool route through the existing newtab mechanism; default unchanged, pinned); BUG-265 (the duplicate-identify anomaly damped to one per nodeId per 60s with `suppressedCount`; root cause honestly recorded as Aether-side). BUG-253's table rows for the whatsapp, open_folder, open_web and duplicate-storm incidents closed; the 2026-08-15 RCA's wakeword and ack-deadline bullets closed. Suite **4760 / 4758 pass / 0 fail / 2 skip**, counts synced per commit. A second session (freebuff worktree) landed `42f370d` mid-plan — stacked cleanly. | `1eda5a8`, `36ba820`, `196911d`, `f61f205`, `2c4bc08`, `0ed3108`, `bd64180`, `b7e16fa`, `1b96d52` | **Unit/source-shape green only — nothing here is live-verified yet, and four cheap operator sittings are named in RESUME HERE:** one X-close sitting (BUG-225: MYTHOS.exe exits ≤10s, double-click relaunches), one packaged-install check (wakeword honest-unavailable), one voice session then grep `memory.consolidate-skip` (BUG-262 — also covers the 08-15 persona/facts checks), and the Aether-side storm diagnosis. Two hook retries were load flakes from the concurrent session's suite runs, not regressions — both re-verified green in isolation before commit. |
+| 2026-08-17 (planning only, second pass) | **No merged-order step advanced, NO CODE WRITTEN — step 8 grew from four lanes to six.** The operator named `msitarzewski/agency-agents` alongside the two repos step 8 already covered, asked for "the best of the best — memory, agent skills", and re-confirmed **plan only, nothing built**, so the 6.5/6.6/7 gate stands. Two lanes added with full design, wiring tables and per-lane oracles: **8E — the Agency roster reaches the seats.** The finding that sized it: agency-agents is **already half-vendored** (six personas as `mythos/skills/persona-*/SKILL.md`, MIT, in `skills.allowlist`, credited in `THIRD_PARTY_NOTICES.md`) but **catalogue-only** — two persona layers exist that cannot see each other (`skills/loader.js` serves those six to the model via `use_skill`; `agents/personas.js` serves the *seats* from a different directory of four files), and `pickBuilderPersona()` is a two-way keyword coin flip, so every card that is not frontend-shaped gets `backend-builder` and the roster is never consulted — the same silent-degradation shape as *personas never loaded*. 8E.1 bridges the roots as a fourth candidate, 8E.2 makes the router scored and self-reporting, 8E.3 vendors **eight** more personas that each have a named reader (devops-automator, api-platform-engineer, data-engineer, appsec-engineer, secrets-credential-engineer, test-automation-engineer, evidence-collector, minimal-change-engineer), leaving ~220 unvendored on purpose, with `desktop-app-engineer` and `code-reviewer` deferred for stated reasons. **8F — the four TencentDB assets 8C did not take** (8C took only the L0→L3 layering): 8F.1 versioned skills (`memory/skills.js:28` overwrites in place, so a worse auto-distillation silently destroys a better one — and the load-bearing detail is that `recordUse()` must NOT snapshot, since it rewrites on every use); 8F.2 `[[wiki-link]]` + backlinks over the existing Obsidian-compatible Notes store with **no index file**; 8F.3 scoped recall, tags first and filter second, applied at the one place `excludeKinds` already is (`memory/index.js:265`, where the keyword/vector paths once diverged as FIX G) — its team/ACL half deliberately not built, no reader in a single-operator product; 8F.4 CodeGraph, which **opens with an adopt-vs-build decision** because `ADOPTION-MATRIX.md` already carries `tirth8205/code-review-graph` at 🟢 P1 for exactly this question, with a recorded recommendation to build native and scope it to JS/TS honestly. **Five new invariants AD-17…AD-21** mirrored into V2 spine §1. Upstream persona filenames were enumerated from the real tree with `gh api repos/msitarzewski/agency-agents/git/trees/main?recursive=1` — the `tree/main/...` web path 404s, so guessing them was explicitly ruled out. All three upstreams MIT, so 6.5 is unaffected. | this commit | n/a (docs) — **nothing in 8E or 8F is implemented, so nothing is verifiable yet.** What IS verified: the two-persona-layer split and the coin-flip router were read in `agents/personas.js` and `agent-actions.js` (four `loadPersona` call sites, one `pickBuilderPersona` caller); the six vendored personas were confirmed on disk, in `skills.allowlist` and in `THIRD_PARTY_NOTICES.md`; the eight upstream filenames were listed from the live upstream tree. |
+| 2026-08-17 (v0.1.10 closeout, Part A) | **No merged-order step ticked yet (6.5 ☐ · 6.6 ☐ · 7 ☐ — ticks are gated on the operator's Part B sitting) — but the closeout plan's entire code half, Part A items A1-A4, shipped in four commits, each independently reviewed and pushed.** **(1) A1 / BUG-269 — the intermittent press-to-talk hotkey, the highest-value fix in the repo, fixed at three independent defects that each reproduce the symptom.** The lost-IPC race: `registerTalkHotkey()` ran before the renderer's `onHotkey` listener existed, and Electron does not queue IPC for unregistered listeners, so any press in that window was lost silently and forever — now a payload-free `mythos:renderer-ready` signal (AD-8-safe, no channel param added to the preload surface) plus `electron/hotkey-latch.js`, a boolean single-press latch that flushes exactly once on ready and re-arms on `did-start-loading` (a reload destroys renderer listeners — same bug class, would have reappeared after every refresh). Re-entrancy: `toggleVoice()` was async but invoked un-awaited, and `ensureVoice().start()` inside it too, so two presses during mic acquisition interleaved — now `voice/toggle-guard.js`, an in-flight guard that DROPS concurrent presses (queueing would ripple start/stop/start the operator never asked for), with the un-awaited calls awaited. Structural lag: `arming` state now sets synchronously as the first statement before any await (a lost press and a slow press were visually identical — why the bug read as "intermittent" rather than "slow"), and `vadTick()` runs once immediately after `setInterval`, removing up to a full 100ms tick of dead time. New behavioural tests were red-first per the plan's mandate: 8/14 failing before the fix, 20/20 after; the pre-existing source-shape guards (which passed throughout the bug, by their own admission) kept and extended. **(2) A2 — `PIN_SESSION_ENFORCE` schema default false→true**, enacting the operator's 2026-08-17 answer ("whenever we start the app, it should ask for the PIN"). Safe by construction and pinned: `pinSessionRequired()` requires BOTH the flag AND `pinLock.isConfigured()`, so no PIN means no lockout; `.env.example` documents the opt-out; the config-doc-truth gate carries a deliberate allowlist entry; `pin-session.test.js` got prose-only corrections, no assertion loosened. **(3) A3 / step 6.5 — informed consent at the install point.** The architecture already excluded the CC BY-NC-SA weights from the installer (verified, not assumed); what was missing was the notice. The setup wizard's wakeword component now states the weights are openWakeWord, licensed CC BY-NC-SA 4.0, non-commercial use only, and downloading them is the user's own action; the allowlist test asserts the notice contains all three claims so it cannot be silently dropped. Decision 4 recorded in the 6.5 section; the 2026-07-30 own-model training workstream marked superseded. **(4) A4 / step 6.6 — the last named audit gap closed by evidence.** NVIDIA NIM's production-use definition quoted verbatim with source URL + fetch date in `THIRD_PARTY_NOTICES.md` ("Production use involves any use of NIM for purposes other than development, testing, research or evaluation … including activity serving real end-users. Using NIM in production requires an NVIDIA AI Enterprise license." — General NIM FAQ, "What does 'production' mean?"), replacing the "NOT VERIFIED 2026-08-16" entry; a 3-line note beside the NIM keys in `.env.example`; consequence phrased as a disclosure obligation, not a licensing one (BYO-key architecture — the end user accepts NVIDIA's terms directly). Lane audit: NIM leads NO default lane (PREF_VOICE 5th, PREF_REASONING 3rd, PREF_SIMPLE 3rd, PREF_TEXT 4th, PREF_BUILD 7th, PREF_VISION 5th-6th google-leading, PREF_MEMORY/PREF_EMBED absent), so no de-ranking was needed. Facts only, no legal conclusion, per the standing limit. Suite **4823 / 4821 pass / 0 fail / 2 skip** (both skips pre-existing environment skips), `sync-test-count --check` OK. | `9b98bc3`, `a847894`, `e62acbd`, `1bee47f` | **No — and the gate is explicit, not an oversight.** All four items are unit-green and independently reviewed; none is live-verified, because the verification IS the operator's Part B sitting (nine checks, listed in RESUME HERE): merged-vault boot, PIN set/quit/relaunch + no-PIN-no-lockout, twenty hotkey presses (ten cold), screen share, cursor overlay, persona/voice by ear, barge-in, clean-path installer, and the second-voice watch. Steps 6.5, 6.6 and 7 tick only after Part B is performed; Part C (`node scripts/release.js patch --yes --ci`) releases v0.1.10 after the ticks. |
+| 2026-08-17 (BUG-270) | **No merged-order step advanced — Part B's first live voice check FAILED, and it falsified a same-day change; BUG-270 fixed in code.** The operator ran the first real voice conversation on the batch path (`VOICE_S2S_ENABLED` unset): "It is very glitchy. It interrupts and it's breaking in between all sorts of things… It's not picking up words from the noise. The microphone is fine." **(1) The interruptions — the 900ms endpointing experiment live-falsified the same day it shipped.** `e19ac07` (that morning) cut `VAD_SILENCE_MS` 1800→900 for faster endpointing, flagged "unit-green, NOT yet live-verified at a mic", and its commit message accepted the exact trade-off that then happened live: natural mid-sentence pauses >900ms split one utterance into two clips, MYTHOS answered mid-thought, and the BUG-027 `assistantSpeaking` half-duplex gate then swallowed the operator's continuation (only the much higher barge-in floor, 0.0875 RMS sustained ~600ms, could get it through). **The documented revert applied:** default restored to 1800 in `schema.js`, the `voice-loop.js` literal, and `.env.example` — the pair re-pinned by `config-doc-truth.test.js`; still env-tunable for anyone who wants faster endpointing. **(2) The missed words — the real defect was that they were INVISIBLE.** The batch path's `recorder.onstop` gates each clip twice (peak RMS vs `MIN_PEAK_RMS` 0.06; effective length/size vs `MIN_CLIP_MS`/`MIN_CLIP_BYTES`) and both gates used to `return` with no log, no event, no HUD hint — and the batch path emits no client telemetry of its own, so "not picking up words" had zero evidence to diagnose. **Both drops are now loud:** `console.warn` carrying the measured value and the floor it failed, plus a HUD caption ("🎤 too quiet — not sent" / "🎤 too short — not sent"). Pinned red-first by new `test/bug-270-clip-drop-observability.test.js` (source-shape, brace-matched onstop extraction; 2/3 failing before the fix, 3/3 after; the third test pins that the gates still DROP — observability changed, behaviour did not). **Deliberately NOT changed: the BUG-020 threshold trio stays** (0.035/0.06/3) — it was raised against noise for a reason (fans/AC/bikes triggered phantom recordings) and lowering it blindly re-opens that bug; the new observability makes the next step evidence-based (`VAD_SPEECH_RMS=0.025` first, or `VAD_ENGINE=silero`, the trained speech-vs-noise detector, one-time `setup-silero.js` download). BUGS.md: BUG-270 recorded; BUG-269's stale "OPEN, UNDIAGNOSED" line corrected to fixed-in-code `9b98bc3`. | this commit | **No — the fix is unit-green and red-first-pinned; live re-verification is the operator re-running Part B's voice checks:** a conversation WITH natural pauses (MYTHOS must no longer jump in mid-thought) and speech in the noisy room (if still missed, the new "too quiet" hint names the gate to tune). The other Part B checks stand. Steps stay ☐. |
+| 2026-08-17 (BUG-271) | **No merged-order step advanced — BUG-271, the Live-path diagnosis of the symptoms BUG-270 fixed on the wrong path, shipped in code across three commits plus this record.** The operator's machine runs the Gemini Live path (`VOICE_S2S_ENABLED`), and the Live path never got the defences the batch path has carried for years. Three defects, three fixes: **(1) the self-interrupting echo loop** — MYTHOS's own voice replayed to Gemini's `START_SENSITIVITY_HIGH` VAD, transcribed as the operator, firing `serverContent.interrupted` mid-word and reading as self-interruption one turn later. `d3d6226`: `src/core/voice/echo-filter.js`, a verbatim port of the batch `echoMatch` (≥60% word overlap vs the last 3s of MYTHOS speech) wired into `live-session.js`; a matching transcript behaves as if it never arrived and logs `live.echo-dropped` (ratio only, never transcript text). 18 new tests. **(2) phantom words from ungated noise** — the Live send path streamed every 100ms frame with no gate, and the eager barge-in release tier (0.035/200ms) tripped on speaker bleed every ~7s, replaying MYTHOS's own voice back. `bb10623`: new `ui/public/js/voice/live-noise-gate.js` wired into BOTH `live-audio` send points — **zero, never drop** (below-floor frames become silence of the same byteLength; wire shape and Gemini's VAD timeline untouched; 800ms-quiet hysteresis; localStorage floor, 0 = raw stream), eager tier raised to **0.05/300ms** (above measured bleed, still below the 0.056 flush tier). 39 new tests. `952580e`: review fix — `framesZeroed` now resets per session in the gate's `reset()`. **(3) the hidden evidence** — since `36561bd` the client's own-voice-release transition has sent `prerollFrames`/`prerollCap`/`heldMs`/`framesDropped`/`peakRms` (plus `framesZeroed` from the new gate), but the server's `voice-capture-suspend` handler logged only `{ suspended, holdMs, reason, at }`. This commit: the handler logs every field the client sends under its exact client name, on the transitions that send it — no wire change, numeric/boolean only. Pinned red-first by extending `test/s2s-capture-suspend-log.test.js` with a real-server block (1/2 failing before, 10/10 after); the same edit fixed a leaked global `mock.timers.enable` in that file that hung any later test using `setTimeout`. BUGS.md: BUG-271 recorded; BUG-270 gets the honest correction note (valid fix, wrong path for the operator's machine). Naming note: `holdMs` (suspend-start) and `heldMs` (own-voice-release duration) are distinct fields on different transitions. | `d3d6226`, `bb10623`, `952580e`, this commit | **No — code-complete and unit-tested; the live acoustic re-test is the operator's next step** (restart the app, converse in the noisy room, watch for phantom words and self-interruption/echo turns; if anything persists, `live.echo-dropped`, `peakRms`, `framesZeroed`, `framesDropped` in mythos-server.log name the responsible gate). Steps stay ☐. |
+| 2026-08-18 (BUG-272, docs only) | **No merged-order step advanced, NO CODE WRITTEN — BUG-271's live re-test happened, and its full fallout is inventoried as BUG-272 with the fix plan.** The operator ran the first post-BUG-271 voice session (20-minute, noisy room, 72 live turns) plus a full forensics pass over the server log (721 lines) and the vault (170 episodic entries, 130 audit records, 3 incidents, `logs/main.log`). **Confirmed working from BUG-271:** noise gate zeroed 5,000+ frames with `framesDropped: 0` on every transition; the suspend-log evidence fields delivered the diagnosis. **Not fixed, now root-caused:** self-interruption at 63% of turns — the eager tier sits below the room's measured bleed floor of 0.09–0.38 RMS, which overlaps the speech band, so no RMS threshold can separate them; 16 `ceiling-fail-open` holds up to 13s (the mirror-image failure — same RMS-only policy); the echo filter fired ZERO times (either pure VAD-level interrupts before any transcript exists, or a broken reference pipeline — the logs cannot currently tell which, hence instrumentation before policy); phantom ASR persists above the noise floor; the wake word died at boot with OverconstrainedError (stale `deviceId:{exact}` from localStorage the surviving cause — the failure predates the s2s mic by ~29s, disproving the capture-race theory; no sampleRate/channelCount constraints exist in the request at all) and never re-armed (no fallback, no backoff, no devicechange hook); `launch_app` "code" resolved to the ZCode process via the unanchored substring rung with a circular evidence oracle; `open_web(browser:true)` failed 7/7 silently under Electron (newtab rejected by the media window, `setWindowOpenHandler` denies window.open, `shell.openExternal` absent from the repo; breaker counts unverified as success; per-turn dedupe resets); focus_window stale-pid + foreground-lock confirmed live-reproducing with a real app focused (answers AGENTS.md's open question; ladder exhausted, no speculative 4th rung); 4 ack-deadline breaches. Five evidence-based corrections to the findings document recorded in the entry (wake-word timeline, constraint shape, launch_app failure class, dedupe-exists-and-worked, echo-check logs must stay transcript-free). **The agreed fix order — audio ownership → echo attribution → barge-in policy → tool honesty — is written into the BUG-272 entry as five slices** (wake-word relaxed retry + backoff re-arm; echo-check instrumentation with privacy-safe fields only; playback-aware barge-in state machine with 2s ceiling and ~150-frame preroll cap; tool honesty incl. `shell.openExternal` surface and per-tool-class ack deadlines; records + scripted verification session with pass criteria). This commit is docs only: BUGS.md BUG-272 entry + header chain, this roadmap's RESUME HERE rewrite + this row. | this commit | **n/a (docs) — nothing implemented, so nothing verifiable yet.** What IS verified: every statistic in the inventory comes from the real session log and vault of 2026-08-17/18, and every code-level claim was grounded by reading the named file:line (mic-device.js, wakeword.js, app.js, ps-automation.ps1, from-pc.js, from-dashboard.js, electron/main.js, media-window.js, live-tool-adapter.js, hub.js). The live verification of the FIXES is the Slice 5 scripted session with the operator at the mic. |
 
 ---
 
@@ -226,7 +1824,7 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 
 **Why the search missed it.** The verification was rigorous but scoped entirely to the repo — `git log --all`, `git stash list`, `mythos/Plans/`, and a repo-wide `*synthesis*`/`*iris*`/`*s2s*` filename sweep. V2 lives in `~/.claude/plans/` (where Claude Code plan-mode files go) under the auto-generated name `deep-compare-this-floofy-heron.md`, which matches no plan-related filename pattern. This document sits in that same directory as `i-just-installed-the-virtual-sketch.md` — two siblings in one folder; the search found this one and concluded the other never existed. The root `.md.txt` that was analysed was a stripped copy of **this** document, which is why the `§` markers only ever matched themselves. **Lesson for the next session: `~/.claude/plans/` is outside the repo and outside every repo-scoped search. Check it before concluding a plan is gone.**
 
-Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract with AD-1…AD-10 and each executable check · §3 frozen Gemini Live wire protocol, every envelope and exact field name · §4 frozen MYTHOS seams, 23 seams with line numbers and contracts · §6 `live-session.js` full source · §7 `live-tools.js` full source with the param-prose converter · §8 the leash tool adapter · §9 both browser worklets · §10 server wiring diff · §11 persona table, all six changes · §7.1–§7.7 including the WinRT OCR PowerShell block · §13 Electron shell · §17 Amendment 1.
+Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract with AD-1…AD-10 and each executable check · §3 frozen Gemini Live wire protocol, every envelope and exact field name · §4 frozen MYTHOS seams, 21 seams with line numbers and contracts (the prose here said "23" from the start while the table itself has 21 rows — corrected 2026-08-16, see the spine's §4 note) · §6 `live-session.js` full source · §7 `live-tools.js` full source with the param-prose converter · §8 the leash tool adapter · §9 both browser worklets · §10 server wiring diff · §11 persona table, all six changes · §7.1–§7.7 including the WinRT OCR PowerShell block · §13 Electron shell · §17 Amendment 1.
 
 **Precedence between the two documents.** V2 is the spine and owns anything it specifies in source-level detail (S2S transport, the frozen references, the Anti-Drift Contract, Electron). This document is the delta and wins where it is more concrete or more recent — it carries literal test code, and V2's own §18.2 explicitly adopts six of its decisions. Where they conflict, V2 §18 is the tie-breaker because it was written last and with both documents in hand. Do not build both sides of a supersession: V2 §7.4's `android-adb`/`from-phone.js` with 6 tools is **replaced** by this document's Wave 2 (`android-child`/`from-android.js`, 14 tools, per-device queues).
 
@@ -234,7 +1832,7 @@ Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract
 
 - [x] **`phone_whatsapp_send` has no legal tap primitive — internal contradiction.** Task 10 requires "a resolved send tap", but none of the 14 tools taps or types, and `phone_shell` is deliberately refused. As written the flow can only ever report "opened, please tap send." **Fix:** add a tiered `phone_tap` (T3, resource-id targeted only, never raw coordinates), or drop the send step and keep the honest deep-link-open behaviour. **RESOLVED (option b, merged-order step 6):** dropped the send step. No physical phone existed to verify a tap primitive against, so `phone_whatsapp_send` opens the wa.me deep link with the message pre-filled and reports `{opened:true, sent:false}` — never a claimed send. Option (a) remains open for a future session WITH a real device to verify against.
 - [x] **Do not register `phone_flashlight_toggle`.** Task 10 concedes no reliable stock command exists. A tool that always fails pollutes `capabilities.md` and, worse, the Live `functionDeclarations`, where accuracy degrades with tool count. Omit it, or register only after a runtime capability probe succeeds. AD-4 argues this. **DONE (merged-order step 6):** not registered — `from-android.js` ships 14 tools (13 rows, see Task 10), `phone_flashlight_toggle` is not one of them, confirmed by a dedicated test.
-- [ ] **Licensing is a hard gate before Wave 4, and it is absent from this document.** Verified in code, not just claimed: `mythos/providers/edge-tts.js:8` and `mythos/services/edge-tts-server.py:7` both label edge-tts as a reverse-engineered endpoint, personal/hobby use only, commercial deployment prohibited; `mythos/THIRD_PARTY_NOTICES.md:25` records the openWakeWord **model weights** as CC BY-NC-SA 4.0, non-commercial. Wave 4 ships an installer, and a paid binary must not contain NC-licensed wake-word weights. **Swap edge-TTS → Piper (MIT, local) and train an own-voice `hey_mythos` model using openWakeWord's Apache-2.0 tooling** — the tooling is permissive, only the pretrained weights are NC. This is a licensing problem, not a technical one, and it will never surface in testing.
+- [x] **Licensing is a hard gate before Wave 4, and it is absent from this document.** Verified in code, not just claimed: `mythos/providers/edge-tts.js:8` and `mythos/services/edge-tts-server.py:7` both label edge-tts as a reverse-engineered endpoint, personal/hobby use only, commercial deployment prohibited; `mythos/THIRD_PARTY_NOTICES.md:25` records the openWakeWord **model weights** as CC BY-NC-SA 4.0, non-commercial. Wave 4 ships an installer, and a paid binary must not contain NC-licensed wake-word weights. **Swap edge-TTS → Piper (MIT, local) and train an own-voice `hey_mythos` model using openWakeWord's Apache-2.0 tooling** — the tooling is permissive, only the pretrained weights are NC. This is a licensing problem, not a technical one, and it will never surface in testing. **RESOLVED — the gate now exists in this document as tracked steps 6.5 and 6.6** (merged-order line, the 6.5 section's four operator decisions, `THIRD_PARTY_NOTICES.md`'s dated/sourced audit entries), and the proposed remedy is superseded twice over: Decision 1 (2026-07-30) keeps TTS BYO, so no Piper swap is required, and Decision 4 (2026-08-17) keeps the wake word BYO with the non-commercial notice at the install point, so there is no own-model training workstream. Do not execute the struck remedy.
 - [x] **Fix cross-reference drift in the parity table. VERIFIED ALREADY FIXED 2026-08-04** — checked the raw table rows rather than trusting this correction's own age (the same method line 111 below used, and for the same reason: these correction bullets go stale themselves). All four now cite correctly: "SMS to contacts by voice" → Task 10 (line 348), "Phone calls + contacts directory" → Task 10 (349), "Up to 2 Android devices + desktop" → Task 9 (353), "24/7 background, zero daily limits" → Task 7 (354). Nothing to change; this checkbox was the only thing still stale.
 - [x] **Split Task 11.** It is nine items behind one checkbox. A checkbox-driven roadmap needs one task each. **VERIFIED ALREADY DONE** — the Task 11 section below (`### Task 11: The rest of V2 §7 plus the four gaps the audit surfaced`) already lists all nine items (semantic code search, maps+routing, image generation, WhatsApp desktop scheduling, §7.1 OCR, §7.3 PIN/Hello, §7.5 doc RAG, §7.6 calendar, §7.7 wallpaper) as separate `- [ ]` checkboxes, not one shared checkbox — checked the raw section directly rather than trusting this correction's own age.
 - [x] **Schedule the §1 anti-drift invariant tests. RESOLVED 2026-08-04, and the phone-tool concern is satisfied by construction rather than by a per-tool test.** All ten invariants now have executable tests (see §18.3.6's re-count below). On the specific worry here — the 14 phone tools: **AD-1's test is a repo-wide literal scan** asserting `effectors.invoke(` appears nowhere but `dispatch-action.js`, so every phone tool is covered automatically the moment it exists; a phone tool that bypassed dispatch would fail that scan, not slip past it. **AD-2** drives a real `createLeash()` end-to-end for a T0 auto-allow, a T3 requireConfirm and a boundary-denial, asserting exactly one audit write each — the property is per-dispatch, not per-tool, so it holds for the phone tools via the same shared path. Additionally `tier-table-conformance.test.js` enforces two-way tier coverage (no tool without a tier row, no tier row without a tool), which is what would actually catch a phone tool being added untiered, and **AD-9 now injects ENOENT on `android-child` specifically**. Writing 14 near-identical per-tool tests would add no coverage the scans do not already give.
@@ -254,6 +1852,7 @@ Recovered verbatim and unfabricated by that one pointer: §1 Anti-Drift Contract
 | **6.5** | **Licensing gate: TTS=BYO (no swap needed), wake-word model TBD — blocks SHIPPING, see below** | §18.3.3 |
 | **6.6** | **Wider third-party licence audit (Hermes, cua-driver, MediaPipe assets, provider ToS for resale) — split from 6.5 by Decision 3** | new |
 | 7 | Electron shell + installer + overlay; Android app planned only — buildable now (blocks release, not building); installer MUST honour Decision 1 (never bundle the LGPL edge-tts package) | §13 |
+| **8** | **Upstream synthesis (prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory · agency-agents): 8A skills truth + curated vendoring, 8B Continual Harness, 8C memory budget + Live depth, 8D budgets + quality gates, 8E Agency roster reaches the seats, 8F the four TencentDB assets 8A-8D left (versioned skills, wiki links, scoped recall, CodeGraph). Tracked, NOT started — starts only after 6.5/6.6/7** | new (AD-11…AD-21) |
 
 ### Step 6.5 — the licensing gate, with 2026-07-30's findings folded in
 
@@ -337,18 +1936,49 @@ Piper TTS, so installing Piper also supplies the sample generator for training
 `hey_mythos` — which additionally gets a wake word that is on-brand instead of
 "hey jarvis".
 
-**Wider audit surface nobody has checked yet** (moved to its own tracked step 6.6
-by Decision 3 below): the licences of **Hermes-Agent** and **cua-driver**, both
-external components the product depends on; the **MediaPipe model assets**
-(`@mediapipe/tasks-vision` code is Apache-2.0, but bundled model files often
-carry separate terms); and whether any brain provider's free tier prohibits use
-in a resold product. The seven npm dependencies themselves are permissive
+**Wider audit surface — first pass recorded 2026-08-16** (moved to its own
+tracked step 6.6 by Decision 3 below; facts live in
+`mythos/THIRD_PARTY_NOTICES.md`, each with source URL and fetch date — no
+legal conclusions, per the standing limit below): **Hermes-Agent = MIT**
+(verified upstream 2026-08-08, re-verified live 2026-08-16); **cua-driver =
+MIT**, with the AGPL caveat correctly scoped to the unused `cua-agent[omni]`
+extra (verified upstream 2026-08-08); **MediaPipe `gesture_recognizer.task`
+remains licence-UNVERIFIED** — re-checked 2026-08-16: both canonical Google
+docs URLs for it are now dead (404 via redirect), and the samples repo states
+no terms for the `.task` weights; the operator's 2026-08-12 ship-anyway
+decision stands, the open question stands with it; and **provider ToS for
+resale** is now recorded verbatim for Google (Gemini API + Google APIs ToS),
+Groq (Services Agreement, 2026-06-22), Mistral (Commercial ToS + Additional
+Product Terms, effective 2026-08-05 — including that Labs/Preview models may
+train on Customer Data), Cerebras (2024-08-27) and OpenRouter (2026-07-29).
+The named gap — **NVIDIA NIM hosted-API terms** — is **CLOSED 2026-08-17**:
+the General NIM FAQ ("What does 'production' mean?",
+https://docs.api.nvidia.com/nim/docs/product, fetched 2026-08-17) states
+*"Production use involves any use of NIM for purposes other than development,
+testing, research or evaluation such as conducting business transactions and
+any non-testing activity including activity serving real end-users. Using NIM
+in production requires an NVIDIA AI Enterprise license."*, and Developer
+Program access *"is for prototyping, research, development and testing
+purposes only and does not include enterprise features or support"*. Full
+sourced entry in THIRD_PARTY_NOTICES.md; the BYO-key consequence (end user
+accepts NVIDIA's terms directly — a disclosure obligation, not a licensing
+one) is recorded there. **Lane audit (2026-08-17):** NIM leads NO
+default lane in `src/core/brain/lanes.default.js` — voice 5th ("last cloud
+resort"), reasoning 3rd, simple 3rd, text 4th, build 7th, vision 5th–6th
+(lane leads with google); memory and embed have no NIM entry. No
+de-ranking was needed: the historical vision-lane rank-0 timeout problem was
+already fixed by the 2026-08-14 reorder that put google first. Step 6.6
+stays ☐ until the operator/lawyer reads the recorded facts (the NIM gap
+itself is now closed by evidence, not by another empty terms page).
+
+The seven npm dependencies themselves are permissive
 (MIT/Apache-2.0). **The BYO-API-key architecture is a genuine licensing asset**
 — the end user brings their own provider keys and accepts those providers' terms
 directly, so MYTHOS resells nobody's API. Preserve that deliberately.
 
-**Three operator decisions — ANSWERED 2026-07-30** (each is a product/architecture
-choice, not derivable from code; recorded here verbatim):
+**Operator decisions — 1–3 ANSWERED 2026-07-30, Decision 4 locked 2026-08-17**
+(each is a product/architecture choice, not derivable from code; recorded here
+verbatim):
 
 - **Decision 1 — Paid TTS: STAYS BYO, like the API keys.** This resolves the
   edge-tts/LGPL exposure *without a code swap*. The paid installer ships no
@@ -368,6 +1998,21 @@ choice, not derivable from code; recorded here verbatim):
 - **Decision 3 — Wider licence audit: OWN TRACKED STEP 6.6**, not folded into 6.5.
   Keeps the two known swaps separate from the un-scoped unknowns (Hermes/cua/
   MediaPipe/provider-ToS); see the new 6.6 row in the merged-order table.
+- **Decision 4 — Wake word: STAYS BYO, with the non-commercial terms stated at
+  the install point (locked 2026-08-17).** The openWakeWord pretrained weights
+  are never bundled (root `package.json` build files exclude
+  `mythos/ui/public/models`), `WAKEWORD_ENABLED` defaults false, and
+  `scripts/setup-wakeword.js` fetches the weights to the user's own machine on
+  demand. The operator's decision adds informed consent at that download moment:
+  the setup wizard's wakeword component note now states the weights are
+  openWakeWord, licensed CC BY-NC-SA 4.0, non-commercial use only, and that
+  downloading them is the user's own action (`src/core/setup/components.js`,
+  pinned by `test/electron-builder-files-allowlist.test.js`). No own-model
+  training workstream: the 2026-07-30 "train an own `hey_mythos` model" plan
+  (see the Progress log row for that date) is superseded by this decision.
+  Facts only, per the standing limit below — whether download-on-demand clears
+  NC for a paid product remains a lawyer's call, and step 6.5 stays unticked
+  until the operator's Part B manual check (v0.1.10 closeout plan) has run.
 
 **Standing limit:** an AI session can report what the licence files say and what
 the code does. Whether download-on-demand clears NC for a paid product is a
@@ -378,6 +2023,1144 @@ confident legal conclusion into this file.
 Two further notes carried from V2 §18.2. Decision 1 (cancelling the speculative sentence-chunk TTS parser) is correct and **stronger than this document states** — sentence-chunked TTS streaming already exists as `splitSentences` in `server/index.js` and `src/core/effectors/voice.js`, with `test/sentence-streamer.test.js` and `test/split-sentences.test.js`; the cancelled work was redundant twice over. And V2 §7.12 wants **real Windows Scheduled Tasks** for alarms so they survive a MYTHOS restart, which is more than Task 5's in-process timer delivers — reconcile when building Task 5, and note V2 §7.8 tiers `clipboard_write` at T2 against Task 3's T1.
 
 One standing constraint: `/council` cannot convene — `~/.claude/agents/` holds 39 agents and zero `council-*.md`. Report that; never synthesize a verdict. Use the real installed reviewers (`code-reviewer`, `security-reviewer`, `silent-failure-hunter`, `debugger`).
+
+---
+
+## Step 8 — Upstream synthesis: prime-agent · addyosmani/agent-skills · TencentDB-Agent-Memory
+
+> **STATUS: TRACKED, NOT STARTED. Planned 2026-08-17, zero code written.**
+> **Do not start step 8 until 6.5, 6.6 and 7 are ticked.** The operator set this
+> sequence explicitly. This section exists so that when those close, the build is
+> a fast execution pass against a finished design rather than a fresh
+> investigation — the research below is done and the two bugs are already
+> reproduced.
+
+The operator asked for the best of three upstream repos wired into MYTHOS
+end-to-end. Two operator decisions were taken during planning and both are
+**patterns-only**, recorded here so a later session does not relitigate them:
+
+| Repo | Licence | What it actually is | Decision (operator, 2026-08-17) |
+|---|---|---|---|
+| `PrimeIntellect-ai/prime-agent` | MIT | A complete competing agent CLI (TypeScript + persistent IPython kernel), installed by `curl \| sh` | **Patterns only** |
+| `addyosmani/agent-skills` | MIT | 24 `SKILL.md` documents + 4 personas + 7 reference checklists | **Vendor a curated subset** (5 already vendored) |
+| `TencentCloud/TencentDB-Agent-Memory` | MIT | 3-service Docker stack (memory-core + web hub + proxy) + a team/ACL model | **Patterns only** |
+| `msitarzewski/agency-agents` | MIT | ~230 persona markdown files across 18 divisions + shell installers for 14 host tools | **Vendor a curated subset** (6 already vendored; +8 in 8E.3) — added to this step 2026-08-17 |
+
+Two of the three cannot become dependencies without breaking rules already in the
+root `CLAUDE.md`: prime-agent's installer is `curl -fsSL … | sh` (forbidden
+outright, and Hermes-Agent is the single deliberate external-engine exception),
+and TencentDB-Agent-Memory needs Docker plus its own LLM keys, which breaks
+open-source portability and puts a second source of truth beside the vault.
+
+**The finding that reframes the work: MYTHOS already has most of what these repos
+are known for.** `src/core/skills/loader.js` is multi-root skill resolution with
+progressive disclosure — prime-agent's own shape. `memory/index.js:243`
+`recallHybrid()` already fuses keyword and vector ranking with reciprocal-rank
+fusion, which is TencentDB's headline retrieval design. `Identity/operator-profile.txt`
+— written whole by `identity/reflection.js`, folded into `persona()` — is already
+TencentDB's "L3 long-term persona" and it reaches every surface. So step 8 is
+gap-closing, not importing.
+
+### The two bugs found while planning (reproduced, not theorised)
+
+Both are **live today** and both are cheap. They are the reason lane 8A is first.
+
+**BUG-266 — the prompts name skills that do not exist on a fresh clone.**
+Reproduced by running the real loader with `USERPROFILE`/`HOME` pointed at a
+non-existent directory (i.e. any machine without the operator's `~/.claude/skills`):
+
+```
+resolved: 43
+missing OPTIONAL: ["ui-ux-pro-max","frontend-patterns","frontend-ui-engineering",
+                   "design-system","deep-research","spec-driven-development",
+                   "planning-and-task-breakdown","tdd-workflow","code-review"]
+prompt-named ui-ux-pro-max            -> PHANTOM
+prompt-named frontend-ui-engineering  -> PHANTOM
+prompt-named spec-driven-development  -> PHANTOM
+prompt-named tdd-workflow             -> PHANTOM
+prompt-named deep-research            -> PHANTOM
+prompt-named code-review              -> PHANTOM
+```
+
+Six of those are hardcoded by name into prompt text the model reads every turn —
+`voice/voice-agent.js:275` (the SKILLS RULE paragraph), `voice/voice-agent.js:93`
+and `effectors/from-skills.js:37`. They resolve on the authoring machine from the
+host CLI's skill directory, so the defect is **invisible here and fires on every
+fresh clone**. It is the shape already recorded in this repo's history as
+*withheld read tools get substituted*: the model does not report the miss, it
+picks the nearest thing and narrates it.
+
+`ui-ux-pro-max` is phantom **on this machine too**: `mythos/skills/ui-ux-pro-max/`
+holds `LICENSE` + `SKILL-CORE.md` only, and `loadContent()` reads `SKILL.md`
+exclusively — so `use_skill('ui-ux-pro-max')` answers "not found" for a skill that
+is vendored and is driving every UI build through `loadEssence()`. The loader
+disagrees with itself about whether a skill exists.
+
+**BUG-267 — the Live/spoken path is told to call a tool it was never given.**
+`buildLiveSystemInstruction()` injects `skillsLoader.catalogBlock()`, whose header
+reads *"SKILLS AVAILABLE … call use_skill with the name to load full guidance"*
+(`loader.js:392`). But `use_skill` sits in `VOICE_ALLOWLIST_EXEMPT`
+(`voice/live-tools.js:252`, rationale "internal/debugging surface") and Live's
+`functionDeclarations` are built from `DEFAULT_ALLOWLIST` only
+(`server/index.js`, the `buildFunctionDeclarations` call). So the **primary
+spoken surface** receives a catalogue of 43 skills plus an instruction to call a
+function it does not have. Same substitution failure mode, on the surface the
+operator actually uses.
+
+*(Line numbers above were correct at `81cf4d5`. `server/index.js` moves often —
+re-grep for `function buildLiveSystemInstruction` and `'use_skill'` before
+editing, per the concurrent-session rule.)*
+
+### Anti-Drift Contract — AD-11 … AD-16
+
+AD-1 … AD-10 (V2 spine §1) apply unchanged and are not restated. Step 8 introduces
+state that is **read by the model and editable by the model**, which AD-1…10 does
+not cover. These six extend it. **They are additions to the spine's §1 table and
+are mirrored there** — if the two ever disagree, the spine wins (precedence rule).
+
+| ID | Invariant | Enforcement |
+|---|---|---|
+| **AD-11** | **Additive overlay only.** The harness overlay is *appended* to a composed prompt. It can never replace, reorder or edit `RULES`, `persona()`, or the capability digest. | `test/anti-drift-harness-additive.test.js`: compose the Live instruction with and without a non-empty overlay; assert the `RULES` and persona substrings are byte-identical in both, and that the overlay appears only as a suffix segment. |
+| **AD-12** | **No unevidenced refinement.** `harness.refine()`/`propose()` refuses any refinement whose `evidence[]` is empty or names episodic/lesson/skill ids that do not resolve in the vault. Refusal emits `health.anomaly` `harness-refine-unevidenced`. | `test/harness-refine-evidence.test.js`: submit `evidence: []`, then a fabricated `ep-…` ref; assert both rejected, overlay unchanged on disk, anomaly emitted. |
+| **AD-13** | **One composer, one path literal.** `Harness/overlay.md` is read and written in exactly one module. No second reader may re-implement composition. | `test/anti-drift-harness-single-composer.test.js`: read every file under `src/` + `server/`; assert the literal `Harness/overlay` appears only in `src/core/harness/index.js`. Mirrors AD-1's `effectors.invoke(` sweep. |
+| **AD-14** | **Every prompt-injected memory block is budgeted and states what it dropped.** No block may silently truncate; the omitted count appears in the emitted text. | `test/memory-budget.test.js`: 200 items against a 500-char cap; assert output ≤ cap and the trailing `[N older entries omitted…]` marker present with N correct. |
+| **AD-15** | **A limit is not a success.** A run ending by exhausting a turn/token/wall budget reports `status:'budget-exhausted:<dimension>'`, never `COMPLETED`; a passed gate is credited only with what that gate checked. | `test/agent-budget-gates.test.js`: exhaust each dimension; assert the engagement lands `BLOCKED` with the named reason and never `COMPLETED`. |
+| **AD-16** | **Nothing the model reads is invisible to the operator.** Any model-editable prompt state is readable through a HUD route and included in the vault export. | `test/harness-route.test.js`: `GET /api/harness` returns the current overlay text, the snapshot list and the refinement ledger. |
+
+Two of these exist because of scars already in this repo. AD-13 is the `Harness/`
+restatement of *a loader pointed at one root fails silently forever*. AD-16 exists
+because **a loader that cannot find anything returns exactly what a loader with
+nothing to find returns** — an invisible overlay would be that same trap wearing a
+new filename.
+
+**AD-17 … AD-21 — added the same day, for lanes 8E and 8F** (the Agency roster and
+the four TencentDB assets 8A-8D did not take). Same rule as above: these are
+additions to the spine's §1 table, mirrored there, and **the spine wins** on any
+disagreement.
+
+| ID | Invariant | Enforcement |
+|---|---|---|
+| **AD-17** | **One persona loader.** Every persona — tracked default, operator edit, or vendored Agency body — resolves through `src/core/agents/personas.js`. No second reader, no inline `path.join` to a persona directory anywhere else. Two persona layers that cannot see each other is the state 8E exists to end; a third would restore it. | `test/anti-drift-persona-single-loader.test.js`: read every file under `src/` + `server/`; assert persona-directory path construction appears only in `agents/personas.js`. Same sweep shape as AD-13. |
+| **AD-18** | **A routed seat says which seat it is and why.** Persona selection writes the chosen role **and** the matched reason into the kanban/mission record. No silent default. A router whose choice is invisible is indistinguishable from the two-way keyword coin flip it replaced — which is exactly how `backend-builder` came to build every security card without anyone noticing. | `test/persona-router.test.js`: assert role + reason present for a matched card and for a zero-hit card (where the reason is the fallback, stated as such). |
+| **AD-19** | **A skill body is never overwritten without keeping its predecessor.** A body/steps change snapshots the previous version first; a use-counter update does **not** snapshot. Both halves are load-bearing: without the first, a worse distillation silently destroys a better one; without the second, `recordUse()` writes thousands of version files a week. | `test/skills-versioning.test.js`: write → rewrite with different steps → assert exactly one version file; then 50 `recordUse()` calls → assert still exactly one. |
+| **AD-20** | **A graph answer carries its freshness.** Every CodeGraph result states the index timestamp and file count, and a query naming a file that is not in the index returns a distinct "not indexed" shape — never an empty edge set. An empty result and an unindexed target must never look identical; that equivalence is the same dishonest-empty trap AD-16 names one layer up. | `test/codegraph-freshness.test.js`: query an un-indexed file; assert the not-indexed shape, not `[]`. Assert timestamp + file count on a normal hit. |
+| **AD-21** | **A scope filter removes, never fabricates, and states what it withheld.** A scoped recall is a strict subset of the same unscoped recall and reports how many records scope withheld. A filter that silently shrinks recall is indistinguishable from an empty vault. | `test/memory-scope-filter.test.js`: same query scoped vs unscoped; assert subset, and assert the withheld count is reported and non-zero when records were excluded. |
+
+### Architecture and infrastructure
+
+**Infrastructure delta: none.** No new npm dependency, no service, no port, no
+Docker image, no model download. All new state is files under the existing vault
+root reached through the existing `createFsStore` surface, so `MYTHOS_VAULT_ROOT`,
+the Electron userData vault, atomic writes, archiving and pruning keep working
+unmodified. This is deliberate: TencentDB's Hub and prime-agent's daemon are
+precisely the parts that cannot ship inside an installer the operator sells
+(step 6.5/6.6 territory).
+
+```
+                    ┌──────────────────── vault/ ────────────────────┐
+                    │ Episodic/  Semantic/  Lessons/  Skills/         │  existing
+                    │ Identity/{self.md, operator-profile.txt}        │  existing
+                    │ Harness/{overlay.md, snapshots/, refinements.jsonl}  NEW (8B)
+                    │ Semantic/scenarios/<slug>.md                    │  NEW (8C.3, provisional)
+                    └────────────────────────────────────────────────┘
+                                       │ createFsStore (unchanged seam)
+        ┌──────────────────────────────┼───────────────────────────────┐
+        │                              │                               │
+  memory/index.js               harness/index.js  NEW           skills/loader.js
+  (episodic, semantic,          overlayBlock() / propose()      (unchanged roots,
+   lessons, recallHybrid)       / apply() / rollback()           + SKILL-CORE fallback)
+        │                              │                               │
+        └──────────► memory/budget.js NEW (AD-14) ◄────────────────────┘
+                                       │
+             ┌─────────────────────────┴──────────────────────────┐
+             │                                                    │
+   server/index.js                                       voice/voice-agent.js
+   buildLiveSystemInstruction()                          per-turn prompt composer
+   (spoken / Live, session-start labelled)               (typed / batch, fresh)
+             │                                                    │
+             └──────────► identical block content, one composer ───┘
+                                       │
+                             live-session.js buildSetup()
+                                       │
+                      Gemini Live  ◄───┴───►  functionDeclarations
+                                              (DEFAULT_ALLOWLIST + use_skill, 8A.3)
+
+  Execution side (8D):
+   agent/budget.js NEW ──► engagements/executor.js (repair budget, verify sweep)
+   agent/gates.js  NEW ──► gate commands run through the EXISTING run_command
+                           effector (allowlist + metachar reject + cwd pin +
+                           env scrub + leash + treeKill) — never a new spawn path
+```
+
+**New config keys — all optional, all defaulted** (`config/schema.js`, plus an
+`.env.example` line each; no key means the default, never a silent disable):
+
+| Key | Default | Purpose |
+|---|---|---|
+| `HARNESS_ENABLED` | `true` | Master switch for 8B. `false` → `overlayBlock()` returns `''`. |
+| `HARNESS_MAX_CHARS` | `4000` | Overlay budget cap (AD-14). |
+| `LIVE_EPISODIC_MAX_CHARS` | `3000` | Cap for the new Live episodic block (8C.2). |
+| `LIVE_LESSONS_MAX` | `5` | Item cap for the new Live lessons block (8C.2). |
+| `AGENT_MAX_WALL_MS` | `1800000` | 8D wall-clock budget; matches today's `buildTimeoutMs()`. |
+
+---
+
+### Step 8A — Skills truth + curated vendoring (addyosmani/agent-skills)
+
+- [ ] **8A.1 — Stop hardcoding skill names in prompts (BUG-266a).**
+
+  **Attach first — what reads what.** Three prompt sites hardcode example names;
+  one catalogue function is the single honest source of what actually resolved.
+
+  | Site | Today | Consumers |
+  |---|---|---|
+  | `skills/loader.js:389 catalogBlock()` | emits only skills that **resolved** | `server/index.js` (Live), `voice-agent.js` (batch), `identity/capabilities.js:162` |
+  | `voice/voice-agent.js:275` SKILLS RULE | names 5 skills verbatim | the batch/typed prompt |
+  | `voice/voice-agent.js:93` `use_skill` decl | names 3 verbatim | batch tool declarations |
+  | `effectors/from-skills.js:37` tool description | names 3 verbatim | every surface declaring `use_skill`, incl. Live after 8A.3 |
+
+  Derive the examples from the same resolved catalogue the block already uses, so
+  a name can never appear in prose without existing on disk:
+
+  ```js
+  // skills/loader.js — add next to catalogBlock()
+
+  // Example names for prompt prose. Derived from the RESOLVED catalog, never
+  // hand-typed: BUG-266 was five skill names written into RULES that resolve on
+  // the author's machine (~/.claude/skills) and are PHANTOM on a fresh clone, so
+  // the model was instructed every turn to call use_skill on something that
+  // answers "not found". A hardcoded example name is a claim about another
+  // machine's disk. `prefer` is a wish list, not a guarantee — anything in it
+  // that did not resolve is dropped and the catalog head fills the remainder.
+  function exampleNames(prefer, limit) {
+    var have = {};
+    loadCatalog().forEach(function(s) { have[s.name] = true; });
+    var cap = limit || 3;
+    var out = (prefer || []).filter(function(n) { return have[n]; });
+    if (out.length < cap) {
+      loadCatalog().forEach(function(s) {
+        if (out.length >= cap) return;
+        if (out.indexOf(s.name) === -1) out.push(s.name);
+      });
+    }
+    return out.slice(0, cap);
+  }
+  ```
+
+  Each prompt site then interpolates instead of asserting:
+
+  ```js
+  // voice/voice-agent.js — SKILLS RULE (was: a fixed list of five names)
+  var eg = skillsLoader.exampleNames(
+    ['ui-ux-pro-max', 'spec-driven-development', 'test-driven-development'], 3);
+  var SKILLS_RULE = 'SKILLS RULE: You have SKILLS available (listed in the SKILLS ' +
+    'AVAILABLE block). When a task fits one — e.g. ' + eg.join(', ') + ' — call ' +
+    'use_skill with that name to load its full guidance, then apply it. Only ever ' +
+    'call use_skill with a name from that block.';
+  ```
+
+  The trailing sentence is load-bearing: it is what stops the model inventing a
+  plausible skill name when the one it wanted is absent.
+
+  **Test (red first):** `test/skills-prompt-names.test.js` — with
+  `USERPROFILE`/`HOME` forced to a non-existent dir and `MYTHOS_SKILLS_DIR` empty
+  (the fresh-clone shape that found this), extract every quoted skill-like token
+  from the composed batch prompt, the `use_skill` declaration and the Live
+  instruction, and assert each is in `loadCatalog()`. **This test fails today** —
+  that red is the proof.
+
+- [ ] **8A.2 — An essence-only skill must still load (BUG-266b).**
+
+  ```js
+  // skills/loader.js — loadContent(), after the SKILL.md attempt fails
+    } catch (_) { /* no SKILL.md anywhere — try the vendored essence below */ }
+    // Essence-only vendoring is a real, documented state (skills/README.md:
+    // "SKILL-CORE.md — a hand-distilled ~1-2 KB essence"), and ui-ux-pro-max ships
+    // exactly that, because its full 45 KB doc needs a Python CSV database this
+    // repo does not carry. Reading only SKILL.md made use_skill report "not found"
+    // for a skill that IS vendored and IS driving every UI build through
+    // loadEssence(). Say it is the essence, so the model does not treat 1 KB as
+    // the whole guidance.
+    try {
+      var essence = fs.readFileSync(path.join(REPO_SKILLS_DIR, name, 'SKILL-CORE.md'), 'utf8');
+      if (essence.trim()) {
+        return '(Condensed essence — the full skill needs a host install of its own ' +
+          'tooling; this is the complete guidance available on this machine.)\n\n' +
+          essence.trim();
+      }
+    } catch (_) { /* no essence either */ }
+    return null;
+  ```
+
+  **Consumers checked:** `loadContent()` has exactly one caller,
+  `effectors/from-skills.js:22`. Nothing parses its return value, so the prefix
+  line is safe. `loadEssence()` is untouched.
+
+- [ ] **8A.3 — Give the spoken path the tool its own prompt names (BUG-267).**
+
+  `use_skill` is **T0** (`leash/tiers.js:71`, "read-only — loads a skill's guidance
+  text from disk"), so there is no safety argument for withholding it — only the
+  tool-count argument in `live-tools.js:15-18`, which is outweighed here because
+  the Live prompt already spends the tokens listing 43 skills. Move `'use_skill'`
+  out of `VOICE_ALLOWLIST_EXEMPT` into `DEFAULT_ALLOWLIST` with this rationale in
+  place of the old exempt comment:
+
+  ```js
+    // use_skill — promoted (BUG-267). It was exempt as an "internal/debugging
+    // surface", but buildLiveSystemInstruction() injects catalogBlock(), whose
+    // header instructs the model to "call use_skill with the name". Declaring the
+    // catalog while withholding the tool is the withheld-read-tool trap: the model
+    // does not report the gap, it substitutes the nearest tool and narrates it.
+    // Either the catalog goes or the tool comes — the catalog is 43 real skills,
+    // so the tool comes. T0 (leash/tiers.js:71), so this adds no confirm.
+    'use_skill',
+  ```
+
+  **Consumers checked before moving it:** `DEFAULT_ALLOWLIST` is read by
+  `buildFunctionDeclarations()` (`live-tools.js`), called from `server/index.js`.
+  Two existing conformance sweeps gate this list and validate the move for free —
+  `test/allowlist-reachability.test.js` (fails when a T0–T2 tool is in neither
+  list) and `test/tier-table-conformance.test.js`. Both already
+  `require('../src/core/effectors/from-skills')`.
+
+  **Alternative rejected:** suppressing `catalogBlock()` on Live. One line
+  cheaper, but it makes the primary surface the only one with no skills at all —
+  the opposite of the wiring being asked for.
+
+- [ ] **8A.4 — Vendor the curated addyosmani subset.**
+
+  Five are already vendored (`THIRD_PARTY_NOTICES.md:203`). Six more earn a slot;
+  each is justified against `build-pack.js:24-41`'s essence-vs-tool-driver rule
+  and against what is already on disk.
+
+  | Skill | Why it earns a slot | Pack |
+  |---|---|---|
+  | `spec-driven-development` | Named in two prompts today and phantom on a fresh clone (BUG-266); also the natural front end of the engagement `SPEC_READY` state | `app` |
+  | `planning-and-task-breakdown` | Feeds `engagements/plan-builder`; already `?`-listed, never vendored | `app` |
+  | `incremental-implementation` | Thin vertical slices with a test/commit cycle — the discipline the engagement stage model assumes but never states to the model | `app` |
+  | `doubt-driven-development` | Adversarial fresh-context review before finalising; direct analogue of AD-4 and of `effectors/evidence.js`. Wired into 8D's verify gate | `app`, `security` |
+  | `context-engineering` | Governs every budget decision in 8C; the repo has no written rule for what belongs in a prompt | `research` |
+  | `frontend-ui-engineering` | Named in `voice-agent.js:275`, phantom today, `?`-listed | `ui` |
+
+  Also vendor `references/definition-of-done.md` as
+  `mythos/skills/definition-of-done/SKILL.md` — it is the checklist 8D's gate
+  runner needs and otherwise has no home.
+
+  **Deliberately NOT vendored, reason recorded so a later session does not
+  "helpfully" add them:** `debugging-and-error-recovery` duplicates the vendored
+  superpowers `systematic-debugging`; `code-simplification` duplicates `ponytail`;
+  `security-and-hardening`, `performance-optimization`, `code-review-and-quality`,
+  `api-and-interface-design`, `observability-and-instrumentation` are already
+  vendored; `git-workflow-and-versioning`, `ci-cd-and-automation`,
+  `documentation-and-adrs`, `deprecation-and-migration`, `shipping-and-launch`,
+  `browser-testing-with-devtools`, `interview-me`, `idea-refine`,
+  `source-driven-development` stay `?`-optional — real skills, but nothing on the
+  MYTHOS execution path reads them, and a catalogue entry the model never needs
+  is prompt tax on every turn.
+
+  **Mechanics per skill — the repo already documents this exactly
+  (`mythos/skills/README.md:47-58`); follow it verbatim, invent no new process:**
+  1. `mythos/skills/<name>/SKILL.md`, upstream text verbatim, frontmatter `name`
+     matching the directory, `description` collapsed to one quoted line.
+  2. `mythos/skills/<name>/LICENSE` — upstream MIT, copied.
+  3. `SKILL-CORE.md` — **required** for any skill added to a `PACKS` entry, since
+     `packBlockFor()` composes essences under an 8 000-char cap
+     (`build-pack.js:86`) and a 20 KB upstream body would evict the packs already
+     carrying every build.
+  4. One line in `mythos/skills.allowlist` under a new
+     `# ---- Engineering discipline (addyosmani/agent-skills, MIT) ----` block —
+     and **remove** the now-redundant `?spec-driven-development`,
+     `?planning-and-task-breakdown`, `?frontend-ui-engineering` entries so the
+     same name is not listed twice.
+  5. Extend the existing `THIRD_PARTY_NOTICES.md:203` row; do not add a second
+     addyosmani row.
+  6. Add rows to `mythos/skills/README.md`'s "Copied from upstream" table — which
+     today is **missing the five already-vendored addyosmani skills**, a doc gap
+     this lane closes on the way past.
+
+  ```js
+  // skills/build-pack.js — PACKS, after vendoring
+  var PACKS = {
+    ui: ['taste-frontend', 'hallmark', 'ui-ux-pro-max', 'frontend-ui-engineering', 'diagram-design'],
+    code: ['ponytail', 'karpathy-guidelines'],
+    // spec/plan/slice discipline. Order matters: the cap drops from the TAIL, so
+    // the ones that change what gets BUILT come before the ones that change how
+    // it is REVIEWED.
+    app: ['ponytail', 'karpathy-guidelines', 'incremental-implementation',
+          'spec-driven-development', 'planning-and-task-breakdown',
+          'systematic-debugging', 'doubt-driven-development',
+          'verification-before-completion'],
+    research: ['ponytail', 'karpathy-guidelines', 'context-engineering'],
+    security: ['ponytail', 'karpathy-guidelines', 'strix-security', 'doubt-driven-development'],
+  };
+  ```
+
+  `packBlockFor()` already names anything it dropped for budget
+  (`build-pack.js:257`), so an over-long `app` pack degrades visibly — but
+  **measure the real composed size against `MAX_PACK_CHARS` and raise the cap in
+  the same commit if the tail is being dropped on every build.** Add a case to
+  `test/skills-build-pack.test.js` asserting `app` composes under cap with
+  **nothing dropped**, so a future essence pushing it over is caught at commit
+  time rather than discovered as missing discipline.
+
+---
+
+### Step 8B — Continual Harness (prime-agent's `/refine`)
+
+- [ ] **8B — supplemental, evidence-backed, snapshotted prompt state.**
+
+  What prime-agent does:
+
+  > "`/refine` reviews the current trajectory and can apply small, evidence-backed
+  > updates to supplemental harness state. It never rewrites the immutable base
+  > system prompt, and recorded snapshots support rollback."
+
+  MYTHOS has three of the four pieces and they are good: `Lessons/` is durable
+  failure memory with trigger matching and counts (`memory/lessons.js`);
+  `vault/Skills/` is auto-distilled procedural success (`memory/skills.js`,
+  written by `goals/index.js:176` and `identity/reflection.js:259`);
+  `Identity/self.md` + `operator-profile.txt` carry durable identity.
+
+  **The missing piece is the one prime-agent centres on:** a supplemental overlay
+  the entity can propose changes to, that carries its evidence, that rolls back,
+  and that actually reaches the model on the spoken path. Today `Lessons/` has
+  **exactly one reader** — the autonomous goal planner (`goals/index.js:456`) — so
+  a lesson learned the hard way never reaches a conversation. That is the same
+  structural amnesia BUG-251 fixed for operator facts, one store over.
+
+  **New module `src/core/harness/index.js`** — `vault/Harness/overlay.md` (what the
+  model reads), `vault/Harness/snapshots/<ts>.md` (one per applied refinement),
+  `vault/Harness/refinements.jsonl` (the ledger: who/when/why/evidence). API:
+  `init()`, `overlayBlock({asOf})`, `propose({note, evidence, source})`,
+  `apply(id)`, `rollback(snapshotId)`, `ledger()`, `overlayText()`.
+
+  Two functions carry the invariants and are worth writing first:
+
+  ```js
+  // AD-12. An id that does not resolve in the vault is not evidence — it is a
+  // sentence that LOOKS like evidence, which is worse than none. Without this the
+  // entity can write itself any instruction it likes and call it learning.
+  function evidenceResolves(refs) {
+    if (!Array.isArray(refs) || refs.length === 0) return false;
+    return refs.every((ref) => {
+      try {
+        if (/^ep-/.test(ref)) return !!memory.episodic.get(ref);
+        if (/^lsn-/.test(ref)) return !!memory.lessons.get(ref);
+        if (/^sk-/.test(ref)) return !!memory.skills.get(ref);
+      } catch (_) { return false; }
+      return false;
+    });
+  }
+
+  // Snapshot BEFORE write is what makes rollback real rather than a promise in a
+  // comment. apply() is the only writer of overlay.md (AD-13).
+  apply(id) {
+    const rec = this.ledger().find((r) => r.id === id && r.status === 'proposed');
+    if (!rec) return { ok: false, error: 'no proposed refinement ' + id };
+    const before = fs.readText(OVERLAY_PATH, '');
+    const snapId = String(rec.ts) + '-' + id.slice(4, 12);
+    fs.writeText(SNAPSHOT_DIR + '/' + snapId + '.md', before);
+    fs.writeText(OVERLAY_PATH, (before ? before.replace(/\s*$/, '\n') : '') + '- ' + rec.note + '\n');
+    fs.appendLine(LEDGER_PATH, Object.assign({}, rec, {
+      status: 'applied', appliedAt: Date.now(), snapshot: snapId,
+    }));
+    return { ok: true, id, snapshot: snapId };
+  }
+  ```
+
+  **Wiring — every writer, every reader, every gate.**
+
+  *Construction:* `src/main.js`, beside the memory facade; `harness` joins the deps
+  object passed to the server exactly as `memory` and `identity` do. `init()` runs
+  in the same boot step as `memory.init()`.
+
+  *WRITER 1 — the operator, by voice or HUD.* New effector
+  `src/core/effectors/from-harness.js` exposing `refine_harness` with
+  `action: propose | apply | rollback | list`, registered next to
+  `registerFromSkills(hub)` (`main.js:579`). Tiering:
+
+  ```js
+    'refine_harness':        3,  // edits what the model is told about itself.
+                                 // Local and snapshot-reversible, so not T4 — but
+                                 // never session-grantable: a tool that rewrites
+                                 // its own operating instructions must not become
+                                 // click-through after the first yes.
+  ```
+
+  and add `'refine_harness'` to `NEVER_TRUSTABLE` in `leash/index.js`, so
+  `TRUSTED_TOOLS` cannot promote it and `SESSION_GRANTABLE` cannot cache it. It
+  **is** added to `DEFAULT_ALLOWLIST` (spoken-reachable) — "remember to always do
+  X" is a natural spoken instruction — and T3 + never-trustable means the operator
+  confirms every single time, which is the correct friction for self-modification.
+  `test/tier-table-conformance.test.js` and `test/allowlist-reachability.test.js`
+  enforce both of the above with no new test written.
+
+  *WRITER 2 — reflection, as proposals only.* `identity/reflection.js:164-282`
+  (`reflectOnActions`) already asks the brain for `{failures[], successes[]}` and
+  writes failures to `Lessons/`, successes to `vault/Skills/`. Add a third bucket,
+  `corrections[]` → `harness.propose({source:'reflection', evidence:[…]})`. Status
+  stays `proposed`; **nothing machine-authored is ever auto-applied.** The episodic
+  ids reflection already carries become the AD-12 evidence, so this costs no new
+  plumbing.
+
+  *READER 1 — the spoken path.* In `buildLiveSystemInstruction()`, after the
+  operator-facts block and before the local-time line:
+
+  ```js
+      // The harness overlay — durable operating notes refined from real sessions.
+      // Session-start labelled per BUG-136 like every other value in this
+      // composer, and budgeted per AD-14. Synchronous by construction: this
+      // function is called from live-session.js buildSetup() on every open() and
+      // rotation and cannot await — the same constraint that made BUG-251's fix a
+      // direct topic() read rather than recallHybrid().
+      try {
+        const overlay = harness ? harness.overlayBlock({ asOf: 'session-start' }) : '';
+        if (overlay) parts.push(overlay);
+      } catch (err) { logger.warn('live.harness-compose-failed', { error: err.message }); }
+  ```
+
+  *READER 2 — the typed/batch path.* `voice/voice-agent.js`'s per-turn composer
+  appends `harness.overlayBlock()` with **no** `asOf` label — it genuinely is fresh
+  there, and labelling a live value as a snapshot is its own small lie.
+
+  *READER 3 — the operator (AD-16).* `server/routes/memory.js` gains
+  `GET /api/harness` → `{ overlay, snapshots[], ledger[] }`, plus a HUD panel
+  entry. Not optional polish: it is the difference between an auditable overlay
+  and a file that quietly steers every answer.
+
+  *Deliberately NOT wired:* the autonomous goal planner. It already reads
+  `Lessons/` with a hard pause at `GOAL_FAIL_PAUSE_THRESHOLD`; a second overlapping
+  instruction source on the same decision would make it impossible to say which one
+  paused a goal. A planner overlay, if ever wanted, needs its own file and its own
+  reason.
+
+  *Tests:* `harness-store.test.js` (propose/apply/rollback/ledger round trip),
+  `harness-refine-evidence.test.js` (AD-12),
+  `anti-drift-harness-additive.test.js` (AD-11),
+  `anti-drift-harness-single-composer.test.js` (AD-13),
+  `harness-route.test.js` (AD-16), plus one case appended to the existing
+  `test/live-memory-inject.test.js` — that file already owns this composer's
+  contract.
+
+---
+
+### Step 8C — Memory budget + Live depth (TencentDB layering)
+
+- [ ] **8C.1 — One budgeted-block helper (AD-14).**
+
+  Three separate hand-rolled truncation loops exist today: the operator-facts loop
+  in `buildLiveSystemInstruction()` (`LIVE_FACTS_MAX_CHARS = 8000`),
+  `build-pack.js:235-261` (essences, and **this one is the good example** — it
+  names what it dropped), and `loader.js:394` (per-skill description truncation).
+  8B and 8C.2 would add three more.
+
+  ```js
+  // memory/budget.js — the one truncation rule for anything injected into a
+  // prompt (AD-14).
+  //
+  // Three hand-rolled loops did this before with three different overflow
+  // behaviours. Only build-pack.js's said what it dropped; the others truncated in
+  // silence, which reads to anyone reading the prompt as "this is everything" when
+  // it is not — the same dishonest-ok shape the loader's lastMissing() exists to
+  // prevent one layer up.
+  //
+  // Contract: never exceed maxChars; never exceed maxItems; ALWAYS state the
+  // omitted count when anything was dropped.
+  function budgetedBlock({ header, items, maxItems, maxChars, newestFirst }) {
+    const all = (items || []).map((i) => String(i).trim()).filter(Boolean);
+    const ordered = newestFirst ? all.slice().reverse() : all.slice();
+    const capItems = maxItems && maxItems > 0 ? maxItems : ordered.length;
+    const capChars = maxChars && maxChars > 0 ? maxChars : Infinity;
+    const head = String(header || '').trim();
+
+    const kept = [];
+    let used = head.length;
+    for (const item of ordered) {
+      if (kept.length >= capItems) break;
+      const line = item.startsWith('- ') ? item : '- ' + item;
+      if (used + line.length + 1 > capChars) break;
+      used += line.length + 1;
+      kept.push(line);
+    }
+    const omitted = all.length - kept.length;
+    if (!kept.length) return { text: '', included: 0, omitted: all.length };
+
+    // newestFirst callers want the newest KEPT but chronological reading order.
+    const body = (newestFirst ? kept.slice().reverse() : kept).join('\n');
+    const note = omitted > 0 ? '\n[' + omitted + ' older entries omitted for prompt budget]' : '';
+    return { text: head + '\n' + body + note, included: kept.length, omitted };
+  }
+  ```
+
+  **Converted in the same commit** (a replacement, not an addition — leaving the
+  old loops is how two truncation rules drift apart): the operator-facts loop, the
+  8B overlay, both 8C.2 blocks. **`build-pack.js`'s loop stays as-is** — it
+  composes whole documents with a separator rather than bullet items, and forcing
+  it through this helper would rewrite working code for symmetry, which the
+  surgical-changes rule forbids.
+
+- [ ] **8C.2 — Give Live the depth the typed path already has.**
+
+  Measured gap: `handleUtterance()` calls `recallHybrid()` per turn, so the typed
+  path gets episodic + semantic + documents fused by RRF. Live gets one static
+  `user-facts.md` snapshot per socket open, and `Lessons/` reaches neither. Two
+  blocks, both **synchronous** reads (no embeddings — the session-open path cannot
+  await, per the BUG-251 reasoning already written into that composer):
+
+  ```js
+      // Recent episodic context. The typed path gets recallHybrid() per turn; Live
+      // got nothing, so "what were we doing yesterday" had no honest answer on the
+      // surface most likely to be asked it. tail() is a bounded reverse read.
+      try {
+        const recent = (memory.episodic.tail({ limit: 40 }) || [])
+          .filter((e) => e.kind === 'conversation' && e.summary);
+        const block = budget.budgetedBlock({
+          header: 'RECENT CONTEXT (as of session-start — use recall_memory for anything older):',
+          items: recent.map((e) => e.summary),
+          maxItems: 12,
+          maxChars: Number(config.LIVE_EPISODIC_MAX_CHARS) || 3000,
+          newestFirst: true,
+        });
+        if (block.text) parts.push(block.text);
+      } catch (err) { logger.warn('live.episodic-compose-failed', { error: err.message }); }
+
+      // Repeated failures. Lessons/ has exactly one reader today (goals/index.js:456,
+      // the autonomous planner), so a failure the operator watched happen three
+      // times never reached the conversation about it. Highest count first.
+      try {
+        const top = (memory.lessons.recall('', { limit: Number(config.LIVE_LESSONS_MAX) || 5 }) || [])
+          .filter((l) => (l.count || 0) > 1);
+        const block = budget.budgetedBlock({
+          header: 'KNOWN FAILURE MODES (seen before — do not repeat):',
+          items: top.map((l) => l.text + ' (seen ' + l.count + 'x)'),
+          maxItems: Number(config.LIVE_LESSONS_MAX) || 5,
+          maxChars: 1200,
+        });
+        if (block.text) parts.push(block.text);
+      } catch (err) { logger.warn('live.lessons-compose-failed', { error: err.message }); }
+  ```
+
+  **Check before writing:** `memory.lessons.recall(query, opts)` is called with a
+  non-empty query at its only current call site (`goals/index.js:456`). Confirm
+  `lessons.js:208` returns count-ordered results for an empty query; if it does
+  not, add an explicit `topByCount(limit)` rather than bending `recall()` — **the
+  planner's behaviour must not change as a side effect of a prompt feature.**
+
+  **Prompt-budget accounting, stated rather than assumed:** these two blocks plus
+  8B's overlay add at most 3000 + 1200 + 4000 ≈ 8.2 KB to a frame already carrying
+  RULES + persona + capability digest + a 43-skill catalogue + up to 8 KB of facts.
+  Paid **once per session**, not per turn (the composed-once frame, V2 §11 row 5).
+  If the frame gets uncomfortable the lever is `LIVE_FACTS_MAX_CHARS`, which at
+  8000 is the largest single block and the least selective. **Measure the composed
+  length in the test and log it; do not guess.**
+
+- [ ] **8C.3 — L2 scenario blocks. PROVISIONAL — verify the gap before building.**
+
+  TencentDB's model is L0 raw → L1 facts/preferences/constraints → L2
+  scenario-organised blocks → L3 long-term persona. Mapped honestly:
+
+  | Layer | MYTHOS today | Status |
+  |---|---|---|
+  | L0 | `Episodic/*.jsonl` | exists |
+  | L1 | `Semantic/user-facts.md` (`habit-promoter.js` + `memory/index.js:374`) | exists |
+  | L2 | — | **the only real gap** |
+  | L3 | `Identity/operator-profile.txt`, rewritten whole by `reflection.js`, folded into `persona()` | **already exists** |
+
+  Three of four layers are already built. L2 would be
+  `Semantic/scenarios/<slug>.md` — clusters of related L1 facts and episodics under
+  a scenario heading — produced by extending the `consolidate()` that
+  `cortex/index.js:413` already calls on its idle path.
+
+  **Sequenced last and marked provisional on purpose.** 8C.2 gives Live real
+  episodic recall for the first time; that may close the felt gap entirely, in
+  which case L2 is a second index over data the model can already reach — exactly
+  the speculative abstraction the simplicity rule forbids. **Do not build 8C.3
+  until 8C.2 is live-verified and found insufficient, and record which observation
+  made it necessary.**
+
+---
+
+### Step 8D — Budgets and quality gates (prime-agent autonomous mode)
+
+- [ ] **8D — one budget, gates that must pass, and "a limit is not a success".**
+
+  **What exists first.** Three unrelated bounded-retry counters, none aware of the
+  others: `engagements/executor.js:50` `MAX_REPAIRS` (default 3) with
+  `execution.repairBudget:{used,max}` in the record; `build-runner.js:48`
+  `REFINE_MAX`; `hermes-runner.js:40` `buildTimeoutMs()` (30 min) plus
+  `hermes-agent/index.js:41` `taskTimeoutMs()` (3 min). Verification already exists
+  as `executor.js:393-455 runCommandVerification()`, which runs an allowlisted
+  command through the real `run_command` effector and degrades honestly to
+  `skipped:true` when `RUN_COMMAND_ALLOWLIST` is unset. That is a good foundation.
+
+  What prime-agent adds: one budget spanning turns/tokens/wall-clock; gates that
+  must pass before a run may finish; **not re-running a gate whose inputs have not
+  changed since it failed**; and the explicit rule that hitting a limit is not
+  success.
+
+  ```js
+  // agent/budget.js
+  // AD-15 is the whole point: "reaching a limit does not imply task success."
+  // Three separate counters existed before this and none could answer "how much
+  // budget does this work have left" — so a run could exhaust one, look finished,
+  // and be reported as done.
+  function createBudget({ maxTurns, maxTokens, maxWallMs, now }) {
+    const clock = now || (() => Date.now());
+    const startedAt = clock();
+    let turns = 0, tokens = 0;
+    return {
+      spendTurn() { turns += 1; },
+      spendTokens(n) { tokens += Number(n) || 0; },
+      remaining() {
+        return {
+          turns: maxTurns ? Math.max(0, maxTurns - turns) : Infinity,
+          tokens: maxTokens ? Math.max(0, maxTokens - tokens) : Infinity,
+          wallMs: maxWallMs ? Math.max(0, maxWallMs - (clock() - startedAt)) : Infinity,
+        };
+      },
+      // Named, not boolean: the caller must report WHICH limit stopped it. A bare
+      // `true` is how "we ran out of time" becomes "we finished".
+      exhausted() {
+        const r = this.remaining();
+        if (r.turns <= 0) return 'turns';
+        if (r.tokens <= 0) return 'tokens';
+        if (r.wallMs <= 0) return 'wall-clock';
+        return null;
+      },
+    };
+  }
+  ```
+
+  ```js
+  // agent/gates.js
+  // The one non-obvious rule, straight from prime-agent: a gate that failed and
+  // whose INPUTS have not changed is not re-run. Re-running burns budget to
+  // re-learn something already known and — worse — a gate that passes on a retry
+  // with identical inputs is measuring flake, not progress.
+  //
+  // Gates execute through the EXISTING run_command effector (allowlist + metachar
+  // rejection + cwd pin + env scrub + leash + treeKill). No new spawn path: a
+  // second way to run a shell command is a second place for the allowlist to not
+  // apply.
+  async function runGates(gates, { dispatch, budget, inputsHash, priorResults }) {
+    const results = [];
+    for (const gate of gates || []) {
+      const prior = (priorResults || []).find((r) => r.id === gate.id);
+      if (prior && !prior.passed && prior.inputsHash === inputsHash) {
+        results.push(Object.assign({}, prior, { skipped: 'unchanged-since-failure' }));
+        continue;
+      }
+      const stop = budget.exhausted();
+      if (stop) { results.push({ id: gate.id, passed: false, reason: 'budget-exhausted:' + stop }); break; }
+      const out = await dispatch({ tool: 'run_command', args: gate.args });
+      results.push({
+        id: gate.id, passed: !!out.ok, inputsHash,
+        // Bounded on purpose: the failing tail is what the next attempt needs, and
+        // an unbounded gate log is how one failure eats the context window.
+        output: String(out.result || out.error || '').slice(-2000),
+      });
+    }
+    return results;
+  }
+  ```
+
+  **Wiring — consumers checked before changing them.** `engagements/executor.js` is
+  the single consumer rewired. Its `runVerificationSweep()` (lines 541-590)
+  currently decides `COMPLETED` / `REPAIRING` / `BLOCKED`; it gains a budget and a
+  gate list, and the rule that a budget stop lands `BLOCKED` with
+  `reason:'budget-exhausted:<dimension>'` and **never** `COMPLETED` (AD-15). The
+  `repairBudget:{used,max}` field already in the record
+  (`engagements/index.js:37-92`) is the natural home for the counters, so the
+  persisted shape gains fields rather than changing — existing engagements keep
+  loading through `store.js:58 backfillRecord()`.
+
+  **`build-runner.js`'s `REFINE_MAX` and `orchestrator.js` are left alone in this
+  lane** — working, on a different execution path (the kanban build queue, not the
+  engagement state machine), and folding them in at the same time mixes a refactor
+  into a feature. Follow-up, recorded as a decision rather than an oversight.
+
+  `doubt-driven-development` (vendored in 8A.4) is the guidance loaded when a gate
+  fails twice with the same `inputsHash` — the point at which "try again" has
+  already been proven not to work.
+
+  *Tests:* `test/agent-budget-gates.test.js` — each dimension exhausts to its named
+  reason; a failed gate with unchanged `inputsHash` is skipped, not re-run; a
+  changed hash re-runs; budget exhaustion lands `BLOCKED` and never `COMPLETED`;
+  gate output truncated to 2000 chars. Extend `test/engagements/*` with the
+  executor's new terminal reason.
+
+---
+
+### Step 8E — The Agency roster reaches the seats (`msitarzewski/agency-agents`)
+
+> **Added 2026-08-17, same plan-only pass. TRACKED, NOT STARTED, same 6.5/6.6/7
+> gate as the rest of step 8.** The operator named a third repo alongside
+> prime-agent and TencentDB; research found it **already half-vendored**, which is
+> what makes this lane small.
+
+Six Agency personas already ship in this repo: `mythos/skills/persona-frontend-developer`,
+`persona-backend-architect`, `persona-ui-designer`, `persona-brand-guardian`,
+`persona-reality-checker`, `persona-ui-finish-gate-reviewer` — MIT bodies verbatim,
+listed in `mythos/skills.allowlist` under `# ---- Personas (adapted from
+msitarzewski/agency-agents, MIT) ----`, credited in `THIRD_PARTY_NOTICES.md`.
+
+**The defect that makes them decorative.** There are two persona layers and they
+cannot see each other:
+
+| Layer | Resolved by | Reads | Reaches |
+|---|---|---|---|
+| Vendored Agency personas | `skills/loader.js` | `mythos/skills/persona-*/SKILL.md` | the model, via `use_skill` — **only if it thinks to ask** |
+| Seat personas | `agents/personas.js` | `$MYTHOS_PERSONAS_DIR` → `vault/Personas/` → `mythos/personas/` (4 files) | the reviewer / reality-checker / builder seats, on every build |
+
+So `agent-actions.js` can seat a `reviewer` and a `reality-checker` and two
+builders, and nothing else — six vendored personas sit in the skills catalogue
+where no seat can reach them. And the router that chooses a builder,
+`agents/personas.js:121 pickBuilderPersona()`, is a **two-way keyword coin flip**:
+one frontend keyword list, else `backend-builder`. A card about deploying, about
+schema, about credentials, about test coverage — all get the backend builder, and
+the roster is never consulted. This is the same shape as *personas never loaded*
+already recorded in this repo's history: nothing throws, every seat just quietly
+degrades to generic.
+
+- [ ] **8E.1 — One persona resolution order (bridge the two layers).**
+
+  `agents/personas.js` gains the vendored persona skills as a **fourth and final
+  root**, after the existing three. Order becomes:
+
+  1. `$MYTHOS_PERSONAS_DIR` — explicit override, `path.delimiter`-separated (unchanged)
+  2. `mythos/vault/Personas/` — the operator's own edits (unchanged; a customisation
+     that loses to a shipped default does nothing)
+  3. `mythos/personas/` — tracked defaults (unchanged)
+  4. **NEW** `mythos/skills/persona-<role>/SKILL.md` — the vendored Agency bodies
+
+  Four things the lane must get right, each traced to something already known here:
+
+  - **Strip the frontmatter before using the body as a system identity.** These
+    files are `SKILL.md`s: they open with `name:`/`description:` YAML that is
+    loader metadata, not persona prose. `skills/loader.js` already parses that
+    block — reuse it rather than writing a second frontmatter regex.
+  - **`isSafeRole()` still gates the role name** (`personas.js:66`). The new root is
+    one more `path.join` on the same already-validated value, not a new input path.
+  - **Keep caching the miss** (`personas.js:86`). Four roots × a role with no file ×
+    the reviewer seat running on every build is a stat storm for nothing.
+  - **Prefix mapping is explicit, not clever.** Role `ui-designer` must resolve
+    `persona-ui-designer/`; do not accept a bare `persona-` prefix from the caller,
+    or the same persona ends up addressable by two names and the cache keys split.
+
+  `listPersonas()` gains the same root so the vendored six become listable — which
+  is precisely what 8E.2 needs, and is unreachable today.
+
+  **Consumers checked:** `loadPersona` has four call sites, all in
+  `effectors/agent-actions.js` (`:435` reviewer, `:457` reality-checker, `:709`
+  builder, `:859` reviewer again) plus a comment reference in `brain/index.js:135`.
+  None inspect the string; all pass it as a system identity. So a body that arrives
+  from a different root needs no caller change.
+
+- [ ] **8E.2 — A router that states its choice (AD-18).**
+
+  Replace the keyword coin flip with a scored match over `listPersonas()`:
+
+  - Routing terms live in **one** place. Decide at execution time between a
+    `Routes:` line inside each persona file and a table in `agents/personas.js` —
+    but pick one. Two sources for the same mapping is how a persona ends up
+    routable in the table and unroutable in the file.
+  - Score = term hits; ties broken by declaration order, so the ordering is
+    reviewable rather than emergent.
+  - **Zero hits still resolves to `backend-builder`.** Today's default is the
+    fail-safe and stays the fail-safe — a router that returns nothing would silently
+    drop the persona entirely, which is worse than a generic seat.
+  - The chosen role **and the matched reason** are written into the kanban/mission
+    record (AD-18), so the Audit view can answer "which seat built this card".
+
+  **Do not change the signature.** `pickBuilderPersona(cardTitle, cardDetail)` has
+  exactly one caller (`agent-actions.js:708`); widening it to take the whole card
+  is a refactor riding along on a feature.
+
+- [ ] **8E.3 — Vendor eight more personas, each with a named reader.**
+
+  Slot test is 8A.4's, unchanged: **a persona earns a slot when a seat calls it**,
+  not when it reads well. Upstream filenames below were enumerated from the real
+  tree (`gh api repos/msitarzewski/agency-agents/git/trees/main?recursive=1`) — the
+  repo has 18 division directories and ~230 files, and the `tree/main/...` web path
+  404s, so enumerate with `gh` or a clone rather than guessing.
+
+  | Upstream file | Vendored as | The reader that exists today |
+  |---|---|---|
+  | `engineering/engineering-devops-automator.md` | `persona-devops-automator` | build cards about deploy/CI/Docker — today they get `backend-builder` |
+  | `engineering/engineering-api-platform-engineer.md` | `persona-api-platform-engineer` | build cards adding routes/effectors; pairs with the vendored `api-and-interface-design` skill |
+  | `engineering/engineering-data-engineer.md` | `persona-data-engineer` | ingestion/vault/index cards (`memory/documents.js`, `from-code-search.js` indexing work) |
+  | `security/security-appsec-engineer.md` | `persona-appsec-engineer` | security cards; the `security` pack and `strix-security` skill already exist for this lane and have no seat |
+  | `security/security-secrets-credential-engineer.md` | `persona-secrets-credential-engineer` | the credential scanner (`effectors/credential-scanner.js`) + leash pre-T3 scan — the one area where a generic builder is actively dangerous |
+  | `testing/testing-test-automation-engineer.md` | `persona-test-automation-engineer` | test-writing cards; the `tdd-workflow`/`verification-before-completion` skills have no seat |
+  | `testing/testing-evidence-collector.md` | `persona-evidence-collector` | the **evidence contract** — `effectors/evidence.js` + `evidence-validator.js` + `dispatch-action.js`'s `unverified`/`reason` rule. This repo's single most-repeated scar has no persona |
+  | `engineering/engineering-minimal-change-engineer.md` | `persona-minimal-change-engineer` | `build-refine.js` repair passes; the code analogue of the vendored `ponytail` skill and of the surgical-changes rule |
+
+  **Two considered and deliberately deferred, reason recorded so a later session
+  does not "helpfully" add them:** `engineering/engineering-desktop-app-engineer.md`
+  (MYTHOS *is* an Electron app, so the reader is real — but step 7 is the Electron
+  lane and is unticked; adding a seat mid-flight there mixes two builds) and
+  `engineering/engineering-code-reviewer.md` (the reviewer seat already has a
+  tracked `mythos/personas/reviewer.md` written for this repo's own rubric, and
+  `review-rubric.js` owns the output contract — a second reviewer identity would
+  fight it). **The remaining ~220 stay unvendored**: a catalogue entry no seat calls
+  is prompt tax on every turn.
+
+  Mechanics per persona: `mythos/skills/README.md:47-58`, verbatim, invent nothing
+  — upstream body verbatim, frontmatter rewritten for this loader with the
+  `<!-- Adapted from msitarzewski/agency-agents (MIT), original file … -->`
+  provenance comment the existing six already carry, `LICENSE` copied, one line in
+  the existing `skills.allowlist` Personas block, **extend the single
+  `THIRD_PARTY_NOTICES.md` agency-agents row** (do not add a second), and add the
+  README "Copied from upstream" rows.
+
+- [ ] **8E.4 — Tests.**
+
+  - `test/personas-resolution.test.js` — four-root order; `$MYTHOS_PERSONAS_DIR`
+    wins; operator `vault/Personas/` beats tracked defaults; vendored fallback
+    resolves; frontmatter stripped; unsafe role rejected; miss cached. **Point every
+    root at temp directories.** Never rename a real directory to fake a state — that
+    is the wake-word `EPERM` scar, and it stranded real model weights invisibly
+    because both directories were gitignored.
+  - `test/persona-router.test.js` — a security card does not get `backend-builder`;
+    a zero-hit card still does; role + reason land in the record (AD-18).
+  - `test/anti-drift-persona-single-loader.test.js` — AD-17 sweep.
+
+---
+
+### Step 8F — The TencentDB assets step 8 did not take
+
+> **Added 2026-08-17, same plan-only pass, same 6.5/6.6/7 gate.** 8C took
+> TencentDB's **layering** (L0→L3) and nothing else. The operator asked for the
+> other four assets: versioned skills, the Wiki's link structure, memory
+> loadouts/ACL, and CodeGraph. Ordered cheapest-and-most-certain first; the last
+> two carry explicit gates because both are large and one has a competing answer
+> already sitting in the adoption matrix.
+
+- [ ] **8F.1 — Versioned skills (no gate — the cheapest real win in step 8).**
+
+  `memory/skills.js:28 write()` composes the whole file and overwrites it. So an
+  auto-distilled skill (written by `goals/index.js:176` and
+  `identity/reflection.js:259`) can be silently replaced by a worse distillation
+  and the predecessor is gone — the exact hazard 8B's snapshot ledger exists to
+  prevent, one store over. TencentDB versions its skill assets for this reason.
+
+  Design, deliberately the same shape as 8B so the repo has one discipline, not two:
+
+  - `vault/Skills/<slug>.md` stays the current version. **No reader changes** —
+    `recall()`, `get()`, `parseSkill()` and the `dispatch-action.js` bookkeeping all
+    keep working untouched.
+  - `vault/Skills/versions/<slug>/<ts>.md` — the previous body, written **before**
+    the overwrite. Snapshot-then-write, in that order, for the same reason
+    `mergeConsolidatedTopics()` now writes before deleting: the other order destroys
+    data on a failed write.
+  - `version` + `supersedes` added to the existing sidecar comment
+    (`skills.js:17 SIDECAR_RE`). Additive — `parseSkill()` must keep parsing files
+    that have neither, or every skill written before this lane becomes unreadable.
+  - **`recordUse()` must NOT snapshot.** It rewrites the file on every single use to
+    bump `uses`/`successRate` (`skills.js:146`, inside `fs.withLock`). A version per
+    use is thousands of files a week. Only a change to the body/steps/criteria
+    snapshots. **This distinction is the whole lane** — get it backwards and the
+    feature is a disk leak.
+  - `history(slug)` and `rollback(slug, ts)` surfaced through the existing
+    `from-memory.js` tool set, not a new effector file.
+  - AD-19 above.
+
+- [ ] **8F.2 — Wiki link structure over Notes (small, additive).**
+
+  `memory/notes.js` is already Obsidian-compatible markdown with search
+  (`notes.js:167`), and `MYTHOS_NOTES_DIR` can point at the operator's real
+  Obsidian vault. What TencentDB's Wiki adds is what is missing: **link structure**
+  — `[[wiki-link]]` resolution and backlinks, so a note declares what it relates to
+  and the relation is readable from both ends.
+
+  - Parse `[[target]]` on read and resolve through the existing `slugifyTitle()`
+    (`notes.js:28`), so link resolution and file naming cannot drift apart.
+  - `backlinks(slug)` computed by scanning at query time, bounded by the existing
+    `MAX_SCAN_FILES` cap. **No index file.** An index over a directory the operator
+    edits in Obsidian is a second source of truth that is stale the moment they
+    save — and the truncation must be reported, since `search()` already reports
+    `truncated`.
+  - Unresolved links are **reported as unresolved**, never silently dropped. Same
+    honesty rule as the loader reporting a missing skill instead of quietly
+    shortening its catalogue.
+  - Anything injected into a prompt from here goes through 8C.1's
+    `budgetedBlock()` (AD-14). No second truncation rule.
+
+- [ ] **8F.3 — Memory loadouts / per-agent scope (two parts, second one gated).**
+
+  TencentDB's idea is that memory assets **bind to specific agents** — sharing is
+  explicit, not broadcast. Its team/ACL half (System Admin / Team Admin / Member,
+  private/team/restricted visibility) has **no reader in a single-operator
+  product** and is not being built; that is recorded here so it is not mistaken for
+  an oversight. The half that does have a reader is **scoped recall**: the reviewer
+  seat should not be steered by facts distilled from an unrelated project, and a
+  build agent should not inherit conversational preferences.
+
+  1. **Scope tags on write — ship this alone first.** `semantic.write(topic, facts,
+     meta)` already carries a `meta` object (`memory/index.js:88`). Add
+     `meta.scope` (project/engagement slug) and `meta.audience` (seat role; absent
+     = every seat). Purely additive: every existing caller keeps working and every
+     untagged record stays universally visible.
+  2. **A recall filter, not a recall fork.** `recallHybrid(query, opts)` gains
+     `opts.audience`/`opts.scope`, applied **in the same place `opts.excludeKinds`
+     is already applied** (`memory/index.js:265`) — that filter exists there
+     precisely because the vector path bypassed the keyword path's exclusion once
+     (recorded in-file as FIX G). A second filter site would re-create that bug.
+     AD-21 applies.
+
+  **Gate:** part 1 before part 2, as separate commits. Tagging is harmless and
+  immediately auditable. Filtering changes what every seat sees, so part 2 needs a
+  full audit of the `recall`/`recallHybrid` call sites first — the server's
+  recall-before-respond, `handleUtterance()`, the goal planner, and the Live
+  composer all read memory, and a filter defaulting the wrong way makes MYTHOS look
+  amnesiac with a full vault.
+
+- [ ] **8F.4 — CodeGraph: symbols, call edges, blast radius (largest — decision first).**
+
+  The honest gap: `from-code-search.js` is embedding-only (`index_project` /
+  `search_code` over `chunkCode()` chunks in the shared `documents` vector
+  partition). It finds code that *reads like* the query. It cannot answer "what
+  breaks if I change this function" — the question the build lane, the reviewer
+  seat and the pre-commit gate all actually ask, and the question TencentDB's
+  CodeGraph exists to answer.
+
+  **First task of this lane is a recorded decision, not code.** The adoption matrix
+  already carries a competing answer: `tirth8205/code-review-graph`, 🟢 **P1** —
+  tree-sitter blast-radius graph over MCP, ~65× token reduction, risk-scored merge
+  gate, local-first, `pip install`. MYTHOS already speaks MCP (`from-mcp.js`,
+  `mcp_call_tool`).
+
+  | Option | For | Against |
+  |---|---|---|
+  | **Adopt** `code-review-graph` as an MCP sidecar | real tree-sitter parsing, multi-language, someone else maintains it; degrades OFFLINE when absent, exactly the cua-driver pattern the root `CLAUDE.md` mandates | a Python dependency inside a product being sold — its licence and its deps must clear step 6.6 before it can ship |
+  | **Build native** | zero new dependencies; reuses the existing `walk()` + `SKIP_DIRS` + `MAX_FILES` caps in `from-code-search.js` (**do not write a second walker**); ships in the installer with nothing to install | regex/AST-lite means JS/TS-accurate and weak elsewhere |
+
+  **Recommendation to record: build native, scoped to JS/TS only, and say so in the
+  tool description.** A graph that silently under-reports Python callers is worse
+  than one that declines to cover Python — that is AD-20's whole point. Shape:
+  extract `require`/`import`/`export` edges and top-level declarations, write
+  `vault/Index/codegraph.json`, expose `impact_of({symbol|file, depth})` returning
+  callers/importers. T0 read-only, so no leash change.
+
+  Sequenced **last** in step 8 and dependent on 8A.4, because the reviewer/gate
+  consumers that make it worth building are what 8A.4 and 8D put in place.
+
+---
+
+### Step 8 — execution order and verification
+
+Each step is independently shippable and independently revertible.
+
+| # | Step | Depends on | Risk |
+|---|---|---|---|
+| 1 | 8A.1 phantom-name fix + red test | — | low |
+| 2 | 8A.2 essence fallback in `loadContent()` | — | low |
+| 3 | 8A.3 `use_skill` → `DEFAULT_ALLOWLIST` | — | low; two existing sweeps gate it |
+| 4 | 8A.4 vendor 6 skills + `definition-of-done` + PACKS + notices + README | 1-3 | low; watch `MAX_PACK_CHARS` |
+| 5 | 8C.1 `memory/budget.js` + convert the operator-facts loop | — | low |
+| 6 | 8B harness store + effector + tier + `NEVER_TRUSTABLE` + both composers + route | 5 | **highest** — model-editable prompt state |
+| 7 | 8C.2 Live episodic + lessons blocks | 5 | medium; prompt-size cost is real |
+| 8 | 8D budget + gates + executor rewire | 4 | medium |
+| 9 | 8C.3 L2 scenarios — **only if 7 proves insufficient** | 7 | provisional |
+| 11 | 8E.1 persona resolution bridge + AD-17 sweep | — | low |
+| 12 | 8E.2 scored router + AD-18 record fields | 11 | low |
+| 13 | 8E.3 vendor 8 personas + allowlist/notices/README | 11-12 | low |
+| 14 | 8F.1 versioned skills + AD-19 | — | low |
+| 15 | 8F.2 wiki links + backlinks over Notes | 5 (uses `budgetedBlock`) | low |
+| 16 | 8F.3 part 1 — scope tags on write, unused | — | low |
+| 17 | 8F.3 part 2 — scoped recall filter + AD-21 | 16 + a full `recall*` consumer audit | medium |
+| 18 | 8F.4 CodeGraph — **adopt-vs-build decision recorded first**, then native JS/TS + AD-20 | 4, 8 | **highest of 8E/8F** |
+| 10 | Tick each box, Progress-log rows with SHAs, rewrite RESUME HERE | all | doc |
+
+Rows 11-18 were appended 2026-08-17 (lanes 8E/8F). Row 10 stays last because it is
+the doc close-out for the whole step. **8E and 8F are independent of 8A-8D** — the
+only cross-lane dependencies are row 15 on 8C.1's `budgetedBlock()` and row 18 on
+8A.4/8D's reviewer-and-gate consumers, so 8E can start the moment the 6.5/6.6/7
+gate opens, without waiting on 8B.
+
+**Before touching anything** (concurrent-session safety): `git pull`, then diff
+`skills.allowlist`, `voice/live-tools.js` and `server/index.js` against what
+BUGS.md claims is in them. Two machines share this repo and one git index —
+commit by pathspec.
+
+**Every suite run and every commit** needs the environment this repo has already
+learned it needs, or the result is noise:
+
+```bash
+# long-form TEMP (an 8.3 short TEMP aborts spawned-server tests inside libuv and
+# surfaces as ECONNREFUSED); port overrides so a running MYTHOS does not produce
+# two false failures on 4478/5050. The pre-commit hook runs the suite too, so it
+# needs the same env.
+export TEMP="$LOCALAPPDATA/Temp" TMP="$LOCALAPPDATA/Temp"
+cd mythos && MYTHOS_PORT=4999 EDGE_TTS_PORT=5099 EDGE_TTS_URL=http://127.0.0.1:5099 node --test
+```
+
+Per-lane verification, in order:
+
+1. **8A.1/8A.2 — red before green.** Run the fresh-clone probe that found the bug:
+   ```bash
+   cd mythos && USERPROFILE=C:/__no_such_home__ HOME=/__no_such_home__ MYTHOS_SKILLS_DIR= \
+     node -e "const l=require('./src/core/skills/loader');
+       const n=new Set(l.loadCatalog().map(s=>s.name));
+       ['ui-ux-pro-max','spec-driven-development','frontend-ui-engineering']
+         .forEach(s=>console.log(s, n.has(s)?'OK':'PHANTOM'));
+       console.log('use_skill(ui-ux-pro-max) ->', l.loadContent('ui-ux-pro-max') ? 'LOADS' : 'FAILS');"
+   ```
+   Today: three `PHANTOM` and `FAILS`. After: all `OK` and `LOADS`.
+2. **8A.3 — live, by voice.** Open a Live session, say *"use your ui-ux-pro-max
+   skill and tell me the first rule it gives you."* Before: the model cannot call
+   `use_skill` and substitutes something adjacent without saying so. After: a real
+   `use_skill` call appears in the Audit view and the answer quotes the skill.
+   **Check the Audit tool ARGS, not the spoken claim** — the spoken claim is
+   exactly what is being tested for.
+3. **8A.4 — build lane.** Trigger an `app`-kind build; assert `packBlockFor('app')`
+   composes under `MAX_PACK_CHARS` with an empty `dropped` list and that the new
+   essences appear in the prompt actually sent.
+4. **8B — the whole loop, on real state.** `propose` with a real episodic id →
+   ledger shows `proposed`; `evidence:[]` → rejected and `health.anomaly` fires;
+   `apply` → snapshot written, overlay grows; open a **new** Live session and
+   confirm the note is in the setup frame (**read the frame; do not ask the model
+   whether it saw it**); `rollback` → overlay byte-identical to the snapshot.
+   `GET /api/harness` shows all three. Confirm the T3 confirm fires and is **not**
+   cached on a second call in the same connection.
+5. **8C — measured, not assumed.** Log the composed Live instruction length before
+   and after; confirm both blocks present, `session-start` labelled, and an
+   over-cap case emits the `[N older entries omitted]` marker. Then the operator
+   question that motivated it: *"what were we working on yesterday?"* on a fresh
+   Live session against a vault with real episodics.
+6. **8D — force each failure.** Exhaust turns, tokens and wall clock separately;
+   each lands `BLOCKED` with the named reason, never `COMPLETED`. Fail a gate,
+   re-run with identical inputs → `skipped:'unchanged-since-failure'`; change an
+   input → re-runs.
+7. **8E — the seat, not the catalogue.** Run a build card whose text is about
+   deploying or about credentials, and read the **record**: it must name a routed
+   persona and the reason (AD-18). Then confirm the body actually reached the
+   model — check the composed prompt or the Audit entry, **not** the model's claim
+   that it was being a devops engineer. A seat that says it is specialised is
+   exactly what was already true and false at the same time before 8E.1. Also
+   re-run the resolution probe with all four roots pointed at temp directories and
+   confirm the operator root still beats the tracked default.
+8. **8F — each lane has its own oracle.** 8F.1: rewrite a skill body, confirm one
+   version file exists and the old body is byte-identical in it, then hammer
+   `recordUse()` and confirm no new version appears. 8F.2: create two notes that
+   link to each other, confirm `backlinks()` finds both directions and that a
+   `[[missing]]` link is reported unresolved rather than dropped. 8F.3: same query
+   scoped and unscoped, assert subset plus the withheld count. 8F.4: index the
+   repo, then `impact_of` a function with known callers and **verify against a real
+   grep** — a graph that agrees with itself is not evidence.
+9. **Anti-drift.** All eleven new AD tests (AD-11…AD-21) pass and the existing
+   `test/anti-drift-*.test.js` suite stays green — AD-7 especially, since step 8
+   adds vault paths and test fixtures (derive fixture paths from `os.tmpdir()`;
+   AD-7 only fails a path literal after `git add`).
+10. **Docs (AD-10).** `node scripts/sync-test-count.js --write`, commit its output,
+   never hand-edit a count. Run it as a **separate** command from the commit —
+   chaining both has hit the 10-minute ceiling before.
+
+**Definition of done for step 8:** all six lanes (8A, 8B, 8C, 8D, 8E, 8F)
+live-verified as above; every box above ticked with a Progress-log row carrying its
+commit SHA; AD-11…AD-21 present in the V2 spine's §1 table; RESUME HERE rewritten
+to name the next unchecked step; pushed. **A tick that is not pushed does not exist
+to the next machine.**
 
 ---
 
@@ -527,7 +3310,7 @@ Modified: `from-computer.js` (4 tools + clipboard delegates), `from-calendar.js`
 
 **DONE 2026-07-30.** Both documents are now committed side by side in `mythos/Plans/`. Steps are recorded rather than deleted because the path confusion here is worth not repeating.
 
-- [x] **Step 1 — DONE, at a corrected path.** The root `.md.txt` was **not** V2; it was a formatting-stripped copy of *this* document. V2 was `~/.claude/plans/deep-compare-this-floofy-heron.md`, now committed as `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md` (1,570 lines, md5 verified identical to source). Its §3 and §4 frozen references — the Gemini Live wire protocol and the 23 MYTHOS seams with line numbers — are intact and are what merged-order step 4 builds from. **Read them before touching S2S; do not skim.**
+- [x] **Step 1 — DONE, at a corrected path.** The root `.md.txt` was **not** V2; it was a formatting-stripped copy of *this* document. V2 was `~/.claude/plans/deep-compare-this-floofy-heron.md`, now committed as `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md` (1,570 lines, md5 verified identical to source). Its §3 and §4 frozen references — the Gemini Live wire protocol and the 21 MYTHOS seams with line numbers (the "23" this line carried for weeks was prose drift against the table's own 21 rows; corrected 2026-08-16) — are intact and are what merged-order step 4 builds from. **Read them before touching S2S; do not skim.**
 - [x] **Step 2 — DONE 2026-07-30.** V2 §0.3 already read `✅ PASSED 2026-07-30`. V2 §16's "Live quota (highest)" risk is now marked **Retired** — re-ran `mythos/scripts/verify-gemini-live.js` live this session (not just trusting the prior claim): `models/gemini-3.1-flash-live-preview`, 67,202B of audio, clean `turnComplete`, no 429. Passed twice now.
 - [x] **Step 3 — superseded, not merged.** The two documents stay separate with a precedence rule (see the V2-spine section above) rather than being fused; V2 §18 already reconciles them from its side. The one supersession to honour: build `android-child` + `from-android.js` with 14 tools, **not** V2 §7.4's `android-adb` + `from-phone.js` with 6. Do not build both.
 - [x] **Step 4 — DONE.** This file is `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`, moved with `git mv` so history follows it.
@@ -988,3 +3771,923 @@ Per-wave gates, in order. Nothing advances on a green unit suite alone — this 
 4. **Wi-Fi ADB IP churn.** A renewed DHCP lease silently breaks every phone tool. **Mitigation:** persist to `vault/Identity/android-devices.json`, retry on boot, recommend a DHCP reservation, and have `phone_list_devices` surface last-seen staleness honestly. Boot can only retry, not rediscover.
 5. **`ps-automation.ps1` concurrency (BUG-037).** Wave 1 Task 3 and Wave 2 Task 11 both edit it. **Mitigation:** `git pull` + diff before editing, re-verify the six load-bearing pieces survive, worktree-isolate or serialize the agents, commit live-verified work immediately, and `TaskStop` any background agent holding the file before editing inline.
 6. **S2S cost.** Duplex audio bills for open-mic time; today's model bills per utterance. **Mitigation:** V2's three-layer gate (wake-word-only open, `LIVE_IDLE_TIMEOUT_MS`, `LIVE_SESSION_MAX_MS`) plus real `usageMetadata` in the spend widget. Measure at verification step 4 before expanding usage.
+
+---
+
+# W6 — Remove Hermes-Agent entirely; DeepSeek Harness (`dsh`) becomes the build engine
+
+**Opened 2026-08-21** on the operator's instruction ("So i want that to change it to
+Deepseek Harness"), and **re-scoped the same day** by a second, unambiguous
+instruction: **remove Hermes-Agent completely and put DeepSeek Harness in its
+place.** Not a selector, not a fallback, not a repoint of Hermes' provider.
+Hermes goes.
+
+**What that supersedes inside this section.** W6.0–W6.2 below are *measured
+evidence* and stand as written, with two corrections noted inline: Forge
+(`hermes-runner.js`) is **in scope**, and there is no "phase 1". W6.3 onward was
+rewritten on 2026-08-21 to describe full removal; the earlier selector
+architecture (`selectBuildEngine()`, `BUILD_ENGINE=hermes|dsh`, "leave Forge
+alone") is **withdrawn**, because a selector keeps the code it was meant to
+retire.
+
+**This is also a change to a binding architecture rule, and it is argued, not
+assumed.** Root `CLAUDE.md` names Hermes the single build-content engine with no
+brain fallback by design — BUG-244 **operator ruling A** of 2026-08-15, made
+after a brain-generated artifact shipped despite the verifier rejecting it. Its
+pinned disposition asks that any change be argued on its own terms. The operator
+has made the call, and **the rule is not being weakened — it is being
+re-pointed.** One engine, no fallback, a build with no engine FAILS with an
+install hint: all still true. The engine is now `dsh`.
+
+**Intended outcome:** every build-content path in MYTHOS runs on DeepSeek
+Harness, no Hermes code or config remains, and the suite still reports
+**0 failures and 0 skips**.
+
+**W6 COMPLETE — all 8 steps done, live-verified and pushed (`512debd` swap, `7e4f498` deletion). DeepSeek Harness is the build engine; Hermes-Agent is gone from the codebase. Suite 5776/5776/0/0. Nothing in W6 is outstanding. THE ONE MEASURED WEAKNESS IS NOT THE HARNESS: 6 of 9 verifier rejections, on BOTH harnesses, were the single rule `no @media queries (not responsive)` — `OUTPUT_CONTRACT` never asks for responsive CSS. THAT ONE-LINE PROMPT CHANGE IS NOW SHIPPED AND MEASURED (`38300be`): a responsive clause in
+`OUTPUT_CONTRACT` took the verifier from **2/9 to 8/9** on one model with the clause as the
+only variable. The first attempt at that number was discarded as uncontrolled — it moved the
+model *and* the contract. The one surviving failure is `interactive-snake`. Shipped alongside
+it: Whisper recognition hints (`providers/stt-hints.js`), **4/8 → 8/8** on MYTHOS jargon,
+because `groq-stt.js` was sending no `prompt` field at all. Nothing in W6 is outstanding; the
+only open item is re-measuring STT against a **real** recording rather than synthesized
+speech — see the 2026-08-22 RESUME HERE entry.**
+
+### The correction that reshaped this section
+
+The operator settled it on 2026-08-21: **W6 swaps the HARNESS. The models do
+not change.** "DeepSeek Harness" is the name of a program, not an instruction to
+run DeepSeek's models through it. Hours went into chasing a `DEEPSEEK_API_KEY`
+for a model nobody asked for. W6.4 was rewritten around
+`BRAIN_TABLES.build` — today `mistral/codestral-latest` — and there is **no
+`DEEPSEEK_API_KEY` requirement anywhere in W6.**
+
+### What is done
+
+**Step 0** — this section is the tracked copy of the operator's removal plan.
+
+**Step 1 — the spike ran, and the comparison is finally apples to apples.**
+`Hermes Agent/config.yaml` pins `mistral-large-2512`, so the 3/9 Hermes baseline
+was always "Hermes plus that model". Every earlier dsh number used a different
+model, so two variables moved at once. `spike-dsh-build.js` gained
+`--dsh-model provider/model`, which generates a pi-ai **catalog** overlay from a
+MYTHOS lane entry and validates the model id against the installed catalog.
+Running dsh on `mistral/mistral-large-2512` gives **dsh 3/9, Hermes 3/9** — the
+same three passes (`dated-landing` 3/3) and the same six failures
+(`interactive-snake` 0/3, `data-dashboard` 0/3), every one of them the single
+rule `no @media queries (not responsive)`. **The swap is quality-neutral, and the
+failing rule belongs to the model and the prompt, not to either harness.** dsh
+also produced 9/9 (no lost attempts) and obeyed the no-write contract 9/9, at a
+25.9 s median.
+
+**The 422 is solved, and it was never a compat switch.** pi-ai ships installed
+catalogs for `mistral/cerebras/groq/nvidia/google/openrouter/deepseek`. A route
+key naming one inherits that provider's endpoint **and its wire protocol** —
+`config.d.ts` says omitting `api` "keeps each installed catalog model's own
+protocol, which is why a catalog route needs no protocol at all". Mistral's
+entries declare `mistral-conversations`. The old overlay hand-declared
+`api: openai-completions` + `baseURL`, which forced OpenAI shaping, which sent
+the system prompt in a `developer` role, which Mistral rejects with
+`422 union_tag_invalid` — and `compat.supportsDeveloperRole: false` was **inert
+at both route and model level**. The fix was to stop declaring a protocol for a
+provider the catalog already describes.
+
+**Step 2 — `mythos/adapters/dsh-agent/index.js`.** `probe · runTask ·
+getStatus · scrubbedEnv`, and **none** of Hermes's four extra exports (AD-8).
+Live-verified against the running engine: read-only path answered in 4.3 s and
+wrote 0 files; write path wrote exactly `hello.txt` with the right content in
+5.1 s; both `writeRoot` guards refused as designed. `test/dsh-agent.test.js` is
+39 tests, and **14 mutations of the adapter were each caught** — the permission
+mode, every overlay-shape invariant, the cwd requirement, a re-added Hermes-only
+stub, a silently-forwarded unset credential, and an ollama route guessed into
+existence.
+
+**Step 3 — the four call sites are ported**, plus everything the plan's step-3
+list did not mention:
+
+- `build-engine.js`: `deps.hermes` → `deps.engine`, `engine: 'dsh'`,
+  `hermesFailed` → `engineFailed`. **`HERMES_ERROR_REPLY_RE` is deleted, not
+  renamed** — dsh's exit code is its oracle and the adapter rejects the failure
+  upstream, so a detector here would be a guard that never fires over a model's
+  own output. Pinned as a disposition with a test. An absent scratch directory is
+  now a **hard failure**, not cwd inheritance (AD-3).
+- `hermes-runner.js` → `forge-runner.js` via `git mv`, `createHermesRunner` →
+  `createForgeRunner`, and the engine is now **injected** rather than required at
+  module scope. `env: { HERMES_WRITE_SAFE_ROOT, HERMES_YOLO_MODE }` became
+  `writeRoot` / `autoApprove` at all three call sites. Reason
+  `'hermes-error'` → `'engine-error'`.
+- `from-hermes.js` → `from-dsh.js`, `hermes_task` → `dsh_task`. **The old tool
+  called `runTask()` with no cwd**, so the agent inherited MYTHOS's own working
+  directory; `dsh_task` now creates its own sandboxed workspace under a
+  MYTHOS-owned root and returns the path plus the files written.
+- **Three leash sites the plan's step list missed**: `hermes_task` was in
+  `leash/index.js:191`'s `NEVER_TRUSTABLE` map plus comments at
+  `leash/index.js:362` and `tiers.js:200`, and the tier entry at `tiers.js:303`.
+  A rename that stopped at the effector would have dropped the tool out of
+  NEVER_TRUSTABLE silently. Also `live-tool-adapter.js`'s `SLOW_TOOLS`.
+- `main.js` (requires, construction, boot probe, capability manifest),
+  `healer.js`'s `missing-dependency:dsh-agent`, `build-runner.js`'s engine tag,
+  `executor.js`'s no-engine message, `completion-status.js`'s engine-value note.
+
+**Step 4 — install, config, UI.** `scripts/setup-dsh.js` with
+`--check`/`--install`; it `npm install --save-exact`s the pin into a vendor root
+and **never pipes a remote script into a shell**. `--check` also reports whether
+the build lane can actually be reached, because "installed" is only half of
+"builds will work". The four schema keys are `DSH_*` with **no aliases** for the
+old names, and a test pins that. `.env.example`'s 205-line Hermes block became a
+130-line dsh block that keeps the measured facts which describe the PROVIDER
+(the 429-at-call-3 endurance numbers) and adds dsh's own measured ~10.7k-token
+per-request overhead. `settings-panel-model.js`'s devices regex now matches
+`DSH_`. The setup component dropped `requiresWsl` — dsh is an npm package, and
+leaving the gate up would refuse the install on every Windows machine without
+WSL, for the one component whose absence fails every build.
+
+### What is left
+
+- **Step 5's live half.** The suite is green, but a green suite cannot tell you
+  the engine ran — proven on this repo 2026-08-04, when a slice shipped with
+  2598 green tests and the app would not start. Needed: one live single-artifact
+  build and one live Forge multi-file build through the running app.
+- **Step 6 — delete Hermes**, in its own commit (AD-4). Adapter (733 LOC),
+  `setup-hermes.js` (444), **three** Hermes verification scripts
+  (`verify-hermes-build-endurance.js`, `verify-hermes-slot-bakeoff.js`,
+  `verify-phase-b-hermes.js` — the last does not match the `verify-hermes-*`
+  glob, which is why earlier counts said two), the Hermes-named test files, the
+  `Hermes Agent/` directory, and the remaining `HERMES_*` names. **Known
+  transient state: those three verify scripts call `createBuildEngine({ hermes })`
+  and are therefore broken between step 3 and step 6.** They are Hermes-only
+  measurement tools being deleted, so they were not patched.
+- **Step 7 — root `CLAUDE.md`**, in the SAME commit as the deletion.
+- **Step 8 — `node mythos/scripts/audit-licences.js --check`**, blocking.
+
+### Operator decisions, unchanged by W6
+
+Cerebras is unbilled (four lane entries return 402, which is why they were
+demoted rather than deleted), and the OpenRouter guardrail allow-list holds only
+GLM 5.2 free plus two TTS models. Neither blocks W6: the build lane's top three
+entries are all Mistral and all reachable.
+
+---
+
+## W6.0 — Evidence register: what is verified, and what is not
+
+Everything in this section was measured on **2026-08-21**, on this machine, with
+the command named beside it. Nothing here is recalled from a model's memory of
+the ecosystem. Re-verify anything older than a week before acting on it — `dsh`
+is eight days old and explicitly unstable.
+
+### VERIFIED — the upstream project
+
+| Fact | Value | How |
+|---|---|---|
+| Repository | `deepseek-ai/deepseek-harness` | `gh api repos/deepseek-ai/deepseek-harness` |
+| Licence | **MIT** | same call, `.license.spdx_id` |
+| Language | TypeScript | same call |
+| Default branch | `master` (**not `main`** — raw URLs against `main` 404) | same call |
+| Created | 2026-08-13 | same call |
+| Last push | 2026-08-21 | same call |
+| Stars / forks | 179,287 / 19,529 | same call |
+| npm package | `@deepseek-ai/dsh@0.1.1-rc.2`, `latest` and `next` both point at the rc | `npm view @deepseek-ai/dsh version dist-tags` |
+| Node requirement | `^22.19.0 \|\| >=24.0.0` | root `package.json` `engines` |
+| Stability | *"Developer preview … THERE WILL BE COMPATIBILITY-BREAKING CHANGES."* | `README.md`, verbatim |
+
+**This machine satisfies the toolchain:** `node -v` → **v26.1.0**, `pnpm -v` →
+**10.10.0**. Both checked 2026-08-21. pnpm matters because `dsh plugin` shells
+out to it.
+
+### VERIFIED — the one-shot surface, which is the whole reason this is feasible
+
+From `apps/cli/README.md` and `apps/cli/reference/README.md` (the reference file
+is authoritative — the top-level README documents only `dsh web` and would have
+led a reader to conclude there is no headless mode):
+
+```
+dsh --profile headless "job"
+```
+
+> *"Run one fresh persisted session, print the final answer, and exit."*
+
+Behavioural contract, quoted from `packages/bundle/headless/README.md` and the
+CLI reference:
+
+- Creates one fresh persisted Agent, submits the task as an ordinary user
+  message, waits for quiescence.
+- **Writes the last non-empty assistant text to stdout.**
+- **Exit 0 iff the final `turn/end` reason is `completed`; otherwise 1.**
+- A terminal `error` reason writes its code and message to **stderr**;
+  a successful run leaves stderr **empty**.
+- Opens **no listening port**. Mounts no ApiProxy, Host, HTTP server, Web
+  runtime, or browser client.
+- A missing or whitespace-only task is rejected before the runner activates.
+
+That is the same shape MYTHOS's `runTask(prompt) -> text` already consumes. This
+is why W6 is a swap and not a rewrite.
+
+### VERIFIED — configuration surface
+
+- **A DeepSeek account is NOT strictly required.** The base bundle — which the
+  `headless` profile rides on — already ships `@deepseek-ai/dsh-llm-pi-ai`, a generic
+  multi-provider adapter. A provider route is declared in a `cordis.patch.yml` layer
+  with `apiKeyEnv` naming *any* environment variable, and a route pi-ai does not carry
+  in its catalog is declared outright with `api: openai-completions` + `baseURL`. So an
+  OpenAI-compatible gateway is configuration, not a code change, and **no plugin install
+  is needed**. Verified against `packages/llm/llm-pi-ai/README.md` and
+  `packages/bundle/base/package.json`. `apiKeyEnv` is a *reference* resolved per request,
+  so no secret enters the patch file, and a reference that resolves to nothing fails with
+  `MISSING_CREDENTIAL` rather than falling through to an unrelated key.
+  **Caveat that keeps this optional rather than default:** routing through a gateway
+  measures dsh *and* that gateway. W6 asks whether *dsh* builds better artifacts than
+  Hermes, so the comparison that goes in the progress log wants a direct
+  `DEEPSEEK_API_KEY` run.
+- **Credential resolution order:** inherited environment → `$DSH_HOME/.credentials.yaml`
+  → the invoking directory's `.env` → `$DSH_HOME/.env`. The managed document is
+  never materialized into `process.env`.
+- **Key name:** `DEEPSEEK_API_KEY`. The base bundle mounts the native DeepSeek
+  adapter, so the model is DeepSeek's own API, not an OpenAI-compatible shim.
+- **`DSH_TOOLS_MODE`** selects `native`, `code`, or `both`; any other value
+  **fails at boot**.
+- **`DSH_PERMISSION_MODE`** changes the process permission fallback. New sessions
+  default to `workspace-write`.
+- **`DSH_TELEMETRY_DISABLED`** — any non-empty value is *"an authoritative hard
+  opt-out."*
+- **`DSH_HOME`** roots profiles at `$DSH_HOME/profiles/<name>`. The `headless`
+  profile auto-initializes from a shipped template on first use.
+
+### VERIFIED — MYTHOS's side of the seam
+
+| Fact | Location |
+|---|---|
+| One and only construction site | `mythos/src/main.js:448` — `createBuildEngine({ hermes: require('../adapters/hermes-agent'), vault: memory.fs, bus: bus })` |
+| The contract the engine demands | `build-engine.js:112-117` — throws `createBuildEngine requires the hermes-agent adapter` unless `deps.hermes.runTask` is a function |
+| The exact call made | `build-engine.js:206-210` — `runTask(full, { requireCli: true, cwd: dir, timeoutMs, maxPromptChars: 24000 })` |
+| Adapter's public surface | `adapters/hermes-agent/index.js` exports `probe · runTask · getStatus · scrubbedEnv · providerSlots · describeSlot · onProviderRotated · HERMES_ERROR_REPLY_RE` |
+| Second, separate Hermes consumer | `effectors/hermes-runner.js` — Forge multi-file builds, `runPlan/runBuild/classify`, 30-minute budget, polls the output directory. **Out of scope for W6 phase 1.** |
+| Downstream of `generate()` | `build-runner.js:174`, `agent-actions.js:161-163`, `engagements/executor.js` |
+| Who reads the `engine` tag | `completion-status.js:41` and `announcer.js:129` — both only special-case `'brain-fallback'` and `'fallback'` |
+
+**Nothing in the repo string-matches `engine === 'hermes'`.** Checked across
+`src/` and `ui/`. The `--module-hermes` CSS custom property in
+`ui/public/css/tokens/semantic.css:82` is a **colour token** (`#4fd8ff`) that has
+nothing to do with the build engine — a name collision, not a consumer. Do not
+rename it as part of W6; that is unrelated churn.
+
+### NOT VERIFIED — and the check that would settle each
+
+1. **Whether `dsh` produces build artifacts as good as Hermes on MYTHOS's own
+   prompts.** Nobody has run it. Settled by W6.7 step 1, the spike. *This is the
+   only fact that decides whether W6 proceeds at all.*
+2. **Whether `dsh --profile headless` honours MYTHOS's `OUTPUT_CONTRACT`** (reply
+   with artifact content only, write no files). `dsh` is agentic and defaults to
+   `workspace-write`; so is Hermes, and MYTHOS already contains that risk with a
+   scratch dir plus `verifier.verify()`. Settled by the spike's file-count
+   assertion.
+3. **Cold-start latency and whether `npx` resolution adds a per-call penalty.**
+   Settled by timing the spike.
+4. **Whether the rc's CLI grammar survives the week.** Cannot be settled — see
+   W6.10 risk 1.
+
+---
+
+## W6.1 — Intake: what the build engine is today, in plain English
+
+When you ask MYTHOS to build something — a landing page, a snake game, a kanban
+card's content — the words that end up in the artifact are written by an external
+program, not by MYTHOS's conversational brain. That program is **Hermes-Agent**,
+driven as a command-line tool.
+
+There are two separate paths and they are frequently confused:
+
+- **`build-engine.js`** — *one artifact, text in one reply.* This is what
+  `pipeline_execute`, `kanban_build_card`, `start_project`, `run_mission` and the
+  engagement build stage all funnel into. **This is what W6 replaces.**
+- **`hermes-runner.js`** — *a whole project tree, many files, 30-minute budget,
+  driven by Forge.* Different verbs (`runPlan`/`runBuild`/`classify`), different
+  oracle (it watches files appear on disk). **W6 phase 1 does not touch it.**
+
+Both currently point at the same `adapters/hermes-agent`. Phase 1 moves the first
+one and leaves the second alone, so a failed swap costs you single-artifact
+builds and not Forge.
+
+**Current provider under Hermes** (measured 2026-08-21): `Hermes Agent/config.yaml`
+lines 3–4 say `provider: openai-api`, `base_url: https://api.mistral.ai/v1`, and
+`mythos/.env:278-280` forwards a Mistral key and `mistral-large-2512`. Note that
+Hermes' own `config.yaml` **wins** over the forwarded environment. So today's
+build engine is *Hermes the harness driving Mistral the model.*
+
+That decomposition matters, because it means there were always **two** possible
+readings of "switch to DeepSeek", and they cost very different amounts:
+
+- **Swap the model, keep the harness** — point Hermes at DeepSeek's
+  OpenAI-compatible endpoint. Three config values, reversible in a minute.
+  `setup-hermes.js:206` hard-requires `provider: openai-api`, and DeepSeek serves
+  an OpenAI-compatible API, so this needs no code at all.
+- **Swap the harness** — what the operator actually asked for on 2026-08-21, and
+  what the rest of this section plans.
+
+The cheap option is recorded here deliberately, because it is the correct
+**rollback target** if W6 fails: it gets DeepSeek-authored builds with zero new
+surface.
+
+---
+
+## W6.2 — The seam, and why this is a swap rather than a rewrite
+
+`createBuildEngine` asks its dependency for exactly one method:
+
+```js
+// build-engine.js:112-117 — the entire contract, quoted
+function createBuildEngine(deps) {
+  var hermes = deps && deps.hermes;
+  ...
+  if (!hermes || typeof hermes.runTask !== 'function') {
+    throw new Error('createBuildEngine requires the hermes-agent adapter');
+  }
+```
+
+Plus one optional method, `onProviderRotated`, used only to republish a bus
+event. Everything else the adapter exports is consumed by `hermes-runner.js`, the
+health probes, or its own tests.
+
+So the swap surface is: **one function, `runTask(prompt, opts) -> Promise<string>`,
+honouring `{ cwd, timeoutMs, maxPromptChars, requireCli }`.**
+
+That is small enough to do honestly. It is also small enough that the temptation
+will be to skip the spike and just write the adapter. Do not — see W6.5, AD-2.
+
+---
+
+## W6.3 — The five clusters to remove
+
+Measured 2026-08-21: **1,731 lines** across the five load-bearing files, plus
+config, docs and tests.
+
+**A · Build content — REPLACE.** `build-engine.js` (241) and `hermes-runner.js`
+(271). Both move to the new adapter. `hermes-runner.js` requires the adapter at
+*module top* (line 23) and `createHermesRunner({config, vault})` has **no adapter
+parameter**, so an injection point must be added at `main.js:652`.
+
+**B · Delegation tool — RENAME.** `from-hermes.js` (42) exposes `hermes_task`,
+tier-3/`danger`. Verified: it is **not** in the voice allowlist
+(`live-tools.js`'s `DEFAULT_ALLOWLIST`), so no spoken flow breaks. Becomes
+`dsh_task`.
+
+**C · Health & immune — RE-POINT.** `main.js:1014-1015` (boot probe),
+`main.js:1046` (status surface), `healer.js:468` (`reprobe-build-engine`, which
+requires the adapter by path and returns `missing-dependency:hermes-agent`).
+
+**D · Install, config, UI — REPLACE.** `scripts/setup-hermes.js` (444) →
+`setup-dsh.js`; four schema keys (`HERMES_PLAN_TIMEOUT_MS`,
+`HERMES_BUILD_TIMEOUT_MS`, `HERMES_POLL_MS`, `HERMES_BUILD_TERMINAL_ENV` at
+`mythos/src/core/config/schema.js:512-515` — that path re-measured during step 0,
+the operator's plan gave the line numbers without the path); **36**
+`.env.example` lines carrying `HERMES_`; the `settings-panel-model.js:26`
+grouping regex; the first-run wizard component.
+
+**Re-measured 2026-08-21, and it changes the size of step 4.** Only **4**
+`HERMES_` names are *validated in the schema*. `.env.example` declares **18
+distinct `HERMES_` names** across those 36 lines — `HERMES_API_KEY`,
+`HERMES_API_URL`, `HERMES_BUILD_TERMINAL_ENV`, `HERMES_BUILD_TIMEOUT_MS`,
+`HERMES_CLI`, `HERMES_CLI_PROBE_TIMEOUT_MS`, `HERMES_HOME`,
+`HERMES_INFERENCE_MODEL`, `HERMES_PLAN_TIMEOUT_MS`, `HERMES_POLL_MS`,
+`HERMES_PROVIDER_BASE_URL`, `HERMES_PROVIDER_BASE_URL_`, `HERMES_PROVIDER_KEY`,
+`HERMES_PROVIDER_KEY_`, `HERMES_PROVIDER_MODEL`, `HERMES_PROVIDER_MODEL_`,
+`HERMES_TASK_TIMEOUT_MS`, `HERMES_TEXT_BUILD_TIMEOUT_MS` — the other 14 being
+read straight from the environment by the adapter and `setup-hermes.js` rather
+than through the schema. **Renaming only the four schema keys would leave 14
+live env names pointing at a deleted program.** A further 31 `.env.example` lines
+mention Hermes in prose (67 case-insensitive total) and are comments, not
+configuration.
+
+**E · Tests & scripts.** **37** test files mention Hermes; **5** are named for it
+(`hermes-adapter`, `hermes-provider-rotation`, `hermes-runner`,
+`p0-1-hermes-probe-diagnostics`, `bug-168-hermes-offline-evidence`). **Two**
+`verify-hermes-*.js` scripts — `verify-hermes-build-endurance.js` and
+`verify-hermes-slot-bakeoff.js`. *(Re-measured 2026-08-21 during step 0: the
+operator's plan said three. `ls mythos/scripts | grep -i verify-hermes` → 2.)*
+
+**Also:** root `CLAUDE.md`'s single-engine paragraph, and the gitignored
+`Hermes Agent/` install directory.
+
+**Correction to W6.0/W6.1/W6.2 above.** They record `hermes-runner.js` as "out of
+scope for W6 phase 1" and treat Forge as a harder, separate problem. That was
+wrong, and the correction is measured: **all four build call sites call
+`hermes.runTask(prompt, opts)` and nothing else.**
+
+| Site | File | Purpose |
+|---|---|---|
+| 1 | `build-engine.js:206` | single artifact, text reply |
+| 2 | `hermes-runner.js:64` | Forge `runPlan` — JSON file manifest |
+| 3 | `hermes-runner.js:123` | Forge widget spec — JSON, data-only |
+| 4 | `hermes-runner.js:216` | Forge `runBuild` — writes a project tree |
+
+Same one-method contract at every site. e2e is therefore **one adapter, not
+two**, and there is no phase split.
+
+---
+
+## W6.4 — Model selection: the build lane, not a DeepSeek model
+
+**CORRECTED 2026-08-21 by operator ruling, and the correction is the point of
+this section.** Everything this section previously said was wrong at the premise.
+It opened "only `OPENROUTER_API_KEY` reaches a DeepSeek model", tabled
+`deepseek-v4-pro` against `deepseek-v4-flash`, and assigned one of them to each
+of the five call sites. Nobody asked for that. The operator's words, verbatim:
+
+> "Did I ask for a deep seek model? I never asked for a deep seek model. The
+> model which we are currently using, I need those models because we have
+> brainstormed those model and found out the best use case for those model. …
+> Check the brain map."
+
+**W6 swaps the HARNESS. The models do not change.** "DeepSeek Harness" is the
+name of a program, not an instruction to run DeepSeek's models through it — dsh
+is a provider-agnostic agent runner and its own base bundle ships a
+multi-provider LLM adapter for exactly this reason. Hours went into chasing a
+`DEEPSEEK_API_KEY` for a model that was never in scope. Recorded here rather than
+quietly fixed, because the same inference is available to the next reader.
+
+### The model is whatever `BRAIN_TABLES.build` ranks first
+
+`src/core/brain/lanes.default.js` is the single source of truth, and the `build`
+lane is already the one MYTHOS uses for build content:
+
+| Rank | Lane entry | Note |
+|---|---|---|
+| 1 | `mistral/codestral-latest` | code-specialised; the production head |
+| 2 | `mistral/mistral-medium-2604` | |
+| 3 | `mistral/mistral-large-2512` | **what Hermes itself runs** — see below |
+| 4 | `nim/meta/llama-3.1-8b-instruct` | |
+| 5 | `cerebras/gpt-oss-120b` | 402 while the account is unbilled |
+| 6–7 | `ollama/hermes3:8b`, `ollama/ornith:9b` | local tail |
+
+So there is **no per-call-site model table** any more. `runBuild`, `runPlan`,
+`runWidget`, `build-engine.generate` and `dsh_task` all resolve their model the
+way every other MYTHOS lane consumer does: walk the lane. A call site that wants
+something cheaper asks for a different *lane*, not a different vendor.
+
+### How dsh is pointed at a lane entry
+
+Two configuration entries, and the shape matters more than the values:
+
+```yaml
+- id: agent-default-model          # the headless runner reads ctx.agentDefaultModel
+  config:
+    provider: mistral
+    model: codestral-latest
+
+- id: llm-pi-ai                    # matched by plugin id; dsh-base calls it llm-pi-ai
+  config:
+    providers:
+      mistral:                     # a CATALOG route: no `api`, no `baseURL`
+        apiKeyEnv: MISTRAL_API_KEY  # a reference resolved per request; no secret
+```
+
+**A catalog route is what fixes the 422**, and this is the single most expensive
+thing learned in step 1. pi-ai ships installed catalogs for `mistral`, `cerebras`,
+`groq`, `nvidia`, `google`, `openrouter` and `deepseek`
+(`@earendil-works/pi-ai/dist/providers/data/*.json`). Per
+`dsh-llm-pi-ai/lib/types/config.d.ts`, the `api` field's omission "keeps each
+installed catalog model's own protocol, which is why a catalog route needs no
+protocol at all". Mistral's catalog entries declare `api: mistral-conversations`
+— Mistral's own protocol. The earlier overlay hand-declared
+`api: openai-completions` + `baseURL`, which forced OpenAI shaping, which sent
+the system prompt in a `developer` role, which Mistral rejects:
+
+```
+422 {"detail":[{"type":"union_tag_invalid","loc":["body","messages",0],
+     "msg":"Input tag 'developer' found using 'role' does not match any of the
+     expected tags: <Roles.system: ..."}]}
+```
+
+`compat.supportsDeveloperRole: false` was tried at route level and at model
+level and was **inert both times**. It was never a compat switch. The fix was to
+stop declaring a protocol for a provider the catalog already describes.
+**Verified end to end 2026-08-21**: catalog route + `mistral-large-2512` +
+`--profile headless` → exit 0, stdout `PONG`, stderr empty, 88.8 s.
+
+`nim` maps to pi-ai's `nvidia` route. **`ollama` has no catalog and is
+deliberately unmapped** — it would need a hand-declared `openai-completions`
+route at a loopback port, and a guessed port that half-works is worse than a
+named refusal. A lane walk that reaches the ollama tail must say so.
+
+### Why this makes the Hermes comparison possible for the first time
+
+`Hermes Agent/config.yaml` pins `model.default: mistral-large-2512`. The 3/9
+Hermes baseline in W6.14 is therefore a measurement of **Hermes plus that
+model**. Every dsh number taken before this correction used a different model
+(`deepseek-v4-pro`, then `z-ai/glm-5.2:free`, then `codestral-latest`), so two
+variables moved and the difference is attributable to neither. `--dsh-model
+mistral/mistral-large-2512` on the spike holds the model fixed and isolates the
+harness. That is the number the swap decision rests on, and it costs cents.
+
+### Credentials
+
+`MISTRAL_API_KEY` — already present, already what Hermes uses, already what the
+build lane's top three entries need. No new account, no new key, and
+`DEEPSEEK_API_KEY` is **not required by W6 at all**. It stays supported because
+pi-ai ships a `deepseek` catalog route like any other, not because anything here
+depends on it.
+
+---
+
+## W6.5 — Target architecture
+
+```
+   BEFORE                                      AFTER
+
+   build-engine.js ──┐                         build-engine.js ──┐
+                     │                                           │
+   hermes-runner.js ─┼──► adapters/            forge-runner.js ──┼──► adapters/
+     runPlan         │    hermes-agent/          runPlan         │    dsh-agent/
+     runWidget       │    ├ runTask ────► hermes  runWidget      │    ├ runTask ──► dsh --profile
+     runBuild        │    ├ probe        CLI      runBuild       │    ├ probe        headless "…"
+                     │    ├ getStatus    │                       │    ├ getStatus       │
+   from-hermes.js ───┤    └ scrubbedEnv  ▼       from-dsh.js ────┤    └ scrubbedEnv      ▼
+     hermes_task     │                  Mistral    dsh_task      │                   build lane
+                     │                                           │
+   healer / main.js ─┘                         healer / main.js ─┘
+```
+
+**Adapter contract** — identical to today's, so no caller learns a new shape:
+
+```
+runTask(prompt, opts) -> Promise<string>
+  opts.cwd            REQUIRED (see W6-AD-3)
+  opts.timeoutMs
+  opts.maxPromptChars
+  opts.writeRoot      NEW — intent, not an env var
+  opts.autoApprove    NEW — intent, not an env var
+```
+
+**Why `writeRoot`/`autoApprove` are new.** `hermes-runner.js` currently passes
+`env: { HERMES_WRITE_SAFE_ROOT: dirAbs, HERMES_YOLO_MODE: '1' }` — a generic
+caller naming another program's environment variables. Under dsh those two
+concepts are expressed completely differently: dsh confines writes by making the
+**invoking directory** the workspace root (`workspace-write`, restricted to that
+root plus platform temp), so `cwd` already does the job and no env var is needed.
+Callers should state **intent**; each adapter translates. Leaving the `HERMES_*`
+names in place while deleting Hermes would be a lie in the code.
+
+---
+
+## W6.6 — Anti-drift contract (W6-AD-1 … W6-AD-9)
+
+1. **Measure dsh, never recall it.** The project is 8 days old and post-dates
+   every model's training data. Every claim cites a file path or a command run.
+2. **The spike gates the adapter.** No adapter code before step 1 returns a
+   number.
+3. **`cwd` is REQUIRED and its absence throws.** dsh treats the invoking
+   directory as its workspace root, grants it `workspace-write`, and loads that
+   directory's `AGENTS.md`/`CLAUDE.md` as agent instructions under a 65,536-byte
+   budget. This repo's two files total **41,412 bytes — both load in full.** An
+   inherited `cwd` therefore hands a build task MYTHOS's own operating rules
+   *while holding write access to the repo*. `build-engine.js:142-151`'s
+   `scratchDir()` returns `undefined` on failure and its comment says "adapter
+   falls back to cwd inheritance" — **that fallback must not survive the port.**
+4. **Removal is a separate commit from replacement.** Land dsh working alongside
+   Hermes, prove it green, *then* delete Hermes. One commit that both adds and
+   deletes cannot be bisected.
+5. **No fallback, still.** dsh fails → the build fails with an install hint.
+   Ruling A survives the engine change;
+   `test/build-engine-no-fallback.test.js` is **re-pointed, never relaxed.**
+6. **Every new env var** lands in `.env.example` **and**
+   `settings-panel-model.js:26`'s regex in the same commit, or it is invisible in
+   the settings panel.
+7. **No absolute machine paths in tracked files** — the AD-7 gate fires only
+   after `git add`, so a clean working tree proves nothing until staged.
+8. **Delete, don't stub.** No `hermes_task` shim that forwards to `dsh_task`. No
+   `providerSlots`/`describeSlot`/`HERMES_ERROR_REPLY_RE` stubs on the new
+   adapter — grep says only Hermes-specific code reads them, and an unused stub
+   is a lie about capability. Removal means gone.
+9. **Push through a PR branch.** Two machines share this repo and one git index.
+
+---
+
+## W6.7 — Anti-context-loss: the handoff protocol
+
+- **State lives in this section, not in a chat transcript.** Rewrite the
+  `W6 RESUME HERE` block after every step: current step, next action as an
+  imperative, what blocks.
+- **Every step gets a progress-log row** with the commit SHA and the verification
+  command *and its counts* — never the word "done".
+- **Never trust a `- [x]` you did not verify this session.** Re-run the command.
+- **`git pull` and diff before editing any file named here** (BUG-037: a
+  concurrent session once reverted live-verified fixes through a clean
+  fast-forward).
+- **The spike's raw replies are committed as fixtures**, not summarized. A number
+  in prose rots.
+- **Handoff = the RESUME block + `git log --oneline -5`.** If an agent would need
+  the chat history, the RESUME block is incomplete — fix it before stopping.
+
+---
+
+## W6.8 — Build order
+
+Steps 1–4 add dsh. Step 5 proves it. Steps 6–8 remove Hermes. **Nothing is
+deleted before dsh is green** (W6-AD-4).
+
+### 1 · Spike — already written, never run
+
+- [x] `mythos/scripts/spike-dsh-build.js` is committed (`f3500a4`, `17ec6e6`) and
+  runnable today:
+
+```bash
+node mythos/scripts/spike-dsh-build.js --samples 3 --dsh-patch mythos/scripts/fixtures/dsh-openai-compatible.patch.yml
+```
+
+- [x] Extend it with a **Forge variant** before trusting the e2e port: `runBuild`
+  needs dsh to *write files*, which the current spike explicitly forbids. Measure
+  the file-appearance oracle **and** the approval behaviour (W6.11 risk 2) in the
+  same pass.
+
+### 2 · `mythos/adapters/dsh-agent/index.js`
+
+- [x] Mirror the hermes adapter's exported shape: `probe · runTask · getStatus ·
+  scrubbedEnv`. **Do not stub** the four Hermes-only exports (W6-AD-8).
+
+```js
+'use strict';
+// adapters/dsh-agent/index.js — DeepSeek Harness as MYTHOS's build engine.
+//
+// UPSTREAM CONTRACT verified 2026-08-21 against apps/cli/reference/README.md and
+// packages/bundle/headless/README.md at deepseek-ai/deepseek-harness@master. dsh is a
+// developer preview whose README says there WILL be breaking changes, so every property
+// below is ASSERTED at runtime rather than trusted.
+
+const DSH_PACKAGE = '@deepseek-ai/dsh';
+
+// W6-AD-3. cwd is REQUIRED and its absence is fatal — a deliberate divergence from the
+// hermes adapter, where a missing cwd merely inherited the process working directory.
+// dsh treats the invoking directory as its workspace root, grants it workspace-write,
+// and loads that directory's AGENTS.md/CLAUDE.md as agent instructions under a
+// 65,536-byte budget. This repo's two files total 41,412 bytes and BOTH would load in
+// full, so an inherited cwd hands a build task MYTHOS's own operating rules plus write
+// access to the repository. Failing loudly beats a default that makes a broken
+// configuration look healthy.
+function requireCwd(cwd) {
+  if (!cwd || typeof cwd !== 'string') {
+    throw new Error('dsh-agent: cwd is required — dsh would otherwise adopt the process '
+      + "working directory as its writable workspace and read this repo's CLAUDE.md as "
+      + 'instructions. Pass an explicit scratch or project directory.');
+  }
+  return cwd;
+}
+
+async function runTask(prompt, opts) {
+  if (!prompt || !String(prompt).trim()) throw new Error('prompt required');
+  opts = opts || {};
+  const cwd = requireCwd(opts.cwd);
+
+  // Launcher flags FIRST: the reference is explicit that they end at the first token the
+  // launcher does not recognize, and that a first app argument equal to `web` or `plugin`
+  // selects that subcommand. The task is therefore ONE positional argument, never loose words.
+  const args = ['--profile', 'headless'];
+  if (opts.patch) args.push('--patch', opts.patch);
+  args.push(String(prompt).slice(0, opts.maxPromptChars || 24000));
+
+  const { code, stdout, stderr } = await spawnDsh(args, {
+    cwd,
+    timeoutMs: opts.timeoutMs || 300000,
+    env: scrubbedEnv(opts),
+  });
+
+  // The exit code IS the oracle: 0 iff the final turn/end reason is `completed`.
+  if (code !== 0) throw new Error('dsh exit ' + code + (stderr ? ': ' + stderr.slice(0, 600) : ' (stderr empty)'));
+  // Documented as empty on success. If it is not, the contract MOVED — say so rather than
+  // scoring an artifact produced under unknown conditions.
+  if (stderr.trim()) throw new Error('dsh exited 0 but wrote to stderr, which its reference '
+    + 'says is empty on success; the CLI contract may have changed: ' + stderr.slice(0, 600));
+  if (!stdout.trim()) throw new Error('dsh exited 0 with empty stdout');
+  return stdout;
+}
+```
+
+- [x] `scrubbedEnv(opts)` — read the hermes adapter's version and match its
+  approach:
+  - `DSH_TELEMETRY_DISABLED = '1'`, and **delete** `DSH_TELEMETRY_MODE` /
+    `DSH_TELEMETRY_OTLP_URL`. The shipped base bundle has **no redaction rule**,
+    so an enabled export can carry message text, tool arguments and results, and
+    workspace paths. Documented, not speculative.
+  - `DSH_HOME` pinned to a MYTHOS-owned directory **derived from the
+    environment**, so a build never mutates the operator's own dsh profiles.
+  - `opts.autoApprove` → the permission knob (W6.11 risk 2), **never** a blanket
+    `danger-full-access`.
+  - Pass `DEEPSEEK_API_KEY` / the overlay's referenced key through; nothing else
+    key-shaped.
+
+### 3 · Port the four call sites
+
+- [x] `build-engine.js`: rename `deps.hermes` → `deps.engine` (the old name
+  becomes a lie), swap the `engine:` result tag to `'dsh'`, and replace the
+  `HERMES_ERROR_REPLY_RE` import. **Check in the spike whether dsh has an
+  exit-0-but-failed mode** — Hermes has one (provider errors on stdout with exit
+  0, BUG-058/245) and that regex exists because of it. If dsh has none, pin that
+  as a disposition so nobody adds a speculative detector.
+- [x] `hermes-runner.js` → rename to `forge-runner.js` (it is Forge's runner;
+  keeping "hermes" in the filename after deleting Hermes is exactly the
+  contradiction this repo treats as a defect). Add an `engine` parameter to
+  `createHermesRunner`→`createForgeRunner`, injected at `main.js:652`. Replace
+  the three `env: { HERMES_* }` blocks with `writeRoot` / `autoApprove`.
+- [x] `from-hermes.js` → `from-dsh.js`, `hermes_task` → `dsh_task`. Keep
+  tier-3/`danger` — dsh executes real commands. Not voice-allowlisted, so no
+  spoken flow changes.
+- [x] `main.js:1014-1046` and `healer.js:468` → point at the new adapter; the
+  healer's `missing-dependency:hermes-agent` string becomes
+  `missing-dependency:dsh-agent`.
+
+### 4 · Install, config, UI
+
+- [x] `scripts/setup-dsh.js` with `--check`/`--install`, modelled on
+  `setup-hermes.js`. **Never `curl | sh`** — root `CLAUDE.md` forbids it and dsh
+  needs no such thing (`npx @deepseek-ai/dsh`, or a pinned local install). Pin
+  the **exact version**; do not float on `latest` against a developer preview.
+- [x] Rename the four *schema-validated* keys `HERMES_*` → `DSH_*` **and account
+  for the other 14 unvalidated `HERMES_` env names W6.3 enumerates** — a rename
+  that stops at the schema leaves 14 live names pointing at a deleted program.
+  Rewrite the 36
+  `.env.example` lines, add `DSH_` to `settings-panel-model.js:26`, swap the
+  wizard component (W6-AD-6).
+
+### 5 · Prove it green — the gate before any deletion
+
+- [x] Full suite at **0 fail / 0 skip**, plus one live single-artifact build
+  **and** one live Forge multi-file build. Only then proceed.
+
+### 6 · Delete Hermes
+
+- [x] Adapter (733), `setup-hermes.js` (444), the two `verify-hermes-*.js`, the
+  five Hermes-named test files, `HERMES_*` from schema and `.env.example`, the
+  wizard component, and the gitignored `Hermes Agent/` directory. Sweep the
+  remaining **37** Hermes-mentioning test files; most are comments and assertions
+  that need **re-pointing, not deletion**.
+
+### 7 · Root `CLAUDE.md`
+
+- [x] Rewrite the single-engine paragraph in the **same commit** as the deletion.
+  The rule survives — one engine, no fallback — the engine changes. State that
+  explicitly so the next reader does not think ruling A was quietly dropped.
+
+### 8 · Licence
+
+- [x] `node mythos/scripts/audit-licences.js --check`. dsh is MIT but its
+  dependency closure is not yet enumerated, and this repo has already been bitten
+  by an LGPLv3 binary inside a tree assumed clean. **Blocking**, because MYTHOS is
+  intended to be sold.
+
+---
+
+## W6.9 — Test plan, and the mutations that must fail
+
+New `test/dsh-agent.test.js` + `test/forge-runner-dsh.test.js`. Each test names
+the branch it traverses.
+
+| Scenario | Why |
+|---|---|
+| `runTask` without `cwd` throws, message names the AGENTS.md/CLAUDE.md reason | W6-AD-3, the whole hazard in one assertion |
+| exit 1 → `{offline:true}` with stderr text preserved in `error` | a wrong classification that also swallows the diagnosis is worse than the failure |
+| exit 0 + empty stdout → failure, not an empty artifact | the class of bug this repo keeps hitting |
+| exit 0 + non-empty stderr → failure naming a possible contract change | dsh is a preview; drift must be loud |
+| `scrubbedEnv` sets `DSH_TELEMETRY_DISABLED` and drops the two mode vars | assert the mechanism, not the return value |
+| `writeRoot` confines a Forge build; nothing lands outside it | replaces `HERMES_WRITE_SAFE_ROOT` |
+| no `HERMES_` string survives in `src/`, `adapters/`, `scripts/` | proves removal, not renaming |
+| no cross-engine retry anywhere | ruling A survives |
+
+**Mutations** — restore from a **file copy**, never `git checkout --`; verify each
+applied **where intended** (this repo has a recorded case of three mutations
+silently hitting the wrong function because the anchor text appeared twice):
+
+1. make `cwd` optional → the W6-AD-3 test fails
+2. drop `DSH_TELEMETRY_DISABLED` → its test fails
+3. treat non-zero exit as success → two fail
+4. swallow stderr → the diagnosis test fails
+5. widen `writeRoot` to the repo → the confinement test fails
+6. re-add a catch-block fallback → the ruling-A test fails *(if this passes,
+   W6-AD-5 is unenforced)*
+7. leave one `HERMES_` literal behind → the removal sweep fails
+
+```bash
+MYTHOS_PORT=4999 EDGE_TTS_PORT=5099 EDGE_TTS_URL=http://127.0.0.1:5099 node --test
+```
+
+Baseline **fail=0, skipped=0**; get the count from
+`node scripts/sync-test-count.js --check`, never a number typed in prose. Export
+long-form `TEMP`/`TMP` or spawned-server tests abort in libuv and surface as
+`ECONNREFUSED`.
+
+---
+
+## W6.10 — What to leave alone
+
+- `test/build-engine-no-fallback.test.js` — **re-point, never relax.**
+- The `--module-hermes` CSS token in `ui/public/css/tokens/semantic.css:82` — a
+  **colour**, `#4fd8ff`, not a consumer. Renaming it is unrelated churn.
+- `evidence.verifiedOk/unverified` · `verifier.verify()` ·
+  `validate.walkProjectFiles` · `prompts.extractJsonObject` — all reused as-is.
+
+---
+
+## W6.11 — Risks
+
+1. **The upstream is 8 days old and says so.** Pin the exact version; assert the
+   CLI contract at runtime; **and note that with Hermes deleted there is no
+   rollback but a revert.** This is the real cost of full removal versus a
+   selector, and it is the operator's call, taken knowingly. (It also withdraws
+   W6.1's "cheap option as rollback target" — repointing Hermes at DeepSeek is no
+   longer available once Hermes is gone.)
+2. **Headless + approvals could stall.** dsh's default preset is
+   `workspace-write` **+ ask**, and the headless runner has *no interactive
+   follow-up surface*. A Forge build that triggers an approval may hang to
+   timeout. **Measure in step 1's Forge variant.** `DSH_PERMISSION_MODE` is the
+   lever; `danger-full-access` removes the sandbox and is not a casual answer.
+3. **Licence closure unaudited.** See step 8.
+4. **Telemetry defaults.** Local by default, no redaction rule. Pinned by a test,
+   not assumed.
+5. **`hermes_task` disappears from the tool registry.** Not voice-allowlisted, so
+   no spoken flow breaks — but anything holding that name in a saved plan or
+   skill will fail. **Grep the vault.**
+
+---
+
+## W6.12 — Verification
+
+1. `node mythos/scripts/spike-dsh-build.js --samples 3 --dsh-patch …` → table
+   with per-engine verifier-pass counts; **commit the fixtures.**
+2. `node --test test/dsh-agent.test.js test/forge-runner-dsh.test.js` → **red
+   first**, then green.
+3. Seven mutations, each caught, each proved to have applied where intended.
+4. Full suite with the port overrides → **0 fail / 0 skip**.
+5. `grep -rn "HERMES_\|hermes-agent" mythos/src mythos/adapters mythos/scripts` →
+   **no hits**.
+6. `node mythos/scripts/audit-licences.js --check` → green.
+7. **Live, both paths, because a green suite cannot tell you the app works:** one
+   spoken single-artifact build (artifact rendered and looked at), and one Forge
+   multi-file build (files actually on disk, `forge.update` progress observed).
+
+---
+
+## W6.13 — Agent handoff brief
+
+Copy this to a fresh agent. It should need nothing else but this document and
+`git log`.
+
+> You are executing **W6** in `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md`:
+> removing Hermes-Agent **entirely** and replacing it with DeepSeek Harness as
+> MYTHOS's build engine.
+>
+> Read the whole W6 section first — W6.0–W6.2 are measured evidence, W6.3 onward
+> is the removal plan and wins wherever they disagree. Then read, in order:
+> `mythos/src/core/effectors/build-engine.js`,
+> `mythos/src/core/effectors/hermes-runner.js`,
+> `mythos/adapters/hermes-agent/index.js`, `mythos/src/main.js:440-460` and
+> `:645-660`, and root `CLAUDE.md`'s Hermes paragraph.
+>
+> Start at the step named in `W6 RESUME HERE`, not at step 1 — earlier steps may
+> be done. Verify any `- [x]` by re-running its command before trusting it.
+>
+> The four ways this goes wrong, in order of likelihood: writing adapter code
+> before the spike returns a number (W6-AD-2); letting `cwd` default, which hands
+> a build task this repo's own `CLAUDE.md` plus write access (W6-AD-3); deleting
+> Hermes in the same commit that adds dsh, so nothing can be bisected (W6-AD-4);
+> and re-adding a cross-engine fallback inside a catch block, which is the exact
+> mechanism the operator's 2026-08-15 ruling deleted (W6-AD-5).
+>
+> Do not start a new plan document. Update W6 in place, rewrite its RESUME block
+> before you stop, and push through a PR branch.
+
+---
+
+## W6.14 — Progress log
+
+| Date | Step | Commit | Verification command and its counts |
+|---|---|---|---|
+| 2026-08-21 | Spike written, four refusal branches verified, never executed | `f3500a4`, `17ec6e6` | `node mythos/scripts/spike-dsh-build.js` → refused with "no credential"; 0 dsh invocations |
+| 2026-08-21 | Step 0 — operator's full-removal plan copied into this tracked section, superseding the selector architecture | *(this commit)* | doc-only; the section now carries W6-AD-1…W6-AD-9 and a 14-subsection body |
+| 2026-08-21 | Step 1 code — Forge variant (`--forge`), timeout-vs-exit-code split, pinned project-local dsh entry replacing `npx --yes`, withdrawn-rollback note corrected | *(same commit)* | `node --check` → OK · `--help` renders `--forge` · red-first refusal run: `--engines dsh --samples 1` → **3/3 attempts refused** with the project-local install hint, `produced 0`, and `makeVerifier()` did **not** throw (so the scoring oracle is real, not the always-pass stub) · relative-path oracle proved on a fixture: `index.html , sub/index.html` |
+| 2026-08-21 | Step 0 — re-measured the plan's own surface numbers rather than copying them | *(same commit)* | `wc -l` on the five files → **1731** ✓ · `grep -rli hermes mythos/test \| wc -l` → **37** ✓ · `ls mythos/test \| grep -i hermes` → **5** ✓ · `grep -c HERMES_ mythos/.env.example` → **36** ✓ · `grep -c HERMES_ src/core/config/schema.js` → **4** ✓ · **CORRECTED:** `verify-hermes-*` → **2, not 3**; distinct `HERMES_` env names → **18, not 4**; schema path is `src/core/**config**/schema.js` |
+| 2026-08-21 | Step 1 — dsh INSTALLED project-local and pinned | `0394cd2` | `/DeepSeek Harness/` — `npm install --save-exact @deepseek-ai/dsh@0.1.1-rc.2` → **added 452 packages in 26m**, exit 0. On disk: `version 0.1.1-rc.2`, `bin {"dsh":"lib/bin.js"}`, **197** packages under `@deepseek-ai/`, **250 MB**. Its own install root, not a mythos dependency: adding it to `mythos/package.json` made npm re-resolve mythos's whole 191-package tree — **24 min CPU, 2.8 GB RSS, zero files extracted** before it was killed; `mythos/node_modules` verified byte-identical afterwards (same listing md5, same `.package-lock.json` size, all 9 deps resolve) |
+| 2026-08-21 | Step 1 — FIRST REAL RUN, and it measured nothing. Three defects found by running it | `0394cd2` | `--samples 3 --forge` → `hermes 9 attempts / 9 produced`, `dsh 9 attempts / 0 produced`. **(1)** relative `--dsh-patch` resolved against the spike's cwd in the preflight and against dsh's temp cwd at run time → ENOENT in dsh's overlay loader, all 12 dsh attempts dead before any model call. **(2)** `verify(raw, spec)` was passed `{title}`, an OBJECT → `'[object Object]'`, so Hermes scored **0/9** on working artifacts. **(3)** the report printed "risk 2 did NOT reproduce" and "Confinement held" over 3 runs that died 380 ms in. All three fixed at the boundary; suite after: `sync-test-count --check` → `tests=5755 pass=5755 fail=0 skipped=0` |
+| 2026-08-21 | Step 1 — **Hermes baseline measured: 3/9** | `0394cd2` | `node mythos/scripts/rescore-w6-fixtures.js` → `hermes: 3/9 pass`. `dated-landing` 3/3 PASS; `interactive-snake` 0/3; `data-dashboard` 0/3. Rule frequency: **6 × `no @media queries (not responsive)`** and nothing else. Re-scored from the 9 committed fixtures rather than regenerated — which is the whole reason W6.7 says commit raw replies, not a summary |
+| 2026-08-21 | Step 1 — dsh wiring PROVEN end to end, measurement BLOCKED on a credential | `0394cd2` | Overlay fixed twice against the installed bundle: patch id was `llm` where `dsh-base/cordis.patch.yml:95` calls it `llm-pi-ai`, and declaring a route does not select it — the headless runner reads `ctx.agentDefaultModel`, base `deepseek-official/deepseek-v4-flash`. Failure then advanced ENOENT → `MISSING_CREDENTIAL` → **`PI_AI_ERROR: 404 No endpoints available matching your guardrail restrictions and data policy`**, i.e. dsh boots, loads, routes, authenticates and reaches OpenRouter. **Blocker verified account-wide, not DeepSeek-specific:** `deepseek-v4-pro`, `deepseek-v4-flash`, `deepseek-chat` and `mistralai/mistral-small-3.2-24b-instruct` all return that same message on this key; `/api/v1/key` → `is_free_tier: true, usage: 0`. Operator decision, not a code defect |
+| 2026-08-21 | Step 1 — harness-mechanics fallback attempted, did NOT settle risk 2 | `0394cd2` | `dsh-harness-mechanics.patch.yml` (routes dsh at Mistral to answer harness questions without a DeepSeek key) → `PI_AI_ERROR: 422` on one call, `RATE_LIMIT: 429` on the rest, both after authentication. **0 of 4 runs reached dsh's agent**, so the Forge oracle, the approval-stall question (W6.11 risk 2) and workspace confinement remain **UNANSWERED, not passed** — which is now what the report prints |
+| 2026-08-21 | Step 1 — harness-only measurement attempted across **five** providers on the operator's instruction; every one blocked outside this repo's code | *(this commit)* | **OpenRouter** `404` data-policy on 3 DeepSeek routes + 1 Mistral route, `/api/v1/key` → `is_free_tier: true, usage: 0`. **Groq** authenticated, tool-calling confirmed (`openai/gpt-oss-20b` → 200 TOOL CALL OK), then `413 TPM: Limit 8000, Requested 10808` on **12/12**. **Mistral** authenticated, `422 union_tag_invalid` on a `developer` role; `compat.supportsDeveloperRole: false` tried at route AND model level, neither suppressed it; `429` on ~1/3 of calls. **NVIDIA/NIM** advertises 102 models incl. `deepseek-ai/deepseek-v4-flash-0731`, but a tool-call request to it **hangs with no response** — corroborates `lanes.default.js:294`'s dead-route note by the timeout path. **Cerebras** `404 model_not_found` on 3 ids |
+| 2026-08-21 | Step 1 — **dsh's fixed request overhead measured: ~10,700–10,820 tokens** before any task text | *(this commit)* | Read off Groq's `413` twelve times (9 single-artifact + 3 Forge), spread ~120 tokens, so it is system-prompt-plus-tools rather than task-dependent. A per-**request** floor, so pacing cannot evade it. Cost input for W6.4: ≈ **$0.017 of prompt per turn** at `deepseek-v4-pro`'s ~$1.60/M, and a Forge build is many turns |
+| 2026-08-21 | Step 1 — dsh's request ASSEMBLY proven, in addition to its boot and routing | *(this commit)* | Groq rejected the request for being too large, which means dsh had already assembled a complete one — system prompt, tool definitions, task — and shipped it. With the earlier ENOENT → `MISSING_CREDENTIAL` → gateway-`404` progression, every link from boot to provider I/O is proven. **What is missing is a provider that answers, not code** |
+| 2026-08-21 | Step 1 — **dsh RAN END TO END.** Forge write path, approval-stall and confinement all ANSWERED | *(this commit)* | Operator allow-listed **GLM 5.2 (free)** on OpenRouter; allow-list proven strict by trying 5 models on one key (`z-ai/glm-5.2:free` → `429` upstream = through the guardrail; four others incl. `deepseek/deepseek-v4-flash` → `404` data policy). Then `--samples 3 --forge`: **3/3 Forge runs wrote exactly `app.js,index.html,styles.css`**, **0 strays in 3/3** (confinement HELD), **0 stalls** (W6.11 risk 2 did NOT reproduce), at 75.6 s / 97.8 s / 18.4 s. Single-artifact: 9 attempts, 1 produced (8 lost to upstream `429`, `provider_name: Decart`, shared free pool), median 14,677 ms, **obeyed-no-write 1/1**, verifier-pass 0/1 failing on `no @media queries` — *the same single rule that fails 6 of Hermes's 9*, **n=1, not a comparison**. Artifact committed: 6,680-byte dark-themed chart titled `CPU Temperature — 7 Day Chart`, i.e. spec-derived |
+| 2026-08-21 | Step 1 — the spike's reached-the-agent test UNDERSTATED its own evidence; fixed | *(this commit)* | The predicate was `ok \|\| timedOut`, so two Forge runs that drove tools for 75-98 s and **wrote all three files** before dying on a later-turn provider `429` were counted as "never started" — the report printed **1 of 3** where the truth was **3 of 3**. Files on disk are the strongest proof the agent ran, since nothing upstream of it can create them, so the predicate is now `ok \|\| timedOut \|\| wrote > 0`. Verified by replaying the observed records: old → `1/3`, fixed → `3/3`. Note the direction: the earlier fix stopped the report OVERstating; this one stopped it UNDERstating |
+| 2026-08-21 | Step 1 — DeepSeek cost measured, so the last gap is priced rather than guessed | *(this commit)* | Re-verified **14 DeepSeek routes on OpenRouter, 0 with a `:free` variant**. Against dsh's measured ~10,760-token request over the spike's 12 turns, prompt side: `deepseek-v4-flash` **$0.080/M → ≈ $0.01**; `deepseek-chat-v3.1` $0.250/M → ≈ $0.03; `deepseek-v4-pro` ~$1.60/M → ≈ $0.21. The remaining blocker is a one-cent purchase, not an architectural unknown |
+| 2026-08-21 | Step 1 — `compat.supportsDeveloperRole: false` is INERT in dsh 0.1.1-rc.2's pi-ai adapter | *(this commit)* | Mistral returned `422 union_tag_invalid: Input tag 'developer' found using 'role' does not match any of the expected tags` **with the switch set**, at both documented positions (route level and model level). Not a blocker — production uses the native DeepSeek adapter once `DEEPSEEK_API_KEY` exists — but a preview-quality signal about the engine W6 is making the only one, and a trap for whoever writes the adapter |
+| 2026-08-22 | **W6.4 REWRITTEN — the DeepSeek-model premise was wrong at the root** | *(this commit)* | Operator ruling: "Did I ask for a deep seek model? I never asked for a deep seek model… Check the brain map." W6.4 had tabled `deepseek-v4-pro` vs `-flash` and assigned one to each of the five call sites. Replaced with `BRAIN_TABLES.build` — today `mistral/codestral-latest`. **No `DEEPSEEK_API_KEY` is required by W6 at all.** The old per-call-site table is recorded as withdrawn rather than deleted, because the same inference is available to the next reader |
+| 2026-08-22 | **The 422 is solved, and it was never a compat switch** | *(this commit)* | pi-ai ships installed catalogs for `mistral/cerebras/groq/nvidia/google/openrouter/deepseek`. Per `dsh-llm-pi-ai/lib/types/config.d.ts`, omitting `api` "keeps each installed catalog model's own protocol, which is why a catalog route needs no protocol at all"; Mistral's entries declare `mistral-conversations`. The old overlay hand-declared `api: openai-completions` + `baseURL` → OpenAI shaping → system prompt in a `developer` role → `422 union_tag_invalid`, with `compat.supportsDeveloperRole: false` inert at BOTH route and model level. **Verified end to end**: catalog route + `mistral-large-2512` + `--profile headless` → exit 0, stdout `PONG`, stderr empty, 88.8 s |
+| 2026-08-22 | **Step 1 CLOSED — the same-model comparison, which is the number the swap rests on** | *(this commit)* | `spike-dsh-build.js` gained `--dsh-model provider/model`: it generates a catalog overlay from a MYTHOS lane entry and validates the model id against the installed catalog (a typo becomes a named refusal instead of a provider 404 six minutes in). `Hermes Agent/config.yaml` pins `mistral-large-2512`, so every earlier dsh number moved two variables at once. Run on that model: `node mythos/scripts/spike-dsh-build.js --engines dsh --samples 3 --dsh-model mistral/mistral-large-2512` → **dsh 9 attempts, 9 produced, 3 verifier-pass, 9/9 obeyed-no-write, median 25,914 ms.** `rescore-w6-fixtures.js` side by side: **dsh 3/9, hermes 3/9** — identical prompt for prompt (`dated-landing` 3/3 PASS both; `interactive-snake` and `data-dashboard` 0/3 both), all 12 rejections the single rule `no @media queries (not responsive)`. **The swap is quality-neutral; that rule belongs to the model and the prompt, not to either harness** |
+| 2026-08-22 | Step 2 — `adapters/dsh-agent/index.js`, live-verified, and 14 mutations caught | *(this commit)* | Exports exactly `probe · runTask · getStatus · scrubbedEnv`; **none** of Hermes's four extras (AD-8), and a test asserts their ABSENCE. Live against the running engine: read-only path → `ALPHA` in 4,306 ms with **0 files written**; write path → `hello.txt` containing `hi from dsh` in 5,141 ms; both `writeRoot` guards refused. `test/dsh-agent.test.js` 39/39. Mutation-tested with file-copy restore verified by sha256: **14/14 caught** — permission mode set to `danger-full-access`, an `api:`/`baseURL:`/`models:` added to the overlay, the overlay keyed `llm` instead of `llm-pi-ai`, `agent-default-model` dropped, cwd defaulting to `process.cwd()`, a Hermes-only stub re-added, selection no longer recording why it skipped an entry, an unset credential forwarded silently, telemetry companions left in place, `DSH_HOME` left on the operator profile, a `writeRoot` mismatch ignored, and an ollama route guessed into existence |
+| 2026-08-22 | Step 2 — the permission preset makes OUTPUT_CONTRACT enforceable rather than requested | *(this commit)* | dsh's presets (read from `dsh-base/cordis.patch.yml:193-205`) are `read-only` / `workspace-write` / `danger-full-access`. `opts.autoApprove` maps to the first two and **never the third**. So a reply-only call — `build-engine.generate`, `runPlan`, `runWidgetBuild` — runs where the sandbox physically refuses a write, replacing "do not write any files" as a sentence in a prompt plus a scratch dir to contain the damage when it was ignored. An inherited `DSH_PERMISSION_MODE` cannot override MYTHOS's choice, and a test pins that |
+| 2026-08-22 | Step 3 — four call sites ported, plus **three leash sites the plan's step list missed** | *(this commit)* | `hermes_task` was in `leash/index.js:191`'s `NEVER_TRUSTABLE` map, at `tiers.js:303` in the tier table, and named in comments at `leash/index.js:362` and `tiers.js:200`. A rename that stopped at the effector would have dropped the tool out of NEVER_TRUSTABLE **silently** — the un-overridable set that covers running and installing. Also `live-tool-adapter.js`'s `SLOW_TOOLS` and `action-outcome-summary.js`. Renames: `hermes-runner.js`→`forge-runner.js` and `from-hermes.js`→`from-dsh.js` via `git mv`; `createHermesRunner`→`createForgeRunner` with the engine **injected** rather than required at module scope; `env: { HERMES_WRITE_SAFE_ROOT, HERMES_YOLO_MODE }` → `writeRoot`/`autoApprove` at all three sites; reason `'hermes-error'`→`'engine-error'` |
+| 2026-08-22 | Step 3 — `HERMES_ERROR_REPLY_RE` DELETED, not renamed, and pinned as a disposition | *(this commit)* | It existed because Hermes reported provider failures on stdout with exit 0 (BUG-058/245). dsh's exit code IS its oracle and the adapter asserts both halves (non-zero exit throws; exit 0 with non-empty stderr throws, on the grounds that the documented contract moved). A detector here would scan a MODEL'S OWN OUTPUT for a pattern nothing has matched under dsh, and would reject a legitimate artifact whose first line reads like an HTTP error. `build-engine.test.js` now asserts such a reply passes through as content, that no `ERROR_REPLY_RE` is defined in the file, and that `build-engine` re-exports none — so re-adding one requires a measurement, not a hunch |
+| 2026-08-22 | Step 3 — AD-3 closed at both ends: an absent scratch dir now FAILS the build | *(this commit)* | `build-engine.js`'s `scratchDir()` returned `undefined` with the comment "adapter falls back to cwd inheritance". Under dsh that inherits MYTHOS's own directory as a **writable workspace** and loads this repo's `CLAUDE.md` (41,412 bytes across two files, both loading in full) as agent instructions. `generate` now refuses by name — the message points at the VAULT, which is the thing actually broken — and `dsh-agent.requireCwd()` throws as an independent second line. The old `from-hermes.js` had the same hole: `hermes_task` called `runTask(task)` with **no cwd at all**; `dsh_task` creates its own sandboxed workspace and returns its path plus the files written |
+| 2026-08-22 | Step 4 — `setup-dsh.js`, and it reports the LANE, not just the install | *(this commit)* | `npm install --save-exact @deepseek-ai/dsh@0.1.1-rc.2` into a vendor root; never `curl \| bash`. `--check` verifies the pin in **three** places (this script's literal, the installed `package.json`, and the CLI's own `--version` — a half-finished reinstall makes the last two disagree, and that is the state that produces inexplicable results rather than a clean failure), then asks the adapter which lane entry is reachable, because "installed" is only half of "builds will work" — the other half is what BUG-168 was. Live: `dsh: OK / version 0.1.1-rc.2 (pinned) / build lane resolves to mistral/codestral-latest (pi-ai route "mistral", credential MISTRAL_API_KEY)`, exit 0. `doctor.js` reports it and treats a **wrong version as not-ok**, since the adapter refuses one |
+| 2026-08-22 | Step 4 — schema keys renamed with **no aliases**, and the WSL gate dropped | *(this commit)* | `HERMES_PLAN/BUILD_TIMEOUT_MS`, `_POLL_MS`, `_BUILD_TERMINAL_ENV` → `DSH_*`. A test pins that the old names are NOT accepted: a silently-honoured `HERMES_BUILD_TIMEOUT_MS` would look like it was working while forge-runner read the `DSH_` default. `.env.example`'s 205-line Hermes block → a 130-line dsh block that KEEPS the measured facts describing the PROVIDER (429 at call 3 of 60 unpaced; 45 s pacing clean) and adds dsh's own measured ~10,700–10,820-token per-request overhead. The setup component lost `requiresWsl` — dsh is an npm package where Hermes was a Python venv inside WSL, and leaving the gate up would refuse the install on every Windows machine without WSL, for the one component whose absence fails every build |
+| 2026-08-22 | **Step 5 CLOSED — the LIVE half, which a green suite cannot supply** | *(step 6 commit)* | New `scripts/verify-dsh-build.js` drives the REAL adapter through the REAL call sites, because every unit test for the swap injects a fake engine and is therefore blind to whether dsh boots, authenticates and obeys its sandbox. On `mistral/codestral-latest`: **5/5 stages.** `build-engine.generate` → 1,273-byte HTML artifact in 5,669 ms with `engine=dsh`; the read-only sandbox left **0 files** under `builds/.engine-scratch`; `runPlan` returned a 5-file website manifest (`index.html` first) in 5,142 ms; `runBuild` wrote all five in 24,603 ms with 12 `onProgress` ticks; **0 strays** beside the project directory. Kept as a script rather than a test on purpose — this repo shipped a slice with 2,598 green tests and an app that would not start |
+| 2026-08-22 | Step 6 — **Hermes DELETED**, in its own commit | *(this commit)* | Removed: `adapters/hermes-agent/` (733 LOC), `scripts/setup-hermes.js` (444), **three** verification scripts (`verify-hermes-build-endurance.js`, `verify-hermes-slot-bakeoff.js`, `verify-phase-b-hermes.js` — the last does not match the `verify-hermes-*` glob, which is why earlier counts said two), `test/hermes-adapter.test.js`, `test/hermes-provider-rotation.test.js`, `test/p0-1-hermes-probe-diagnostics.test.js`, and `test/fixtures/fake-hermes-cli.bat`. **KEPT DELIBERATELY: the nine `hermes--*.txt` spike fixtures.** They are the measured baseline, and `rescore-w6-fixtures.js` reproduces the 3/9 from them with no model call and no install — which is exactly why W6.7 said to commit raw replies rather than a summary. Deleting them would have destroyed the evidence for the decision |
+| 2026-08-22 | Step 6 — the deletion reached FIVE surfaces the plan's step list did not name | *(this commit)* | (1) **`build/installer.nsh`** offered a "Hermes build agent (installs into WSL)" checkbox — a lie about a deleted program — so the row, its detection macro, its three-home probe and the `"hermes":` key in `install-selection.json` all became dsh, and the **WSL gate was dropped** while WSL itself is still probed and reported. (2) **`electron/main.js`** warned when an operator `HERMES_HOME` pointed inside the install tree an update deletes; the hazard is identical for `MYTHOS_DSH_INSTALL_DIR`, so the check was re-pointed rather than lost. (3) **`server/index.js`** compared `MISTRAL_API_KEY` against `HERMES_PROVIDER_KEY` and warned on a match — under dsh they are the same key BY CONSTRUCTION, so a check that would now fire on every boot was removed and the rate-limit reasoning it protected was written into `.env.example` instead. (4) **`from-runner.js`**'s env scrub list stripped `^HERMES_`, now `^DSH_` — live code, not a comment. (5) `immune.test.js`'s live re-probe pinned `HERMES_CLI` at `process.execPath`; dsh has no such override by design, so the test now asserts against whichever state the machine is genuinely in rather than faking absence |
+| 2026-08-22 | Step 6 — the spike's `hermes` engine went with the adapter, not stubbed | *(this commit)* | `--engines hermes` now REFUSES by name and points at `rescore-w6-fixtures.js`. `runHermes()` was deleted outright rather than left as a husk: W6-AD-8 says a function that cannot run the engine it names is a lie about capability. My first attempt left a commented-out body that broke the file's syntax, which is a fair argument for deleting rather than stubbing |
+| 2026-08-22 | Step 7 — root `CLAUDE.md` rewritten in the SAME commit as the deletion | *(this commit)* | The single-engine paragraph now says the RULE survived a change of ENGINE, in those words, so nobody reads the Hermes deletion as ruling A being quietly dropped. It also states the two things most likely to be got wrong: the harness changed and the models did not (no `DEEPSEEK_API_KEY` anywhere; the lane is the source of truth), and the version is pinned and asserted before every task because dsh is a preview that promises breaking changes. `src/core/CLAUDE.md`'s `NEVER_TRUSTABLE` list moved `hermes_task` → `dsh_task` |
+| 2026-08-22 | Step 8 — **licence closure enumerated, and it adds no new class** | *(this commit)* | `node mythos/scripts/audit-licences.js --check` → PASS, every shipped package permissive or recorded. Then the dsh tree itself, 434 packages read from disk: **349 MIT, 55 Apache-2.0, 15 BSD-3-Clause, 10 ISC, 2 BSD-2-Clause, 1 0BSD, 1 Python-2.0, and exactly ONE non-permissive** — `@img/sharp-win32-x64` at `Apache-2.0 AND LGPL-3.0-or-later`, reached via `@deepseek-ai/dsh-attachment-local` → `sharp`. That is the **same libvips exposure this repo already ships and already documents** (through `kokoro-js` → `@huggingface/transformers` → `sharp`), so dsh introduces no new licence class — but it adds a second path to it, and `THIRD_PARTY_NOTICES.md` now records that. Whether an LGPL-3.0 libvips inside a BYO, non-vendored, operator-installed tree matters for a paid product is **left unconcluded on purpose** — root `CLAUDE.md` forbids writing a confident legal conclusion into a tracked file |
+| 2026-08-22 | The `Hermes Agent/` DIRECTORY was deliberately NOT deleted from disk | *(this commit)* | The plan's step-6 list names it, and the `.gitignore` rule is kept rather than dropped, with the reason written in: the directory holds a third-party checkout, its own CPython/uv/PortableGit, and **Hermes's own `config.yaml`/`auth.json` with provider credentials**. Removing the ignore rule would surface all of that as untracked files and invite committing a secret. Nothing in MYTHOS reads it any more, so deleting it is a one-command operator decision about disk space, not something a session should do to an install it did not create |

@@ -315,10 +315,19 @@ function createAetherSensor(ctx) {
     // stop() deliberately does NOT removeAllListeners(), so this listener
     // stays attached through teardown and absorbs the deferred error from a
     // CONNECTING socket that fails after stop() returns.
-    socket.on('error', function () {
+    socket.on('error', function (err) {
       // 'close' follows and drives reconnect; log once for observability so a
       // down Aether isn't indistinguishable from "sensor never started."
-      try { logger.warn('sensors.aether.socket_error'); } catch (_) {}
+      //
+      // BUG-257: this used to log the bare event name with no payload. A real
+      // session carried 151 of these in 12 minutes and none of them said WHAT
+      // failed or WHERE — an aggregator that is merely absent (ECONNREFUSED,
+      // the common case when AETHER_ENABLED is on without the bridge running)
+      // was indistinguishable from a wrong URL, a TLS failure or a port already
+      // claimed by something else. The url and error code cost nothing and are
+      // the whole diagnosis.
+      var code = (err && (err.code || err.message)) || 'unknown';
+      try { logger.warn('sensors.aether.socket_error', { url: url, code: String(code).slice(0, 120) }); } catch (_) {}
     });
 
     socket.on('open', function () {
@@ -513,6 +522,7 @@ function createAetherSensor(ctx) {
       decide: decide,            // test hook: drive the dedup gate directly
       findOwnerScanner: findOwnerScanner,
       ingest: ingest,            // test hook: seed ranging/position enrichment
+      isConnected: function () { return connected; }, // test hook: client-side flag speak() gates on
       _reset: function () {      // test hook: clear gate + enrichment state
         lastEmittedOwner = null;
         lastEmittedRssi = null;

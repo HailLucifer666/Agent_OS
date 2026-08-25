@@ -40,6 +40,7 @@
 
 const { effectorFromTool } = require('./adapter');
 const fromPc = require('./from-pc');
+const { formatOutgoingMessage } = require('./message-format');
 
 function ok(result) {
   return { ok: true, result };
@@ -71,20 +72,32 @@ function reasonText(res) {
 // Lives in the vault (gitignored) because these are personal phone numbers: they
 // must never be committed, and the open-source portability rule forbids baking
 // anyone's identifiers into tracked files.
+const { levenshtein } = require('../lib/levenshtein');
 const CONTACTS_PATH = 'Contacts/contacts.json';
 const MAX_MESSAGE_CHARS = 2000;
 
 let vaultFs = null;
 let logger = null;
 
-// E.164-ish: digits with an optional leading +. Deliberately the same shape
-// from-android.js's sanitizePhoneNumber accepts, so a number that works for the
-// phone bridge works here too.
+// Strict E.164: a leading '+', a non-zero country-code digit, then enough
+// digits to make a real international number (8-15 digits total after the
+// '+', per ITU-T E.164). The '+' is REQUIRED here, unlike from-android.js's
+// sanitizePhoneNumber (which is deliberately lenient because it feeds a shell
+// token, not a dialable identifier) — this number goes straight into
+// whatsapp://send?phone=<number>, so a bare national number with no country
+// code must be refused rather than silently dialed as if it had one. This does
+// NOT catch a country code that was dropped but left a plausible-length number
+// behind (that is a semantic error, not a shape error); it only rejects
+// strings that are not E.164-shaped at all.
+const E164_RE = /^\+[1-9]\d{7,14}$/;
+
 function sanitizeNumber(raw) {
   const cleaned = String(raw || '').replace(/[^\d+]/g, '');
-  if (!/^\+?\d{3,15}$/.test(cleaned)) return null;
-  return cleaned;
+  return E164_RE.test(cleaned) ? cleaned : null;
 }
+
+const E164_SHAPE_HINT = 'E.164 form: a "+", then digits only, starting with a non-zero digit, ' +
+  '8-15 digits total (e.g. +15551234567).';
 
 // Collapse whitespace and drop control characters, then cap length. The text is
 // typed through SendInput as Unicode, so there is no shell to escape for — but a
@@ -139,8 +152,16 @@ function resolveRecipient(to) {
   const wanted = String(to || '').trim();
   if (!wanted) return { error: 'Who should I message? Give a contact name or a phone number.' };
 
-  const direct = sanitizeNumber(wanted);
-  if (direct && /\d{3,}/.test(wanted.replace(/[^\d]/g, ''))) return { number: direct };
+  // A string with a '+' or 3+ digits was meant as a phone number, not a
+  // contact name — resolve it as a number (strictly) rather than falling
+  // through to the name lookup below, which would misreport a malformed
+  // number as "not in my contact list" and hide the actual problem (shape).
+  const digitCount = wanted.replace(/[^\d]/g, '').length;
+  if (wanted.includes('+') || digitCount >= 3) {
+    const direct = sanitizeNumber(wanted);
+    if (direct) return { number: direct };
+    return { error: '"' + wanted + '" is not a phone number I can use. Give it in ' + E164_SHAPE_HINT };
+  }
 
   const contacts = loadContacts();
   const names = Object.keys(contacts);
@@ -154,6 +175,7 @@ function resolveRecipient(to) {
   }
 
   const needle = wanted.toLowerCase().replace(/^(my|to)\s+/, '').trim();
+  let fuzzyNote = null;
   let hit = names.find((n) => n.toLowerCase() === needle);
   if (!hit) hit = names.find((n) => n.toLowerCase().replace(/^(my|to)\s+/, '') === needle);
   if (!hit) {
@@ -163,6 +185,45 @@ function resolveRecipient(to) {
     if (partial.length === 1) hit = partial[0];
     else if (partial.length > 1) {
       return { error: '"' + wanted + '" matches more than one contact (' + partial.join(', ') + '). Which one?' };
+    }
+  }
+  // Fuzzy rung (2026-08-21 audit) — fires ONLY when exact, prefix-strip and
+  // substring have all found nothing, so it can never override a stronger
+  // match. STT renders the saved contact "Moushumi" as "Mousumi" and "Mausumi
+  // Paul" as "Mousumi Paul" (one edit each); both were refused outright while
+  // the refusal read the correct name aloud in its own "Known contacts" list.
+  // The operator had already written that alias into vault user-facts, so the
+  // system held the answer and still said no.
+  //
+  // Q1 (what ELSE matches this?): the cap is the whole safety story, because
+  // messaging the wrong human is not recoverable. Names of 4 characters or
+  // fewer get distance 1 only — at the general cap of 2, "mom" and "dad" sit
+  // within reach of the same typo and there is no undo on a sent message.
+  // Longer names get max(2, 20% of length), so "Mousumi"->"Moushumi" (1 edit
+  // in 8) resolves while "Mousumi"->"Mausumi Paul" (6 edits) does not.
+  //
+  // Q8 (pin the disposition): a tie at the same distance ASKS rather than
+  // picking, matching the substring rung directly above — this file's existing
+  // rule that an ambiguous recipient is a question, not a guess. Deliberately
+  // unlike semantic.forget()'s fuzzy pass, which DELETES on a single candidate;
+  // the same audit refused to loosen that one for exactly this reason.
+  if (!hit) {
+    const scored = names
+      .map((n) => {
+        const lower = n.toLowerCase();
+        const cap = lower.length <= 4 ? 1 : Math.max(2, Math.floor(lower.length * 0.2));
+        return { name: n, d: levenshtein(needle, lower), cap: cap };
+      })
+      .filter((c) => c.d > 0 && c.d <= c.cap)
+      .sort((a, b) => a.d - b.d);
+    if (scored.length && (scored.length === 1 || scored[0].d < scored[1].d)) {
+      hit = scored[0].name;
+      fuzzyNote = 'closest match to "' + wanted + '" is saved contact "' + hit + '"';
+    } else if (scored.length > 1) {
+      return {
+        error: '"' + wanted + '" is close to more than one contact (' +
+          scored.map((c) => c.name).join(', ') + '). Which one?',
+      };
     }
   }
   if (!hit) {
@@ -179,17 +240,62 @@ function resolveRecipient(to) {
   if (!number) {
     return { error: 'The number saved for "' + hit + '" is not a valid phone number. Fix it in vault/' + CONTACTS_PATH + '.' };
   }
-  return { number, name: hit };
+  return fuzzyNote ? { number, name: hit, fuzzyNote } : { number, name: hit };
 }
+
+  // A4: how long the composer is given to appear after focus, and how often it is
+  // asked. 3s covers the measured cold start (the successful 17:31:47 attempt came
+  // after the operator asked it to wait a couple of seconds) without turning a
+  // genuinely dead window into a long stall — and a warm app answers on the first
+  // read, before either constant is consulted.
+  const COMPOSER_SETTLE_MS = 3000;
+  const COMPOSER_POLL_MS = 250;
+
+  // BUG-359 — 2026-08-25. Same question as A4's pair above, one stage EARLIER in
+  // this flow: how long the WINDOW gets to appear after a deep-link activation.
+  // MEASURED LIVE on this machine that day: WhatsApp's MSIX process OUTLIVES its
+  // window — chat closed reads `pid=17056 processName=WhatsApp.Root
+  // MainWindowHandle=0`, and after activation the SAME pid owns the visible
+  // "WhatsApp" window. Activation-to-enumerable-window takes seconds. This used
+  // to be probed exactly once; on a cold start that one probe landed before the
+  // window existed and three operator-approved sends failed with "could not
+  // identify its window" / "Process 17056 has no main window" — the second time
+  // this flow produced that shape (C1 was the name mismatch; BUGS.md's C1 Q8 note
+  // declined a poll until there was evidence of a timing case, and asked for
+  // exactly the measurement that now exists).
+  //
+  // Defaults follow A4's own arithmetic, scaled for the heavier event: 6s of
+  // settle, asked every 400ms. BOTH apply only on the failure path — a window
+  // present on the first probe answers immediately, so the warm send gains
+  // nothing and loses nothing.
+  const WINDOW_SETTLE_MS = 6000;
+  const WINDOW_POLL_MS = 400;
+  let windowSettleMs = WINDOW_SETTLE_MS;
+  let windowPollMs = WINDOW_POLL_MS;
 
 async function whatsapp_send({ to, text, send }) {
   const recipient = resolveRecipient(to);
   if (recipient.error) return fail(recipient.error);
 
-  const message = sanitizeMessage(text);
+  // F6: a list-shaped body ("Groceries: milk, eggs, bread") is reformatted
+  // before it reaches sanitizeMessage. itemJoiner is ', ' rather than the
+  // default '\n' — sanitizeMessage's whitespace collapse (a newline mid-type
+  // submits WhatsApp's composer early, see its comment below) would flatten
+  // real line breaks back into unpunctuated spaces, so a newline-joined list
+  // would lose its structure the moment it reached that step. A comma-joined
+  // rendering survives the collapse untouched and still turns an already-
+  // bulleted/newline list ("- milk\n- eggs\n- bread", the shape that produced
+  // the wall-of-text incident) into one clean, readable line instead of the
+  // dash-soup that collapse alone leaves behind.
+  const message = sanitizeMessage(formatOutgoingMessage(text, { itemJoiner: ', ' }));
   if (!message) return fail('What should the message say?');
 
-  const label = recipient.name ? recipient.name + ' (' + recipient.number + ')' : recipient.number;
+  // A fuzzy recipient resolution is never silent: the note rides on the label,
+  // which every success AND failure message below interpolates, so the operator
+  // always hears which saved contact was actually chosen — including when the
+  // send then fails for an unrelated reason.
+  const label = (recipient.name ? recipient.name + ' (' + recipient.number + ')' : recipient.number) +
+    (recipient.fuzzyNote ? ' — ' + recipient.fuzzyNote : '');
 
   // 1. Ask WhatsApp to open this exact conversation. The URI scheme is what makes
   //    contact resolution WhatsApp's problem rather than ours.
@@ -207,9 +313,109 @@ async function whatsapp_send({ to, text, send }) {
     const byName = await fromPc.launch_app({ name: 'whatsapp' });
     if (byName.ok && byName.result && typeof byName.result.pid === 'number') pid = byName.result.pid;
   }
+  // BUG-273 C1 — 2026-08-18: two sends failed here, to `mom` and to `alex`, both
+  // with "WhatsApp opened the chat ... but I could not identify its window". The
+  // chat opened; nothing was typed; zero messages delivered. Honest, and useless.
+  //
+  // Why both attempts above can come back without a pid. Step 1 launches a URI
+  // (`whatsapp://send?phone=...`), and since BUG-272 T1 launch_app only reports a
+  // pid when it can resolve a live windowed process whose NAME matches what was
+  // asked for — a deliberate change, because a pid belonging to a different app is
+  // worse than none. The name asked for here is a URI, which matches no process
+  // name, so T1 correctly declines. Step 2 asks for 'whatsapp' by name, but on a
+  // machine where the app is already running that is an activation whose new
+  // process exits immediately (the MSIX shape BUG-272 slice 4 documents), so it
+  // can decline too.
+  //
+  // The remedy is the one launch_app's own failure text already names: enumerate
+  // what is actually open. list_windows returns {pid, processName, title, visible}
+  // read from live top-level windows, which is an observation of the world rather
+  // than a launch call's say-so — the same 'process-window' class of evidence T1
+  // requires, obtained a different way.
+  //
+  // Q1 — WHAT ELSE MATCHES THIS? Matched on processName, never on title. WhatsApp's
+  // window title is "(194) WhatsApp" whichever conversation is open, so a title
+  // match would happily select a browser tab, an Explorer window in a WhatsApp
+  // folder, or a chat with the wrong person. This is the trap that targeted the
+  // operator's IDE for a launch of "notepad" on 2026-07-31, and from-pc.js's
+  // Resolve-WindowedProcessByName has refused title matches ever since.
+  //
+  // Q8 — WHAT DELIBERATELY DOES NOT CHANGE. If this ALSO finds nothing, the send
+  // still refuses. Typing blind into an unidentified window is how a message
+  // reaches the wrong person, and the whole point of step 3.5 below is that even a
+  // confirmed window is not a confirmed RECIPIENT. A fallback that guessed would be
+  // worse than the failure it replaced.
+  if (!pid && typeof fromPc.list_windows === 'function') {
+    // Guarded on the function EXISTING, not just on its answer. An unguarded call
+    // threw a TypeError here against a from-pc without list_windows, which turned a
+    // clean refusal ("the message is NOT sent") into an exception — a worse outcome
+    // than the bug being fixed, and caught by whatsapp-send.test.js's existing
+    // no-window case rather than by anything written for C1.
+    //
+    // 2026-08-21 audit: this compared against the bare string 'whatsapp', and
+    // the desktop app on Windows reports its process as "WhatsApp.Root" — 23
+    // occurrences in the live vault and server log, zero occurrences of a bare
+    // "WhatsApp" process. So this fallback could never identify the window it
+    // was looking at, and three sends failed with "I could not identify its
+    // window". bug-273-c1's fixture used processName:'WhatsApp', which is the
+    // one spelling that did work — the fixture was more generous than the wire,
+    // which is why a green suite sat on top of a dead code path.
+    //
+    // Q1 — WHAT ELSE MATCHES THIS? Anchored at both ends, and a suffix is
+    // allowed only after a DOT, which is the MSIX sub-process convention that
+    // produced ".Root". "WhatsAppSpoofer" and "whatsapp-web-helper" therefore do
+    // not match: a process that merely STARTS with these letters is not this
+    // app, and prefix matching is how an unrelated binary would inherit a send.
+    // Still matched on processName only, never on title — the browser-tab trap
+    // in the Q1 note above is unchanged.
+    //
+    // BUG-359 — an earlier Q8 note here read "no retry/settle poll was added:
+    // there is no evidence of a 'window not yet enumerable' timing case." The
+    // 2026-08-24 session supplied that evidence (three approved sends failing
+    // while the MSIX process was alive but windowless — see the WINDOW_SETTLE_MS
+    // comment above for the live capture), so the bounded poll below now exists.
+    // It early-exits on the first decisive answer and still refuses blind-typing
+    // when exhausted.
+    //
+    // Q8 — WHAT DELIBERATELY DOES NOT CHANGE. If this finds nothing even after
+    // the settle window is exhausted, the send still refuses. Typing blind into
+    // an unidentified window is how a message reaches the wrong person, and the
+    // whole point of step 3.5 below is that even a confirmed window is not a
+    // confirmed RECIPIENT. A fallback that guessed would be worse than the
+    // failure it replaced.
+    const deadline = Date.now() + Math.max(0, windowSettleMs);
+    for (;;) {
+      let listed = null;
+      try { listed = await fromPc.list_windows(); } catch (_) { listed = null; }
+      const rows = (listed && listed.ok && listed.result && Array.isArray(listed.result.windows))
+        ? listed.result.windows : [];
+      const WHATSAPP_PROCESS_RE = /^whatsapp(\.[a-z0-9._-]+)?$/;
+      const matches = rows.filter((row) => {
+        const name = String((row && row.processName) || '').trim().toLowerCase();
+        return WHATSAPP_PROCESS_RE.test(name) && row.visible !== false && typeof row.pid === 'number';
+      });
+      if (matches.length === 1) {
+        pid = matches[0].pid;
+        break;
+      }
+      // Exactly one, or none. Two visible WhatsApp windows means the desktop app
+      // and something else claiming the name, and picking one at random is the
+      // guess this whole path exists to avoid — so it names them and stops,
+      // WITHOUT waiting out the settle first: ambiguity is not cured by waiting.
+      if (matches.length > 1) {
+        return fail('WhatsApp opened the chat with ' + label + ', but ' + matches.length +
+          ' windows report themselves as WhatsApp (pids ' + matches.map((m) => m.pid).join(', ') +
+          '), so I will not guess which one to type into. The conversation should be open — ' +
+          'the message is NOT sent.');
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.max(1, windowPollMs)));
+    }
+  }
   if (!pid) {
     return fail('WhatsApp opened the chat with ' + label + ', but I could not identify its window, ' +
-      'so I cannot type into it safely. The conversation should be open — the message is NOT sent.');
+      'so I cannot type into it safely — launch_app could not name it and no open window reports ' +
+      'itself as WhatsApp. The conversation should be open — the message is NOT sent.');
   }
 
   // 3. Focus, and let the OS confirm it. focus_window verifies through
@@ -234,11 +440,40 @@ async function whatsapp_send({ to, text, send }) {
   // composer "Type a message to <recipient>", with the conversation header as an
   // independent second opinion. Either naming the intended recipient is enough;
   // neither is a refusal.
-  const composer = await fromPc.readComposeBox(pid);
-  const cbox = (composer && composer.ok && composer.result) || null;
+  // A4 (2026-08-14 session): the operator was right. whatsapp_send failed at
+  // 17:29:26 and 17:31:11 with "could not read its message box (No editable
+  // element found...)" and succeeded at 17:31:47 only because they told it to
+  // wait — "WhatsApp takes a couple of seconds to start". focus_window returning
+  // proves the WINDOW exists; WebView2 has not necessarily registered its
+  // editable surface yet, so ps-automation.ps1 answers honestly that there is no
+  // editable element and this refused a chat that was about to be readable.
+  //
+  // A POLL, not a sleep. A fixed delay is a guess that is simultaneously too slow
+  // when the app is warm (every send pays it) and too short when it is cold. This
+  // returns the instant the composer answers.
+  //
+  // Scope: this covers "the composer is not there yet" ONLY. The recipient-match
+  // check below keeps its immediate, no-retry refusal — a composer that IS found
+  // and names the wrong human must never be re-read in the hope of a better
+  // answer (BUG-064: sending to the wrong human is not a recoverable error).
+  //
+  // Honest framing: this removes the cold-start class, it does not "fix
+  // WhatsApp". The second failure that day came 105s later with the app already
+  // focused, so something else is also in play.
+  let composer = await fromPc.readComposeBox(pid);
+  let cbox = (composer && composer.ok && composer.result) || null;
+  if (!cbox) {
+    const deadline = Date.now() + COMPOSER_SETTLE_MS;
+    while (!cbox && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, COMPOSER_POLL_MS));
+      composer = await fromPc.readComposeBox(pid);
+      cbox = (composer && composer.ok && composer.result) || null;
+    }
+  }
   if (!cbox) {
     return fail('WhatsApp is open and focused for ' + label + ', but I could not read its message box (' +
-      String((composer && composer.result) || 'no message box found') + '), so I cannot prove the chat on ' +
+      String((composer && composer.result) || 'no message box found') + ') after waiting ' +
+      Math.round(COMPOSER_SETTLE_MS / 1000) + 's for it to appear, so I cannot prove the chat on ' +
       'screen is the right one. Nothing was typed and nothing was sent.');
   }
 
@@ -254,10 +489,54 @@ async function whatsapp_send({ to, text, send }) {
     addressee.toLowerCase().includes(String(recipient.name).toLowerCase());
 
   if (!matchedByNumber && !matchedByName) {
-    return fail('REFUSED: WhatsApp is showing a different conversation. I asked for ' + label +
-      ', but the message box on screen says "' + String(cbox.name || '(unnamed)') + '"' +
-      (cbox.headerName ? ' and the chat header says "' + cbox.headerName + '"' : '') +
-      '. Nothing was typed and nothing was sent — open the right chat, or check the saved number.');
+    // Wave 4 (2026-08-13): the deep link silently failing to switch chats is
+    // the diagnosed root cause (BUGS.md) — WhatsApp was already open on a
+    // DIFFERENT conversation and whatsapp://send?phone=... did not move it.
+    // One retry of the SAME deep link (not an in-app search-and-click):
+    // this file's own header explains why UI-hunting (search box, type,
+    // click a result) was deliberately rejected as the fragile path for
+    // this Electron app — a retry that reintroduces exactly that path would
+    // undo the reason the deep link exists. Re-issuing the deep link is the
+    // one retry consistent with the architecture already chosen; it either
+    // recovers from whatever made the first navigation not take, or the
+    // retry proves it wasn't a fluke and the honest fail below stands.
+    const retryLaunch = await fromPc.launch_app({ name: uri });
+    if (retryLaunch.ok) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const retryComposer = await fromPc.readComposeBox(pid);
+      const retryBox = (retryComposer && retryComposer.ok && retryComposer.result) || null;
+      if (retryBox) {
+        const retryAddressee = String(retryBox.name || '') + '   ' + String(retryBox.headerName || '');
+        const retrySeenDigits = retryAddressee.replace(/\D/g, '');
+        const retryMatchedByNumber = Boolean(wantDigits) &&
+          (retrySeenDigits.includes(wantDigits) || retrySeenDigits.includes(wantDigits.slice(-10)));
+        const retryMatchedByName = Boolean(recipient.name) &&
+          retryAddressee.toLowerCase().includes(String(recipient.name).toLowerCase());
+        if (retryMatchedByNumber || retryMatchedByName) {
+          cbox.name = retryBox.name;
+          cbox.headerName = retryBox.headerName;
+          cbox.currentText = retryBox.currentText;
+        } else {
+          return fail('REFUSED: WhatsApp is showing a different conversation, and retrying the deep link ' +
+            'did not switch it. I asked for ' + label + ', but the message box says "' +
+            String(retryBox.name || cbox.name || '(unnamed)') + '"' +
+            (retryBox.headerName ? ' and the chat header says "' + retryBox.headerName + '"' : '') +
+            '. Nothing was typed and nothing was sent — open the right chat, or check the saved number.');
+        }
+      } else {
+        return fail('REFUSED: WhatsApp is showing a different conversation. I asked for ' + label +
+          ', but the message box on screen says "' + String(cbox.name || '(unnamed)') + '"' +
+          (cbox.headerName ? ' and the chat header says "' + cbox.headerName + '"' : '') +
+          '. A retry of the deep link could not re-read the message box either. Nothing was typed and ' +
+          'nothing was sent — open the right chat, or check the saved number.');
+      }
+    } else {
+      return fail('REFUSED: WhatsApp is showing a different conversation. I asked for ' + label +
+        ', but the message box on screen says "' + String(cbox.name || '(unnamed)') + '"' +
+        (cbox.headerName ? ' and the chat header says "' + cbox.headerName + '"' : '') +
+        '. A retry of the deep link failed too (' + reasonText(retryLaunch) + '). Nothing was typed and ' +
+        'nothing was sent — open the right chat, or check the saved number.');
+    }
   }
 
   // Anything already sitting in the composer is the operator's draft. Report it
@@ -338,16 +617,25 @@ async function whatsapp_contacts() {
 // conversation — the operator hit this trying to message someone who simply
 // wasn't in the file. Writes the documented object shape, so this can never be
 // the thing that puts an array back on disk.
+// 2026-08-12: dispatched on intent as {number: "", name: ""} before the
+// operator had actually given a name or number — the tool went ahead and
+// failed opaquely several steps in (an unwritable-vault message, or a
+// generic "not a phone number" for an empty string) instead of naming what
+// was actually missing. Validate both arguments before touching the vault at
+// all: the message here is read by the MODEL, not spoken to the operator, so
+// it says exactly which field to ask for rather than a human-friendly excuse.
 async function whatsapp_contact_save({ name, number }) {
   const label = String(name || '').trim();
-  if (!label) return fail('What name should I save them under?');
+  if (!label) return fail('Ask the operator for the missing name before calling this.');
+  const rawNumber = String(number == null ? '' : number).trim();
+  if (!rawNumber) return fail('Ask the operator for the missing number before calling this.');
+
   if (!vaultFs || typeof vaultFs.writeJSON !== 'function') {
     return fail('The vault is not writable, so I cannot save contacts right now.');
   }
   const e164 = sanitizeNumber(number);
   if (!e164) {
-    return fail('"' + String(number || '') + '" is not a phone number I can use. ' +
-      'Give it in full international form, like +15551234567.');
+    return fail('"' + String(number || '') + '" is not a phone number I can use. Give it in ' + E164_SHAPE_HINT);
   }
 
   const contacts = loadContacts();
@@ -380,6 +668,47 @@ async function whatsapp_contact_save({ name, number }) {
   });
 }
 
+// Wave 4 (2026-08-13): whatsapp_contact_save already deletes-then-rewrites a
+// contact internally when replacing one (line ~439 above) — there was just no
+// way to remove one WITHOUT immediately re-adding it, so a throwaway/bad
+// contact could only be overwritten with a new number, never actually
+// removed. Same case-insensitive lookup whatsapp_contact_save and
+// resolveRecipient already use.
+async function whatsapp_contact_delete({ name }) {
+  const label = String(name || '').trim();
+  if (!label) return fail('Ask the operator for the contact name to delete before calling this.');
+
+  if (!vaultFs || typeof vaultFs.writeJSON !== 'function') {
+    return fail('The vault is not writable, so I cannot delete contacts right now.');
+  }
+
+  const contacts = loadContacts();
+  const existing = Object.keys(contacts).find((n) => n.toLowerCase() === label.toLowerCase());
+  if (!existing) {
+    return fail('No saved contact named "' + label + '". Nothing to delete.');
+  }
+  delete contacts[existing];
+
+  const written = vaultFs.writeJSON(CONTACTS_PATH, contacts);
+  if (written && written.ok === false) {
+    return fail('Could not delete ' + existing + ': ' + reasonText(written));
+  }
+
+  // Oracle: read the file back and confirm the name no longer resolves,
+  // same discipline as whatsapp_contact_save's own read-back.
+  const check = resolveRecipient(existing);
+  if (!check.error) {
+    return fail('I wrote the contacts file without ' + existing + ' but it still resolves to a number ' +
+      '(' + check.number + '). Not deleted reliably.');
+  }
+
+  return ok({
+    deleted: existing,
+    evidence: 'read-back',
+    note: 'Deleted ' + existing + ' from saved contacts.',
+  });
+}
+
 const TOOLS = [
   {
     name: 'whatsapp_send',
@@ -409,11 +738,24 @@ const TOOLS = [
     danger: true,
     fn: whatsapp_contact_save,
   },
+  {
+    name: 'whatsapp_contact_delete',
+    description: 'Permanently remove a saved WhatsApp contact by name. Use for "delete the WhatsApp contact ' +
+      'for X", "forget X\'s WhatsApp number", or cleaning up a throwaway/test contact. Destructive — the ' +
+      'contact can no longer be messaged by name afterward.',
+    params: { name: 'string - the saved contact name to remove' },
+    danger: true,
+    fn: whatsapp_contact_delete,
+  },
 ];
 
 function registerFromWhatsapp(hub, ctx) {
   vaultFs = (ctx && ctx.memory && ctx.memory.fs) || (ctx && ctx.vault) || null;
   logger = (ctx && ctx.logger) || null;
+  // BUG-359 test seam — same shape as createLiveToolAdapter's toolAckDeadlineMs:
+  // production registers without these and gets WINDOW_SETTLE_MS/WINDOW_POLL_MS.
+  if (ctx && Number.isFinite(ctx.windowSettleMs)) windowSettleMs = ctx.windowSettleMs;
+  if (ctx && Number.isFinite(ctx.windowPollMs)) windowPollMs = ctx.windowPollMs;
   for (let i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }
@@ -426,6 +768,8 @@ module.exports = {
   whatsapp_send,
   whatsapp_contacts,
   whatsapp_contact_save,
+  whatsapp_contact_delete,
   // exported for tests
-  _internal: { resolveRecipient, sanitizeNumber, sanitizeMessage, CONTACTS_PATH },
+  _internal: { resolveRecipient, sanitizeNumber, sanitizeMessage, CONTACTS_PATH,
+    COMPOSER_SETTLE_MS, COMPOSER_POLL_MS, WINDOW_SETTLE_MS, WINDOW_POLL_MS },
 };

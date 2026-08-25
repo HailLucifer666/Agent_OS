@@ -248,20 +248,27 @@ describe('P21: web search chain — pure-function tests', function() {
 
   // ---- wikiSearch (with mocked fetch) ----
 
+  // CHANGED by BUG-280 (2026-08-20). These two tests pinned the OpenSearch
+  // response shape ([query, titles[], descriptions[], urls[]]). They are
+  // rewritten rather than deleted, because what changed is a deliberate decision
+  // and not a bug in them: action=opensearch is title-prefix matching and cannot
+  // answer a natural-language query at all — measured, 'London' returned 3 hits
+  // and 'weather in London today' returned 0 against the same host. wikiSearch
+  // now uses action=query&list=search, whose shape differs in two ways that both
+  // fail quietly if missed: there is no url field (it is built from the title),
+  // and the snippet carries <span class="searchmatch"> highlight markup that
+  // would otherwise be spoken verbatim.
   describe('wikiSearch', function() {
-    it('parses Wikipedia OpenSearch JSON response', async function() {
-      var fixture = [
-        'javascript',
-        ['JavaScript', 'JavaScript (programming language)', 'JavaScript library'],
-        [
-          'A high-level programming language',
-          'A programming language and core technology of the World Wide Web',
-          'A collection of pre-written JavaScript code'
-        ],
-        ['https://en.wikipedia.org/wiki/JavaScript',
-         'https://en.wikipedia.org/wiki/JavaScript_(programming_language)',
-         'https://en.wikipedia.org/wiki/JavaScript_library']
-      ]
+    it('parses the Wikipedia full-text (list=search) response', async function() {
+      var fixture = {
+        query: {
+          search: [
+            { title: 'JavaScript', snippet: 'A <span class="searchmatch">high-level</span> programming language' },
+            { title: 'JavaScript (programming language)', snippet: 'core technology of the Web' },
+            { title: 'JavaScript library', snippet: 'a collection of pre-written code' }
+          ]
+        }
+      }
       var origFetch = global.fetch
       global.fetch = function() {
         return Promise.resolve({
@@ -275,6 +282,10 @@ describe('P21: web search chain — pure-function tests', function() {
         assert.equal(results[0].title, 'JavaScript')
         assert.equal(results[0].url, 'https://en.wikipedia.org/wiki/JavaScript')
         assert.ok(results[0].snippet.indexOf('high-level') !== -1)
+        assert.equal(results[0].snippet.indexOf('<span'), -1,
+          'highlight markup must be stripped before it can be read aloud')
+        assert.equal(results[1].url, 'https://en.wikipedia.org/wiki/JavaScript_(programming_language)',
+          'spaces become underscores; parentheses must survive')
       } finally {
         global.fetch = origFetch
       }
@@ -308,7 +319,9 @@ describe('P21: web search chain — pure-function tests', function() {
     })
 
     it('respects maxResults parameter', async function() {
-      var fixture = ['q', ['A', 'B', 'C'], ['d1', 'd2', 'd3'], ['http://a', 'http://b', 'http://c']]
+      var fixture = { query: { search: [
+        { title: 'A', snippet: 'd1' }, { title: 'B', snippet: 'd2' }, { title: 'C', snippet: 'd3' }
+      ] } }
       var origFetch = global.fetch
       global.fetch = function() {
         return Promise.resolve({

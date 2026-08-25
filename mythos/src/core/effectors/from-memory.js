@@ -1,10 +1,28 @@
 'use strict';
 var effectorFromTool = require('./adapter').effectorFromTool;
+var { reasonText } = require('../util/reason-text');
+var { dayKey } = require('../util/day-key');
 function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
+// BUG-320 — "[[Note Name]]" -> "Note Name". Applied to note titles only: the
+// vault's markdown uses wiki links, so a model that has just read a note hands
+// the link back as the lookup key. Empty after stripping ("[[]]") returns '',
+// which the caller already treats as "no title given" — the list-my-notes
+// branch — rather than searching for an empty string.
+function stripWikiLink(s){
+  var t=String(s==null?'':s).trim();
+  var m=/^\[\[([\s\S]*)\]\]$/.exec(t);
+  return (m?m[1]:t).trim();
+}
+
 function buildTools(ctx){
   var semantic=ctx&&ctx.semantic, fs=ctx&&ctx.fs, identity=ctx&&ctx.identity, memory=ctx&&ctx.memory;
+  // Notes store (memory/notes.js) — plain Obsidian-compatible markdown, the
+  // operator's own documents rather than MYTHOS's asserted facts. Optional in
+  // this ctx so every existing caller/test that builds these tools without it
+  // keeps working; the tools then fail honestly instead of throwing.
+  var notes=ctx&&ctx.notes;
 
   // Detect preference-shaped text: starts with "I like", "I prefer", "always", "never", etc.
   function isPreferenceShape(text) {
@@ -48,7 +66,7 @@ function buildTools(ctx){
         });
       }
       return ok({remembered:text.slice(0,200),ref:res&&res.ref});
-    }catch(err){return fail('remember failed: '+(err.message||err));}
+    }catch(err){return fail('remember failed: '+reasonText(err));}
   }
 
   // BUG-160: the missing half of remember(). Without it a spoken correction
@@ -65,9 +83,19 @@ function buildTools(ctx){
     try{
       var res=semantic.forget(query,{topic:(args&&args.topic)||''});
       if(res.error) return fail('forget_fact: '+res.error);
+      // Wave 4 (2026-08-13): exact substring found nothing, but semantic.forget's
+      // fuzzy fallback found MORE THAN ONE plausible match — a paraphrased forget
+      // that happens to land on several stored facts (e.g. "forget the kids thing")
+      // must ask which one rather than silently deleting the wrong fact or the
+      // exact-match "no stored fact" message, which would be false here.
+      if(!res.removed.length && res.candidates && res.candidates.length){
+        var list=res.candidates.map(function(c,i){return (i+1)+'. "'+c.text+'" ('+c.topic+')';}).join('; ');
+        return fail('Found '+res.candidates.length+' similar facts, none an exact match for "'+
+          query.slice(0,80)+'" — which one? '+list);
+      }
       if(!res.removed.length) return fail('No stored fact contains "'+query.slice(0,80)+'". Topics searched: '+(res.searched.join(', ')||'none'));
-      return ok({forgot:res.removed,topic:res.topic,evidence:'removed '+res.removed.length+' fact(s) from Semantic/'+res.topic+'.md'});
-    }catch(err){return fail('forget_fact failed: '+(err.message||err));}
+      return ok({forgot:res.removed,topic:res.topic,evidence:'removed '+res.removed.length+' fact(s) from Semantic/'+res.topic+'.md'+(res.matchedBy==='fuzzy'?' (paraphrase match)':'')});
+    }catch(err){return fail('forget_fact failed: '+reasonText(err));}
   }
 
   // BUG-171: the same incident was written twice from one spoken report. The
@@ -119,7 +147,7 @@ function buildTools(ctx){
           evidence:'already logged '+Math.round((now-prev.ts)/1000)+'s ago as '+prev.id+' — not written twice'});
       }
 
-      var d=new Date(now).toISOString().slice(0,10);
+      var d=dayKey(now);   // F11: one date basis for every dated vault file
       var id=nextIncidentId(now);
       fs.ensureDir('Incidents');
       fs.appendLine('Incidents/'+d+'.jsonl',{id:id,ts:now,text:text,severity:severity,source:'voice',status:'open'});
@@ -143,7 +171,7 @@ function buildTools(ctx){
       }
       return ok({logged:text.slice(0,200),date:d,id:id,
         evidence:'wrote '+id+' to Incidents/'+d+'.jsonl'});
-    }catch(err){return fail('log_incident failed: '+(err.message||err));}
+    }catch(err){return fail('log_incident failed: '+reasonText(err));}
   }
 
   // BUG-171: the read side. Incidents were written and never read by anything
@@ -234,13 +262,13 @@ function buildTools(ctx){
     }
 
     try{
-      var d=new Date().toISOString().slice(0,10);
+      var d=dayKey();      // F11: one date basis for every dated vault file
       fs.ensureDir('Incidents');
       fs.appendLine('Incidents/'+d+'.jsonl',
         {kind:'status',id:target.id,status:status,ts:Date.now(),note:(args&&args.note)||'',source:'voice'});
       return ok({id:target.id,text:target.text.slice(0,120),from:target.status,status:status,
         evidence:'appended status '+status+' for '+target.id+' to Incidents/'+d+'.jsonl'});
-    }catch(err){return fail('incident_status failed: '+(err.message||err));}
+    }catch(err){return fail('incident_status failed: '+reasonText(err));}
   }
 
   // Item 9 stretch (RAG follow-up): explicit mid-conversation memory search —
@@ -273,7 +301,7 @@ function buildTools(ctx){
             : 'NO MATCHING MEMORIES for "'+query.slice(0,60)+'". Say you do not have anything stored about this — do not invent a recollection.'});
       }
       return ok({query:query,count:results.length,results:results});
-    }catch(err){return fail('recall_memory failed: '+(err.message||err));}
+    }catch(err){return fail('recall_memory failed: '+reasonText(err));}
   }
 
   // P5 Jarvis upgrade: grounded self-knowledge. Reads the boot-generated
@@ -293,11 +321,98 @@ function buildTools(ctx){
     return ok({topic:topic,matches:matched.length,lines:matched.slice(0,40)});
   }
 
+  // ---- Notes (Obsidian-compatible markdown) --------------------------------
+  //
+  // These sit next to remember/recall_memory deliberately rather than in a new
+  // effector file: the operator says "note that down" and "what did I remember
+  // about X" in the same breath, and splitting the family across files is how
+  // the model ends up reaching for the wrong half. remember() stores a FACT
+  // MYTHOS asserts; note_take stores a DOCUMENT the operator owns and can open
+  // in Obsidian. The tool descriptions have to keep that line visible, because
+  // nothing else will.
+  //
+  // Every result carries an oracle-backed `evidence` string (real path + real
+  // byte count from statSync, or the real match count) — never a bare ok:true.
+  // The evidence contract exists because a UI-type action once audited as
+  // delivered while the target app never received the text.
+
+  function notesUnavailable(){
+    return fail('notes store unavailable — MYTHOS_NOTES_DIR could not be resolved');
+  }
+
+  async function note_take(args){
+    if(!notes||typeof notes.write!=='function') return notesUnavailable();
+    var title=(args&&(args.title||args.name)||'').trim();
+    var text=(args&&(args.text||args.body||args.content)||'').trim();
+    if(!title) return fail('title required — what to call the note');
+    if(!text) return fail('text required — the note body');
+    try{
+      var res=notes.write({title:title,text:text,mode:(args&&args.mode)||'append',
+        tags:(args&&args.tags)||[]});
+      return ok({title:res.title,file:res.slug+'.md',mode:res.mode,bytes:res.bytes,
+        evidence:(res.created?'created ':'updated ')+res.path+' ('+res.bytes+' bytes on disk)'});
+    }catch(err){return fail('note_take failed: '+reasonText(err));}
+  }
+
+  async function note_read(args){
+    if(!notes||typeof notes.read!=='function') return notesUnavailable();
+    // BUG-320: strip wiki-link brackets. The model asked for
+    // note_read({title:"[[ai-news-digest-v2]]"}) three times across two sessions
+    // — the vault's own notes are written with [[...]] links, so it reads a link
+    // and passes it back verbatim. The brackets never matched, the error listed
+    // the real notes beside a bracketed name, and the healer recorded the same
+    // lesson twice. Nothing was broken except the argument.
+    var title=stripWikiLink((args&&(args.title||args.name||args.query)||''));
+    if(!title){
+      // No title given = "what notes do I have". A list is a real answer here,
+      // and it is what lets the model name a note back instead of guessing one.
+      var all=notes.list();
+      if(!all.notes.length){
+        return ok({count:0,notes:[],evidence:'no .md notes in '+notes.notesDir(),
+          note:'NO NOTES EXIST YET. Say so — do not describe a note you have not read.'});
+      }
+      return ok({count:all.notes.length,notes:all.notes.map(function(n){return n.slug;}).slice(0,50),
+        truncated:all.truncated,evidence:'listed '+all.notes.length+' note file(s) in '+notes.notesDir()});
+    }
+    try{
+      var res=notes.read(title);
+      if(!res){
+        var listed=notes.list();
+        return fail('No note called "'+title.slice(0,60)+'". '+
+          (listed.notes.length?('Existing notes: '+listed.notes.map(function(n){return n.slug;}).slice(0,15).join(', ')):'There are no notes yet.'));
+      }
+      return ok({title:res.title,file:res.slug+'.md',bytes:res.bytes,content:res.content.slice(0,8000),
+        evidence:'read '+res.path+' ('+res.bytes+' bytes)'});
+    }catch(err){return fail('note_read failed: '+reasonText(err));}
+  }
+
+  async function note_search(args){
+    if(!notes||typeof notes.search!=='function') return notesUnavailable();
+    var query=(args&&(args.query||args.text)||'').trim();
+    if(!query) return fail('query required — what to search the notes for');
+    try{
+      var res=notes.search(query,{limit:(args&&args.limit)||10});
+      if(!res.matches.length){
+        // BUG-172 shape: an empty result is a real answer and must say so in
+        // words the spoken reply cannot round off into "I found your note".
+        return ok({query:query,count:0,matches:[],
+          evidence:'searched '+res.scanned+' note file(s) in '+notes.notesDir()+', 0 matches',
+          note:'NO NOTE MATCHES "'+query.slice(0,60)+'". Say you found nothing — do not invent a note.'});
+      }
+      return ok({query:query,count:res.matches.length,truncated:res.truncated,
+        matches:res.matches.map(function(m){return {note:m.slug,matchedIn:m.matchedIn,line:m.line};}),
+        evidence:'searched '+res.scanned+' note file(s), '+res.matches.length+' match(es)'});
+    }catch(err){return fail('note_search failed: '+reasonText(err));}
+  }
+
   return [
+    {name:'note_take',description:'Write a note as a real markdown file the user can open in Obsidian. Use when the user says "take a note","write this down","start a note about X","add to my X note". Obsidian conventions apply: [[wikilinks]] and #tags in the text are kept verbatim. Use this for the user\'s OWN documents and longer content; use remember for a short standing fact or preference about the user.',params:{title:'string — the note title (becomes the filename)',text:'string — the note body (markdown; [[wikilinks]] allowed)',mode:'string (optional) — append (default, adds under a timestamp) or replace',tags:'array (optional) — tag strings for the note frontmatter'},danger:false,fn:note_take},
+    {name:'note_read',description:'Read one of the user\'s markdown notes back, or list the notes that exist when called with no title. Use for "read my X note","what\'s in my X note","what notes do I have". Read-only.',params:{title:'string (optional) — the note title to read; omit to list all notes'},danger:false,fn:note_read,needs_result:true},
+    {name:'note_search',description:'Search the text of the user\'s markdown notes for a word or phrase. Use for "find the note where I wrote about X","search my notes for X". Returns the matching line from each note so you can quote it. Read-only.',params:{query:'string — the word or phrase to look for',limit:'number (optional) — max results, default 10'},danger:false,fn:note_search,needs_result:true},
     {name:'self_capabilities',description:'Read your own capabilities manifest (tools, tiers, adapters, skills, recent code changes — regenerated every boot). Use when the user asks "what can you do", "what are your capabilities", "what tools do you have for X", or "what\'s new/changed". Pass topic to filter (e.g. "spotify").',params:{topic:'string (optional) — filter lines matching this word'},danger:false,fn:self_capabilities},
     {name:'remember',description:'Save a durable fact, preference, or instruction to permanent memory. Use when user says "remember","note that","don\'t forget","from now on","keep in mind", or states a standing rule. Persists across restarts. When the user CORRECTS something previously remembered, call forget_fact for the old fact first, then remember the corrected one.',params:{text:'string — the fact/preference/instruction'},danger:false,fn:remember},
     {name:'forget_fact',description:'Remove a wrong or outdated fact from permanent memory. Use when the user says "forget that","that\'s wrong, the real X is...","delete that memory", or corrects something previously remembered. Echoes exactly what was removed — repeat it back so the user can catch a wrong match.',params:{query:'string — a distinctive phrase from the fact to remove',topic:'string (optional) — memory topic file to search, e.g. user-facts'},danger:false,fn:forget_fact},
-    {name:'log_incident',description:'Record an error/bug/incident the user flags. Use when user says "log this","this is wrong","you hallucinated","log this as an error". Persists to durable incident log.',params:{text:'string — describe the incident',severity:'string (optional) — info|warn|error (default warn)'},danger:false,fn:log_incident},
+    {name:'log_incident',description:'Record an error/bug/incident the OPERATOR explicitly asks to log. Use ONLY when the operator says "log this","this is wrong","you hallucinated","log this as an error" — a direct request to log, spoken or typed. Do NOT call this on your own initiative to record a mistake you noticed yourself, a tool failure, or anything the operator did not ask you to log; noticing something is wrong is not the same as being asked to log it. Persists to durable incident log.',params:{text:'string — describe the incident',severity:'string (optional) — info|warn|error (default warn)'},danger:false,fn:log_incident},
     {name:'recall_memory',description:'Search past conversations and remembered facts for something relevant. Use when the user references something from earlier that you don\'t have in front of you, or directly asks "what did I say about X" / "do you remember X". Read-only.',params:{query:'string — what to search memory for',limit:'number (optional) — max results, default 8'},danger:false,fn:recall_memory},
     {name:'list_incidents',description:'Read back the incidents the user has logged. Use for "what bugs are open", "what did I report", "any incidents today". Read-only.',params:{status:'string (optional) — open|acknowledged|resolved|all (default open)',limit:'number (optional) — max results, default 10'},danger:false,fn:list_incidents,needs_result:true},
     {name:'incident_status',description:'Mark a logged incident acknowledged or resolved. Use when the user says "that one is fixed","mark it resolved","I know about that one". Identify it by id, or by a distinctive phrase from the incident text.',params:{status:'string — open|acknowledged|resolved',id:'string (optional) — the incident id',query:'string (optional) — a distinctive phrase from the incident text',note:'string (optional) — why'},danger:false,fn:incident_status}

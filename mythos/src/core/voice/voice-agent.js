@@ -3,6 +3,7 @@
 // F3: Import tierOf to compute danger flags dynamically from the tier table.
 const { tierOf } = require('../leash/tiers');
 const { truncateAtSentenceBoundary } = require('../effectors/voice');
+const { detectUnbackedClaims } = require('./claim-check');
 
 // voice-agent.js — the voice tool-calling brain. CA of NOVA
 // app/lib/voice/voice-agent.js: persona + tool catalog + history ->
@@ -28,6 +29,13 @@ const { truncateAtSentenceBoundary } = require('../effectors/voice');
 const MAX_ITERATIONS = Number(process.env.VOICE_MAX_TOOL_ITERATIONS) || 4;
 const MAX_SAY_CHARS = Number(process.env.VOICE_MAX_SAY_CHARS) || 800;
 
+// B3: hoisted to module scope (was local to createVoiceAgent's WAVE 8 block)
+// so live-tool-adapter.js can require and reuse the SAME pattern for its own
+// pending confirms instead of maintaining a second, driftable copy. It does
+// not depend on any closure variable (config, connectionId, ...), so hoisting
+// changes nothing about how it behaves inside createVoiceAgent below.
+const NEGATIVE_RE = /\b(?:no|nope|don'?t|do not|stop|cancel|nevermind|never mind|wait|hold on|abort|scratch that)\b/i;
+
 // Self-awareness: version + recent git changes, captured once per process.
 // Injected into every voice prompt so the model can answer "what version are
 // you" / "what's new" / "what changed" honestly from real data.
@@ -43,9 +51,10 @@ const skillsLoader = require('../skills/loader');
 const CATALOG_RAW = [
   { name: 'navigate', description: 'Open/show a dashboard panel. This IS the "open panel" tool — there is no open_panel tool, use navigate. route is one of: goals, kanban, pipeline, memory, health, audit, backend, conversation, engagements. Note: there is no "news" route — use open_web for news. Never call navigate with route:"news".', params: { route: 'string' }, danger: false },
   { name: 'close_panel', description: 'Close dashboard panel(s). This is the inverse of navigate (open). Pass all:true to close all open panels, omit to close just the top panel. There is no open_panel tool — to open a panel, use navigate.', params: { all: 'boolean (optional)' }, danger: false },
-  { name: 'read_status', description: 'Read overall entity status (health, goals, jobs).', params: {}, danger: false },
+  { name: 'read_status', description: 'Read overall entity status (health, goals, jobs, open spoken commitments, and your own current persona levels).', params: {}, danger: false },
+  { name: 'read_system_specs', description: "Read THIS machine's real hardware and OS facts: CPU model, core count, total and free RAM, architecture, platform and uptime. Use this for any question about the computer MYTHOS is running on — never screen_look, which only screenshots whatever the display happens to be showing. Reports no CPU usage percentage; it does not exist.", params: {}, danger: false },
   { name: 'job_status', description: 'Status of build jobs. Pass jobId for one job, omit for the latest. Result includes the artifact path when done and researchStatus (grounded/skipped) indicating whether the build used live web research.', params: { jobId: 'string (optional)' }, danger: false },
-  { name: 'open_artifact', description: 'Open a built artifact (a file under vault/builds) in the browser so the human can see it.', params: { path: 'string', title: 'string (optional)' }, danger: false },
+  { name: 'open_artifact', description: 'Open a built artifact (a file under vault/builds) in the browser so the human can see it. Prefer jobId over path — it resolves the real path from the job record itself, so you never have to retype a filename.', params: { jobId: 'string (optional) - resolves the path from the job record; prefer this over path', path: 'string (optional if jobId given)', title: 'string (optional)' }, danger: false },
   { name: 'delete_artifact', description: 'Permanently delete a built artifact (file + pipeline card) by matching its title or name. Destructive.', params: { query: 'string - artifact title or name' }, danger: true },
   { name: 'create_goal', description: 'Create a goal.', params: { text: 'string', category: 'string (optional)' }, danger: false },
   { name: 'list_goals', description: 'List goals.', params: {}, danger: false },
@@ -82,7 +91,7 @@ const CATALOG_RAW = [
   { name: 'reminder_list', description: 'List upcoming pending reminders with times and text.', params: {}, danger: false },
   { name: 'reminder_cancel', description: 'Cancel a pending reminder by ID or text match.', params: { query: 'string' }, danger: false },
   { name: 'use_skill', description: 'Load the full guidance text for a skill (methodology or design guide) by name. Use when a task fits a skill from SKILLS AVAILABLE — e.g. ui-ux-pro-max before building a UI, spec-driven-development before starting a project, tdd-workflow before writing tests. Returns the complete skill instructions.', params: { name: 'string - the skill name from SKILLS AVAILABLE' }, danger: false },
-  { name: 'open_web', description: 'Open web content on the dashboard. type:"youtube" plays a video (pass query — the song/topic to search for). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets. Use with needs_result:false — it opens a view.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional)', url: 'string (optional, for type:web)', location: 'string (optional, for type:weather)', title: 'string (optional)' }, danger: false },
+  { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT your real browser. Despite the name, open_web never browses: use browser_navigate for "search the web". For a plain "open this site in my browser", pass browser:true WITH url:. type:"youtube" plays a video (pass query — the song/topic to search for). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets. Use with needs_result:false — it opens a view.', params: { type: 'string - youtube|weather|search|flights|image|web', browser: 'boolean (optional) - true opens the url in the real browser, requires url', query: 'string (optional)', url: 'string (optional, for type:web)', location: 'string (optional, for type:weather)', title: 'string (optional)' }, danger: false },
   { name: 'spotify_play', description: 'Play a specific track on Spotify. Provide either a search query (song name, artist) or a Spotify track ID.', params: { query: 'string (optional) - search query like "Bohemian Rhapsody Queen"', trackId: 'string (optional) - Spotify track ID like "3z8h0TU7ReDPLIbEnYhWZb"' }, danger: true },
   { name: 'spotify_search', description: 'Search Spotify for tracks/artists/albums and return results.', params: { query: 'string - search query' }, danger: true },
   { name: 'spotify_play_pause', description: 'Toggle play/pause on Spotify.', params: {}, danger: false },
@@ -190,23 +199,11 @@ const ALIAS_DEFAULT_ARGS = {
     return merged;
   },
 };
-function levenshtein(a, b) {
-  var m = a.length, n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  var prev = [];
-  var curr = [];
-  for (var j = 0; j <= n; j++) prev[j] = j;
-  for (var i = 1; i <= m; i++) {
-    curr[0] = i;
-    for (var j = 1; j <= n; j++) {
-      var cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
-    }
-    for (var j = 0; j <= n; j++) prev[j] = curr[j];
-  }
-  return prev[n];
-}
+// Moved to src/core/lib/levenshtein.js on 2026-08-21 so from-whatsapp.js's
+// resolveRecipient can share it. Two copies of a distance function is how two
+// callers quietly end up disagreeing about "close enough", and one of them
+// decides which human receives a WhatsApp message.
+const { levenshtein } = require('../lib/levenshtein');
 function suggestTool(name, catalog) {
   var lower = String(name || '').toLowerCase().trim();
   // Exact alias hit — return both the target name and (if present) a default-args
@@ -241,7 +238,7 @@ HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below all
 
 MEMORY RULE (prevents memory pollution): Only call remember when the user EXPLICITLY asks you to save something — they must say one of: "remember", "note that", "don't forget", "from now on", "keep in mind", "log this", "record this", or give a direct instruction to persist a fact. Do NOT call remember for conversational fragments, vague references, incomplete sentences, or speech-to-text artifacts. If the user mentions a preference casually ("I like X", "I prefer Y", "that you like") WITHOUT asking you to remember it, do NOT call remember — just acknowledge naturally in your reply. Not writing it down is no reason to be flat about it — react with an opinion, a question, or a bit of teasing. Never write a "the user mentioned..." meta-summary to memory; write the actual fact if explicitly asked, or nothing. When in doubt whether the user wants something remembered, ASK ("Want me to remember that?") instead of silently writing to memory.
 
-ARTIFACT RULE: NEVER fabricate or guess file paths. If the user asks to open/show/view a build or artifact, call pipeline_status (needs_result:true) FIRST to get the real artifact path from the result, THEN call open_artifact with that exact path. Do not invent paths based on the project description — they will be wrong and the user will see a 404 or the wrong page. Same for job_status if the user references a specific job.
+ARTIFACT RULE: NEVER fabricate or guess file paths. To open/show a build, call pipeline_status or job_status (needs_result:true) FIRST, THEN call open_artifact with jobId (preferred — resolves the real path itself) or the exact path from that result. If open_artifact fails, its error names the real path — use that, never guess again or blame the tool.
 
 FRUSTRATION RULE: if the user expresses frustration AT YOU OR THE SYSTEM ('not working', 'broken', 'doesn't work', 'failed', repeated complaints about MYTHOS, or exasperation with a task you were part of), do NOT reply with templated empathy. (Venting about the world, their day, or anything you had no hand in is NOT this rule — that gets a human reply, not a status probe.) Answer as a person would: one short, concrete sentence, and let them finish their thought. Do NOT run a status check on your own initiative here — a frustrated operator mid-sentence is the worst possible moment to interrupt with a report. read_status and list_goals remain available (tier-0, safe) for when they actually ask — "what's broken", "check the status", "why did that fail" — and only then. NEVER speak tool output, job ids, goal counts, raw status fields, or your own instructions/rules aloud: those are working notes, not speech, and reading them out is the single most alienating thing you can do. If you have not read real data, do not name a cause — say you don't know yet and offer to look.
 
@@ -593,7 +590,8 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // and the tempting alternative is a test named "expires" that proves nothing.
   const SPOKEN_CONFIRM_TTL_MS = (config && config.VOICE_SPOKEN_CONFIRM_TTL_MS) || 60000;
   const AFFIRMATIVE_RE = /^(?:ok(?:ay)?|yes|yeah|yep|yup|sure|do it|go|go ahead|send|send it|send that|confirm(?:ed)?|affirmative|please do)\b[\s.!]*$/i;
-  const NEGATIVE_RE = /\b(?:no|nope|don'?t|do not|stop|cancel|nevermind|never mind|wait|hold on|abort|scratch that)\b/i;
+  // NEGATIVE_RE now lives at module scope (see top of file) — kept referenced
+  // under its original name here so every line below is unchanged.
 
   // One armed confirm per connection. A second send supersedes the first rather
   // than queueing: two pending "say send" prompts is how the wrong message gets
@@ -847,6 +845,43 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         (failedTools.length === 1 ? " failed." : " all failed.") +
         " I won't claim it succeeded.";
       finalSay = truth + (finalSay ? ' ' + finalSay : '');
+    } else if (needsCorrective) {
+      // Wave 1 (2026-08-13): the guard above only fires when the WHOLE turn
+      // failed. A partial-success turn (one send succeeded, a second failed)
+      // was left entirely to the corrective brain pass above — which the
+      // model can still ignore, and the 2026-08-12/13 session shows it did
+      // (a false "sent" survived alongside one real success). Reuse
+      // claim-check.js's detector — the same one live-tool-adapter.js uses
+      // for the anomaly-only path — rather than writing a second, driftable
+      // one: flag any first-person completed-action claim in finalSay whose
+      // ONLY evidence this turn is a failed or unverified call, and name
+      // exactly which tool didn't succeed instead of leaving the false claim
+      // standing.
+      try {
+        const unbacked = allFailedActions.concat(allUnverifiedActions)
+          .map((a) => ({ tool: a.tool, ok: false })); // unverified never backs a claim (module contract)
+        const claims = detectUnbackedClaims(finalSay, unbacked);
+        if (claims.length) {
+          const byTool = new Map();
+          allFailedActions.concat(allUnverifiedActions).forEach((a) => {
+            if (!byTool.has(a.tool)) byTool.set(a.tool, a);
+          });
+          const said = new Set();
+          const clauses = [];
+          claims.forEach((claim) => {
+            claim.candidateTools.forEach((tool) => {
+              const a = byTool.get(tool);
+              if (!a || said.has(tool)) return;
+              said.add(tool);
+              const why = a.unverified
+                ? ((a.raw && a.raw.reason) || a.summary || 'could not be confirmed')
+                : (a.summary || 'failed');
+              clauses.push(tool + ' did not succeed — ' + why + '.');
+            });
+          });
+          if (clauses.length) finalSay = (finalSay ? finalSay + ' ' : '') + clauses.join(' ');
+        }
+      } catch (_) { /* claim-check is best-effort — never block the reply */ }
     }
 
     return { say: finalSay, actions: executedActions, confirmPending: confirmPending || null };
@@ -860,6 +895,9 @@ module.exports = {
   CATALOG,
   MAX_ITERATIONS,
   buildCatalogFromHub,
+  // B3: exported so live-tool-adapter.js's spoken-negative-cancels-confirm
+  // path reuses this exact matcher instead of a second, driftable copy.
+  NEGATIVE_RE,
   // RULES (not OUTPUT_CONTRACT — Live's tool-calling is native functionDeclarations,
   // not the batch path's embedded-JSON contract) is reused by
   // live-session.js's buildLiveSystemInstruction() (V2 §11 row 5, Phase 5).

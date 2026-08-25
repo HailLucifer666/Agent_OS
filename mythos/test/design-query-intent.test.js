@@ -95,6 +95,12 @@ describe('build prompts subordinate the design system to the request', () => {
   });
 
   it('makes the reviewer flag sections nobody asked for', () => {
-    assert.match(src, /Extra sections are a defect/);
+    // C3: this criterion moved out of agent-actions.js into review-rubric.js
+    // so it can be scoped by artifact type (a game/visualisation must not be
+    // graded on it) — see review-rubric-scope.test.js for that behaviour.
+    const rubricSrc = require('fs').readFileSync(
+      require('path').join(__dirname, '..', 'src', 'core', 'effectors', 'review-rubric.js'), 'utf8'
+    );
+    assert.match(rubricSrc, /Extra sections are a defect/);
   });
 });

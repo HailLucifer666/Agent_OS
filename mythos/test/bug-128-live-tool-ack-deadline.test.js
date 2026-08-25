@@ -142,3 +142,47 @@ describe('BUG-128 — no call may reach turnComplete unanswered', () => {
     assert.notDeepEqual(batch2.fields.callIds, batch.fields.callIds);
   });
 });
+
+// Fix-plan 2.3 (2026-08-17): the deadline is config-driven, not hard-wired. The
+// 1500 default produced 4 late acks on web_search/web_fetch in one measured
+// session (2026-08-15 RCA), but the number is the operator's call, evidence
+// gathered from live.tool-ack-deadline log counts — so the knob must exist end
+// to end: schema key, env override honored, and the server call site actually
+// passing it (the seam existed since BUG-128 but nothing fed it).
+describe('BUG-128 — the ack deadline is operator-tunable', () => {
+  const { loadConfig } = require('../src/core/config');
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  test('TOOL_ACK_DEADLINE_MS exists in the schema with default 1500 and min 250', () => {
+    const { SCHEMA } = require('../src/core/config/schema');
+    const def = SCHEMA.TOOL_ACK_DEADLINE_MS;
+    assert.ok(def, 'the schema key must exist');
+    assert.equal(def.type, 'number');
+    assert.equal(def.default, 1500, 'no default behavior change — the measured-session evidence has not been gathered');
+    assert.equal(def.min, 250, 'a typo must not ack before the dispatch round-trip even starts');
+  });
+
+  test('an env override flows through loadConfig as a number; sub-minimum is rejected', () => {
+    const raised = loadConfig({ envOverrides: { TOOL_ACK_DEADLINE_MS: '3000' } });
+    assert.equal(raised.config.TOOL_ACK_DEADLINE_MS, 3000);
+    const tooLow = loadConfig({ envOverrides: { TOOL_ACK_DEADLINE_MS: '100' } });
+    assert.equal(tooLow.ok, false, 'below min must be a loud config error, not a silently-clamped value');
+    assert.ok(tooLow.errors.some((e) => e.includes('TOOL_ACK_DEADLINE_MS')));
+  });
+
+  test('the server call site passes config.TOOL_ACK_DEADLINE_MS into the adapter', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
+    const at = src.indexOf('createLiveToolAdapter({');
+    const block = src.slice(at, src.indexOf('});', at));
+    assert.match(block, /toolAckDeadlineMs:\s*config\.TOOL_ACK_DEADLINE_MS/,
+      'the seam existed since BUG-128 but nothing fed it — without this line the .env.example dial silently does nothing');
+  });
+
+  test('.env.example documents the key with its evidence source', () => {
+    const env = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
+    assert.ok(env.includes('TOOL_ACK_DEADLINE_MS='), 'the key must be documented (repo portability rule)');
+    assert.match(env, /TOOL_ACK_DEADLINE_MS[\s\S]{0,600}?live\.tool-ack-deadline/,
+      'tuning is evidence-first: the doc must name the log line whose counts are the evidence');
+  });
+});

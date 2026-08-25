@@ -10,7 +10,7 @@
 // approved?". Approving one Forge build plan therefore handed the goal a
 // standing pass for EVERY T3 tool that later carried the same goalId:
 // gmail_send, delete_file, run_command, phone_call, phone_sms_send,
-// browser_click, install_from_github, hermes_task, and the rest.
+// browser_click, install_from_github, dsh_task, and the rest.
 //
 // That was reachable two ways without any external attacker:
 //   1. engagements/executor.js runs `kind:'action'` stages whose {tool,args}
@@ -122,7 +122,7 @@ describe('leash T3 grants are tool-scoped, not tier-wide', function() {
     const mustStillConfirm = [
       'gmail_send', 'compose_email', 'delete_file', 'move_file', 'copy_file',
       'run_command', 'install_from_github', 'delete_artifact', 'delete_goal',
-      'hermes_task', 'ui_click', 'ui_type', 'browser_click', 'browser_type',
+      'dsh_task', 'ui_click', 'ui_type', 'browser_click', 'browser_type',
       'phone_call', 'phone_sms_send', 'phone_whatsapp_send', 'phone_file_push'
     ];
 
@@ -332,7 +332,7 @@ describe('BUG-119 — a T3 approval on the voice path actually holds for the ses
 
   it('outward-facing T3 tools are still confirm-every-time after the widening', function() {
     const leash = makeLeash();
-    for (const tool of ['gmail_send', 'delete_goal', 'run_command', 'hermes_task']) {
+    for (const tool of ['gmail_send', 'delete_goal', 'run_command', 'dsh_task']) {
       acceptEnvelope(leash, tool, 'conn-A');
       const next = leash.check({ tool: tool, args: {} }, { connectionId: 'conn-A' });
       assert.equal(next.requireConfirm, true, tool + ' must keep asking');

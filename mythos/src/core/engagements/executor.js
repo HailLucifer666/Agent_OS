@@ -290,22 +290,40 @@ function createEngagementExecutor(deps) {
     return { ok: true, verified: v.ok, skipped: v.skipped, artifacts: [] };
   }
 
-  // Build stage: generates file content, written under the vault. Content now
+  // Build stage: generates file content, written under the vault. Content
   // comes from buildEngine (Hermes-Agent) — the same single engine build-runner
   // uses — instead of this module's own brain.think call, which was a third,
   // independent generator with no queue, verifier or review gate behind it.
-  // No fallback: an unavailable engine produces nothing and raises an anomaly
-  // carrying the real reason, rather than silently substituting brain output.
-  // Verification then fails naturally if the stage required a file.
+  // No fallback — for real this time: an absent engine HARD-FAILS the stage
+  // with the same install-hint wording build-engine.js's hermesFailed() uses,
+  // rather than substituting brain output or silently producing nothing. A
+  // build with no engine must FAIL instead of shipping a plausible-but-wrong
+  // artifact. The stage runner maps ok:false → stageFailed → bounded repair
+  // loop → BLOCKED. (The engine-present-but-offline path below still degrades
+  // to verify, and a vault-less build still skips generation and verifies —
+  // both behavior-pinned and unchanged.)
   async function runBuildStage(record, stage) {
     var artifacts = [];
     var generator = buildEngine && typeof buildEngine.generate === 'function' ? buildEngine : null;
-    if ((generator || brain) && vault && typeof vault.writeText === 'function') {
+    if (!generator) {
+      var noEngineError = 'the build engine is unavailable — DeepSeek Harness is the only build-content engine and there is no fallback. '
+        + 'Install it with `node mythos/scripts/setup-dsh.js --install`.';
+      // Distinct kind from the offline case below, deliberately: "no engine was
+      // ever wired" and "the engine is wired but failed this call" have
+      // different remedies (install it vs diagnose it) and one of them is not
+      // fixable by retrying. Sharing one kind made the vault ledger unable to
+      // tell them apart, which is the same shape as BUG-265's storm — a
+      // diagnostic that cannot discriminate costs a session later. Nothing keys
+      // on either string: the healer's build-engine-reprobe playbook triggers on
+      // 'build-engine-failed', not on these, so splitting cannot orphan a
+      // playbook or start a futile heal loop against an engine that is absent.
+      anomaly('engagement-build-engine-missing', { engagementId: record.id, stageId: stage.id, error: noEngineError });
+      return { ok: false, error: noEngineError, verified: false };
+    }
+    if (vault && typeof vault.writeText === 'function') {
       var prompt = (stage.prompt || stage.name || 'build') +
         '\n\nProduce the file content for this build stage. Respond with the file content as plain text.';
-      var result = generator
-        ? await generator.generate({ prompt: prompt, source: 'engagement:' + record.id + ':build:' + stage.id })
-        : await think(prompt, null, 'build:' + stage.id, record.id);
+      var result = await generator.generate({ prompt: prompt, source: 'engagement:' + record.id + ':build:' + stage.id });
       if (result && result.offline && result.error) {
         anomaly('engagement-build-engine-offline', { engagementId: record.id, stageId: stage.id, error: result.error });
       }

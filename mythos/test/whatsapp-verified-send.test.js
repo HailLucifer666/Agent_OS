@@ -128,6 +128,81 @@ describe('WAVE 9 (BUG-064) — the composer must name the intended recipient', (
   });
 });
 
+// Wave 4 (2026-08-13): the deep link silently failing to switch chats is the
+// diagnosed root cause of the wrong-conversation refusal above — WhatsApp was
+// already open on someone else and the FIRST whatsapp://send?phone=... never
+// moved it. One retry of the SAME deep link (not an in-app search-and-click —
+// this file's own header explicitly rejects UI-hunting as the fragile path
+// for this Electron app) either recovers, or proves the mismatch is real.
+describe('Wave 4: whatsapp_send retries the deep link once before refusing on a wrong conversation', () => {
+  it('recovers when the retried deep link actually switches to the right chat', async () => {
+    let readCount = 0;
+    const pc = fromPcStub({
+      readComposeBox: async () => {
+        readCount += 1;
+        // First read: wrong chat (Priya). Second read (post-retry): right chat.
+        return readCount === 1
+          ? { ok: true, result: { name: 'Type a message to Priya Sharma', headerName: 'Priya Sharma' } }
+          : { ok: true, result: { name: 'Type a message to +91 99033 82050', currentText: '', headerName: '+91 99033 82050' } };
+      },
+    });
+    await withFromPc(pc, async (wa) => {
+      const res = await wa.whatsapp_send({ to: 'alex', text: 'hello' });
+      assert.equal(res.ok, true, 'the retry must recover a send the first navigation missed');
+      assert.equal(res.result.sent, true);
+      const launchCalls = pc.calls.filter((c) => c[0] === 'launch_app');
+      assert.equal(launchCalls.length, 2, 'the deep link must be re-issued exactly once on mismatch');
+    });
+  });
+
+  it('fails honestly, still without typing, when the retry does not fix it either', async () => {
+    const pc = fromPcStub({
+      readComposeBox: async () => ({ ok: true, result: { name: 'Type a message to Priya Sharma', headerName: 'Priya Sharma' } }),
+    });
+    await withFromPc(pc, async (wa) => {
+      const res = await wa.whatsapp_send({ to: 'alex', text: 'hello' });
+      assert.equal(res.ok, false);
+      assert.match(res.result, /REFUSED/);
+      assert.match(res.result, /retrying the deep link did not switch it/);
+      assert.match(res.result, /Priya Sharma/);
+      assert.equal(pc.calls.some((c) => c[0] === 'ui_type'), false);
+      assert.equal(pc.calls.some((c) => c[0] === 'submitMessage'), false);
+      const launchCalls = pc.calls.filter((c) => c[0] === 'launch_app');
+      assert.equal(launchCalls.length, 2, 'exactly one retry — not a loop');
+    });
+  });
+
+  it('the retry never falls back to a search box or a contact click (no UI-hunting reintroduced)', async () => {
+    const pc = fromPcStub({
+      readComposeBox: async () => ({ ok: true, result: { name: 'Type a message to Priya Sharma', headerName: 'Priya Sharma' } }),
+    });
+    await withFromPc(pc, async (wa) => {
+      await wa.whatsapp_send({ to: 'alex', text: 'hello' });
+      assert.equal(pc.calls.some((c) => c[0] === 'ui_click'), false);
+      assert.equal(pc.calls.some((c) => c[0] === 'ui_elements'), false);
+    });
+  });
+
+  it('fails honestly when the retried deep link itself fails to launch', async () => {
+    let launchCount = 0;
+    const pc = fromPcStub({
+      readComposeBox: async () => ({ ok: true, result: { name: 'Type a message to Priya Sharma', headerName: 'Priya Sharma' } }),
+      launch_app: async (a) => {
+        launchCount += 1;
+        pc.calls.push(['launch_app', a]);
+        if (launchCount === 1) return { ok: true, result: { pid: 19716, launched: true } };
+        return { ok: false, result: 'app not found' };
+      },
+    });
+    await withFromPc(pc, async (wa) => {
+      const res = await wa.whatsapp_send({ to: 'alex', text: 'hello' });
+      assert.equal(res.ok, false);
+      assert.match(res.result, /A retry of the deep link failed too/);
+      assert.match(res.result, /app not found/);
+    });
+  });
+});
+
 describe('WAVE 9 (BUG-067) — a send is only claimed once the box has emptied', () => {
   it('a submit that leaves the message in the box is NOT reported as sent', async () => {
     // The 2026-08-01 failure exactly: ok:true from the keystroke, message still

@@ -68,7 +68,11 @@ export function mountMemoryWidget(el, ctx) {
     keyedList(
       list,
       ranked,
-      (e) => e.summary,
+      // ponytail: summary#index is collision-safe for rendering but re-keys
+      // rows when the list reorders. Ceiling: expose the semantic record's
+      // stable sidecar id through /api/memory/semantic (server/routes/memory.js
+      // deliberately strips it, along with score) and key on that instead.
+      (e, i) => e.summary + '#' + i,
       (e) => h('div', { class: 'widget-feed-row mono', title: e.summary }, e.summary),
       (node, e) => { node.textContent = e.summary; node.title = e.summary; },
     );

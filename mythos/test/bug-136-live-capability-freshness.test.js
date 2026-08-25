@@ -177,6 +177,47 @@ describe('BUG-136: buildLiveSystemInstruction asks for the labelled variant', ()
   });
 });
 
+describe('Task B3: the two BUG-136 gaps named in the comment are now labelled too', () => {
+  test('version.contextLine() and the skills catalog both carry an "as of session-start" staleness note', async () => {
+    const bus = createBus({ historySize: 50 });
+    const sockets = [];
+    const createLiveSocket = () => { const s = new FakeGeminiSocket(); sockets.push(s); return s; };
+    const prevKey = process.env.GOOGLE_API_KEY;
+    process.env.GOOGLE_API_KEY = 'test-key-for-b3';
+    const server = createServer(baseDeps(bus, {
+      config: { VOICE_S2S_ENABLED: true },
+      createLiveSocket,
+      getCapabilityDigest: (opts) => capabilities.summaryDigest(Object.assign({ adapters: {} }, opts)),
+    }));
+    await server.ready;
+    const { port } = server.httpServer.address();
+    try {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
+      ws.send(JSON.stringify({ type: 'live-open' }));
+      await waitFor(() => sockets.length === 1);
+      sockets[0].simulateOpen();
+      sockets[0].serverFrame({ setupComplete: {} });
+      await waitFor(() => sockets[0].sent.some((f) => f.setup));
+
+      const text = sockets[0].sent.find((f) => f.setup).setup.systemInstruction.parts[0].text;
+      // version.contextLine() reads 'MYTHOS vX.Y.Z (gitref). Last change: ...' —
+      // its own staleness note must ride right along with it.
+      assert.match(text, /MYTHOS v[^(]*\([^)]*\)\.[^]*as of session-start/,
+        'version.contextLine() must carry the session-start staleness note');
+      // The skills catalog block starts with 'SKILLS AVAILABLE' — its staleness
+      // note must appear after it, not just anywhere else in the prompt.
+      assert.match(text, /SKILLS AVAILABLE[^]*as of session-start/,
+        'the skills catalog must carry the session-start staleness note');
+
+      ws.close();
+    } finally {
+      if (prevKey === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = prevKey;
+      await server.stop();
+    }
+  });
+});
+
 describe('BUG-136: RULES carries the negative-honesty guard for adapter availability', () => {
   test('AVAILABILITY RULE requires a this-turn tool result before claiming unavailability', () => {
     // RULES is a module-private const, not exported — both the batch and Live

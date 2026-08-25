@@ -54,12 +54,19 @@ export function mountWebResult(el, payload) {
         // non-numeric value from the remote API can't reach innerHTML as text.
         var humid = cur.relative_humidity_2m !== undefined ? Math.round(cur.relative_humidity_2m) + '%' : '—';
         var wind = cur.wind_speed_10m !== undefined ? Math.round(cur.wind_speed_10m) + ' km/h' : '—';
+        // BUG-281: apparent_temperature is now requested by from-dashboard.js's
+        // URL, so render it. Math.round() coerces it for the same reason the
+        // fields above are coerced — a non-numeric value from the remote API
+        // must not reach innerHTML as text.
+        var feels = cur.apparent_temperature !== undefined
+          ? Math.round(cur.apparent_temperature) + '°C'
+          : '—';
         // xss-safe: all interpolated fields escaped
         el.innerHTML =
           '<div class="weather-widget-card">' +
             '<div class="weather-widget-temp text-gold">' + temp + '</div>' +
             '<div class="weather-widget-cond">' + cond + '</div>' +
-            '<div class="weather-widget-sub text-dim">Humidity ' + humid + ' · Wind ' + wind + '</div>' +
+            '<div class="weather-widget-sub text-dim">Feels ' + feels + ' · Humidity ' + humid + ' · Wind ' + wind + '</div>' +
           '</div>';
       })
       .catch(function() {

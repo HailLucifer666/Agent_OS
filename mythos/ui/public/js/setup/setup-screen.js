@@ -24,9 +24,12 @@ import { trapFocus } from '../a11y/focus-trap.js';
 import {
   deriveSetupNeed,
   planGapActions,
-  validateKeyValue,
-  interpretStoreResult,
+  chooseSetupScreen,
+  shouldRetryProbe,
+  retryDelayMs,
 } from './setup-state.js';
+import { createKeyField } from './key-field.js';
+import { mountFirstRunWizard } from './first-run-wizard.js';
 
 const INERT_SELECTOR = '#hud-canvas, #core-orb, #hud-a11y-root, #widget-root, #overlay-root, #confirm-root, #compose-bar, #camera-preview';
 
@@ -92,7 +95,7 @@ export function mountSetupScreen(root, opts) {
 
     if (gapAction.action === 'store') {
       for (const keyName of gapAction.keyNames) {
-        li.appendChild(keyField(keyName, keyStoreNames));
+        li.appendChild(createKeyField({ keyName, storedNames: keyStoreNames, bridge }));
       }
       const note = document.createElement('p');
       note.className = 'setup-row-note';
@@ -111,67 +114,6 @@ export function mountSetupScreen(root, opts) {
     }
 
     return li;
-  }
-
-  function keyField(keyName, keyStoreNames) {
-    const wrap = document.createElement('div');
-    wrap.className = 'setup-field';
-
-    const label = document.createElement('label');
-    label.className = 'setup-field-label';
-    label.textContent = keyName;
-    const inputId = `setup-key-${keyName}`;
-    label.setAttribute('for', inputId);
-
-    const input = document.createElement('input');
-    // type=password so a shoulder/screen-share does not read the key, and
-    // autocomplete off so the browser never offers to remember it.
-    input.type = 'password';
-    input.id = inputId;
-    input.className = 'setup-field-input';
-    input.autocomplete = 'off';
-    input.spellcheck = false;
-    input.placeholder = keyStoreNames.includes(keyName) ? 'already stored — enter to replace' : 'paste the key';
-
-    const save = document.createElement('button');
-    save.type = 'button';
-    save.className = 'setup-field-save';
-    save.textContent = 'Save';
-
-    const status = document.createElement('p');
-    status.className = 'setup-field-status';
-    status.setAttribute('role', 'status');
-
-    save.addEventListener('click', async () => {
-      const check = validateKeyValue(keyName, input.value);
-      if (!check.ok) {
-        status.textContent = check.error;
-        status.classList.add('is-error');
-        return;
-      }
-      status.classList.remove('is-error');
-      status.textContent = 'Storing…';
-      save.disabled = true;
-      let result = null;
-      let thrown = '';
-      try {
-        result = await bridge.setKey(keyName, input.value);
-      } catch (err) {
-        thrown = (err && err.message) || 'the key store refused the request';
-      }
-      // Clear the field whatever happened. A stored key must not sit in the DOM
-      // waiting for the next screen-share, and a refused one is usually a typo
-      // worth retyping rather than editing.
-      input.value = '';
-      save.disabled = false;
-      const outcome = interpretStoreResult(result, thrown);
-      status.textContent = outcome.message;
-      status.classList.toggle('is-error', !outcome.stored);
-      if (outcome.stored) wrap.classList.add('is-stored');
-    });
-
-    wrap.append(label, input, save, status);
-    return wrap;
   }
 
   function paint(need) {
@@ -254,20 +196,90 @@ export function mountSetupScreen(root, opts) {
     else dismiss.focus();
   }
 
+  async function probePin() {
+    try {
+      const res = await doFetch('/api/pin/status', { headers: { Accept: 'application/json' } });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // MAX_PROBES exists because of the real first-run failure: in the packaged
+  // .exe the BrowserWindow loads before the fork()ed server child is listening,
+  // so the single boot-time probe returned null, deriveSetupNeed said
+  // 'indeterminate' — correctly, it knew nothing — and the screen was never
+  // shown again. A fresh install therefore never asked for a key. Retrying only
+  // the indeterminate case keeps the honesty rule (never paint on a guess) while
+  // removing the race: an answer that arrives four seconds late still counts.
+  const MAX_PROBES = 12;
+
+  async function resolveNeed() {
+    for (let attempt = 1; attempt <= MAX_PROBES; attempt += 1) {
+      const status = await probe();
+      if (disposed) return null;
+      const need = deriveSetupNeed({ status });
+      if (!shouldRetryProbe(need.reason, attempt, MAX_PROBES)) {
+        return { need, status };
+      }
+      await sleep(retryDelayMs(attempt));
+      if (disposed) return null;
+    }
+    return null;
+  }
+
+  let wizard = null;
+
+  function openWizard(statusBody, pinStatus) {
+    if (wizard) wizard.dispose();
+    wizard = mountFirstRunWizard(root, {
+      status: statusBody,
+      pinStatus,
+      fetchImpl: doFetch,
+      bridge,
+      onClose() { wizard = null; },
+    });
+  }
+
   (async () => {
-    const status = await probe();
+    const resolved = await resolveNeed();
+    if (!resolved || disposed) return;
+    const { need, status } = resolved;
+    const statusBody = (status && status.body) || {};
+    need.keyStoreNames = Array.isArray(statusBody.keyStoreNames) ? statusBody.keyStoreNames : [];
+
+    const pinStatus = await probePin();
     if (disposed) return;
-    const need = deriveSetupNeed({ status });
-    if (!need.show) return;
-    need.keyStoreNames = (status && status.body && Array.isArray(status.body.keyStoreNames))
-      ? status.body.keyStoreNames
-      : [];
-    paint(need);
+
+    const screen = chooseSetupScreen({
+      need,
+      keyStoreNames: need.keyStoreNames,
+      pinConfigured: Boolean(pinStatus && pinStatus.configured),
+    });
+
+    if (screen === 'wizard') openWizard(statusBody, pinStatus);
+    else if (screen === 'gaps') paint(need);
   })();
 
   return {
+    // open() — the manual entry point (the key button in the compose bar). The
+    // wizard is not only for a fresh machine: "add the provider I just signed up
+    // for" is the same flow, and the gap screen could never serve it because it
+    // showed inputs for required gaps only.
+    async open() {
+      if (disposed) return;
+      teardown();
+      const status = await probe();
+      const pinStatus = await probePin();
+      if (disposed) return;
+      openWizard((status && status.body) || {}, pinStatus);
+    },
     dispose() {
       disposed = true;
+      if (wizard) { wizard.dispose(); wizard = null; }
       teardown();
     },
   };

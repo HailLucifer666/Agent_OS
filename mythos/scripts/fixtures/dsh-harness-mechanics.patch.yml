@@ -1,0 +1,145 @@
+# W6 step 1 — HARNESS-MECHANICS overlay. Added 2026-08-21.
+#
+# READ THIS BEFORE QUOTING ANY NUMBER PRODUCED WITH IT.
+#
+# This overlay does NOT measure DeepSeek, and a run using it must never be
+# entered in W6.14's engine-comparison table. It routes dsh at whatever provider
+# this machine can actually reach, for one purpose: to answer the questions that
+# are about dsh's MACHINERY rather than about model quality —
+#
+#   * does `dsh --profile headless` boot, run a turn, and exit 0 at all?
+#   * does it obey MYTHOS's OUTPUT_CONTRACT (reply only, write nothing)?
+#   * on the Forge write path, does it write files where told?
+#   * does it STALL on an approval it cannot answer (W6.11 risk 2)?
+#   * does anything land outside the workspace root?
+#
+# Every one of those is a property of the harness and the profile, not of the
+# model behind it. Build QUALITY is the one question it cannot answer.
+#
+# WHY IT EXISTS. Measured 2026-08-21: the OpenRouter overlay
+# (dsh-openai-compatible.patch.yml) is correct and wires end to end — dsh boots,
+# loads it, selects the route, authenticates — but OpenRouter refuses every
+# request on this account:
+#
+#   404 {"message":"No endpoints available matching your guardrail restrictions
+#        and data policy. Configure: https://openrouter.ai/settings/privacy"}
+#
+# Verified account-wide, not DeepSeek-specific: three DeepSeek routes AND
+# `mistralai/mistral-small-3.2-24b-instruct` return that same message on that
+# key, and `/api/v1/key` reports `is_free_tier: true` with `usage: 0`. It is an
+# account privacy setting plus credits — an operator decision, not a code
+# defect. Until it is taken, or a DEEPSEEK_API_KEY appears, this overlay keeps
+# the harness questions answerable instead of leaving all of step 1 blocked.
+#
+# WHY GROQ AND NOT MISTRAL. The first version of this file routed at Mistral,
+# the provider Hermes already drives here. It failed `PI_AI_ERROR: 422` after
+# authenticating, and a direct probe named the cause exactly:
+#
+#   422 {"detail":[{"type":"union_tag_invalid","loc":["body","messages",0],
+#        "msg":"Input tag 'developer' found using 'role' does not match any of
+#        the expected tags: <Roles.system: ..."}]}
+#
+# So dsh sent the system prompt in a `developer` role, which Mistral rejects
+# outright — and it did so with `compat.supportsDeveloperRole: false` already
+# set. That switch was then tried in BOTH documented positions, route level and
+# model level (the README says compat resolves model → route → catalog →
+# pi-ai's own detection), and **neither suppressed the developer role**: the
+# 422 is identical each time. Either the switch does not reach this path in
+# 0.1.1-rc.2, or dsh emits that message for a reason the switch does not govern.
+# Recorded rather than chased — it is a note for whoever writes the adapter, not
+# a blocker for it, because production will not route through pi-ai at all once
+# DEEPSEEK_API_KEY exists (the base bundle mounts the native DeepSeek adapter).
+#
+# Rather than keep guessing at pi-ai's compat surface for a provider that is
+# also rate-limiting (`429` on 3 of 4 calls), this routes at Groq, whose
+# OpenAI-compatible endpoint accepts the `developer` role. Measured on this
+# machine the same day, with a real tool-call request:
+#
+#   groq openai/gpt-oss-20b              200  TOOL CALL OK
+#   mistral max_tokens                   200  TOOL CALL OK   (plain shape)
+#   mistral developer-role               422  union_tag_invalid
+#   groq llama-3.1-8b-instant            404  model_not_found
+#   cerebras (3 ids tried)               404  model_not_found
+#
+# Tool calling is the part that matters: dsh's Forge path writes files through
+# tools, so a provider that answers plain chat but refuses a tools array cannot
+# exercise the write path at all.
+#
+# GROQ'S FREE TIER IS TOO SMALL, and the number is worth keeping. Running this
+# overlay produced, identically on all 12 attempts:
+#
+#   413 {"message":"Request too large for model `openai/gpt-oss-20b` ... service
+#        tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested
+#        10808 ...","code":"rate_limit_exceeded"}
+#
+# **dsh's request is ~10,700–10,820 tokens before the task text** — measured
+# nine times on the single-artifact prompts and three on the Forge prompt, with
+# a spread of ~120 tokens, so that is its fixed system-prompt-plus-tools
+# overhead rather than anything about the task. Two consequences:
+#
+#   * This is a per-REQUEST ceiling, not a pacing problem: no amount of waiting
+#     makes a 10.7k request fit an 8k-per-minute cap. Groq needs its Dev tier.
+#   * It is a real cost input for W6. At `deepseek-v4-pro`'s ~$1.60/M prompt
+#     tokens that is roughly $0.017 of prompt per turn before the task, and a
+#     Forge build is many turns. W6.4's per-call-site model assignment should be
+#     read with that in mind.
+#
+# It also proves one more link in the chain: dsh assembled a complete request —
+# system prompt, tool definitions, task — and shipped it. The failure is the
+# provider's ceiling, not dsh's request building.
+#
+# `apiKeyEnv` is a credential reference resolved per request, so no secret is in
+# this file.
+
+# ---------------------------------------------------------------------------
+# UPDATED 2026-08-21 (third target). The operator added **GLM 5.2 (free)** to
+# their OpenRouter "Allowed Models" list, which changes the picture: OpenRouter's
+# guardrail is a strict ALLOW-list, and being on it is exactly what removes the
+# data-policy 404. Verified by trying five models on one key:
+#
+#   429  z-ai/glm-5.2:free                       ON the allowlist  -> upstream 429
+#   404  nvidia/nemotron-3-ultra-550b-a55b:free  not on it         -> data policy
+#   404  google/gemma-4-31b-it:free              not on it         -> data policy
+#   404  cohere/north-mini-code:free             not on it         -> data policy
+#   404  deepseek/deepseek-v4-flash              not on it         -> data policy
+#
+# So `z-ai/glm-5.2:free` is REACHABLE (256k context, advertises `tools`), and the
+# remaining obstacle is upstream free-pool congestion rather than permission:
+# six manual attempts over ~2.5 minutes were all
+# `429 z-ai/glm-5.2:free is temporarily rate-limited upstream`. dsh's own
+# retryPolicy gets a longer run at it than a hand loop, which is why maxRetries
+# is raised here.
+#
+# Uses OPENROUTER_API_KEY from the repo-root .env.local. The allowlist is
+# ACCOUNT-level, so the key already stored there reaches GLM too — confirmed
+# separately, so nothing here depends on a temporary key.
+#
+# STILL NOT A DEEPSEEK MEASUREMENT. GLM is not DeepSeek; this answers the harness
+# questions only. There are **14 DeepSeek routes on OpenRouter and 0 with a
+# `:free` variant** (re-verified 2026-08-21), so measuring actual DeepSeek needs
+# a paid route allowlisted plus credit — and it is cheap: at
+# `deepseek/deepseek-v4-flash`'s **$0.080/M** prompt, dsh's measured ~10,760-token
+# request across the spike's 12 turns is about **$0.01** on the prompt side.
+# ---------------------------------------------------------------------------
+
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: z-ai/glm-5.2:free
+
+- id: llm-pi-ai
+  config:
+    providers:
+      openrouter:
+        displayName: OpenRouter GLM (harness mechanics only)
+        apiKeyEnv: OPENROUTER_API_KEY
+        api: openai-completions
+        baseURL: https://openrouter.ai/api/v1
+        models:
+          - id: z-ai/glm-5.2:free
+            contextWindow: 256000
+        retryPolicy:
+          mode: normal
+          # Raised from 3: the blocker is a congested free pool, not a bad
+          # request, and a 429 that clears is worth waiting through.
+          maxRetries: 8

@@ -14,6 +14,7 @@
 // onToolCall() so the leash/dispatch spine stays the single execution surface (AD-1).
 
 const WebSocket = require('ws');
+const { createEchoFilter } = require('./echo-filter');
 
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -42,17 +43,129 @@ const WS_URL = 'wss://generativelanguage.googleapis.com/ws/' +
 // frozen (spine §3) and an unknown setup field risks killing voice outright.
 const REASONING_LABEL_RE = /^[\s>*_#-]*(?:reasoning|thinking|thought|thoughts|chain[\s-]of[\s-]thought|internal(?:\s+monologue)?)[\s*_]*:[\s*_]*/i;
 
+// 2026-08-12: two more leaks reached speech in a single live session, and the
+// logs showed reasoningStripped: 0 on both turns — the label filter above
+// never fires on this shape, because there is no bare "Reasoning:"-style
+// label at all. Both leaks instead open with a third-person narration of the
+// request ("The user is asking..." / "The user asked...") and, in one of
+// them, a labelled correction/plan header before the real reply.
+//
+// The narration lead has no colon to stop at, so it consumes its own whole
+// sentence rather than just a label. Self-Correction:/Correction plan: are
+// colon-terminated labels like the ones above, so — same philosophy as
+// REASONING_LABEL_RE — only the label itself is cut; they are found anywhere
+// in the text (not anchored), matching the label BUG-118/BUG-170 already
+// tolerate appearing after other reasoning content, not only at position 0.
+const NARRATION_LEAD_RE = /^The user (?:is asking|asked)\b[^.?!]*[.?!]\s*/i;
+// Widened 2026-08-14 against real leaked transcripts (BUGS.md — deferred
+// fixtures, 2026-08-12/13 incident session): the model does not always spell
+// this label the same way twice in one turn — "Self-Correction:" the first
+// time, "Self-Correction during reasoning:" the second, in the SAME reply.
+// The literal colon-right-after-the-word version below missed the second
+// spelling entirely, so it kept reaching the operator verbatim. Still a
+// labelled-header match only (bounded by requiring a colon within 60 chars),
+// not a general "contains these words" search.
+const SELF_CORRECTION_RE = /Self-Correction\b[^:\n]{0,60}:\s*/i;
+const CORRECTION_PLAN_RE = /Correction plan:\s*/i;
+// New 2026-08-14, same real-transcript evidence: "Reasoning after tool
+// analysis:" / "Reasoning after tool consideration:" are the SAME class of
+// labelled reasoning header as Self-Correction/Correction plan above — this
+// model just varies the wording per turn. Bounded the same way.
+const REASONING_AFTER_RE = /Reasoning after\b[^:\n]{0,60}:\s*/i;
+// New 2026-08-14: an "Output:" header marking where the model's OWN answer
+// begins is the mirror image of the labels above — everything before it is
+// the model talking to itself, everything after is meant for the operator.
+// Requires a preceding newline (never mid-sentence) specifically so this
+// does not fire on a genuine reply that happens to discuss "output:" as a
+// topic — narrower than the other three labels on purpose, since this one
+// has no colon-adjacent keyword like "Correction"/"Reasoning" to anchor on.
+const OUTPUT_LABEL_RE = /\n[ \t]*Output:\s*/i;
+
+// A plan header is normally followed by its own numbered steps, and a
+// narration lead is often followed by more first-person self-talk before the
+// model finally addresses the operator — neither of which the labels above
+// remove on their own. Peel one leading sentence at a time (a numbered step,
+// or an "I ..." sentence).
+//
+// CRITICAL fix (2026-08-12 review): this used to stop ONLY when it found a
+// sentence addressing the operator ("you") — an unbounded loop with a
+// content-dependent exit. Most genuine replies never say "you" at all, so on
+// real input (a numbered recipe, an opinion with no direct address, a single
+// terse refusal) the loop ran off the end of the string and returned ''. The
+// call sites gate on `if (onTranscript && cleanedText)`, so an empty result
+// meant the reply never reached the operator — worse than the leak this
+// exists to silence.
+//
+// The "you" check is now an OPTIMISATION on top of a hard structural bound,
+// not the thing that makes this safe: this function is guaranteed to never
+// return an empty/whitespace string when given a non-empty one, because it
+// refuses to peel the last sentence remaining — whatever is left, once
+// peeling would leave nothing behind it, is kept as-is. stripReasoningLead's
+// own final check below is the second, independent layer of that guarantee.
+function peelContinuationSentences(text) {
+  let rest = text.replace(/^\s+/, '');
+  for (;;) {
+    const m = /^(\d+\.[^.?!]*[.?!]|I\b[^.?!]*[.?!])\s*/.exec(rest);
+    if (!m) break;
+    const remainder = rest.slice(m[0].length);
+    if (!remainder.trim()) break; // hard bound: never peel the last remaining sentence
+    if (/\byou\b/i.test(m[1])) break; // addresses the operator — treat this as the reply
+    rest = remainder;
+  }
+  return rest;
+}
+
 function stripReasoningLead(text) {
-  if (!text) return { text: text, stripped: false };
-  const out = String(text).replace(REASONING_LABEL_RE, '');
-  return { text: out, stripped: out !== String(text) };
+  if (!text) return text;
+  const str = String(text);
+
+  // Unchanged BUG-170 behaviour: a bare label at the very start. Strips only
+  // the label — the content behind it is trusted as-is, never peeled further.
+  const labelStripped = str.replace(REASONING_LABEL_RE, '');
+  let candidate = labelStripped;
+
+  if (labelStripped === str) {
+    // No bare label — find the LAST of the 2026-08-12/2026-08-14 markers and
+    // cut everything up to it, then peel any leading plan steps/self-talk
+    // that still haven't addressed the operator.
+    //
+    // "LAST" means the last OCCURRENCE across the whole string, not just the
+    // last of the four regex TYPES — a real leaked turn (BUGS.md's
+    // 2026-08-12/13 fixtures) repeated the Self-Correction header twice with
+    // different wording in the same reply, and a non-global .exec() only
+    // ever finds the FIRST occurrence, leaving the second one — and
+    // everything after it — unstripped. lastMatchEnd scans with a global
+    // flag and keeps the LAST match's end index instead.
+    function lastMatchEnd(source, re) {
+      const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
+      let m, end = -1;
+      while ((m = g.exec(source))) { end = m.index + m[0].length; if (m[0].length === 0) g.lastIndex++; }
+      return end;
+    }
+    let lastEnd = -1;
+    const narrationMatch = NARRATION_LEAD_RE.exec(str);
+    if (narrationMatch) lastEnd = Math.max(lastEnd, narrationMatch[0].length);
+    lastEnd = Math.max(lastEnd, lastMatchEnd(str, SELF_CORRECTION_RE));
+    lastEnd = Math.max(lastEnd, lastMatchEnd(str, CORRECTION_PLAN_RE));
+    lastEnd = Math.max(lastEnd, lastMatchEnd(str, REASONING_AFTER_RE));
+    lastEnd = Math.max(lastEnd, lastMatchEnd(str, OUTPUT_LABEL_RE));
+    candidate = lastEnd === -1 ? str : peelContinuationSentences(str.slice(lastEnd));
+  }
+
+  // CRITICAL fix (2026-08-12 review), second and independent layer of the
+  // same invariant: even a single marker that happens to consume the WHOLE
+  // string (e.g. the text is nothing but "Correction plan:") would otherwise
+  // return ''. A false positive that eats the entire reply is worse than the
+  // leak it was trying to silence, so fall back to the untouched original
+  // rather than hand the caller nothing to speak.
+  return candidate.trim() ? candidate : str;
 }
 
 function createLiveSession(deps) {
   const {
     config, bus, logger, spend, breakers,
     systemInstruction,      // string — full RULES + persona (Phase 6)
-    functionDeclarations,   // [] from live-tools.js (Phase 2)
+    functionDeclarations,   // [] from live-tools.js, or a () => [] rebuilt per open — see currentFunctionDeclarations
     onToolCall,             // async (calls[], {sendToolResponse}) => void  (Phase 3)
     onAudioOut,             // (base64Pcm24k) => void
     onTranscript,           // ({role:'user'|'assistant', text, final}) => void
@@ -72,6 +185,14 @@ function createLiveSession(deps) {
     // it itself (Live just demonstrably didn't), so the caller routes it to
     // the TTS chain.
     onSilentTurn,
+    // Wave 2 (2026-08-13, resume-on-activity watchdog): () => void — fires
+    // alongside the live-turn-no-user-transcript health.anomaly below. Same
+    // reason as onInterrupted above (see its comment): the shared process bus
+    // is not connection-scoped, so a bus.subscribe in server/index.js would
+    // clear EVERY connection's mic-suspend gate on ANY one connection's blind
+    // turn. A direct per-session callback is the established fix for exactly
+    // this shape here, not a connectionId added to the bus payload.
+    onSuspendedTurnAnomaly,
 
     // Test-only seam: the wire protocol is frozen, the transport constructor is
     // not. Defaults to the real 'ws' WebSocket against the real endpoint.
@@ -80,6 +201,9 @@ function createLiveSession(deps) {
 
   const MODEL = config.GEMINI_LIVE_MODEL || 'models/gemini-3.1-flash-live-preview';
   const VOICE = config.GEMINI_LIVE_VOICE || 'Aoede';
+  // Wave 6 — empty/unset means auto-detect (Gemini's own default); see
+  // GEMINI_LIVE_LANGUAGE's schema comment for the caveat this doesn't fix.
+  const LANGUAGE = String(config.GEMINI_LIVE_LANGUAGE || '').trim();
   const IDLE_MS = Number(config.LIVE_IDLE_TIMEOUT_MS) || 120000; // BUG-059: was 45000, see schema.js
   const MAX_MS = Number(config.LIVE_SESSION_MAX_MS) || 10 * 60 * 1000;
   const BREAKER = 'gemini-live';
@@ -112,6 +236,13 @@ function createLiveSession(deps) {
   let userText = '', assistantText = '';
   let closedByUs = false;
   let idleRotationsWithoutSpeech = 0;
+  // Audio captured while the socket is down between rotations — see sendAudio.
+  // 512KB of base64 is roughly 12 seconds of 16kHz mono PCM16, comfortably more
+  // than a reconnect needs and still a hard ceiling if one never completes.
+  const MAX_PENDING_AUDIO_BYTES = Number(config.LIVE_PENDING_AUDIO_BYTES) || 512 * 1024;
+  let pendingAudio = [];
+  let pendingAudioBytes = 0;
+  let pendingAudioDropped = 0;
   // 2026-08-10: which serverContent fields this turn actually carried, by name.
   // The vault says every Live turn since ~08-09 stored an EMPTY user transcript
   // (21 of 21 on 08-10, 144 of 153 on 08-09, 51 of 147 on 08-07) while the reply
@@ -120,6 +251,25 @@ function createLiveSession(deps) {
   // the outside, and this repo has burned three sessions on plausible theories.
   // One log line per turn naming the fields that DID arrive settles it.
   let turnFrameFields = null;   // Set, lazily created
+  // 2026-08-12: how many mic frames WE put on the wire during this turn. scFields
+  // above records what the server sent back; this records what we sent up, and
+  // only the pair is diagnostic. Every turn logged so far carried no
+  // inputTranscription AND systemInitiated:true — which is equally consistent
+  // with "the operator never spoke" and "the operator spoke and no audio left the
+  // browser" (a stuck captureSuspended, a worklet that stopped firing, a mic that
+  // opened on the wrong device). Those need opposite fixes, and this repo has
+  // already spent three sessions on plausible theories about this exact bug.
+  // A count, not the audio: nothing about what was said is recorded here.
+  let turnAudioIn = 0;
+  // 2026-08-10: did WE start this turn? sendText() is how a [SYSTEM] late tool
+  // outcome and a proactive line are injected, and either one makes the model
+  // reply — a complete turn in which the operator never spoke and never should
+  // have been transcribed. Without this, those turns look identical to a turn
+  // where the operator DID speak and the transcript went missing, and the
+  // half-blind check below reported five false alarms in one six-minute
+  // conversation. Each one was then spoken aloud at the operator as a raw event
+  // name, mid-sentence, because unplaybooked anomalies get narrated.
+  let turnSystemInitiated = false;
   // BUG-118 instrumentation. The operator heard MYTHOS speak its own private
   // reasoning as if it were the reply. The suspicion — NOT yet evidence — is
   // that those are modelTurn parts flagged `thought: true`, which this module
@@ -138,6 +288,21 @@ function createLiveSession(deps) {
   // reply make a sound" and "did this reply open with a leaked label".
   let turnAudioParts = 0;
   let turnReasoningStrips = 0;
+  // How many `interrupted` frames Gemini sent during this turn, and when the turn
+  // began. One interrupt arriving with turnComplete is a turn ending; SEVERAL
+  // arriving mid-turn, while audio is still streaming, is every one of them
+  // calling player.flush() in the browser and chopping the reply into words. That
+  // second shape was invisible until 2026-08-19 — see the sc.interrupted branch.
+  let turnInterrupts = 0;
+  let turnStartedAt = 0;
+  // Audio-chunk starvation, per turn — see the inlineData branch. A chunk holds
+  // ~100ms of 24kHz PCM; 250ms is comfortably past "the previous chunk has
+  // finished playing and the room is now silent", without firing on ordinary
+  // jitter.
+  const AUDIO_STARVE_MS = 250;
+  let lastAudioPartAt = 0;
+  let turnAudioStarveEvents = 0;
+  let turnAudioStarveMaxMs = 0;
   let turnPartText = '';
 
   // BUG-170: a strip is never silent. A false positive costs one word and has
@@ -153,13 +318,49 @@ function createLiveSession(deps) {
       spokenAnyway: channel === 'outputTranscription',
     });
     if (bus && typeof bus.emit === 'function') {
-      bus.emit('health.anomaly', { kind: 'live-reasoning-leak', turnId: turnCounter + 1, channel });
+      // B3 (2026-08-14): this fired 24 times that session and produced 24
+      // no-match heal round trips, because it was on the FAULT channel while
+      // being a report that a filter WORKED. The strip is the fix operating, not
+      // a failure — the leak it would have shown the operator never reached them.
+      //
+      // Moved to its own event name rather than deleted: BUG-170's rule is that a
+      // strip is never silent, and it still is not — the logger.warn above is
+      // unchanged, and a subscriber that wants these can name them. What changes
+      // is that the immune system no longer diagnoses, heals, announces and
+      // double-writes an episodic record for a filter doing its job.
+      //
+      // Exact precedent: 'voice.live.idle-closed' was moved off health.anomaly on
+      // 2026-08-10 because the explainer narrated a normal cost-saving socket
+      // close to the operator as a fault with an invented cause. Same shape, same
+      // remedy, same naming. Registered in ALLOWED_EVENTS.
+      //
+      // `spokenAnyway` rides along because it is the one fact that decides whether
+      // a text filter could ever have been enough: for outputTranscription the
+      // audio had already played.
+      bus.emit('voice.live.reasoning-filtered', {
+        turnId: turnCounter + 1, channel, spokenAnyway: channel === 'outputTranscription',
+      });
     }
   }
   // BUG-124: monotonic within this session object, so it survives an
   // idle/session-max rotation (the reconnect reuses this closure) and a
   // misalignment spanning a rotation is still traceable across it.
   let turnCounter = 0;
+
+  // BUG-271: own-voice echo filter (see echo-filter.js for the class of bug
+  // and the accepted cost of quoting MYTHOS back at it within 3s). Tracks
+  // what MYTHOS said via outputTranscription; an inputTranscription that
+  // word-overlaps it (>= 60%, within 3s) is the speakers replaying MYTHOS's
+  // voice into the mic, not the operator — dropped before it can become
+  // userText, fire onTranscript, reset the idle ceiling, or arm the turn
+  // stall. The batch path has had this filter for years (voice-loop.js's
+  // echoMatch); the Live path never got it.
+  const echoFilter = createEchoFilter();
+  // BUG-272 V3: epoch ms of the last assistant audio frame Gemini sent, or 0.
+  // Feeds live.echo-check's msSinceAssistantAudio. Deliberately NOT called
+  // "assistant playing": real playback state lives in the client and this side
+  // of the wire cannot see it.
+  let lastAssistantAudioAt = 0;
 
   function setState(next, reason) {
     if (state === next) return;
@@ -227,7 +428,7 @@ function createLiveSession(deps) {
         // turnCounter increments at turnComplete, so the turn still in flight is
         // the next one — the same id it will be reported under if it ever lands.
         bus.emit('health.anomaly', {
-          kind: 'live-turn-stalled', turnId: turnCounter + 1, waitedMs: TURN_STALL_MS,
+          kind: 'live-turn-stalled', turnId: turnCounter + 1, waitedMs: TURN_STALL_MS, reason: 'No reply of any kind — audio, text or a tool call — arrived within ' + TURN_STALL_MS + 'ms after the operator stopped speaking. The turn was never answered.',  // BUG-324: waitedMs was here and no cause was built from it, so the explainer told the operator "I do not yet know the cause" with the measurement sitting on the event. Says only what was observed (AD-4 — a stall could be client, network or model) and sets no needsOperator, because nobody can make a reply arrive. One line because this file is over the size ratchet's ceiling; mechanism in test/bug-324-anomaly-must-report-a-cause-it-knows.test.js
         });
       }
       logger.warn('live.turn-stalled', { turnId: turnCounter + 1, waitedMs: TURN_STALL_MS });
@@ -255,15 +456,60 @@ function createLiveSession(deps) {
     return typeof systemInstruction === 'function' ? systemInstruction() : systemInstruction;
   }
 
+  // Same treatment for the tool catalog, and for the same reason. The setup
+  // frame's `tools` was built once at construction and then replayed verbatim on
+  // every reconnect, so a session that rotated at the 10-minute ceiling came
+  // back declaring the capabilities the machine had ten minutes ago. That is the
+  // frozen-capability-snapshot shape recorded as BUG-046/136: an adapter that
+  // comes online mid-session (a browser attaching to CDP, pc-child restarting)
+  // stayed invisible to the model until the operator closed and reopened Live
+  // entirely — and server/index.js's own comment at the build site says the
+  // opposite is the intent ("an adapter that comes online later must become
+  // declarable on the next session without a restart").
+  //
+  // Falls back to the last good list rather than to nothing: a builder that
+  // throws mid-reconnect must not silently strip every tool from the session,
+  // which would look to the operator like MYTHOS suddenly losing all its
+  // abilities for no stated reason.
+  let lastDeclarations = Array.isArray(functionDeclarations) ? functionDeclarations : [];
+  function currentFunctionDeclarations() {
+    if (typeof functionDeclarations !== 'function') return functionDeclarations;
+    try {
+      const built = functionDeclarations();
+      if (Array.isArray(built)) lastDeclarations = built;
+      return lastDeclarations;
+    } catch (err) {
+      logger.warn('live.tool-declarations-failed', { error: err.message, kept: lastDeclarations.length });
+      if (bus && typeof bus.emit === 'function') {
+        bus.emit('health.anomaly', {
+          kind: 'live-tool-declarations-failed',
+          target: 'live-session',
+          reason: 'rebuilding the Live tool catalog threw (' + err.message
+            + '), so the previous catalog of ' + lastDeclarations.length + ' tools was reused',
+        });
+      }
+      return lastDeclarations;
+    }
+  }
+
   function buildSetup() {
+    const declarations = currentFunctionDeclarations();
     const setup = {
       model: MODEL,
       generationConfig: {
         responseModalities: ['AUDIO'],
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
+        // Wave 6 (2026-08-13): languageCode is OMITTED unless the operator
+        // pinned one via GEMINI_LIVE_LANGUAGE — unset means auto-detect,
+        // which stays the default. Pinning stops a session drifting into
+        // Korean/Spanish STT mid-conversation; see the schema entry for the
+        // Hindi/Bengali speech-input-only caveat this does not fix.
+        speechConfig: Object.assign(
+          { voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE } } },
+          LANGUAGE ? { languageCode: LANGUAGE } : {},
+        ),
       },
       systemInstruction: { parts: [{ text: currentSystemInstruction() }] },
-      tools: (functionDeclarations && functionDeclarations.length) ? [{ functionDeclarations }] : undefined,
+      tools: (declarations && declarations.length) ? [{ functionDeclarations: declarations }] : undefined,
       // Pinned rather than inherited. `{}` took whatever Google's current
       // defaults happen to be, which means the operator's barge-in behaviour
       // could change under them with no release on this side and nothing to
@@ -274,6 +520,15 @@ function createLiveSession(deps) {
       // end-of-speech silence is deliberately NOT aggressive: a shorter window
       // cuts the operator off mid-sentence at every natural pause, which reads
       // as rudeness rather than as responsiveness.
+      //
+      // BUG-271 (2026-08-17): START_SENSITIVITY_HIGH STAYS even though it is
+      // what let room noise fire the VAD and fabricate phantom transcripts.
+      // Lowering it would trade the phantoms for missed speech onset — the
+      // original "it talks over me" bug — which is the worse failure. The
+      // noise is now handled at the wire instead: s2s-bridge.js zeroes
+      // below-floor frames before they reach this session (live-noise-gate.js),
+      // so HIGH sensitivity keeps seeing real speech and no longer sees the
+      // noise floor.
       realtimeInputConfig: {
         automaticActivityDetection: {
           startOfSpeechSensitivity: 'START_SENSITIVITY_HIGH',
@@ -326,6 +581,9 @@ function createLiveSession(deps) {
           // reconnect via resumeHandle, never dead-end.
           maxTimer = setTimeout(() => close('session-max', { final: false }), MAX_MS);
           if (maxTimer.unref) maxTimer.unref();
+          // After setState('open'), so the frames go out on the live socket
+          // rather than back into the buffer they came from.
+          flushPendingAudio();
           resolve(true);
         }
         handleFrame(msg);
@@ -374,26 +632,95 @@ function createLiveSession(deps) {
       if (!turnFrameFields) turnFrameFields = new Set();
       for (const k in sc) turnFrameFields.add(k);
       if (sc.inputTranscription && sc.inputTranscription.text) {
-        userText += sc.inputTranscription.text;
-        idleRotationsWithoutSpeech = 0; // a real word means the room isn't empty
-        armTurnStall(); // BUG-131 — the operator said something; a reply is now owed
-        if (onTranscript) onTranscript({ role: 'user', text: sc.inputTranscription.text, final: false });
+        // BUG-271: an echo of MYTHOS's own voice behaves as if it never
+        // arrived — no userText, no onTranscript, no idle-ceiling reset, no
+        // turn stall (see echoFilter's declaration above).
+        // BUG-272 V3: the filter fired ZERO times across 72 turns and nothing
+        // could say why — match() collapses every non-match to null, so a
+        // near-miss at 0.59 and "MYTHOS had said nothing at all" produced the
+        // same silence. inspect() returns the whole decision; one echo-check
+        // line per inputTranscription makes the answer readable from the log
+        // instead of inferable a day later.
+        //
+        // Every field is a number, a boolean or a fixed enum. The privacy
+        // invariant (a log line never carries transcript text) is binding and
+        // test-pinned, which is why the proposed inputTranscript /
+        // lastAssistantText fields from the findings document are absent.
+        const echoCheck = echoFilter.inspect(sc.inputTranscription.text);
+        logger.info('live.echo-check', {
+          turnId: turnCounter + 1,
+          ratio: echoCheck.ratio,
+          decision: echoCheck.matched ? 'dropped' : 'accepted',
+          reason: echoCheck.reason,
+          candidateWords: echoCheck.candidateWords,
+          referenceWords: echoCheck.referenceWords,
+          referenceCount: echoCheck.referenceCount,
+          msSinceSpoken: echoCheck.msSinceSpoken,
+          msSinceAssistantAudio: lastAssistantAudioAt ? Date.now() - lastAssistantAudioAt : null,
+        });
+        const echoRatio = echoCheck.matched ? echoCheck.ratio : null;
+        if (echoRatio !== null) {
+          // The ratio only, never the text — transcripts are operator
+          // speech, the log is not. Kept alongside echo-check because
+          // BUG-271's tests pin this line and a drop must stay loud on its own.
+          logger.info('live.echo-dropped', { turnId: turnCounter + 1, ratio: echoRatio });
+        } else {
+          userText += sc.inputTranscription.text;
+          idleRotationsWithoutSpeech = 0; // a real word means the room isn't empty
+          armTurnStall(); // BUG-131 — the operator said something; a reply is now owed
+          if (onTranscript) onTranscript({ role: 'user', text: sc.inputTranscription.text, final: false });
+        }
       }
       if (sc.outputTranscription && sc.outputTranscription.text) {
         disarmTurnStall(); // BUG-131 — it IS answering
+        // BUG-271: track the RAW text — the echo is acoustic, and the audio
+        // that played is the unstripped speech.
+        echoFilter.noteSpoken(sc.outputTranscription.text);
         // BUG-170: strip a leaked reasoning label only while this turn's reply
         // is still empty — see stripReasoningLead's note above.
-        const cleaned = assistantText ? { text: sc.outputTranscription.text, stripped: false }
-                                      : stripReasoningLead(sc.outputTranscription.text);
-        if (cleaned.stripped) noteReasoningStripped('outputTranscription', sc.outputTranscription.text);
-        assistantText += cleaned.text;
-        if (onTranscript && cleaned.text) onTranscript({ role: 'assistant', text: cleaned.text, final: false });
+        const rawOutputText = sc.outputTranscription.text;
+        const cleanedText = assistantText ? rawOutputText : stripReasoningLead(rawOutputText);
+        if (!assistantText && cleanedText !== rawOutputText) noteReasoningStripped('outputTranscription', rawOutputText);
+        assistantText += cleanedText;
+        if (onTranscript && cleanedText) onTranscript({ role: 'assistant', text: cleanedText, final: false });
       }
       const parts = (sc.modelTurn && sc.modelTurn.parts) || [];
       if (parts.length) disarmTurnStall(); // BUG-131 — audio or text is coming back
       for (const p of parts) {
         if (p.inlineData && p.inlineData.data) {
           turnAudioParts += 1; // BUG-170 — counted whether or not a sink is wired
+          // 2026-08-19 — ARRIVAL TIMING, because the operator reports the reply
+          // coming out one word at a time with ~800ms of silence between words,
+          // and nothing on either side of the wire could say why.
+          //
+          // pcm-player.js schedules chunks gaplessly (startAt = max(now+0.04,
+          // nextAt)), so a silent gap in playback has exactly two possible causes:
+          // the chunk ARRIVED after the previous one had finished playing, or it
+          // arrived on time and something DROPPED it. Those need opposite fixes —
+          // one is upstream/transport, the other is the client's flush path — and
+          // guessing between them is what two sessions already did.
+          //
+          // A chunk carries ~100ms of 24kHz PCM, so consecutive chunks should land
+          // well under 100ms apart while the model is streaming. Anything past
+          // STARVE_MS means playback had already run dry before this chunk landed,
+          // i.e. the room heard a gap that no drop can explain.
+          const nowMs = Date.now();
+          if (lastAudioPartAt) {
+            const sinceLast = nowMs - lastAudioPartAt;
+            if (sinceLast > AUDIO_STARVE_MS) {
+              turnAudioStarveEvents += 1;
+              if (sinceLast > turnAudioStarveMaxMs) turnAudioStarveMaxMs = sinceLast;
+            }
+          }
+          lastAudioPartAt = nowMs;
+          // BUG-272 V3: when Gemini last handed us assistant audio. This is the
+          // closest thing to "is MYTHOS speaking right now" that exists on this
+          // side of the wire — actual playback state lives in the client
+          // (s2s-bridge's player.isSpeaking()) and is NOT visible here. Named
+          // for what it measures rather than what we wish it measured: a field
+          // called assistantAudioPlaying would be a guess presented as fact, and
+          // this bug has already cost two sessions to confident wrong theories.
+          lastAssistantAudioAt = Date.now();
           if (onAudioOut) onAudioOut(p.inlineData.data);
         }
         // BUG-118: a part the model marks as its own thinking is not the reply.
@@ -408,24 +735,54 @@ function createLiveSession(deps) {
           // BUG-170: the same start-of-turn strip as outputTranscription
           // above. assistantText is the position marker for both paths, so a
           // label arriving on either one is caught exactly once.
-          const cleanedPart = assistantText ? { text: p.text, stripped: false }
-                                            : stripReasoningLead(p.text);
-          if (cleanedPart.stripped) noteReasoningStripped('modelTurn.part', p.text);
+          const cleanedPart = assistantText ? p.text : stripReasoningLead(p.text);
+          if (!assistantText && cleanedPart !== p.text) noteReasoningStripped('modelTurn.part', p.text);
           // Kept separately from assistantText (which only outputTranscription
           // feeds) so the silent-turn check below knows whether the operator
           // was SHOWN a reply, regardless of which channel carried it.
-          turnPartText += cleanedPart.text;
-          if (onTranscript && cleanedPart.text) {
-            onTranscript({ role: 'assistant', text: cleanedPart.text, final: false });
+          turnPartText += cleanedPart;
+          if (onTranscript && cleanedPart) {
+            onTranscript({ role: 'assistant', text: cleanedPart, final: false });
           }
         }
       }
       if (sc.interrupted) {
+        turnInterrupts += 1;
+        // LOGGED, as of 2026-08-19, because it was not — and that cost a whole
+        // commit's reasoning. `voice.live.interrupted` is a BUS event name and no
+        // logger has ever written it, so
+        //   grep -c '"msg":"voice.live.interrupted"' mythos-server.log
+        // returns 0 against every log this project has ever produced, whatever
+        // actually happened. BUG-274 step 4 read that 0 as "Gemini's VAD never
+        // fired once, so no turn was ever cut", and built its fix on it. The same
+        // log's own scFields contained `interrupted` on 129 turns.
+        //
+        // This is the ONLY mechanism that can stop the model mid-turn, and it is
+        // also what makes the client call player.flush(). An unlogged count of it
+        // is the difference between diagnosing chopped speech and guessing at it.
+        // Second occurrence of this exact class — see the note on
+        // verify-voice-session.js counting a bus-event name that is never logged.
+        logger.info('live.interrupted', {
+          turnId: turnCounter,
+          interruptsThisTurn: turnInterrupts,
+          // Which other fields rode the same frame. `interrupted` alongside
+          // turnComplete is Gemini closing a turn it considers interrupted;
+          // `interrupted` with modelTurn and no turnComplete is a cut landing
+          // WHILE audio is still streaming, which is the shape that chops a word
+          // in half. Those are different faults and the frame tells them apart.
+          withFields: Object.keys(sc).sort().join(','),
+          audioPartsSoFar: turnAudioParts,
+          msSinceTurnStart: turnStartedAt ? Date.now() - turnStartedAt : null,
+        });
         if (onInterrupted) onInterrupted();
         if (bus && typeof bus.emit === 'function') bus.emit('voice.live.interrupted', {});
       }
       if (sc.turnComplete) {
         disarmTurnStall(); // BUG-131 — the turn landed, stalled or not
+        // BUG-271: the utterance ended, but it stays an echo reference for
+        // the rest of its 3s window — speaker bleed arrives after the speech
+        // finishes (the batch path's post-playback ECHO_GUARD_MS).
+        echoFilter.endUtterance();
         if (breakers && typeof breakers.success === 'function') breakers.success(BREAKER);
         // BUG-124: a monotonic per-session turn number, attached to the turn and
         // to every anomaly this module raises about it. The reported symptom is
@@ -442,6 +799,10 @@ function createLiveSession(deps) {
           userText: userText.trim(), assistantText: assistantText.trim(), turnId: turnCounter,
         };
         userText = ''; assistantText = '';
+        // Snapshot before the reset below — Wave 0 (2026-08-13) needs these on
+        // the health.anomaly emit further down, not just the log line here.
+        const scFieldsSnapshot = turnFrameFields ? Array.from(turnFrameFields).sort().join(',') : '';
+        const audioInSnapshot = turnAudioIn;
         // BUG-118 instrumentation — see the counter declarations above. Logged
         // for every turn (one small line) because the interesting case is the
         // NEGATIVE one: a reasoning leak with thoughtParts:0 rules the text
@@ -452,7 +813,30 @@ function createLiveSession(deps) {
           // 2026-08-10 — see turnFrameFields. `inputTranscription` missing from
           // this list on a turn the operator demonstrably spoke in is the whole
           // answer to the empty-user-text question.
-          scFields: turnFrameFields ? Array.from(turnFrameFields).sort().join(',') : '',
+          scFields: scFieldsSnapshot,
+          // audioIn:0 on a turn the operator spoke in means the browser never sent
+          // the mic — look at s2s-bridge.js (captureSuspended, the worklet, the
+          // device). A healthy count with no inputTranscription in scFields means
+          // the audio went up and came back untranscribed — look upstream.
+          audioIn: audioInSnapshot,
+          // How many times Gemini cut THIS turn. Anything above 1 on a turn that
+          // produced audio means the browser flushed the player mid-reply that
+          // many times, which is exactly what "it says one word, pauses, says the
+          // next word" sounds like from the room. Previously uncountable: see the
+          // sc.interrupted branch above for why the old grep always returned 0.
+          interrupts: turnInterrupts,
+          // The two numbers that decide WHERE the word-by-word stutter comes from.
+          // audioStarveEvents > 0 means the audio arrived too slowly and the room
+          // heard a gap the client could not have prevented. audioStarveEvents === 0
+          // on a turn the operator heard stutter means the audio arrived on time and
+          // something in the browser dropped or flushed it. Opposite fixes.
+          audioStarveEvents: turnAudioStarveEvents,
+          audioStarveMaxMs: turnAudioStarveMaxMs,
+          // Whether WE provoked this turn — the difference between "the operator
+          // spoke and we did not hear it" and "nobody spoke". Logged because
+          // reading the first as the second is what produced five false anomalies
+          // on 2026-08-10; next time the log says which kind a turn was.
+          systemInitiated: turnSystemInitiated,
         });
         turnFrameFields = null;
         // 2026-08-10: a completed turn is proof the room is not empty, whether or
@@ -472,22 +856,58 @@ function createLiveSession(deps) {
         const shownText = (turn.assistantText || turnPartText).trim();
         const wasSilent = !!shownText && turnAudioParts === 0;
         turnTextParts = 0; turnThoughtParts = 0; turnAudioParts = 0;
-        turnReasoningStrips = 0; turnPartText = '';
+        turnReasoningStrips = 0; turnPartText = ''; turnAudioIn = 0;
+        turnInterrupts = 0; turnStartedAt = Date.now();
+        turnAudioStarveEvents = 0; turnAudioStarveMaxMs = 0; lastAudioPartAt = 0;
         if (!turn.userText && !turn.assistantText && bus && typeof bus.emit === 'function') {
           // AD-6: a completed turn with no transcript means the entity went blind.
           bus.emit('health.anomaly', { kind: 'live-turn-no-transcript', turnId: turnCounter });
-        } else if (!turn.userText && turn.assistantText && bus && typeof bus.emit === 'function') {
+        } else if (!turn.userText && turn.assistantText && !turnSystemInitiated
+                   && bus && typeof bus.emit === 'function') {
           // 2026-08-10: half-blind, and it was silent until now. The check above
           // only fires when BOTH sides are empty, so a turn that answered the
           // operator while recording nothing they said passed as healthy — and
           // that is precisely the shape the vault is full of. It is not cosmetic:
           // this text is what episodic memory stores as the operator's words, so
           // every one of these is a hole in what MYTHOS can later recall.
+          //
+          // ...but ONLY when the operator was expected to have spoken. Later the
+          // same day this fired 5 times in one six-minute conversation, every one
+          // of them a turn WE provoked (the proactive greeting, and replies to
+          // [SYSTEM] late tool outcomes) — turns 1, 3, 8, 13 and 15, exactly the
+          // turns whose scFields carried no inputTranscription because there was
+          // no operator utterance to transcribe. A monitor that cries wolf on a
+          // third of its samples trains everyone to ignore it, and this one is
+          // also SPOKEN ALOUD when unplaybooked, so it interrupted the very
+          // conversation it was misreporting. turnSystemInitiated is the guard;
+          // a genuinely unheard operator still fires.
+          // Wave 0 (2026-08-13): carry audioIn + scFields so one anomaly record
+          // is a complete diagnosis instead of a bare kind — audioIn:0 means the
+          // client mic gate never sent frames (candidate 1: over-eager
+          // suspendForMedia); audioIn>0 with no inputTranscription in scFields
+          // means Gemini dropped it server-side (candidate 2, vendor-side, no
+          // code fix available). Without both fields every prior incident here
+          // needed a manual vault dig to tell the two apart.
           bus.emit('health.anomaly', {
             kind: 'live-turn-no-user-transcript', turnId: turnCounter,
             reason: 'the reply was transcribed but the operator\'s speech was not',
+            audioIn: audioInSnapshot,
+            scFields: scFieldsSnapshot,
           });
+          // Wave 2 (resume-on-activity watchdog): candidate 1 is a mic gate
+          // (s2s-bridge.js's captureSuspended) that outlived the media/TTS
+          // burst it was meant to cover. The client, not us, knows whether it
+          // is actually suspended right now — this just tells it to check and
+          // clear early if so, tightening the existing 30s fail-open ceiling
+          // reactively instead of waiting it out. A no-op signal on a client
+          // that was never suspended (candidate 2 — Gemini dropped it
+          // server-side; no code fix available for that half).
+          if (typeof onSuspendedTurnAnomaly === 'function') {
+            try { onSuspendedTurnAnomaly(); } catch (_) { /* best-effort */ }
+          }
         }
+        // Consumed: the next turn is operator-initiated until sendText says otherwise.
+        turnSystemInitiated = false;
         if (wasSilent) {
           logger.warn('live.turn-silent', { turnId: turnCounter, chars: shownText.length });
           if (bus && typeof bus.emit === 'function') {
@@ -547,9 +967,67 @@ function createLiveSession(deps) {
   }
 
   function sendAudio(base64Pcm16k) {
+    // ROTATION IS NOT A REASON TO DROP SPEECH.
+    //
+    // This used to be a bare `if (state !== 'open') return false`, and the
+    // session rotates on purpose: MAX_MS fires at the ~10-minute connection
+    // ceiling, idle timeouts fire, and goAway arrives from Google. Each one
+    // takes the socket down, reconnects, and waits for setupComplete — and for
+    // that entire window every frame the operator spoke was discarded, with
+    // nothing recording that it had happened. The client keeps streaming
+    // throughout (s2s-bridge.js has no idea a rotation is underway), so the
+    // symptom is a sentence that is simply missing from the conversation, at a
+    // moment determined by a ten-minute timer rather than by anything the
+    // operator did.
+    //
+    // Buffered instead, and flushed in order once the new session is up.
+    // Bounded by bytes, because a reconnect that never succeeds must not grow
+    // this forever — and the overflow drops the OLDEST frames, since if the
+    // reconnect is taking that long the newest audio is the part still worth
+    // hearing. Anything dropped is counted and reported, never silent.
+    if (state === 'reconnecting' || state === 'opening') {
+      pendingAudio.push(base64Pcm16k);
+      pendingAudioBytes += base64Pcm16k.length;
+      while (pendingAudioBytes > MAX_PENDING_AUDIO_BYTES && pendingAudio.length > 1) {
+        pendingAudioBytes -= pendingAudio.shift().length;
+        pendingAudioDropped += 1;
+      }
+      return true;   // accepted, not sent — the caller's alternative is to lose it
+    }
     if (state !== 'open') return false;
+    // See turnAudioIn's declaration: the missing half of the empty-operator-
+    // transcript question. scFields already says whether inputTranscription
+    // arrived; this says whether we ever gave the model anything to transcribe.
+    turnAudioIn += 1;
     armIdle();
     return sendRaw({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: base64Pcm16k } } });
+  }
+
+  // Called once the reconnected session reports setupComplete. Order is
+  // preserved: these frames are the operator's speech and arrived in this order.
+  function flushPendingAudio() {
+    if (!pendingAudio.length && !pendingAudioDropped) return;
+    const frames = pendingAudio;
+    const dropped = pendingAudioDropped;
+    pendingAudio = [];
+    pendingAudioBytes = 0;
+    pendingAudioDropped = 0;
+    for (const frame of frames) {
+      turnAudioIn += 1;
+      if (!sendRaw({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: frame } } })) break;
+    }
+    logger.info('live.audio-flushed', { frames: frames.length, dropped });
+    // Only an actual loss is a health event. A clean flush is normal operation
+    // and must not add noise to the anomaly channel that the healer reads.
+    if (dropped && bus && typeof bus.emit === 'function') {
+      bus.emit('health.anomaly', {
+        kind: 'live-audio-dropped-across-rotation',
+        target: 'live-session',
+        reason: dropped + ' audio frames were dropped while the Live session reconnected, '
+          + 'because the buffer bound was reached before the new session came up — '
+          + 'the operator may have said something that never arrived',
+      });
+    }
   }
 
   // Screen-share video input (Electron Slice 3, spine §13). One JPEG frame per
@@ -626,8 +1104,44 @@ function createLiveSession(deps) {
 
   // Text injection on the realtimeInput channel (NOT clientContent — that breaks VAD
   // mid-conversation per Google's guidance). Used for the post-confirm follow-up.
-  function sendText(text) {
+  // BUG-273 D3 — THIS is the only way text enters a Live session, and until now it
+  // recorded nothing about who sent it or why.
+  //
+  // MEASURED (mythos-server.log, the 2026-08-18 "rambling on by yourself" session):
+  // 26 of 61 turns carried systemInitiated:true, 8 of them with no tool call
+  // anywhere between them and the previous turn — and the log could not say what
+  // started a single one. There are thirteen call sites across live-tool-adapter.js
+  // and server/index.js (late outcomes, confirm resolutions, AD-4 corrections,
+  // proactive speech, the boot greeting, and the operator TYPING into the HUD).
+  //
+  // AND ONE OF THEM IS NOT US AT ALL. The HUD text box routes the operator's typed
+  // words through this same function, so every typed message was being marked
+  // system-initiated. That is not cosmetic: turnSystemInitiated is the guard on the
+  // half-blind-transcript anomaly, so a turn where the operator typed — or spoke and
+  // was not heard — could be silently exempted from the very check that exists to
+  // catch it. `meta.operator` separates the two; the default stays "ours", because
+  // an unlabelled caller in this file is pipeline code by construction.
+  //
+  // Q2: the text itself is NOT logged. These strings carry tool results, message
+  // bodies and whatever the operator typed. A site and a length attribute a turn;
+  // the content already lives in the audit vault under its own rules.
+  function sendText(text, meta) {
     if (state !== 'open') return false;
+    const m = meta || {};
+    const fromOperator = m.operator === true;
+    // Mark the turn this provokes as ours, so the half-blind transcript check
+    // does not accuse the operator of having spoken unheard (see
+    // turnSystemInitiated's declaration). Set before the send, not after: the
+    // reply can begin arriving synchronously on a fake socket in tests.
+    if (!fromOperator) turnSystemInitiated = true;
+    logger.info('live.text-injected', {
+      site: m.site || 'unattributed',
+      operator: fromOperator,
+      tool: m.tool || null,
+      claim: m.claim || null,
+      chars: String(text).length,
+      turnId: turnCounter,
+    });
     return sendRaw({ realtimeInput: { text: String(text) } });
   }
 
@@ -644,6 +1158,12 @@ function createLiveSession(deps) {
   // sees !closedByUs && resumeHandle and reconnects on its own.
   function close(reason, { final = true } = {}) {
     if (final) closedByUs = true;
+    // A FINAL close ends the conversation, so anything still buffered is speech
+    // the operator aimed at a session that no longer exists. Replaying it into
+    // whatever session opens next — minutes or hours later — would put a
+    // stranded sentence at the start of an unrelated conversation. Dropped here
+    // deliberately; the non-final (rotation) path is the one that keeps it.
+    if (final) { pendingAudio = []; pendingAudioBytes = 0; pendingAudioDropped = 0; }
     if (idleTimer) clearTimeout(idleTimer);
     if (maxTimer) clearTimeout(maxTimer);
     // BUG-131: a closed session owes no reply, so a pending stall timer would

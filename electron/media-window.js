@@ -32,10 +32,19 @@
 const MEDIA_WIDGET_TYPES = new Set(['youtube', 'web']);
 
 // A ui.open-web payload carries either `embedUrl` (youtube/web) or `url`
-// (newtab/news — deliberately NOT promoted; those already mean "open outside
-// MYTHOS", and newtab already opens the operator's own external browser via
-// window.open, per app.js). Returns null when this payload isn't one Electron
-// should turn into a real window.
+// (newtab/news — deliberately NOT promoted; those mean "open outside MYTHOS").
+//
+// CORRECTED 2026-08-18 (BUG-272 T2): this comment used to justify the exclusion
+// with "newtab already opens the operator's own external browser via window.open,
+// per app.js". That was FALSE under the Electron shell — app.js's window.open is
+// denied unconditionally by setWindowOpenHandler in main.js (a deliberate
+// 2026-07-31 fix), so newtab had NO working surface anywhere and
+// open_web(browser:true) failed seven consecutive times while reporting success.
+// The exclusion itself is still right: a real browser hand-off is not a media
+// window's job. It now goes through the mythos:open-external channel →
+// shell.openExternal instead, which is where that responsibility belongs.
+//
+// Returns null when this payload isn't one Electron should turn into a real window.
 //
 // BUG-166 (mediaBaseUrl): a YouTube EMBED URL must never be loaded as this
 // window's top-level document — a top-level embed carries no referer and

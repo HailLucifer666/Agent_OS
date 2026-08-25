@@ -6,6 +6,8 @@
 // feature: new page/build/create → full P22 gate (research → build → visual → review)
 // architecture-change: refactor/redesign/migrate → full gate + ADR
 
+var keywordMatch = require('./keyword-match');
+
 var KEYWORDS = {
   'tiny-fix': ['typo', 'rename', 'fix spelling', 'fix a bug', 'small fix', 'quick fix', 'cosmetic', 'text change', 'color change'],
   'architecture-change': ['refactor', 'architect', 'redesign', 'migrate', 'rewrite', 'restructure', 'overhaul', 're-architect'],
@@ -16,33 +18,49 @@ var KEYWORDS = {
 // Gate path definitions — what phases are required for each risk class
 var GATE_PATHS = {
   'tiny-fix': ['artifact'],
-  'quick-win': ['artifact', 'verify'],
+  // 2026-08-22, BUG-304: 'verify' REMOVED, on the same precedent as 'adr' below
+  // and for a stronger version of the same reason. 'adr' at least named a
+  // document someone might one day produce; 'verify' appeared in exactly two
+  // places in the whole of src/ — this table, demanding it, and
+  // evidence-validator.js's header comment, listing it. No code produced it and
+  // no code checked it, so quick-win advertised a two-phase gate and ran a
+  // one-phase one. The validator now throws on a phase it cannot check, so
+  // re-adding this name without its check is no longer possible quietly.
+  'quick-win': ['artifact'],
   'feature': ['research', 'artifact', 'visual', 'review'],
-  'architecture-change': ['research', 'adr', 'artifact', 'visual', 'review'],
+  // 2026-08-20: 'adr' REMOVED from architecture-change. It is deliberately not
+  // required: no ADR generator exists in this repo, so gating on an artifact
+  // nothing produces is a deadlock, not a stricter gate. Re-add to gatePath()
+  // in the same commit that adds a producer — and add the matching check in
+  // evidence-validator.js, which is where the phase was declared-but-unenforced
+  // for as long as it sat here. test/evidence-gate-visual-and-adr.test.js fails
+  // if 'adr' reappears in any gate path.
+  'architecture-change': ['research', 'artifact', 'visual', 'review'],
 };
 
+// Checked in order of specificity, most specific first. architecture-change
+// before feature so a "redesign" is not merely a "design"; tiny-fix before
+// feature so genuine low-risk work is not over-gated.
+var ORDER = ['architecture-change', 'tiny-fix', 'feature', 'quick-win'];
+
+// BUG-309: this used String.indexOf, with no word boundary. A spec saying
+// "base 16px typography using Geist font pairing" therefore matched the
+// tiny-fix keyword 'typo', and a from-scratch landing-page build was gated as
+// a typo fix — gatePath() collapsed to ['artifact'], so research, review and
+// the visual gate were all skipped and the resolved design system was thrown
+// away. Measured on the shipped card pipe-1787402245811-455.json, risk
+// "tiny-fix", against two near-identical earlier cards that read "feature".
+//
+// indexOf was ALSO too tight in the other direction, which the regression test
+// for this found: 'migrate' never matched "migrating" or "migration", so
+// architecture-change missed its own most common phrasing. keyword-match.js
+// fixes both directions at once — see its header for why a plain \bword\b
+// would have broken "adding" / "updated" / "renamed".
 function classify(text) {
   if (!text) return 'feature';
-  var lower = String(text).toLowerCase();
-
-  // Check in order of specificity (most specific first)
-  // architecture-change: check before feature because "redesign" could contain "design"
-  for (var i = 0; i < KEYWORDS['architecture-change'].length; i++) {
-    if (lower.indexOf(KEYWORDS['architecture-change'][i]) !== -1) return 'architecture-change';
+  for (var i = 0; i < ORDER.length; i++) {
+    if (keywordMatch.matchesAny(text, KEYWORDS[ORDER[i]])) return ORDER[i];
   }
-  // tiny-fix: highest priority for low-risk work
-  for (var j = 0; j < KEYWORDS['tiny-fix'].length; j++) {
-    if (lower.indexOf(KEYWORDS['tiny-fix'][j]) !== -1) return 'tiny-fix';
-  }
-  // feature: new creation
-  for (var k = 0; k < KEYWORDS['feature'].length; k++) {
-    if (lower.indexOf(KEYWORDS['feature'][k]) !== -1) return 'feature';
-  }
-  // quick-win: modifications
-  for (var l = 0; l < KEYWORDS['quick-win'].length; l++) {
-    if (lower.indexOf(KEYWORDS['quick-win'][l]) !== -1) return 'quick-win';
-  }
-
   // Default: feature-level rigor (safer to over-check than under-check)
   return 'feature';
 }

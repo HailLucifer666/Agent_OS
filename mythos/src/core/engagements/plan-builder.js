@@ -11,7 +11,7 @@
 // honest-inert, never a fake brain result). Each stage sets BOTH `kind` (new,
 // preferred) and `type` (legacy alias) so existing readers keep working.
 //
-// Phase B: buildEngine (Hermes-Agent) is now the preferred generator for
+// Phase B: buildEngine (DeepSeek Harness) is now the preferred generator for
 // buildViaBrain() below — the brain.think({lane:'build'}) call was a third,
 // independent generator alongside build-runner.js and executor.js's build
 // stage, same reasoning as build-engine.js's header comment. A caller-supplied

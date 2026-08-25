@@ -13,6 +13,8 @@ const { resolveSandboxed, open_folder } = require('./from-computer');
 // The evidence contract: a world-changing effector may only report ok:true with
 // proof from an oracle other than its own call. See evidence.js's header.
 const evidence = require('./evidence');
+const { reasonText } = require('../util/reason-text');
+const { visionThink } = require('./vision-call');
 
 function ok(result) {
   return { ok: true, result };
@@ -23,6 +25,14 @@ function fail(reason) {
 
 var brain = null;
 var vaultFs = null;
+// screen_look's vision call: instrumentation + the bound that stops a starved
+// free-tier provider holding a "quick look" for a minute (see vision-call.js).
+var pcLogger = null;
+var visionTimeoutMs = null;
+var visionAttemptTimeoutMs = null;
+// Wave 5 (2026-08-13) test seam, forwarded to visionThink's own chainFor
+// option — see from-dashboard.js's identical comment on visionChainFor.
+var visionChainForOverride = null;
 
 // FIX 1: last pid returned by a successful launch_app. ui_type/ui_click use
 // this as their default target when the caller (the planning LLM) omits pid,
@@ -91,9 +101,14 @@ async function delegateWithRetry(cmdObj, opts) {
       return lastResult;
     }
     if (attempt < attempts) {
+      // BUG-259 class fix (2026-08-16): the backoff timer must stay REF'D.
+      // Unref'd, it never fires in a process with nothing else holding the
+      // event loop (CI's Node 22 test-runner child), leaving the retry
+      // promise pending at loop drain — the runner then kills the test and
+      // cascades cancelledByParent through its siblings. See briefing.js's
+      // withTimeout for the full history.
       await new Promise((resolve) => {
-        const t = setTimeout(resolve, backoffMs);
-        if (t && typeof t.unref === 'function') t.unref();
+        setTimeout(resolve, backoffMs);
       });
     }
   }
@@ -207,7 +222,32 @@ async function launch_app({ name, existing }, ctx) {
   // pid already stops us, and the explicit matchedBy check keeps it stopped if a
   // future PS change ever starts returning a pid for a title match.
   var r = res.result || {};
-  var byProcess = typeof r.pid === 'number' && r.matchedBy !== 'title';
+  // BUG-272 T1: 'partial' joins 'title' as a CANDIDATE, not a resolution. An
+  // unanchored substring hit on a process name ('ZCode' -like '*code*') used to be
+  // labelled matchedBy:'process' and was therefore indistinguishable from an exact
+  // match — which is how launch_app("code") reported the operator's unrelated CLI
+  // as a fully verified launch of VS Code.
+  var byProcess = typeof r.pid === 'number' && r.matchedBy !== 'title' && r.matchedBy !== 'partial';
+
+  // BUG-272 T1: does the process we actually landed on match what was asked for?
+  //
+  // This is the check that previously had nothing to check against.
+  // New-LaunchResult echoed the REQUESTED name back as `name`, and the oracle
+  // below built its `observed` field out of that echo — so the "proof" of a launch
+  // was the request itself plus a pid, and the pid came from a substring match.
+  // Circular, and the wrong process passed every honesty gate. The PS side now
+  // reports resolvedName (the real ProcessName), so a mismatch is finally visible.
+  //
+  // Compared case-insensitively with .exe and whitespace stripped: 'Code' vs
+  // 'code' and 'Notepad' vs 'notepad' agree, while 'ZCode' vs 'code' does not —
+  // the requested name must be the WHOLE resolved name, not merely inside it.
+  // Absent resolvedName (an older adapter build) the check abstains rather than
+  // failing every launch: a missing field is not evidence of a mismatch.
+  var resolvedName = typeof r.resolvedName === 'string' && r.resolvedName ? r.resolvedName : null;
+  var normName = function (v) {
+    return String(v || '').trim().replace(/\.exe$/i, '').replace(/\s+/g, '').toLowerCase();
+  };
+  var nameAgrees = !(byProcess && resolvedName) || normName(resolvedName) === normName(name);
 
   if (res.ok && byProcess) {
     lastLaunchedPid = r.pid;
@@ -254,12 +294,30 @@ async function launch_app({ name, existing }, ctx) {
   // report the launch as attempted: the app may genuinely have started, but there
   // is no window we can honestly claim as the target, and saying so is what stops
   // the next ui_type from guessing.
-  if (byProcess) {
+  if (byProcess && nameAgrees) {
     return evidence.verifiedOk(res, {
       oracle: 'process-window',
       expected: String(name).trim(),
-      observed: String(r.name || name) + ' (pid ' + r.pid + ')',
+      // BUG-272 T1: the RESOLVED process name when we have one, never the echoed
+      // request. An oracle whose "observed" value is the caller's own input
+      // proves nothing about the world.
+      observed: String(resolvedName || r.name || name) + ' (pid ' + r.pid + ')',
     });
+  }
+  // BUG-272 T1: a pid belonging to a DIFFERENT application is worse than no pid,
+  // because a later ui_type would type into it happily. Downgrade, clear the
+  // implicit target, and name both sides so the model asks instead of assuming.
+  // Failing loudly beats a confident wrong answer.
+  if (byProcess && !nameAgrees) {
+    lastLaunchedPid = null;
+    return evidence.unverified(res, 'asked for "' + String(name).trim() + '" but the windowed process ' +
+      'that came up is "' + resolvedName + '" (pid ' + r.pid + '), a different application — not ' +
+      'targeting it. Call list_windows to see what is actually open.');
+  }
+  if (r.matchedBy === 'partial') {
+    return evidence.unverified(res, 'no process is named exactly "' + name + '" — the closest was "' +
+      (resolvedName || 'an unrelated process') + '", whose name merely contains it, so I am not ' +
+      'targeting it');
   }
   return evidence.unverified(res, r.candidateTitle
     ? 'no process named like "' + name + '" owns a window — the only match was an unrelated window titled "' +
@@ -306,15 +364,64 @@ async function submitMessage(pid) {
   });
 }
 
+// WAVE 6 oracle, upgraded 2026-08-17 (fix-plan 2.2). Returns
+// {online, window, matchedBy} instead of a bare win|null:
+//   - `online:false` lets open_folder say "pc-child is not running" instead of
+//     folding that into "no window found" — different problems, different next
+//     steps for the model.
+//   - the title match is case-insensitive exact OR title-CONTAINS-leaf, because
+//     special/localized folders can title their Explorer window with more than
+//     the bare leaf. `matchedBy` names which rule hit so the evidence can say so.
 async function findExplorerWindow(leafName) {
   const leaf = String(leafName || '').trim().toLowerCase();
-  if (!leaf) return null;
+  if (!leaf) return { online: false, window: null, matchedBy: null };
   const wins = await delegate({ cmd: 'list_windows' });
-  if (!wins.ok || !wins.result || !Array.isArray(wins.result.windows)) return null;
-  return wins.result.windows.find(function (w) {
-    return String(w.title || '').trim().toLowerCase() === leaf &&
-      /explorer/i.test(String(w.process || w.processName || ''));
+  if (!wins.ok || !wins.result || !Array.isArray(wins.result.windows)) {
+    return { online: false, window: null, matchedBy: null };
+  }
+  const explorers = wins.result.windows.filter(function (w) {
+    return /explorer/i.test(String(w.process || w.processName || ''));
+  });
+  const exact = explorers.find(function (w) {
+    return String(w.title || '').trim().toLowerCase() === leaf;
   }) || null;
+  if (exact) return { online: true, window: exact, matchedBy: 'exact' };
+  const contains = explorers.find(function (w) {
+    return String(w.title || '').toLowerCase().indexOf(leaf) !== -1;
+  }) || null;
+  return { online: true, window: contains, matchedBy: contains ? 'contains' : null };
+}
+
+// findWindowByTitle — the open_file oracle (2026-08-21). Same shape as
+// findExplorerWindow above but across EVERY process, because the window that
+// appears after shell.openPath belongs to whichever app owns the file type.
+//
+// Q1 — a title match is used here as an OBSERVATION oracle only, never to pick
+// a window to type into; that distinction is what makes it acceptable, and
+// open_folder already depends on exactly this. MYTHOS's own HUD is not a false
+// positive: list_windows reports window TITLES, and MYTHOS's title is its own,
+// not the transcript it happens to be showing on screen.
+//
+// Exact title first, then contains, so "notes.txt" cannot lose to
+// "notes.txt.bak - Notepad" when both are open.
+async function findWindowByTitle(leafName) {
+  const leaf = String(leafName || '').trim().toLowerCase();
+  if (!leaf) return { online: false, window: null, matchedBy: null };
+  const wins = await delegate({ cmd: 'list_windows' });
+  if (!wins.ok || !wins.result || !Array.isArray(wins.result.windows)) {
+    return { online: false, window: null, matchedBy: null };
+  }
+  const visible = wins.result.windows.filter(function (w) {
+    return w && w.visible !== false && typeof w.pid === 'number';
+  });
+  const exact = visible.find(function (w) {
+    return String(w.title || '').trim().toLowerCase() === leaf;
+  }) || null;
+  if (exact) return { online: true, window: exact, matchedBy: 'exact' };
+  const contains = visible.find(function (w) {
+    return String(w.title || '').toLowerCase().indexOf(leaf) !== -1;
+  }) || null;
+  return { online: true, window: contains, matchedBy: contains ? 'contains' : null };
 }
 
 async function focus_window({ pid }) {
@@ -325,7 +432,26 @@ async function focus_window({ pid }) {
   // it requires an explicit real pid.
   var targetPid = coercePid(pid);
   if (!targetPid) return fail('PID is required.');
-  return delegate({ cmd: 'focus_window', pid: targetPid });
+  var res = await delegate({ cmd: 'focus_window', pid: targetPid });
+  // BUG-272 T3: a vanished pid used to surface as PowerShell's bare "Cannot find
+  // a process with the process identifier", with no hint about what to do — so
+  // the model kept passing the same dead pid from an earlier tool result.
+  // close_window has carried the remedy since its own incident, and
+  // foregroundThenRetry has the identical wording; this reuses that sentence
+  // rather than inventing a third variant of it.
+  // Reads BOTH shapes on purpose. delegate() maps an adapter failure to
+  // fail(resp.error), so the PowerShell text arrives on `error`, while PS paths
+  // that return their message as a successful-transport result put it on
+  // `result`. close_window checks only `result` and has been lucky; a guard that
+  // silently matches nothing is worse than no guard, because it looks like it
+  // works.
+  var detail = String((res && res.error) || (res && res.result) || '');
+  if (!res.ok && /cannot find/i.test(detail)) {
+    return fail(detail
+      + ' That pid no longer exists, so nothing was focused. Call list_windows again to find the '
+      + 'right target — retrying this pid will not help.');
+  }
+  return res;
 }
 
 async function close_window({ pid }) {
@@ -427,17 +553,37 @@ async function screen_look({ query }) {
   if (!brain || typeof brain.think !== 'function') {
     return fail('Screenshot captured but no vision brain is available to describe it.');
   }
-  var result = await brain.think({
-    lane: 'vision',
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'text', text: (query ? String(query).slice(0, 300) : 'Describe what is on this screen, briefly and concretely.') },
-        { type: 'image_url', image_url: { url: 'data:image/png;base64,' + b64 } },
-      ],
-    }],
+  // The prompt states WHAT THE IMAGE IS, every time, regardless of what was
+  // asked. On 2026-08-10 the model called this tool with query "What is the user
+  // holding in the webcam frame?" — because camera_look was withheld from the
+  // voice allowlist and this was the only pair of eyes it could reach. A vision
+  // model handed a desktop screenshot and a leading question about a webcam
+  // answers the question: it said "a black smartphone", then "a small dog".
+  // Naming the image first is what makes that unanswerable instead of plausible.
+  var SCREEN_FRAMING =
+    'This image is a screenshot of the operator\'s COMPUTER SCREEN. It is not a '
+    + 'webcam or camera image: it does not show the operator, their face, their '
+    + 'hands, or anything they are holding. If the question asks about the '
+    + 'operator or the room rather than the screen, say that this is the screen '
+    + 'and you cannot see them in it. ';
+  var result = await visionThink(brain, {
+    prompt: SCREEN_FRAMING + (query
+      ? 'Question about the screen: ' + String(query).slice(0, 300)
+      : 'Describe what is on this screen, briefly and concretely.'),
+    b64: b64,
     source: 'screen-look',
+    timeoutMs: visionTimeoutMs,
+    attemptTimeoutMs: visionAttemptTimeoutMs,
+    logger: pcLogger,
+    chainFor: visionChainForOverride,
   });
+  if (result.timedOut) {
+    return fail('The vision model did not answer in time, so the screen was not read. '
+      + 'Say that you could not see it; do not describe anything.');
+  }
+  // Wave 5 (2026-08-13): laneEmpty is the preflight failing fast — name the
+  // real cause instead of the generic "offline" every other cause also sets.
+  if (result.laneEmpty) return fail(result.reason || 'Vision lane is empty — cannot describe the screen.');
   if (result.offline || !result.content) return fail('Vision providers are offline — cannot describe the screen.');
 
   // WAVE 4 — the tool that is supposed to catch the lie was itself lying.
@@ -651,6 +797,46 @@ async function ui_click({ pid, elementPath }) {
   // per-element oracle — a state change, a new window — picked per element
   // type); ceiling is "clicked in the right window", upgrade path is a
   // per-element post-condition if a false-positive click surfaces live.
+  //
+  // 2026-08-20 — THE UPGRADE PATH ABOVE IS NOW TAKEN, where the element offers
+  // it. Handle-UiClick's pattern ladder returns a per-element oracle for the
+  // rungs that have one: ToggleState moved, IsSelected flipped, the top-level
+  // window count changed, the range Value moved. That is strictly stronger
+  // evidence than "still foreground" and costs no extra round trip, because the
+  // property read is already paid for by the pattern call.
+  //
+  // A `confirmed: false` is the interesting case and must NOT be flattened into
+  // success: it means the pattern call returned cleanly and the element did not
+  // move. That is the BUG-274 T5 shape exactly — Notepad's WinUI3 MenuBarItem
+  // reporting ExpandCollapseState 'Expanded' while no flyout renders — so the
+  // one situation this oracle exists to catch is the one a bare ok would hide.
+  var elementOracle = res.result && res.result.oracle;
+  if (elementOracle && elementOracle.name) {
+    var moved = 'before ' + JSON.stringify(elementOracle.before) + ', after ' + JSON.stringify(elementOracle.after);
+    if (elementOracle.confirmed === true) {
+      // An element that was ALREADY in the target state is a weaker claim than
+      // one that moved into it: the post-condition holds, but this click did not
+      // prove it caused anything. Live-measured on Mouse Properties' first tab
+      // (is-selected true -> true). Said out loud in the evidence rather than
+      // presented as a state change, because the whole point of this oracle is
+      // not overstating what was observed.
+      var note = elementOracle.alreadySelected === true
+        ? ' (it was already selected, so this click changed nothing observable)'
+        : '';
+      return evidence.verifiedOk(res, {
+        oracle: 'ui-pattern-state',
+        expected: elementOracle.name + ' to change',
+        observed: elementOracle.name + ': ' + moved + note,
+      });
+    }
+    if (elementOracle.confirmed === false) {
+      return evidence.unverified(res,
+        'the ' + String(res.result.mechanism) + ' call returned cleanly but the element did not change — ' +
+        elementOracle.name + ' says ' + moved + '. The control may have a broken accessibility provider; ' +
+        'see_and_click or click_at drive it a different way.');
+    }
+  }
+
   var fg = await delegate({ cmd: 'get_foreground_window' });
   if (fg.ok && fg.result && fg.result.pid === targetPid) {
     return evidence.verifiedOk(res, {
@@ -742,9 +928,31 @@ async function ui_type({ text, pid, elementPath }) {
     // absent from an older adapter or when the lookup failed — in which case the
     // strict comparison below still applies, so this loosens nothing on its own.
     var landedSameApp = res.result.typedIntoSameApp;
-    var landedElsewhere = (landedSameApp === false) ||
-      (landedSameApp === undefined && typeof landedPid === 'number' && landedPid !== targetPid);
-    if (targetPid && typeof landedPid === 'number' && landedPid > 0 && landedElsewhere) {
+    // FIX-PLAN 3.2 (2026-08-17): two distinct verdicts, no longer folded into
+    // one. typedIntoSameApp === false is PS's POSITIVE finding that the keys
+    // left the app — that stays a hard failure. undefined (older adapter, or
+    // the Test-SameApp lookup failed) plus a pid mismatch stays a hard failure
+    // too — EXCEPT when the landed title is a WebView2 hosting artifact
+    // ("Chrome Legacy Window" & kin): there the pid mismatch is NOT app-
+    // identity evidence, because the shell owns the target window while an
+    // msedgewebview2 child receives the keystrokes (the exact shape the field
+    // exists to resolve; the 2026-08-09 audit's two refused WhatsApp sends
+    // were this). That one shape returns honest-unverified, and returns HERE,
+    // deliberately before the read-back oracle: the read-back reads whatever
+    // control holds the caret, which is exactly the window we could not rule
+    // out, so its "confirmed" would be the BUG-066 every-layer-agreed-on-a-lie
+    // again.
+    var WEBVIEW_ARTIFACT_TITLE = /chrome legacy window|msedgewebview2|_renderwidgethost/i;
+    if (targetPid && landedSameApp === false && typeof landedPid === 'number' && landedPid > 0) {
+      return fail('Typed into the wrong window: the text went to "' + landedTitle +
+        '" (pid ' + landedPid + '), not the target (pid ' + targetPid + '). Nothing was typed where you asked.');
+    }
+    if (targetPid && landedSameApp === undefined && typeof landedPid === 'number' && landedPid > 0 && landedPid !== targetPid) {
+      if (WEBVIEW_ARTIFACT_TITLE.test(landedTitle)) {
+        return evidence.unverified(res,
+          'typed into pid ' + landedPid + ' ("' + landedTitle + '"), which does not match the target pid ' + targetPid +
+          ' — I could not verify both belong to the same app, so I cannot confirm the text landed where you asked');
+      }
       return fail('Typed into the wrong window: the text went to "' + landedTitle +
         '" (pid ' + landedPid + '), not the target (pid ' + targetPid + '). Nothing was typed where you asked.');
     }
@@ -1048,31 +1256,12 @@ async function readScreenRegions(target) {
   return { ok: true, regions: toAbsoluteRegions(result) || [], text: String(result.text || '') };
 }
 
+const { matchRegions, centreOf } = require('./see-and-click-match.js');
+
 function reasonOf(res) {
   const r = res && res.result;
   if (r && typeof r === 'object' && r.error) return String(r.error);
   return typeof r === 'string' ? r : 'screen OCR failed';
-}
-
-// Exported for tests: pure, no I/O. Progressively looser so an exact label always beats
-// a coincidental substring — "Mou" must not win over "Mousumi" when both are present.
-function matchRegions(regions, query) {
-  const want = String(query || '').trim().toLowerCase();
-  if (!want) return [];
-  const usable = (regions || []).filter((r) =>
-    r && typeof r.x === 'number' && typeof r.y === 'number' &&
-    r.width > 0 && r.height > 0 && String(r.text || '').trim());
-  const norm = (r) => String(r.text).trim().toLowerCase();
-
-  const exact = usable.filter((r) => norm(r) === want);
-  if (exact.length) return exact;
-  const startsWith = usable.filter((r) => norm(r).startsWith(want));
-  if (startsWith.length) return startsWith;
-  return usable.filter((r) => norm(r).includes(want));
-}
-
-function centreOf(r) {
-  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
 }
 
 async function see_and_click({ text, occurrence, expect, pid }) {
@@ -1088,6 +1277,44 @@ async function see_and_click({ text, occurrence, expect, pid }) {
   // hand a region to the second read, quietly widening it back to the full desktop.
   const scope = { pid: pid };
 
+  // 2026-08-21 audit — FOCUS BEFORE READ. see_and_click is 3 ok / 8 fail and
+  // every failure is grounding, never the click (click_at is 1 ok / 0 fail
+  // all-time). Five of the eight read back MYTHOS's OWN HUD — "What I can
+  // read: MYTHOS | File Edit View | Window | Help | Voice: see_an…" — MYTHOS
+  // reading its own window, including its rendering of the request it was
+  // being asked to carry out.
+  //
+  // ps-automation.ps1's capture comment already names the mechanism: PrintWindow
+  // "returns black for the DirectComposition/Chromium windows this is most
+  // needed for", so the capture is CopyFromScreen — a crop of the VISIBLE
+  // desktop. "A target sitting behind another window therefore reads whatever
+  // is on top of it. Scoping is what stops a match in an unrelated window;
+  // focus_window first is what makes the target the thing being read." BUG-108
+  // threaded the pid through and did the first half only. The operator had
+  // already written the second half into the vault, twice, as a fact starting
+  // "IMPERATIVE: ... ALWAYS explicitly focus the target application's window
+  // FIRST" — the system was told and still did not do it.
+  //
+  // ADVISORY ON PURPOSE. focus_window's foreground-lock refusal is real and
+  // documented (BUG-272 T3; adapters/CLAUDE.md records that the ladder is
+  // exhausted and no fourth rung is coming). An unguarded advisory call that
+  // aborts on failure is strictly worse than not calling it: this repo has
+  // already had an unguarded SetFocus kill ui_type's focus-free recovery
+  // routes. So the outcome is recorded and the read happens either way.
+  //
+  // Only when a pid was given. Unscoped there is nothing to focus, and picking
+  // a window to bring forward would be the guess this whole path avoids.
+  let focusNote = '';
+  let focusFailedWithPid = false; // BUG-349: read proceeds, click must not
+  if (coercePid(pid)) {
+    const focused = await delegate({ cmd: 'focus_window', pid: coercePid(pid) });
+    if (!focused.ok) {
+      focusFailedWithPid = true;
+      focusNote = ' I could not bring that window to the front first (' +
+        reasonOf(focused) + '), so this read may be of whatever is covering it.';
+    }
+  }
+
   const before = await readScreenRegions(scope);
   if (!before.ok) return fail('I could not read the screen, so I will not guess where to click: ' + before.error);
 
@@ -1097,7 +1324,16 @@ async function see_and_click({ text, occurrence, expect, pid }) {
     // wrong bug — the label may be present but spelled differently, or OCR may have
     // returned nothing at all, and those need opposite responses.
     const sample = before.regions.slice(0, 12).map((r) => r.text).join(' | ');
-    return fail('I cannot see "' + want + '" on screen. ' + (before.regions.length
+    // BUG-099 class: a refusal naming no reachable next step is where the model
+    // improvises. All five HUD-reading failures dead-ended here. The remedy is
+    // only offered when it has NOT already been taken — telling a caller that
+    // already passed a pid to go and get a pid trains it to ignore refusals.
+    const remedy = coercePid(pid)
+      ? focusNote
+      : ' This was a whole-screen read, which includes my own window — if the app you ' +
+        'mean is behind mine, call list_windows and pass its pid so I read (and focus) ' +
+        'that window instead.';
+    return fail('I cannot see "' + want + '" on screen. ' + remedy + ' ' + (before.regions.length
       ? 'What I can read: ' + sample + (before.regions.length > 12 ? ' …' : '')
       : 'OCR returned no text regions at all — the screen may be blank, or this text may be an image or an icon rather than rendered text.'));
   }
@@ -1119,6 +1355,18 @@ async function see_and_click({ text, occurrence, expect, pid }) {
   }
 
   const point = centreOf(target);
+
+  // BUG-349: a hit found through an OCCLUDED read is not clickable evidence.
+  // The READ stays advisory-on-purpose (grounding info is useful); the CLICK
+  // is not. With focus refused, these screen-absolute pixels may belong to
+  // whatever covered the target - clicking would be the exact wrong-target
+  // class BUG-099/BUG-108 exist for. Refuse with both halves of the truth.
+  if (focusFailedWithPid) {
+    return fail('I found "' + target.text + '" at ' + point.x + ',' + point.y +
+      ' but could not bring its window to the front first, so those pixels may belong to whatever is covering it. ' +
+      'Bring that window forward yourself (or close what covers it) and ask again - I will not click coordinates I cannot vouch for.');
+  }
+
   const clicked = await click_at(point);
   if (!clicked.ok) return fail('Found "' + target.text + '" at ' + point.x + ',' + point.y +
     ' but the click failed: ' + reasonOf(clicked));
@@ -1220,7 +1468,7 @@ async function capture_screenshot() {
 
     return ok({ savedTo: filePath, filename: filename, bytes: buffer.length });
   } catch (err) {
-    return fail('Failed to save screenshot: ' + (err.message || err));
+    return fail('Failed to save screenshot: ' + reasonText(err));
   }
 }
 
@@ -1242,7 +1490,7 @@ const TOOLS = [
   { name: 'set_app_volume', description: 'Set ONE application\'s own volume (0-100) without touching the system master volume — the per-app sliders in the Windows Volume Mixer. Use for "turn Spotify down". Fails honestly if that app has no live audio session (i.e. it is not playing anything).', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process instead of matching by name', level: 'number - target volume 0-100' }, danger: false, fn: set_app_volume },
   { name: 'get_app_volume', description: 'Read the current per-app volume (0-100) and mute state of ONE application from its live audio session. Use before a relative change ("turn Spotify down a bit"). Fails honestly if the app has no live audio session.', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process' }, danger: false, fn: get_app_volume, needs_result: true },
   { name: 'set_app_mute', description: 'Mute or unmute the audio session of ONE application without touching the system master volume. Reads the mute state back as evidence. Fails honestly if the app has no live audio session.', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process', mute: 'boolean - true to mute, false to unmute (default true)' }, danger: false, fn: set_app_mute },
-  { name: 'screen_look', description: 'Take a screenshot of the primary screen and describe it via a vision brain. Optionally pass a query to focus the description.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
+  { name: 'screen_look', description: 'Look at the COMPUTER SCREEN: take a screenshot of the primary display and describe it via a vision brain. This is NOT a camera — it cannot see the operator, their face, their hands, or an object they are holding up; for any of those use camera_look (and camera_on if the camera is off). It is also NOT the way to answer questions about THIS machine: for CPU, cores, RAM, platform or uptime call read_system_specs, which reads the real numbers — never screenshot a dashboard to read them off it. Optionally pass a query to focus the description on part of the screen.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
   { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
   { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
   { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { pid: 'number (optional) - window process ID; defaults to the last launched app', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
@@ -1266,6 +1514,13 @@ const TOOLS = [
 function registerFromPc(hub, opts) {
   brain = (opts && opts.brain) || null;
   vaultFs = (opts && opts.fs) || null;
+  // Both optional: vision-call.js bounds with its own default when no config is
+  // supplied and skips instrumentation when no logger is. Tests construct this
+  // module without either.
+  pcLogger = (opts && opts.logger) || null;
+  visionTimeoutMs = (opts && opts.config && opts.config.VISION_CALL_TIMEOUT_MS) || null;
+  visionAttemptTimeoutMs = (opts && opts.config && opts.config.VISION_ATTEMPT_TIMEOUT_MS) || null;
+  visionChainForOverride = (opts && opts.visionChainFor) || null;
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }
@@ -1286,7 +1541,7 @@ module.exports = {
   screen_look, capture_screenshot, screen_read_text, set_wallpaper, ui_elements, ui_click, ui_type, send_key, click_at, see_and_click, write_note,
   // pure, no I/O — exported so the matcher can be tested without a screen
   _seeAndClickInternal: { matchRegions, centreOf },
-  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, readComposeBox, submitMessage,
+  ambient_awareness, setScreenSensorHandle, show_desktop, findExplorerWindow, findWindowByTitle, readComposeBox, submitMessage,
   move_window, snap_window, scroll_at, right_click_at, drag,
   media_status,
 };

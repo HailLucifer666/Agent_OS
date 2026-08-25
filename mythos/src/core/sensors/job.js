@@ -37,11 +37,22 @@ function createJobSensor({ bus, buildRunner }) {
       error: job.error,
       // artifact path — included so the conversation announcer and cortex know
       // WHAT to open/announce on completion, not just that "a job finished".
-      artifact: job.artifact || null,
+      // job.artifact is an OBJECT everywhere else ({path}, … — job_status,
+      // agent-actions, from-dashboard all read artifact.path); the perception
+      // carries the PATH STRING, because the announcer composes a spoken,
+      // model-visible sentence from it and String({path:…}) is
+      // "[object Object]".
+      artifact: (job.artifact && job.artifact.path) || null,
       // BUG-016: include review verdict and issues so announcer can notify the user
       // if a build completed but failed review (as opposed to build execution failure)
       reviewVerdict: job.reviewVerdict || null,
-      reviewIssues: job.reviewIssues || null
+      reviewIssues: job.reviewIssues || null,
+      // C1: include the engine so the announcer can also degrade a build
+      // that came from the fallback engine, not just one the reviewer
+      // rejected — job.engine is stamped by build-runner.js's pump() before
+      // run() ever returns (see completion-status.js for why both signals
+      // matter).
+      engine: job.engine || null
     });
   }
 

@@ -42,16 +42,16 @@ const ALLOWLIST = new Set([
   'server/index.js:96',
   'server/index.js:114',
   // HUD canvas animation jitter (visual-only spark/burst timing, not a metric).
-  // Line numbers re-synced 2026-08 after the iridescent-swarm redesign shifted
-  // these calls within core-orb.js (the swarm port grew the file by ~200 lines).
-  // Same 5 legitimate sites: spark-timer init, neural-web firing edge + cadence,
+  // Line numbers re-synced 2026-08-13 after Wave 2's 'muted' state addition
+  // shifted these calls within core-orb.js by a handful of lines. Same 5
+  // legitimate sites: spark-timer init, neural-web firing edge + cadence,
   // synapse-spark angle/length, and the ambient spark-timer reset. None
   // synthesize a status/metric/telemetry value — all are pure animation jitter.
-  'ui/public/js/neural-map/core-orb.js:109',
-  'ui/public/js/neural-map/core-orb.js:550',
-  'ui/public/js/neural-map/core-orb.js:552',
-  'ui/public/js/neural-map/core-orb.js:574',
-  'ui/public/js/neural-map/core-orb.js:772',
+  'ui/public/js/neural-map/core-orb.js:116',
+  'ui/public/js/neural-map/core-orb.js:558',
+  'ui/public/js/neural-map/core-orb.js:560',
+  'ui/public/js/neural-map/core-orb.js:582',
+  'ui/public/js/neural-map/core-orb.js:780',
   'ui/public/js/neural-map/hud-canvas.js:369',
 ]);
 

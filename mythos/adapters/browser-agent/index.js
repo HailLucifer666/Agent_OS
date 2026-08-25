@@ -143,7 +143,14 @@ function getStatus() {
   return { state, mode, hint, cdpUrl, pageCount };
 }
 
-async function connect(url) {
+// connect(url, {quiet})
+//
+// `quiet` suppresses ONLY the failure log line, never the state change or the
+// hint — getStatus() still reports the failure verbatim, so nothing becomes
+// invisible. It exists for the auto-connect poller, whose repeated failure is a
+// standing condition rather than news; see startAutoConnect's backoff below.
+async function connect(url, opts) {
+  const quiet = Boolean(opts && opts.quiet);
   // FIX-1: join an in-flight connect instead of racing chromium.connectOverCDP
   // a second time.
   if (connectingPromise) return connectingPromise;
@@ -193,7 +200,9 @@ async function connect(url) {
       state = 'OFFLINE';
       hint = 'CDP connect failed: ' + err.message;
       browser = null;
-      log.warn('browser-agent connect failed', { error: err.message });
+      // The hint above is always set, so a quiet failure is still fully
+      // reportable through getStatus() — only the log line is withheld.
+      if (!quiet) log.warn('browser-agent connect failed', { error: err.message });
       return false;
     } finally {
       connectingPromise = null;
@@ -284,22 +293,125 @@ async function ensureOnline(opts) {
 // timer is unref'd so it never keeps the process alive on its own.
 let autoConnectTimer = null;
 
+// ---- poller backoff (operator, 2026-08-11) -------------------------------------
+//
+// THE LOG SPAM: on the installed build, mythos-server.log carried
+// "browser-agent connect failed … ECONNREFUSED 127.0.0.1:9222" every 15 seconds,
+// forever, each with a full Playwright stack. No debug browser was running and
+// none was going to be — the operator had not asked for one — so this was 5,760
+// stack traces a day burying every real line in the file, on the one machine
+// where a diagnosable log mattered most.
+//
+// The poller's BEHAVIOUR is right and stays: it must keep watching, because a
+// debug Chrome the operator starts by hand ten minutes from now should be picked
+// up without a restart, and it must never launch a browser itself.
+//
+// So this changes the CADENCE and the VOLUME, not the semantics:
+//   - the interval timer still ticks at intervalMs (setInterval, unref'd — the
+//     FIX-5 contract), but an attempt is only made every `factor` ticks — this
+//     is the FLOOR of the backoff, set by the caller (main.js passes
+//     config.BROWSER_RECONNECT_MS, default 15000ms — the exact cadence the
+//     operator was seeing spam at, kept as the responsive starting point);
+//   - `factor` doubles (BACKOFF_MULTIPLIER) after each failed attempt up to
+//     MAX_BACKOFF_FACTOR, so a 15s poller settles at one attempt every
+//     15s * 32 = 8 minutes — an idle hour costs at most ~7-8 attempts past
+//     the ceiling instead of 240;
+//   - each ramp-up attempt (factor climbing 1 -> 2 -> 4 ... -> 32) still logs
+//     its own warn — "at most once per window" is automatically true because
+//     there is only ever one attempt per window — so a handful of warns marks
+//     the ramp, not hundreds. The attempt that first finds `factor` already at
+//     the ceiling additionally logs one 'browser-agent.giving-up' line: from
+//     that point on, connect() is called with quiet:true forever, so logging
+//     stops (this is what "giving up" means — giving up on frequent retries
+//     AND on logging each one) while the retries themselves never stop;
+//   - everything resets the moment a connect succeeds, so a browser that
+//     appears (or reappears after a later unexpected drop) is still picked up
+//     promptly, at the floor cadence, not wherever the backoff had climbed to.
+//
+// On-demand launch (ensureOnline/launchLocal/browser_launch_debug) is untouched:
+// it never went through this poller.
+const BACKOFF_MULTIPLIER = 2;
+const MAX_BACKOFF_FACTOR = 32;
+
+let autoConnectTicks = 0;      // ticks since the last attempt
+let autoConnectFactor = 1;     // attempt every N ticks
+let autoConnectFailures = 0;   // consecutive failures, for the log policy
+let autoConnectAtCeiling = false;
+
+function resetAutoConnectBackoff() {
+  autoConnectTicks = 0;
+  autoConnectFactor = 1;
+  autoConnectFailures = 0;
+  autoConnectAtCeiling = false;
+}
+
+// One "tick" of the poller: the unit of work setInterval invokes below.
+// Pulled out as its own function (rather than an inline setInterval callback)
+// so tests can drive the whole backoff sequence by calling this directly, in
+// a plain loop, with no real timer involved at all — the previous version of
+// this test inlined the logic in the interval callback and drove it with a
+// tiny real setInterval, which is exactly the wall-clock dependency that made
+// it flaky under full-suite CPU contention: a 5ms interval assumes the event
+// loop gets back to it within a few ms, which does not hold when hundreds of
+// other test files are scheduling their own timers concurrently. Calling
+// autoConnectTick() directly has no such assumption — each call is just an
+// async function invocation, resolved by microtasks (the mocked
+// connectOverCDP rejects/resolves immediately), so the whole 6-attempt ramp
+// to the ceiling runs in however long the CPU actually takes, however long
+// that is, with no dependency on any timer firing on schedule.
+async function autoConnectTick(url, onOnline, intervalMs) {
+  if (intentionalDisconnect) return;
+  if (state === 'ONLINE' || state === 'CONNECTING') return;
+
+  autoConnectTicks += 1;
+  if (autoConnectTicks < autoConnectFactor) return; // backing off
+  autoConnectTicks = 0;
+
+  // quiet:true only once the ceiling has been reached and announced —
+  // every ramp-up attempt still warns (there's only one attempt per
+  // window, so that's already "at most once per window"); giving up on
+  // logging each one is exactly what the ceiling transition below means.
+  let ok;
+  try {
+    ok = await connect(url, { quiet: autoConnectAtCeiling });
+  } catch (_) {
+    // FIX-5: defensive only — connect() always resolves (true/false), never
+    // rejects (every internal failure path is caught and turned into a
+    // `return false`), so this branch is currently unreachable. Left in
+    // place as a safety net in case that invariant ever changes.
+    return;
+  }
+
+  if (ok) {
+    resetAutoConnectBackoff();
+    if (typeof onOnline === 'function') {
+      try { onOnline(); } catch (_) { /* best-effort */ }
+    }
+    return;
+  }
+
+  autoConnectFailures += 1;
+  if (autoConnectFactor < MAX_BACKOFF_FACTOR) {
+    autoConnectFactor = Math.min(autoConnectFactor * BACKOFF_MULTIPLIER, MAX_BACKOFF_FACTOR);
+  } else if (!autoConnectAtCeiling) {
+    autoConnectAtCeiling = true;
+    // The one line that makes "still retrying, just quietly" discoverable.
+    // Never repeated — retries continue at the ceiling cadence forever,
+    // but silently, per the contract above.
+    log.info('browser-agent.giving-up', {
+      url,
+      everyMs: intervalMs ? intervalMs * MAX_BACKOFF_FACTOR : undefined,
+      failures: autoConnectFailures,
+    });
+  }
+}
+
 function startAutoConnect(url, intervalMs, onOnline) {
   stopAutoConnect();
   if (!url || !intervalMs || intervalMs <= 0) return;
+  resetAutoConnectBackoff();
   autoConnectTimer = setInterval(function () {
-    if (intentionalDisconnect) return;
-    if (state === 'ONLINE' || state === 'CONNECTING') return;
-    connect(url).then(function (ok) {
-      if (ok && typeof onOnline === 'function') {
-        try { onOnline(); } catch (_) { /* best-effort */ }
-      }
-    }).catch(function () {
-      // FIX-5: defensive only — connect() always resolves (true/false), never
-      // rejects (every internal failure path is caught and turned into a
-      // `return false`), so this branch is currently unreachable. Left in
-      // place as a safety net in case that invariant ever changes.
-    });
+    autoConnectTick(url, onOnline, intervalMs);
   }, intervalMs);
   if (autoConnectTimer.unref) autoConnectTimer.unref();
 }
@@ -309,6 +421,7 @@ function stopAutoConnect() {
     clearInterval(autoConnectTimer);
     autoConnectTimer = null;
   }
+  resetAutoConnectBackoff();
 }
 
 async function disconnect() {
@@ -461,4 +574,11 @@ module.exports = {
   startAutoConnect,    // background CDP auto-connect poller (safe, never launches)
   stopAutoConnect,
   recordLaunchedPid,   // BUG-029 Phase 3 — for from-browser.js browser_launch_debug
+  // Test seam (Task D2): the poller's per-tick unit of work and its backoff
+  // reset, exposed so backoff behaviour can be driven directly — call after
+  // call, with no real timer — instead of depending on a real setInterval to
+  // fire on schedule under test load. Not meant to be called from production
+  // code; startAutoConnect wires autoConnectTick to the real interval itself.
+  autoConnectTick,
+  resetAutoConnectBackoff,
 };

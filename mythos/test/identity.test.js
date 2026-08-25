@@ -104,11 +104,36 @@ describe('identity module', () => {
 
   afterEach(function() { cleanupVaultDir(dir); });
 
-  it('loads at boot with fail-safe boundaries when file missing', () => {
-    // gate (a): loaded at boot
-    assert.equal(identity.getMaxAutonomousTier(), 1); // no boundaries.md seeded in this test → fail-safe default
+  it('loads at boot with the CONFIGURED ceiling when boundaries.md is absent', () => {
+    // gate (a): loaded at boot.
+    //
+    // CHANGED 2026-08-11 (installer parity). This test used to assert tier 1 and
+    // an 'identity-boundaries-malformed' anomaly for a MISSING file, which is the
+    // behaviour that produced the incident: the freshly installed .exe had a new,
+    // empty vault with no Identity/boundaries.md, so its autonomy ceiling was
+    // clamped to 1 and every Tier-2 tool asked for approval while the dev run —
+    // same code, older vault — never did.
+    //
+    // Absent now means "fresh vault": the operator's configured ceiling applies
+    // and the anomaly is a distinct non-critical kind. Present-but-unparseable
+    // still clamps to 1 with the exact §11 critical anomaly — asserted below and
+    // in identity-boundaries-failsafe-contract.test.js.
+    assert.equal(identity.getMaxAutonomousTier(), 2, 'absent boundaries.md must fall back to config.AUTONOMOUS_MAX_TIER');
+    assert.equal(identity.boundariesSource(), 'absent-config-ceiling');
+    const anomaly = bus._lastEvent('health.anomaly');
+    assert.equal(anomaly.payload.kind, 'identity-boundaries-absent');
+    assert.equal(anomaly.payload.severity, 'warning');
+  });
+
+  it('still fails safe to tier 1 when boundaries.md EXISTS but has no parseable tier', async () => {
+    fsStore.writeText('Identity/boundaries.md', '# MYTHOS Boundaries\n\ngarbage, no tier field\n');
+    const identity2 = createIdentity({ bus, config, fs: fsStore, identityStore: store });
+    await identity2.init();
+    assert.equal(identity2.getMaxAutonomousTier(), 1, 'a corrupt boundaries file must never widen the ceiling');
+    assert.equal(identity2.boundariesSource(), 'malformed-failsafe');
     const anomaly = bus._lastEvent('health.anomaly');
     assert.equal(anomaly.payload.kind, 'identity-boundaries-malformed');
+    assert.equal(anomaly.payload.severity, 'critical');
   });
 
   it('MYTHOS_NAME override: self.md persona wins over config.MYTHOS_NAME', async () => {

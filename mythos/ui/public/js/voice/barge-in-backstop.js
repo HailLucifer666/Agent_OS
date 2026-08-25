@@ -26,8 +26,7 @@
 //    S2S capture path — so borrowing those numbers would set an 0.8 amplitude
 //    floor that can never be reached, and the backstop would be silently dead
 //    for exactly the operator who tuned their VAD the most. The constants below
-//    are the RMS-scale defaults (SPEECH_RMS 0.035 * BARGE_IN_RMS_MULT 2.5, and
-//    SPEECH_HOLD_TICKS 3 * BARGE_IN_HOLD_TICKS_MULT 2) written out rather than
+//    are RMS-scale numbers written out rather than
 //    imported, for the same reason pcm-capture-worklet.js duplicates the
 //    resample math: the alternative is a shared value that means two different
 //    things depending on a flag.
@@ -38,13 +37,65 @@
 
 import { decideBargeIn } from './voice-loop.js';
 
-// RMS amplitude floor a frame must clear to count toward a barge-in, and how
-// many consecutive frames must clear it. s2s-bridge streams 100ms frames, so
-// 6 frames is ~600ms of sustained loud input — high and long enough that it
-// does not fire on a cough, a keyboard, or the tail of MYTHOS's own audio
-// bleeding back through the mic.
-export const BACKSTOP_RMS_THRESHOLD = 0.035 * 2.5;
-export const BACKSTOP_HOLD_FRAMES = 3 * 2;
+// TWO TIERS, NOT ONE (2026-08-14). Until this session the module had a single
+// threshold pair, and that was a design error with a measured cost: one
+// threshold decided BOTH "stop MYTHOS's playback" AND "let the operator's audio
+// reach Gemini" (s2s-bridge's half-duplex gate only opens on this module's
+// verdict). Those two decisions have opposite failure costs. A false positive on
+// the first clips a sentence MYTHOS was speaking — recoverable, audible, the
+// operator asks again. A false NEGATIVE on the second silently discards what the
+// operator said: the 1.2s preroll ring overflows and the sentence is gone. The
+// 2026-08-14 session has two turns logged as live-turn-no-user-transcript with
+// the operator talking over the reply, and this module fired zero times all
+// session against 0.0875 / 6 frames.
+//
+// So the release tier is deliberately EAGER (operator's explicit choice, taken
+// over losing sentences): it clears the ordinary speech floor for ~300ms and
+// does nothing except reopen the mic path, handing the real interruption verdict
+// to Gemini's own server-side VAD — which is a better detector than an RMS
+// heuristic and is the thing that would have decided it anyway had the gate
+// never been held. The flush tier stays higher and slightly longer, because it
+// is the one that can cut MYTHOS off mid-word.
+//
+// BUG-271 (2026-08-17): the eager tier used to be 0.035 / 2 frames (200ms), and
+// the operator's own session log proved that was wrong for this room — speaker
+// bleed (MYTHOS's voice leaking through the mic despite AEC) clears 0.035, so
+// every ~7s the bleed alone released the half-duplex gate and the replay handed
+// MYTHOS's own words straight to Gemini. The tier is now 0.05 / 3 frames
+// (300ms): above the measured bleed, still eager, and still strictly below the
+// flush tier (0.056) — a release must never double as a flush. A real barge-in
+// that a different room's noise floor outruns keeps the localStorage override
+// (MYTHOS_BARGE_RELEASE_RMS).
+//
+// Both tiers are still well clear of the echo of our own voice: getUserMedia's
+// AEC (mic-device.js) attenuates it, which is what makes a two-tier split
+// exploit a real signal gap rather than guess at one. s2s-bridge streams 100ms
+// frames, so the frame counts below are milliseconds divided by 100, and both
+// pairs are overridable from localStorage there (MYTHOS_BARGE_* ) so an operator
+// can walk the eagerness back without a rebuild.
+export const BACKSTOP_RMS_THRESHOLD = 0.035 * 1.6;
+export const BACKSTOP_HOLD_FRAMES = 3;
+export const BACKSTOP_RELEASE_RMS_THRESHOLD = 0.05;
+export const BACKSTOP_RELEASE_HOLD_FRAMES = 3;
+
+// "A release must never double as a flush" (see the tier comment above) was
+// stated in prose and enforced nowhere — and it is not merely a preference, it
+// is load-bearing in observe() below. The once-per-run latch clears on
+// `lastLevel <= releaseRms` precisely BECAUSE the release threshold is the lower
+// of the two; invert them and the latch clears on frames that are still above
+// the flush bar, so onRelease can fire repeatedly inside a single run and the
+// documented at-most-once contract is gone.
+//
+// It is reachable without touching this file. s2s-bridge.js's bargeTuning()
+// reads MYTHOS_BARGE_RMS and MYTHOS_BARGE_RELEASE_RMS from localStorage and
+// passed both straight through with no ordering check, so an operator raising
+// the release bar to quiet a noisy room — the exact thing that override exists
+// for — could silently put it at or above the flush bar.
+//
+// The shipped ratio, kept so a clamp preserves the DESIGNED relationship rather
+// than inventing an epsilon: 0.05 / 0.056 = 0.893.
+export const BACKSTOP_RELEASE_TO_FLUSH_RATIO =
+  BACKSTOP_RELEASE_RMS_THRESHOLD / BACKSTOP_RMS_THRESHOLD;
 
 // Int16 little-endian PCM (what pcm-capture-worklet.js emits) -> RMS in the
 // same -1..1 scale voice-loop.js's rms() produces from its Uint8 analyser data,
@@ -65,13 +116,64 @@ export function rmsFromPcm16(buffer) {
   return Math.sqrt(sum / samples.length);
 }
 
-// onFlush is called at most once per sustained-loud run. It is the caller's
-// player.flush() — which carries its own TAIL_GUARD_SEC, so a near-finished
-// sentence still gets to finish rather than losing its last word (BUG-061).
-export function createBargeInBackstop({ onFlush, threshold, holdFrames } = {}) {
+// onFlush RE-ARMS. It is called once per `holdFrames` of continuous loud audio,
+// NOT once per run — this comment used to claim "at most once per sustained-loud
+// run" and that was simply untrue: decideBargeIn() returns
+// `newBargeAboveCount: 0` when it fires, so the counter restarts and a long run
+// flushes again every holdFrames. Measured 2026-08-19: 12 loud frames at the
+// shipped 3-frame hold produce FOUR onFlush calls, not one.
+//
+// Left as it is, because the behaviour is harmless where onRelease's would not
+// have been: player.flush() carries its own TAIL_GUARD_SEC and is a no-op on an
+// already-empty queue, so the second and later calls in a run do nothing. Only
+// the false contract is fixed. onRelease is the tier that genuinely needs
+// at-most-once (it reopens the mic path), and that one IS latched, deliberately,
+// by `releasedThisRun` below.
+//
+// It is the caller's player.flush() — which carries its own TAIL_GUARD_SEC, so a
+// near-finished sentence still gets to finish rather than losing its last word
+// (BUG-061).
+//
+// onRelease is the eager tier: also at most once per run, and it must NOT stop
+// playback. Its only job is to open s2s-bridge's half-duplex gate so the
+// operator's audio starts flowing to Gemini immediately. It fires before onFlush
+// on a run loud enough to reach both, and on its own on a run that never does.
+export function createBargeInBackstop({
+  onFlush, onRelease, threshold, holdFrames, releaseThreshold, releaseHoldFrames,
+} = {}) {
   const rmsThreshold = typeof threshold === 'number' ? threshold : BACKSTOP_RMS_THRESHOLD;
   const ticks = typeof holdFrames === 'number' ? holdFrames : BACKSTOP_HOLD_FRAMES;
+  const releaseRms = typeof releaseThreshold === 'number'
+    ? releaseThreshold : BACKSTOP_RELEASE_RMS_THRESHOLD;
+  const releaseTicks = typeof releaseHoldFrames === 'number'
+    ? releaseHoldFrames : BACKSTOP_RELEASE_HOLD_FRAMES;
+  // NO ORDERING CLAMP HERE, and the reason is worth keeping. 2026-08-19 (backlog
+  // M5) added one — refusing a release threshold at or above the flush threshold
+  // and pulling it back under — on the reasoning that observe()'s once-per-run
+  // latch depends on the release tier being the lower of the two. That reasoning
+  // was WRONG, and a probe against this module said so: the latch clears on
+  // `lastLevel <= releaseRms` and fires on `lastLevel > releaseRms`, so the two
+  // conditions are mutually exclusive on any single frame no matter where the
+  // FLUSH threshold sits. onRelease fired exactly once per run at the defaults,
+  // with the tiers inverted and a level above both, and with a level between
+  // them.
+  //
+  // The clamp also cost a real capability: MYTHOS_BARGE_RELEASE_RMS exists so an
+  // operator can walk the eager tier back, and setting it deliberately
+  // unreachable (0.9) is how you turn it off. The clamp rewrote that to ~0.02 and
+  // made it fire on nearly every frame — the opposite of the request. An inverted
+  // ordering does not corrupt any state; it just makes the release tier
+  // unreachable, which is exactly what an operator setting it high is asking for.
+  // See test/barge-in-tier-ordering.test.js, which pins both facts.
   let aboveCount = 0;
+  let releaseCount = 0;
+  let releasedThisRun = false;
+  // The RMS of the most recently observed frame. Exposed because it was NEVER
+  // MEASURED ANYWHERE: after the 2026-08-14 session "the threshold is too high"
+  // could only be inferred from the absence of flushes, never read off a number.
+  // s2s-bridge tracks the peak of this across each held gate and logs one line
+  // per hold, so the next session yields the figure instead of another inference.
+  let lastLevel = 0;
 
   // Idempotency with the server signal, in both directions. Whichever of the
   // two verdicts lands first stops the audio and zeroes the run; the other then
@@ -79,24 +181,66 @@ export function createBargeInBackstop({ onFlush, threshold, holdFrames } = {}) {
   // what makes the SECOND one cheap rather than merely harmless — without it a
   // server interrupt would leave a half-accumulated local run that could tip
   // over on the first frame of the NEXT reply.
-  function reset() { aboveCount = 0; }
+  function reset() { aboveCount = 0; releaseCount = 0; releasedThisRun = false; }
 
-  // Returns true iff this frame triggered a local flush. `speaking` must be the
-  // player's real isSpeaking() — when nothing is playing there is nothing to
-  // barge into, and decideBargeIn() is a documented pass-through no-op there.
+  // Returns true iff this frame triggered a local FLUSH. The eager release is
+  // reported through onRelease, not through the return value, so the existing
+  // "did we cut MYTHOS off?" contract every caller and test already relies on is
+  // unchanged. `speaking` must be the player's real isSpeaking() — when nothing
+  // is playing there is nothing to barge into, and decideBargeIn() is a
+  // documented pass-through no-op there.
   function observe(frame, speaking) {
-    if (!speaking) { aboveCount = 0; return false; }
+    // Measured before the speaking gate so the instrumentation is honest even in
+    // the states that take no decision — a peak of 0 must mean silence, never
+    // "we did not look".
+    lastLevel = rmsFromPcm16(frame);
+    if (!speaking) { reset(); return false; }
+
+    // Eager tier first: on a run loud enough for both, the mic must reopen no
+    // later than the moment playback stops, never a frame after it.
+    const releaseDecision = decideBargeIn({
+      level: lastLevel,
+      assistantSpeaking: true,
+      bargeAboveCount: releaseCount,
+      thresholds: { bargeThreshold: releaseRms, bargeHoldTicks: releaseTicks },
+    });
+    releaseCount = releaseDecision.newBargeAboveCount;
+    // A quiet frame ends the run for BOTH tiers (decideBargeIn zeroes the count
+    // on any level at or below its threshold, and the release threshold is the
+    // lower of the two), so this is where the once-per-run latch clears.
+    if (lastLevel <= releaseRms) releasedThisRun = false;
+    if (releaseDecision.shouldBargeIn && !releasedThisRun) {
+      releasedThisRun = true;
+      if (onRelease) onRelease(lastLevel);
+    }
+
     const decision = decideBargeIn({
-      level: rmsFromPcm16(frame),
+      level: lastLevel,
       assistantSpeaking: true,
       bargeAboveCount: aboveCount,
       thresholds: { bargeThreshold: rmsThreshold, bargeHoldTicks: ticks },
     });
     aboveCount = decision.newBargeAboveCount;
     if (!decision.shouldBargeIn) return false;
-    if (onFlush) onFlush();
+    if (onFlush) onFlush(lastLevel);
     return true;
   }
 
-  return { observe, reset, pendingFrames: () => aboveCount };
+  return {
+    observe,
+    reset,
+    pendingFrames: () => aboveCount,
+    pendingReleaseFrames: () => releaseCount,
+    lastLevel: () => lastLevel,
+    // The thresholds actually in force, and whether a clamp was applied. Same
+    // reasoning as lastLevel above: "the threshold is wrong" was only ever
+    // inferable from the absence of flushes, so the values a session ran with
+    // must be readable rather than reconstructed from which overrides were set.
+    thresholds: () => ({
+      flushRms: rmsThreshold,
+      flushHoldFrames: ticks,
+      releaseRms,
+      releaseHoldFrames: releaseTicks,
+    }),
+  };
 }

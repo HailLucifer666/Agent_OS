@@ -14,8 +14,16 @@ const SEVERITY = {
   'provider-down':      'major',
   'effector-flapping':  'major',
   'budget-exhausted':   'major',
-  'event-storm':        'major',
-  'tick-overrun':       'minor',
+  // 2026-08-20: 'event-storm' (major) and 'tick-overrun' (minor) were REMOVED,
+  // not corrected. Nothing in src/ or server/ ever emitted either one, so both
+  // rows classified a condition that cannot occur while reading as coverage of
+  // a bus storm and a stalled loop. The real signals are elsewhere and are not
+  // anomalies: the storm guard emits 'perception.coalesced' (bus/index.js:49)
+  // and the only overrun signal is logger.warn('loop.stalled')
+  // (loop-lag.js:51). Deliberately deleted rather than wired — giving either a
+  // severity requires a real emitter AND a healer playbook, which is a feature,
+  // not a table fix. Re-add in the same commit that adds an emitter.
+  // test/anomaly-kind-conformance.test.js now fails on any phantom kind here.
   'memory-growth':      'minor',
   'quota-low':          'minor',
   // reflection.js:215 emits this when reflectOnActions spots a repeated
@@ -43,14 +51,22 @@ function playbookLookup(kind) {
   return hit ? hit.id : null;
 }
 
-function diagnose(anomaly) {
+// B2 (2026-08-14): sourceEventId is the bus id of the health.anomaly event this
+// diagnosis came from, threaded through so the healer's health.healed can carry
+// it and the two episodic records written for one event (the anomaly, and the
+// healer's verdict) become countable as a pair. Without it, every tally made
+// from the vault was inflated 2x — 2026-08-14's "238 anomalies" was ~119 events.
+// Optional and defaulted, so every existing caller (and test) that passes only
+// the payload keeps working and simply gets a null.
+function diagnose(anomaly, sourceEventId) {
   anomaly = anomaly || {};
   return {
     kind: anomaly.kind,
     target: anomaly.target,
     evidence: anomaly,
     severity: severityOf(anomaly.kind),
-    suggestedAction: playbookLookup(anomaly.kind)
+    suggestedAction: playbookLookup(anomaly.kind),
+    sourceEventId: sourceEventId || null
   };
 }
 
@@ -58,7 +74,7 @@ function createDiagnostician({ bus }) {
   if (!bus) throw new Error('createDiagnostician requires bus');
 
   function onAnomaly(event) {
-    const diagnosis = diagnose(event.payload);
+    const diagnosis = diagnose(event.payload, event && event.id);
     // 'health.diagnosed' — exact string, do not paraphrase.
     bus.emit('health.diagnosed', diagnosis);
   }

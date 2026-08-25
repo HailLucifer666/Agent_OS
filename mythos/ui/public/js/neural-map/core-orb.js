@@ -69,6 +69,13 @@ export function mountCoreOrb(canvas, ctx) {
     listening: cssVar('--orb-listening', '#43e5a0'),
     speaking: cssVar('--orb-speaking', '#f5d020'),
     online: cssVar('--orb-online', '#4fd8ff'),
+    // Wave 2 (2026-08-13): s2s-bridge.js's mic-suspend gate (own-TTS/media
+    // echo guard) used to drop frames while the orb kept showing 'listening'
+    // — the operator had no visual reason to doubt they were being heard.
+    // Reuses the dim/offline token rather than inventing a new hue: this is
+    // "not actually listening right now", closer to offline than to any
+    // active state.
+    muted: cssVar('--orb-offline', '#8ba3c4'),
   };
   // idle/online share the accent token; legacy local aliases kept for ACTION_COLORS
   // and the per-state plasma/orbital code below, which still read named consts.
@@ -127,7 +134,7 @@ export function mountCoreOrb(canvas, ctx) {
   const STATE_LINE = {
     offline: 'ENTITY OFFLINE', booting: 'ENTITY BOOTING', confirm: 'AWAITING CONFIRM',
     degraded: 'ENTITY DEGRADED', thinking: 'PROCESSING', listening: 'LISTENING',
-    speaking: 'SPEAKING', online: 'ENTITY ONLINE',
+    speaking: 'SPEAKING', online: 'ENTITY ONLINE', muted: 'MIC MUTED',
   };
 
   function resolveState() {
@@ -137,17 +144,18 @@ export function mountCoreOrb(canvas, ctx) {
     if (degraded) return 'degraded';
     if (voiceState === 'speaking') return 'speaking';
     if (voiceState === 'processing') return 'thinking';
+    if (voiceState === 'muted') return 'muted';
     if (voiceState === 'listening') return 'listening';
     return 'online';
   }
   function statusColor() { return STATE_COLOR[resolveState()]; }
   function statusLine() { return STATE_LINE[resolveState()]; }
 
-  // aria-live announce — #hud-status-live is one of exactly two live regions
-  // in the whole HUD (the other is kanban.js's #kanban-note); this pushes
-  // STATE_LINE[state] only on an actual state TRANSITION, never per frame
-  // (resolveState() is otherwise recomputed every frame for drawing, which
-  // would make a screen reader unusable if echoed at that rate).
+  // aria-live announce — #hud-status-live is one of exactly three live regions
+  // in the whole HUD (the others: kanban.js's #kanban-note, conversation.js's
+  // sr-only #conv-live transcript mirror); this pushes STATE_LINE[state] only on
+  // an actual state TRANSITION, never per frame (resolveState() is recomputed
+  // every frame for drawing; echoing at that rate makes a screen reader unusable).
   const statusLiveEl = document.getElementById('hud-status-live');
   let lastAnnouncedState = null;
   function announceState(state) {
@@ -833,11 +841,12 @@ export function mountCoreOrb(canvas, ctx) {
   return {
     setDegraded(v) { degraded = !!v; },
     notifyConfirmResolved() { confirmPending = false; },
-    // voice-loop states (idle|listening|processing|speaking) — each has its own
-    // glow color: idle=cyan, listening=green, processing=purple, speaking=yellow.
+    // voice-loop states (idle|listening|processing|speaking|muted) — each has
+    // its own glow color: idle=cyan, listening=green, processing=purple,
+    // speaking=yellow, muted=dim (Wave 2, 2026-08-13 — s2s-bridge.js's mic gate).
     // Hardware states (downloading/disabled/error/unsupported) collapse to idle.
     setVoiceState(s) {
-      voiceState = (s === 'listening' || s === 'processing' || s === 'speaking') ? s : 'idle';
+      voiceState = (s === 'listening' || s === 'processing' || s === 'speaking' || s === 'muted') ? s : 'idle';
     },
     // live voice amplitude 0..1 — drives the speaking-state plasma boost, arc
     // speed, and outward halo waves. Harmless no-op at other states.
