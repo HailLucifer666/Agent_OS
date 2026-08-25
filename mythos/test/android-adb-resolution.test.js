@@ -200,6 +200,55 @@ describe('BUG-360: the adapter resolves instead of trusting the config default',
   });
 });
 
+describe('BUG-360: doctor and the runtime cannot disagree about whether adb is here', () => {
+  // Found by a concurrent session reviewing the fix, and it is the sharper half
+  // of the bug. Through the entire outage `node scripts/doctor.js` printed
+  //   OK    Android platform-tools (adb)    <repo>/Android Platform Tools/...
+  //   No gaps. Every tracked key, model and binary is present.
+  // while all 14 phone_* tools were dead. Not a wrong answer — a DIFFERENT
+  // QUESTION. doctor asked resolveAdbPath(), the single directory --install
+  // would write into, and that file really did exist; the adapter meanwhile
+  // spawned bare 'adb'. Two components, two resolvers, two truths, and the
+  // diagnostic tool vouching for the broken one.
+  //
+  // Fixing only the adapter would have left the divergence pointing the other
+  // way, which is why this is pinned rather than just corrected: with
+  // MYTHOS_TOOLS_DIR set, resolveAdbPath() names userData ALONE, so doctor
+  // would have reported NOT FOUND for a repo-installed adb the adapter resolves
+  // and uses without complaint.
+  const doctor = require('../scripts/doctor.js');
+
+  it('doctor reports adb present exactly when the adapter can resolve one', () => {
+    // NOTE the absence of a `if (!rows) return` escape hatch. The first draft of
+    // this test guarded on a doctor export that does not exist
+    // (doctor.collectChecks), so it returned early and passed while asserting
+    // nothing — a vacuous guard, which is the same species of problem as the bug
+    // it was written for. assetChecks() is the real export; if it is ever
+    // renamed this test must fail loudly rather than quietly stop testing.
+    const rows = doctor.assetChecks();
+    const row = rows.find((g) => g.id === 'adb');
+    assert.ok(row, 'doctor must still have an adb row');
+    assert.equal(row.ok, Boolean(setupAndroid.findInstalledAdb()),
+      'doctor and the runtime resolver must give the same verdict — a diagnostic that '
+      + 'disagrees with the runtime is worse than no diagnostic');
+  });
+
+  it('doctor asks the search resolver, not the single write-target path', () => {
+    // Source-shape guard, because the divergence is invisible on a machine where
+    // both answers happen to coincide — which is every machine that has adb in
+    // the repo, i.e. the one this was missed on. Deliberately narrow: it pins
+    // WHICH function the adb row calls, not the row's formatting.
+    const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'doctor.js'), 'utf8');
+    const adbRow = /id:\s*'adb'[\s\S]{0,400}?\},/.exec(src);
+    assert.ok(adbRow, "doctor.js must still carry an id:'adb' row");
+    assert.match(adbRow[0], /findInstalledAdb\(\)/,
+      "doctor's adb row must resolve through findInstalledAdb()");
+    assert.doesNotMatch(adbRow[0], /ok:\s*fileAtLeast\(android\.resolveAdbPath\(\)/,
+      'resolveAdbPath() is the WRITE target only — using it here is the exact check that '
+      + 'reported "No gaps" while every phone tool was dead');
+  });
+});
+
 describe('BUG-360: an OFFLINE adapter says which adb it could not find', () => {
   it('names the resolved path in the hint when one was resolved', () => {
     const bogus = path.join(os.tmpdir(), 'definitely-not-installed', 'adb-custom');

@@ -246,11 +246,27 @@ function assetChecks() {
       fix: 'node scripts/setup-dsh.js --install',
     },
     {
+      // BUG-360 follow-up. This asked android.resolveAdbPath(), which is the
+      // WRITE target — the single directory --install would unpack into — and
+      // therefore answered a different question from the one the runtime asks.
+      // Through the whole of BUG-360 doctor printed "OK  Android platform-tools
+      // (adb)" and "No gaps" while all 14 phone_* tools were dead, because the
+      // repo copy it pointed at genuinely existed and the adapter was spawning
+      // bare 'adb' instead. Fixing only the adapter would have left the same
+      // divergence pointing the other way: with MYTHOS_TOOLS_DIR set,
+      // resolveAdbPath() names userData only, so doctor would report NOT FOUND
+      // for a repo-installed adb the adapter finds and uses happily.
+      //
+      // findInstalledAdb() is the runtime's own resolver. Two components
+      // answering "is adb here" with two different functions is the defect
+      // class, not the individual wrong answer — test/android-adb-resolution
+      // pins that doctor and the adapter cannot diverge again.
       id: 'adb',
       label: 'Android platform-tools (adb)',
       required: false,
-      ok: fileAtLeast(android.resolveAdbPath(), 1),
-      detail: android.resolveAdbPath(),
+      ok: Boolean(android.findInstalledAdb()),
+      detail: android.findInstalledAdb()
+        || 'not found in ' + android.androidSearchDirs().join(' | '),
       why: 'every phone_* effector shells out to adb',
       fix: 'node scripts/setup-android.js --install',
     },
