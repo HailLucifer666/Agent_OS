@@ -62,7 +62,46 @@ Rules to prevent a repeat:
    before writing.
 2. **Commit verified fixes immediately** — never leave live-verified work
    sitting uncommitted while other sessions may be running.
-3. **After any `git pull` that touches `ps-automation.ps1`**, re-check that
+3. **Two sessions in one checkout share one git INDEX, and the loser does not
+   find out.** Proven twice on 2026-08-22 within an hour. First, an uncommitted
+   fix — source edits, its test file and a BUGS.md entry — was reverted wholesale
+   by the other session; it survived only because of an unrelated scratch backup.
+   Then a `git add`ed test file was swallowed by the other session's index-wide
+   commit while this session's pre-commit hook was still running its suite, so
+   262 lines of BUG-322 are committed under a BUG-319 message, and for the length
+   of one commit `HEAD` carried a test without the fix it tests. That second one
+   passed both hooks, because **a hook runs the suite against the WORKING TREE,
+   which is not what gets committed.**
+
+   Two rules follow. **`git add` publishes your work to a shared index** — keep
+   the window between `add` and `commit` to seconds, never the length of a test
+   run, and prefer `git commit -- <pathspec>` on already-tracked files so no
+   `add` is needed at all. And **if two sessions will run at once, give one of
+   them a worktree** — that removes the shared index entirely rather than
+   managing it:
+
+   ```
+   git worktree add .claude/worktrees/<name> -b <branch> HEAD
+   node mythos/scripts/setup-worktree.js --path .claude/worktrees/<name>
+   ```
+
+   Branching from `HEAD` is deliberate: the tooling default is
+   `origin/<default-branch>`, which silently leaves your current work behind.
+
+   **A fresh worktree tests LESS than the main checkout, and does not say so.**
+   `git worktree add` copies tracked files only, and six gitignored paths are
+   needed to run the real suite. Missing `node_modules` fails loudly; missing
+   FIXTURES do not fail at all — the licence guards `t.skip()` honestly when
+   theirs are absent. Measured: a fresh worktree reported 6031 tests, 0 failures
+   and **2 silent skips**, both of them redistribution guards that block release.
+   Run `sync-test-count.js --write` there and `skipped=2` becomes the committed
+   baseline. `setup-worktree.js` links all six and `--check` reports what is
+   missing; `test/worktree-setup-links.test.js` fails if a new fixture-gated
+   guard appears that the list does not cover. After setup, **verify by running
+   the full suite in the worktree and demanding the same numbers as the main
+   checkout, `skipped=0` included.**
+
+4. **After any `git pull` that touches `ps-automation.ps1`**, re-check that
    these load-bearing pieces still exist before trusting the file:
    UTF-8 console encoding block, `Await-WinRTOperation` (explicit
    `[type]$ResultType` param), `$TargetPid` parameters (NEVER `$pid` — it is a

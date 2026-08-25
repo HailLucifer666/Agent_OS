@@ -60,7 +60,22 @@ describe('REMEDIATION: executePipelineCard sets a clean job.spec, not the boiler
       }
     };
     const buildRunner = createBuildRunner({ config: {}, brain, bus: fakeBus(), vault: vaultFs, verifier });
-    const agentActions = createAgentActions({ fs: vaultFs, pipeline, kanban, buildRunner, brain, webSearch: async () => ({ ok: true, result: { results: [] } }), webFetch: async () => ({ ok: true, result: { content: '' } }) });
+    // BUG-329: this used to hand back ZERO results, and the test still passed —
+    // because the pipeline's "a feature build must have research" refusal fired
+    // inside run(), which is AFTER verification, so verify() had already been
+    // called and the assertions below were satisfied by a job that then failed.
+    // The refusal now happens before the first generation, which is the whole
+    // point of that change, so an empty search means nothing is ever verified.
+    // The subject of this test is job.spec's purity, not the research gate, so
+    // the search answers.
+    const agentActions = createAgentActions({
+      fs: vaultFs, pipeline, kanban, buildRunner, brain,
+      webSearch: async () => ({
+        ok: true,
+        result: { results: [{ title: 'Calculator patterns', url: 'https://example.invalid/calc', snippet: 'notes' }] },
+      }),
+      webFetch: async () => ({ ok: true, result: { content: 'body' } }),
+    });
 
     try {
       const card = pipeline.capture(IDEA_TEXT, 'test');

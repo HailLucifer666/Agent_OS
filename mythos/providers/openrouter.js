@@ -47,7 +47,9 @@ async function chat(messages, opts = {}) {
     } catch {
       // ignore parse failure, keep statusText
     }
-    throw new Error(`openrouter chat failed: ${res.status} ${detail}`);
+    const err = new Error(`openrouter chat failed: ${res.status} ${detail}`);
+    err.status = res.status; // BUG-336: typed provider-fault identity for chain.js
+    throw err;
   }
 
   let full = '';

@@ -8,7 +8,9 @@
 // honestly flagged as "with-issues" rather than silently passing garbage.
 
 var path = require('path');
-var designSystemEngine = require('../design/system');
+var designSystemPrompt = require('./design-system-prompt');
+var reviewStatusLib = require('./review-status');
+var groundingCheck = require('./grounding-check');
 var buildPack = require('../skills/build-pack');
 var personas = require('../agents/personas');
 var { reasonText } = require('../util/reason-text');
@@ -121,6 +123,9 @@ function extractJsonBlock(raw) {
 }
 
 var riskClassifierLib = require('./risk-classifier');
+// BUG-329: the research gate and its live-data rule. Extracted because
+// adding it here pushed this file past its one-directional size ratchet.
+var buildResearch = require('./build-research');
 var completionStatusLib = require('./completion-status');
 
 function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, brain, buildEngine, webSearch, webFetch, browserAgent, evidenceValidator, bus }) {
@@ -186,54 +191,14 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
     return job;
   }
 
-  // ---- P22: Research gate — grounds the builder with real web data ----
-  // Calls web_search for the topic, then web_fetch on top results to get real
-  // content. Returns a condensed brief injected into the builder's prompt so
-  // it works with actual data instead of hallucinating from training memory.
-  async function researchForBuild(topic, maxResults) {
-    if (!webSearch) return null;
-    try {
-      var searchRes = await webSearch({ query: topic, maxResults: maxResults || 5 });
-      if (!searchRes || !searchRes.ok || !searchRes.result || !searchRes.result.results) return null;
-      var results = searchRes.result.results.slice(0, maxResults || 5);
-      if (!results.length) return null;
-
-      // Fetch the top 2-3 results for deeper content
-      var briefs = [];
-      var fetchCount = Math.min(results.length, 3);
-      for (var i = 0; i < fetchCount; i++) {
-        if (!webFetch) break;
-        try {
-          var fetched = await webFetch({ url: results[i].url });
-          if (fetched && fetched.ok && fetched.result && fetched.result.content) {
-            var content = String(fetched.result.content).slice(0, 800);
-            briefs.push({ title: results[i].title, url: results[i].url, snippet: results[i].snippet || '', content: content });
-          }
-        } catch (_) { /* best-effort — snippet alone is still useful */ }
-      }
-
-      // Build the research brief (max 2000 chars to stay within context budget)
-      var lines = ['RESEARCH BRIEF (real web data — use this, do not hallucinate):'];
-      for (var j = 0; j < results.length; j++) {
-        var r = results[j];
-        lines.push((j + 1) + '. ' + (r.title || 'Untitled') + ' — ' + (r.url || ''));
-        if (r.snippet) lines.push('   ' + String(r.snippet).slice(0, 200));
-      }
-      if (briefs.length) {
-        lines.push('');
-        lines.push('KEY CONTENT EXTRACTS:');
-        for (var k = 0; k < briefs.length; k++) {
-          lines.push('— ' + briefs[k].title + ': ' + briefs[k].content.slice(0, 400));
-        }
-      }
-      var brief = lines.join('\n');
-      if (brief.length > 2000) brief = brief.slice(0, 2000) + '\n[...truncated]';
-      return brief;
-    } catch (_) {
-      return null; // research is best-effort — don't block builds on network issues
-    }
-  }
-
+  // ---- P22/BUG-329: the research gate lives in effectors/build-research.js --
+  // It runs in build-runner's preparePrompt hook, before the first generation,
+  // rather than inside run(), which is downstream of the verifier. Its header
+  // carries the measurement. Constructed here because it needs this factory's
+  // injected webSearch/webFetch/bus.
+  var research = buildResearch.createBuildResearch({
+    webSearch: webSearch, webFetch: webFetch, bus: bus,
+  });
   // ---- A3: social-media research via agent-reach — REMOVED 2026-08-20 ----
   //
   // This block shelled out to two commands that do not exist and never did:
@@ -516,6 +481,23 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       kind: 'pipeline-execute',
       goalId: goalId,
       prompt: basePrompt,
+      // BUG-310: awaited by build-runner BEFORE the first generation, so every
+      // generation in the job — first draft, verification retry, refine
+      // regenerations, grounded rebuild — works from the real design system.
+      // `card.text` and not basePrompt: the resolver keyword-matches its whole
+      // argument, so prompt boilerplate would choose the design.
+      // BUG-329: research joins the design system in this hook, so BOTH reach
+      // the FIRST generation. It is no longer conditional on `designSystem`: a
+      // deployment without the design skill still needs its research, and the
+      // old shape skipped the hook entirely in that case.
+      preparePrompt: async function(p, job) {
+        var out = p;
+        if (designSystem) out = await designSystemPrompt.prependDesignSystem(out, card.text);
+        // fatalOnMissing: true preserves this path's existing policy — the
+        // pipeline already refused to ship a feature build with no research,
+        // it just refused AFTER paying for a generation and a verification.
+        return research.researchIntoPrompt(out, job, card.text, card.risk || 'feature', true);
+      },
       // REMEDIATION P0-2: a job that fails before run() ever executes (e.g.
       // the build engine itself is offline) previously left the card at
       // execute/progress:25 forever with no trace of failure —
@@ -533,64 +515,51 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           });
         } catch (_) { /* best-effort */ }
       },
-      run: async function(raw, j) {
+      run: async function(raw, j, preparedPrompt) {
+        // BUG-310: adopt the prompt build-runner actually generated from, so the
+        // grounded rebuild and the review retry below regenerate from the SAME
+        // prompt as the first draft (design system included) rather than from
+        // the unprepared string this closure captured.
+        if (preparedPrompt) basePrompt = preparedPrompt;
+
         // P23: Risk-classified gate path — scale rigor to the change type
         var risk = card.risk || 'feature';
         var needsResearch = riskClassifierLib.requiresResearch(risk);
         var needsReview = riskClassifierLib.requiresReview(risk);
         var needsVisual = riskClassifierLib.requiresVisual(risk);
 
-        // Auto-use the real skill tool: for UI/frontend builds, run
-        // ui-ux-pro-max's search.py to resolve a genuine design system from
-        // its CSV database, and prepend it to the prompt so the build model
-        // works from real colors/styles/typography instead of improvising.
-        // Falls back to the home-grown designSystemEngine substitute only if
-        // the skill or Python is absent. Best-effort: never blocks a build.
-        // (Resolved here in run() because the skill-tool call is async and
-        // executePipelineCard must stay sync for its callers.)
-        if (designSystem) {
-          try {
-            var dsBlock = await buildPack.resolveDesignSystemTool(card.text);
-            if (!dsBlock) {
-              var ds = designSystemEngine.generateDesignSystem(card.text);
-              dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
-            }
-            if (dsBlock) basePrompt = dsBlock + '\n\n' + basePrompt;
-          } catch (_) { /* design system lookup is best-effort */ }
-        }
+        // BUG-310: the design system used to be resolved HERE, which was too
+        // late — build-runner calls run() after the first generation, after
+        // verification and after the whole refine loop, so the only generation
+        // that read it was the grounded rebuild below, and a build that skipped
+        // research read it nowhere. It now rides the preparePrompt hook.
 
-        // P22: Research gate — gather real web data before committing to the build.
-        // The initial `raw` was generated without grounding; if research returns
-        // a brief, regenerate with the grounded prompt for a properly sourced build.
-        // P23: skip for tiny-fix and quick-win (low-risk work doesn't need web grounding)
-        // A4: track researchStatus — never fail silently. If research was required
-        // but returned nothing, flag the artifact so the model/operator knows it
-        // was built ungrounded. Previously this was invisible.
-        var researchStatus = needsResearch ? 'pending' : 'not-required';
-        if (needsResearch) {
-          var researchBrief = await researchForBuild(card.text, 5);
-
-          // FOR FEATURE/ARCH-CHANGE: research is mandatory - throw if failed
-          if (!researchBrief) {
-            throw new Error('Research gate failed: unable to fetch live data for "' + card.text + '" (required for risk=' + risk + ')');
-          }
-
-          if (researchBrief) {
-            researchStatus = 'grounded';
-            try {
-              var grounded = await generateContent(basePrompt + '\n\n' + researchBrief, 'pipeline-grounded:' + j.id);
-              if (grounded && !grounded.offline && grounded.content) {
-                raw = grounded.content;
-              }
-            } catch (_) { /* research/rebuild failed — use original raw */ }
-          }
-        }
+        // BUG-329: the research gate MOVED to the preparePrompt hook, which
+        // build-runner awaits before the first generation. It used to live right
+        // here, and here is after the first generation AND after the verifier —
+        // so a brief that could not be satisfied without live data was rejected
+        // by the verifier and this code never ran. The gate that supplies the
+        // data ran after the gate that checks for it.
+        //
+        // Two consequences beyond the obvious one. The first draft is now
+        // grounded, so the "generate ungrounded, then regenerate with the brief"
+        // pair that used to sit here is gone — one whole generation removed from
+        // the happy path. And the fatal-if-missing refusal is now raised before
+        // anything is generated rather than after, so a doomed job stops costing
+        // a build.
+        //
+        // These are read off the job record rather than recomputed: repeating
+        // the search here would pay for it twice and could disagree with what
+        // the model was actually given.
+        var researchStatus = j.researchStatus || (needsResearch ? 'pending' : 'not-required');
+        var researchBrief = j.researchBrief || null;
 
         var artifact = saveDeliverable(raw, card.text, 'pipeline');
 
         // P22: Full review gate — visual verify + reviewer + reality check
         // P23: skip for tiny-fix (build only) and quick-win (verify-only, no full review)
         var review = needsReview ? await fullReview(card, artifact, brain) : { verdict: 'approve', issues: [], visualDescription: '' };
+        review = groundingCheck.reviewWithGrounding(review, raw, { spec: card.text, brief: researchBrief, researchStatus: researchStatus }); // BUG-314
 
         // If rejected, retry once with the issues fed back to the builder
         if (review.verdict === 'reject' && !j._reviewRetried) {
@@ -605,7 +574,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
             if (retryResult && !retryResult.offline && retryResult.content) {
               // Overwrite the artifact with the retry
               artifact = saveDeliverable(retryResult.content, card.text, 'pipeline');
-              review = await fullReview(card, artifact, brain);
+              review = groundingCheck.reviewWithGrounding(await fullReview(card, artifact, brain), retryResult.content, { spec: card.text, brief: researchBrief, researchStatus: researchStatus }); // BUG-314: the retry must clear grounding too, not just re-review
             }
           } catch (_) { /* retry failed — ship original with issues flagged */ }
         }
@@ -613,15 +582,9 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // Ship — with honest status flag. buildFailed:false clears any stale
         // failure flag a PRIOR job attempt left on this same card (onFailed
         // above) — otherwise a successful retry would still read as failed.
-        var reviewed = review.verdict === 'approve';
         var shipMeta = { progress: 100, jobId: j.id, artifact: artifact, risk: risk, researchStatus: researchStatus, buildFailed: false };
-        if (!reviewed) {
-          shipMeta.reviewIssues = review.issues;
-          shipMeta.reviewStatus = 'failed';
-        } else {
-          shipMeta.reviewStatus = 'approved';
-          if (review.visualDescription) shipMeta.visualReview = review.visualDescription;
-        }
+        // BUG-316: a review that never ran must not record as 'approved'.
+        Object.assign(shipMeta, reviewStatusLib.deriveReviewMeta(review, needsReview));
 
         // C1: evidence.pass used to mean only "the gate phases ran", which a
         // human reads as "the thing works" — those are different facts, and
@@ -629,10 +592,19 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // evidence.pass:true). The completion payload folds in BOTH the
         // review verdict and whether the content actually came from the real
         // build engine, so nothing downstream can announce this as done.
+        //
+        // BUG-311/316: reviewRequired and refineStatus are now supplied too. The
+        // first lets a DECLARED skip finish while an undeclared one cannot; the
+        // second means a visually rejected artifact ('reverted'/'exhausted')
+        // stops reading as done — the 2026-08-22 build shipped refineStatus
+        // 'reverted' after the visual gate listed six defects, and this call
+        // never saw that field.
         var completion = completionStatusLib.deriveCompletionPayload({
-          reviewStatus: shipMeta.reviewStatus, buildEngine: j.engine
+          reviewStatus: shipMeta.reviewStatus, buildEngine: j.engine,
+          reviewRequired: needsReview, refineStatus: j.refineStatus
         });
         shipMeta.status = completion.status;
+        if (j.refineStatus) shipMeta.refineStatus = j.refineStatus;
 
         // P23: Evidence validator — external gate that blocks ship if required
         // phases are missing evidence. Cannot be bypassed by the agent.
@@ -663,7 +635,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         } else {
           pipeline.moveCard(card.id, 'execute', shipMeta);
         }
-        return { artifact: artifact, review: review, researchStatus: researchStatus };
+        return { artifact: artifact, review: review, researchStatus: researchStatus, reviewStatus: shipMeta.reviewStatus, reviewRequired: needsReview };
       }
     });
     // REMEDIATION P2-8: same fix as buildKanbanCard's job.spec below — the
@@ -723,6 +695,24 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
       goalId: goalId,
       prompt: basePrompt,
       persona: builderPersona,
+      // BUG-310: see executePipelineCard's preparePrompt. Same hook, same
+      // reason; the topic here is title + detail, as it always was.
+      // BUG-329: as in executePipelineCard — design system AND research, both
+      // before the first generation, and no longer skipped entirely when the
+      // design skill is absent.
+      //
+      // fatalOnMissing: false keeps this path's existing tolerance. A kanban
+      // card is frequently something the web cannot help with ("build a snake
+      // game" classifies as a feature, so research is nominally required), and
+      // failing every such build when the network is down would be a worse
+      // outcome than building it ungrounded and saying so. researchIntoPrompt
+      // still refuses outright when the brief itself names live data.
+      preparePrompt: async function(p, job) {
+        var topic = card.title + ' ' + (card.detail || '');
+        var out = p;
+        if (designSystem) out = await designSystemPrompt.prependDesignSystem(out, topic);
+        return research.researchIntoPrompt(out, job, topic, riskClassifierLib.classify(topic), false);
+      },
       // REMEDIATION P0-2: same fix as executePipelineCard's onFailed above —
       // a job that fails before run() ever executes otherwise leaves the
       // card with no trace of failure at all.
@@ -735,7 +725,11 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
           });
         } catch (_) { /* best-effort */ }
       },
-      run: async function(raw, j) {
+      run: async function(raw, j, preparedPrompt) {
+        // BUG-310, same as executePipelineCard: adopt the prompt build-runner
+        // generated from, so the rebuild paths below match the first draft.
+        if (preparedPrompt) basePrompt = preparedPrompt;
+
         var slug = (card.title || 'card').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
 
         // P23: Risk-classified gate path for kanban cards
@@ -743,45 +737,18 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         var needsResearch = riskClassifierLib.requiresResearch(risk);
         var needsReview = riskClassifierLib.requiresReview(risk);
 
-        // Auto-use the real skill tool: for UI/frontend cards, run
-        // ui-ux-pro-max's search.py for a genuine design system. Mirrors
-        // executePipelineCard's resolution. Falls back to designSystemEngine.
-        if (designSystem) {
-          try {
-            var dsTopic = card.title + ' ' + (card.detail || '');
-            var dsBlock = await buildPack.resolveDesignSystemTool(dsTopic);
-            if (!dsBlock) {
-              var ds = designSystemEngine.generateDesignSystem(dsTopic);
-              dsBlock = designSystemEngine.formatDesignSystemForPrompt(ds);
-            }
-            if (dsBlock) basePrompt = dsBlock + '\n\n' + basePrompt;
-          } catch (_) { /* design system lookup is best-effort */ }
-        }
-
-        // P22: Research gate — gather real web data before committing to the build.
-        // A4: track researchStatus for observability (never fail silently).
-        var researchStatus = needsResearch ? 'pending' : 'not-required';
-        if (needsResearch) {
-          var researchTopic = card.title + ' ' + (card.detail || '');
-          var researchBrief = await researchForBuild(researchTopic, 5);
-          if (researchBrief) {
-            researchStatus = 'grounded';
-            try {
-              var grounded = await generateContent(basePrompt + '\n\n' + researchBrief, 'kanban-grounded:' + j.id, builderPersona);
-              if (grounded && !grounded.offline && grounded.content) {
-                raw = grounded.content;
-              }
-            } catch (_) { /* research/rebuild failed — use original raw */ }
-          } else {
-            researchStatus = 'skipped';
-            if (bus) bus.emit('health.anomaly', { kind: 'research-skipped', cardId: card.id, topic: String(researchTopic).slice(0, 100) });
-          }
-        }
+        // BUG-329: moved to the preparePrompt hook — see the long note on the
+        // same change in executePipelineCard above. The first draft is grounded
+        // now, so the ungrounded-then-regenerate pair that used to sit here is
+        // gone, and the anomaly for a skipped search is emitted from the hook.
+        var researchStatus = j.researchStatus || (needsResearch ? 'pending' : 'not-required');
+        var researchBrief = j.researchBrief || null;
 
         var artifact = saveDeliverable(raw, slug + '-' + j.id, 'kanban');
 
         // P22: Full review gate (P23: skip for tiny-fix)
         var review = needsReview ? await fullReview(card, artifact, brain) : { verdict: 'approve', issues: [], visualDescription: '' };
+        review = groundingCheck.reviewWithGrounding(review, raw, { spec: card.title + ' ' + (card.detail || ''), brief: researchBrief, researchStatus: researchStatus }); // BUG-314
 
         // If rejected, retry once with the issues fed back
         if (review.verdict === 'reject' && !j._reviewRetried) {
@@ -796,31 +763,27 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
             );
             if (retryResult && !retryResult.offline && retryResult.content) {
               artifact = saveDeliverable(retryResult.content, slug + '-' + j.id + '-r', 'kanban');
-              review = await fullReview(card, artifact, brain);
+              review = groundingCheck.reviewWithGrounding(await fullReview(card, artifact, brain), retryResult.content, { spec: card.title + " " + (card.detail || ""), brief: researchBrief, researchStatus: researchStatus }); // BUG-314
             }
           } catch (_) { /* retry failed — ship original with issues flagged */ }
         }
 
-        var reviewed = review.verdict === 'approve';
         // buildFailed:false clears any stale failure flag a prior job attempt
         // left on this card (onFailed above) — a successful retry must not
         // still read as failed.
         var patchMeta = { lane: 'review', jobId: j.id, builderOutput: artifact.title, artifact: artifact, researchStatus: researchStatus, buildFailed: false };
-        if (!reviewed) {
-          patchMeta.reviewIssues = review.issues;
-          patchMeta.reviewStatus = 'failed';
-        } else {
-          patchMeta.reviewStatus = 'approved';
-          if (review.visualDescription) patchMeta.visualReview = review.visualDescription;
-        }
+        Object.assign(patchMeta, reviewStatusLib.deriveReviewMeta(review, needsReview)); // BUG-316
         // C1: same rule as executePipelineCard's shipMeta — a failed review,
         // or content that came from the fallback engine rather than the real
-        // one, must never read as a finished build downstream.
+        // one, must never read as a finished build downstream. BUG-311/316 adds
+        // the declared-skip and visual-rejection signals.
         patchMeta.status = completionStatusLib.deriveCompletionPayload({
-          reviewStatus: patchMeta.reviewStatus, buildEngine: j.engine
+          reviewStatus: patchMeta.reviewStatus, buildEngine: j.engine,
+          reviewRequired: needsReview, refineStatus: j.refineStatus
         }).status;
+        if (j.refineStatus) patchMeta.refineStatus = j.refineStatus;
         kanban.patchCard(card.id, patchMeta);
-        return { artifact: artifact, review: review, researchStatus: researchStatus };
+        return { artifact: artifact, review: review, researchStatus: researchStatus, reviewStatus: patchMeta.reviewStatus, reviewRequired: needsReview };
       }
     });
     // FIX H (bug 2): the clean topic, not basePrompt (design-system boilerplate +
@@ -872,7 +835,9 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
   return {
     saveDeliverable: saveDeliverable,
     extractJsonBlock: extractJsonBlock,
-    researchForBuild: researchForBuild,
+    // BUG-329: now implemented in build-research.js. Re-exported under the same
+    // name so existing callers and tests do not have to care where it lives.
+    researchForBuild: research.researchForBuild,
     verifyBuildVisually: verifyBuildVisually,
     fullReview: fullReview,
     executePipelineCard: executePipelineCard,

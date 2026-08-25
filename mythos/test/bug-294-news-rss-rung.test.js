@@ -256,9 +256,19 @@ describe('BUG-294: failure and non-changes', () => {
       path.join(__dirname, '..', 'src', 'core', 'voice', 'live-tools.js'), 'utf8');
     assert.match(liveTools, /'web_search'/,
       'web_search must still be in DEFAULT_ALLOWLIST, or the voice path cannot reach this rung');
+    // BUG-315 moved the rung's body from web-search.js into news-rung.js, so
+    // this can no longer look for the require in one named file — that pinned a
+    // LOCATION where the invariant is "reuse server/news-feed, do not
+    // reimplement parseRss". Read both files: the chain must reach the rung, and
+    // the rung must reach the module we already own.
     const chain = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'core', 'effectors', 'web-search.js'), 'utf8');
-    assert.match(chain, /news-feed/, 'the chain must call the module we already own, not a copy of it');
+    const rung = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'core', 'effectors', 'news-rung.js'), 'utf8');
+    assert.match(chain, /news-rung/, 'web_search must still reach the news rung');
+    assert.match(rung, /news-feed/, 'the rung must call the module we already own, not a copy of it');
+    assert.doesNotMatch(rung, /function parseRss/,
+      'parseRss must stay in server/news-feed.js — a second copy is the defect this guards');
   });
 });
 

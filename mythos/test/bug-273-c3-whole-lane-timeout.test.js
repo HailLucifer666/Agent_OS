@@ -84,7 +84,12 @@ describe('BUG-273 C3 — a whole-lane timeout takes no cooldown', () => {
   });
 
   it('Q8 — 429 / 5xx / network still cool down immediately, unchanged', () => {
-    assert.match(chain, /var namesAProvider = isRateLimit \|\| isServerError \|\| isNetwork;/,
+    // BUG-336: namesAProvider is now derived from classifyProviderError()
+    // (typed err.kind/status/code first, prose as visible fallback). The
+    // behavioural contract these three tiers name a provider on their own and
+    // must not be deferred is enforced by chain-provider-error-classification
+    // .test.js; this pin stays structural so nobody can quietly defer them.
+    assert.match(chain, /var namesAProvider = cls\.kind === 'rate-limit' \|\| cls\.kind === 'server' \|\| cls\.kind === 'network';/,
       'these three name a provider on their own and must not be deferred');
     assert.match(chain, /if \(namesAProvider\) \{[\s\S]{0,400}markCooldown\(lane, model, cooldownMs\)/,
       'and they must still mark the cooldown inside the loop');

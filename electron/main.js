@@ -12,6 +12,45 @@
 // injects decrypted values ONLY into the child process env (server-side). The
 // preload surface (preload.js) exposes no value-returning channel to the
 // renderer — names + booleans only.
+//
+// ---------------------------------------------------------------------------
+// THIS FILE IS DELIBERATELY NOT SPLIT, and that is a decision, not neglect.
+// (Audit item 13, Phase 6, 2026-08-22. Pinned by
+// mythos/test/electron-main-stays-whole.test.js.)
+//
+// It is well over 2,500 lines against a house limit of 800, and it stays that
+// way. (No exact figure here on purpose — a number a human types is a number
+// nobody updates. The ratchet test holds the real one.)
+//
+// The reason is load order. Several Electron exports are lazy getters that
+// THROW until the app emits 'ready' — screen, powerMonitor, session,
+// desktopCapturer among them — and merely reading the property counts as using
+// it. A defensive `typeof x.method !== 'function'` check is enough to kill the
+// app. That is not hypothetical here: the cursor-overlay slice shipped with 16
+// passing tests, a walked installer artefact and 2,598 green tests, and the
+// shell would not start at all. The guard WAS the crash. Root CLAUDE.md records
+// it in full.
+//
+// Splitting a file moves requires around, and moving requires is exactly the
+// operation that reorders when those getters are first touched. Worse, the
+// suite cannot see the damage: unit tests inject a fake `screen`, so they stay
+// green while the real app is dead on launch. A green suite cannot tell you the
+// desktop app boots — the only detector is starting it.
+//
+// So the trade is: a file over the limit, which is a readability cost paid
+// continuously, versus a class of unbootable-app bug that no test catches. The
+// file stays whole.
+//
+// WHAT IS ENFORCED INSTEAD, so this is not merely a promise:
+//   - ready-gated Electron APIs are required lazily AT THEIR USE SITE, never
+//     destructured from require('electron') at module scope. The destructure on
+//     the next line is limited to exports that are safe before ready.
+//   - mythos/test/electron-main-stays-whole.test.js asserts that, and asserts
+//     this decision comment still exists — so splitting the file means first
+//     deleting the explanation of why not to.
+//   - the file-size ratchet (mythos/test/file-size-ratchet.test.js) records the
+//     current size as a ceiling, so the exception cannot quietly get bigger.
+// ---------------------------------------------------------------------------
 
 const { app, BrowserWindow, ipcMain, safeStorage, globalShortcut } = require('electron');
 const path = require('node:path');

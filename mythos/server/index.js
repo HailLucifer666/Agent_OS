@@ -199,6 +199,7 @@ function createServer(deps) {
   const kanbanEffector = deps.kanbanEffector;    // P7 effectors/kanban.js
   const pipelineEffector = deps.pipelineEffector; // P7 effectors/pipeline.js
   const effectors = deps.effectors;              // hub — .invoke, .breakers, .effectors
+  const geminiLiveBreakers = require('../src/core/voice/live-breakers.js').ensureGeminiLiveBreakerWired({ bus: bus, config: config, effectors }); // BUG-340: wiring lives in voice/live-breakers.js
   const leash = deps.leash;                      // P5 — .check, .confirm.{create,accept,reject}
   const goals = deps.goals;                       // cognitive GoalSystem — .debitBudget
   const probes = deps.probes;                     // P6 immune/probes.js — .getStatus()
@@ -624,15 +625,10 @@ function createServer(deps) {
   // pre-existing test depends on it) and is completely untouched by this;
   // this only tightens what counts as a VALID token once the operator has
   // chosen to set one.
-  const MIN_AUTH_TOKEN_LENGTH = 16;
-  const WEAK_AUTH_TOKEN_RE = /^(password|changeme|admin|secret|letmein|qwerty|default|token|test|12345678)/i;
-  function weakAuthTokenReason(token) {
-    if (token.length < MIN_AUTH_TOKEN_LENGTH) return `shorter than the ${MIN_AUTH_TOKEN_LENGTH}-char minimum`;
-    if (/^(.)\1*$/.test(token)) return 'a single character repeated';
-    if (new Set(token.toLowerCase()).size < 4) return 'too few distinct characters (low entropy)';
-    if (WEAK_AUTH_TOKEN_RE.test(token)) return 'matches a common/weak token pattern';
-    return null;
-  }
+  // H3(b) (security audit, 2026-08-08) — weak-token rejection at boot; the
+  // check itself lives in src/core/server/boot-guards.js (ratchet extraction,
+  // BUG-337). Running with NO token on loopback stays the documented default.
+  const { weakAuthTokenReason, MIN_AUTH_TOKEN_LENGTH } = require('../src/core/server/boot-guards.js');
   if (AUTH_TOKEN) {
     const weakReason = weakAuthTokenReason(AUTH_TOKEN);
     if (weakReason) {
@@ -864,6 +860,10 @@ function createServer(deps) {
 
   app.use(express.json({ limit: '1mb' }));
 
+  // BUG-337: DNS-rebinding guard — implementation in boot-guards.js; loopback binds only (behind a proxy Host IS foreign and tokens are mandatory anyway).
+  const { createLoopbackHostGuard } = require('../src/core/server/boot-guards.js');
+  if (isLoopbackBind) app.use(createLoopbackHostGuard({ configuredPort: PORT }));
+
   const globalLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_GLOBAL) || 240, scope: 'global-api' });
   const expensiveLimit = createLimiter({ windowMs: 60000, max: Number(process.env.RATE_LIMIT_EXPENSIVE) || 8, scope: 'expensive' });
 
@@ -979,7 +979,7 @@ function createServer(deps) {
     if (PIN_UNLOCK_EXEMPT_PATHS.has(req.path)) return next();
     return requireToken(req, res, next);
   });
-  app.use('/vault/builds', requireToken);
+  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken, pinSessionRequired, pinSessionValid: (r) => pinSession.isValid(extractCookieToken(r)) })); // BUG-317: a signed artifact link substitutes for the bearer token, never for the PIN session
 
   // ---- static asset delivery: compression + caching -----------------------
   //
@@ -2345,7 +2345,7 @@ function createServer(deps) {
         return;
       }
     }
-    proactiveSpeak(e.payload.text);
+    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // ---- Boot greeting (JARVIS-style) ----
@@ -2567,7 +2567,7 @@ function createServer(deps) {
       // "Reminder: walk the dog" as the operator's own words called
       // reminder_add on it — the reminder re-created itself, 9 seconds later.
       // This wording is self-describing as a completed event instead.
-      proactiveSpeak('This reminder has just fired and is now complete: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) });
+      proactiveSpeak('This reminder has just fired and is now complete: ' + e.payload.text, undefined, { alertSound: Boolean(e.payload.alertSound) }).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     }
   });
 
@@ -2590,7 +2590,7 @@ function createServer(deps) {
         return;
       }
     } catch (_) {}
-    proactiveSpeak(e.payload.text);
+    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
         conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
@@ -2598,10 +2598,10 @@ function createServer(deps) {
     } catch (_) {}
   });
   bus.subscribe('plan.checkin', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
   bus.subscribe('plan.evening-review', (e) => {
-    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text);
+    if (e && e.payload && e.payload.text) proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // Idle-mull follow-ups (cortex/index.js emits 'cortex.thought' after every
@@ -2625,7 +2625,7 @@ function createServer(deps) {
     if (lastTurnAt && now - lastTurnAt < quietMs) return;
     if (lastFollowupAt && now - lastFollowupAt < gapMs) return;
     lastFollowupAt = now;
-    proactiveSpeak(String(e.payload.text));
+    proactiveSpeak(String(e.payload.text)).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // Gmail triage — proactive speech when the gmail-sensor finds genuinely new
@@ -2673,7 +2673,7 @@ function createServer(deps) {
       logger.info('gmail.batch-deferred-to-greeting', { count: count });
       return;
     }
-    proactiveSpeak(text);
+    proactiveSpeak(text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
         conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
@@ -2946,7 +2946,7 @@ function createServer(deps) {
           // speaking in the old voice while every other surface had switched —
           // the picker would look broken precisely for the operator who is
           // using Live, which is now the default whenever a Google key exists.
-          config: liveConfigNow(), bus, logger, spend, breakers: effectors.breakers,
+          config: liveConfigNow(), bus, logger, spend, breakers: geminiLiveBreakers,
           createSocket: createLiveSocket, // test-only seam; undefined in production
           // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
           // buildSetup() calls it fresh on every open()/reconnect so the local
@@ -3518,12 +3518,7 @@ function createServer(deps) {
             let audioB64 = null;
         let chunkMime;
             try {
-              // GAP-ANALYSIS-2026-08-24 M2-sibling: this was the one synthesis
-              // site with no signal. sendChain serializes chunks, so a hung
-              // sidecar here stalled every later chunk and the whole vision
-              // turn (undici ~300s). 30s matches ACTION_TIMEOUT_MS default;
-              // the catch below already degrades the chunk honestly.
-              const out = await activeChain.synthesize({ text: spoken, signal: AbortSignal.timeout(30000) });
+              const out = await activeChain.synthesize({ text: spoken, signal: AbortSignal.timeout(30000) }); // GAP-ANALYSIS M2-sibling: hung sidecar here stalled every later chunk and the vision turn (undici ~300s); 30s = ACTION_TIMEOUT_MS
               audioB64 = out.audio.toString('base64');
               chunkMime = out.mime;
             } catch (err) {

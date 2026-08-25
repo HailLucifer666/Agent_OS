@@ -303,9 +303,24 @@ function renderTabContent(engagement, activeTab) {
 
 function renderSpecTabContent(engagement) {
   if (!engagement.spec?.markdown) {
+    // BUG-341: an empty spec is exactly when the operator needs the button —
+    // pressing it surfaces the machine's refusal verbatim instead of silence.
+    if (engagement.status === 'SPEC_READY') {
+      return `<div style="margin: 16px;">
+        <button class="engag-btn engag-btn-primary" type="button" data-action="build-plan">Build plan</button>
+        <span data-role="build-plan-error" style="color: var(--danger, #e5484d); font-size: 12px; margin-left: 8px;"></span>
+      </div>`;
+    }
     return '<div class="engag-skeleton-block" style="height: 120px; margin: 16px;"></div>';
   }
-  return `<div class="engag-spec-markdown">${renderMarkdown(engagement.spec.markdown)}</div>`;
+  let html = `<div class="engag-spec-markdown">${renderMarkdown(engagement.spec.markdown)}</div>`;
+  if (engagement.status === 'SPEC_READY') {
+    html += `<div style="margin-top: 12px; display: flex; gap: 8px; align-items: center;">
+      <button class="engag-btn engag-btn-primary" type="button" data-action="build-plan">Build plan</button>
+      <span data-role="build-plan-error" style="color: var(--danger, #e5484d); font-size: 12px;"></span>
+    </div>`;
+  }
+  return html;
 }
 
 function renderPlanTabContent(engagement) {
@@ -687,6 +702,23 @@ export async function render(mount) {
   const detailPanel = document.getElementById('engag-detail');
 
   detailPanel.addEventListener('click', (e) => {
+    // BUG-341: SPEC_READY advance — the call that was never made anywhere.
+    const buildPlanBtn = e.target.closest('[data-action="build-plan"]');
+    if (buildPlanBtn) {
+      const id = state.selectedId;
+      const errEl = detailPanel.querySelector('[data-role="build-plan-error"]');
+      if (errEl) errEl.textContent = '';
+      buildPlanBtn.disabled = true;
+      transitionEngagement(id, 'buildPlan')
+        .then(() => renderListAndDetail())
+        .catch((err) => {
+          const message = (err && err.message) || String(err);
+          if (errEl) errEl.textContent = message;
+          else console.error('buildPlan refused', message);
+        })
+        .finally(() => { buildPlanBtn.disabled = false; });
+      return;
+    }
     const tab = e.target.closest('.engag-detail-tab');
     if (!tab) return;
     state.activeTab = tab.dataset.tab;

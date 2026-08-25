@@ -75,6 +75,11 @@ function load(makeOverrides) {
   wa.registerFromWhatsapp({ register() {} }, {
     memory: { fs: { readJSONStrict: () => ({}) } },
     logger: { warn() {}, info() {} },
+    // BUG-359 seam: these cases exercise the EXHAUSTED-poll refusal, which now
+    // waits WINDOW_SETTLE_MS (6s) per send in production. Zero here keeps the
+    // suite fast without changing what is asserted.
+    windowSettleMs: 0,
+    windowPollMs: 0,
   });
   return { wa, calls };
 }

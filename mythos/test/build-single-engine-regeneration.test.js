@@ -39,6 +39,15 @@ const { createAgentActions } = require('../src/core/effectors/agent-actions');
 
 // Sources that generate ARTIFACT CONTENT, as opposed to the review/verify
 // machinery that legitimately reasons with the brain.
+//
+// BUG-329 UPDATED THIS FILE'S SUBJECT, NOT ITS THESIS. The grounded
+// regeneration this file was written around no longer exists: research moved
+// into the preparePrompt hook, so the FIRST generation is the grounded one and
+// `pipeline-grounded:` / `kanban-grounded:` are never emitted. The thesis —
+// every artifact byte comes from the build engine and brain.think never
+// generates content — is unchanged, and the assertions now make it at the first
+// generation. The two dead tags stay in this pattern deliberately: if either
+// ever reappears it is a content generation and must be counted.
 const CONTENT_SOURCE_RE = /^(build-runner:|pipeline-grounded:|pipeline-retry:|kanban-grounded:|kanban-retry:)/;
 
 function setup(opts) {
@@ -110,22 +119,31 @@ function contentBrainCalls(env) {
 }
 
 describe('builds use one engine end to end (no brain.think for content)', () => {
-  it('the research-grounded regeneration goes through the build engine, not the brain', async () => {
+  it('the research brief reaches the FIRST engine generation, through no other engine', async () => {
     const env = setup();
     try {
       // "landing page" classifies as risk=feature, which is what turns the
-      // research gate — and therefore the regeneration — on.
+      // research gate on.
       const card = env.pipeline.capture('Build a landing page for a pet shop, dark premium theme', 'test');
       env.pipeline.approve(card.id);
       const jobId = env.agentActions.executePipelineCard(card.id, null).job.id;
       const job = await waitForJobFinished(env.buildRunner, jobId);
       assert.equal(job.status, 'done');
 
-      const grounded = env.engineCalls.filter((c) => String(c.source).indexOf('pipeline-grounded:') === 0);
-      assert.equal(grounded.length, 1, 'the grounded rebuild must call buildEngine.generate exactly once');
-      assert.match(grounded[0].prompt, /pet shop/, 'the spec must survive into the grounded prompt');
-      assert.match(grounded[0].prompt, /example\.com|snippet text|fetched body/,
-        'the research brief must be included, otherwise grounding is theatre');
+      // BUG-329: the grounded generation is now the FIRST one, not a rebuild
+      // after it. Before the move, the verifier judged the ungrounded draft and
+      // the grounded rebuild shipped without ever passing the gate.
+      const first = env.engineCalls[0];
+      assert.ok(first, 'no generation happened at all');
+      assert.match(String(first.source), /^build-runner:/, 'source was ' + first.source);
+      assert.match(first.prompt, /pet shop/, 'the spec must survive into the prompt');
+      assert.match(first.prompt, /example\.com|snippet text|fetched body/,
+        'the research brief must be in the FIRST prompt, otherwise grounding is theatre');
+      assert.equal(job.researchStatus, 'grounded');
+
+      const grounded = env.engineCalls.filter((c) => /-grounded:/.test(String(c.source)));
+      assert.deepEqual(grounded, [],
+        'the second, post-verification generation is gone — one draft, grounded, verified');
 
       assert.deepEqual(contentBrainCalls(env), [],
         'brain.think must never generate build content when an engine is present');
@@ -169,12 +187,18 @@ describe('builds use one engine end to end (no brain.think for content)', () => 
       const jobId = env.agentActions.buildKanbanCard(card.id).job.id;
       await waitForJobFinished(env.buildRunner, jobId);
 
-      const grounded = env.engineCalls.filter((c) => String(c.source).indexOf('kanban-grounded:') === 0);
-      assert.equal(grounded.length, 1, 'the kanban grounded rebuild must use the engine');
-      assert.match(grounded[0].prompt, /pet shop/);
-      // Hermes has no persona parameter, so the builder voice must be folded
-      // into the prompt rather than silently dropped on the way through.
-      assert.ok(grounded[0].prompt.length > 200, 'persona + base prompt must both reach the engine');
+      // BUG-329: same move as the pipeline test above — the grounded generation
+      // is the first one, so that is where these assertions belong.
+      const first = env.engineCalls[0];
+      assert.ok(first, 'no generation happened at all');
+      assert.match(String(first.source), /^build-runner:/, 'source was ' + first.source);
+      assert.match(first.prompt, /pet shop/);
+      assert.match(first.prompt, /example\.com|snippet text|fetched body/,
+        'the kanban research brief must reach the first prompt too');
+      // The build engine has no persona parameter, so the builder voice must be
+      // folded into the prompt rather than silently dropped on the way through.
+      assert.ok(first.prompt.length > 200, 'persona + base prompt must both reach the engine');
+      assert.deepEqual(env.engineCalls.filter((c) => /-grounded:/.test(String(c.source))), []);
       assert.deepEqual(contentBrainCalls(env), []);
     } finally { cleanupVaultDir(env.dir); }
   });
@@ -210,8 +234,14 @@ describe('builds use one engine end to end (no brain.think for content)', () => 
       const jobId = agentActions.executePipelineCard(card.id, null).job.id;
       const job = await waitForJobFinished(buildRunner, jobId);
       assert.equal(job.status, 'done');
-      assert.ok(calls.some((c) => String(c.source).indexOf('pipeline-grounded:') === 0),
-        'without an engine the brain must still perform the grounded rebuild');
+      // BUG-329: there is no separate grounded rebuild to look for any more. The
+      // back-compat claim this test makes is that a caller wiring no engine still
+      // gets its content generated — through the brain, on the build-runner
+      // source, with the research brief in it.
+      const content = calls.filter((c) => String(c.source).indexOf('build-runner:') === 0);
+      assert.ok(content.length >= 1, 'without an engine the brain must still generate the content');
+      assert.match(String(content[0].messages[0].content), /example\.com|body/,
+        'and it must still be grounded in the research');
     } finally { cleanupVaultDir(dir); }
   });
 });

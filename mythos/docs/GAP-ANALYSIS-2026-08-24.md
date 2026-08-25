@@ -62,7 +62,7 @@ Every hop confirmed by reading the actual require/subscribe/dispatch edges this 
 | 8 unhandled rejection | REMEDIATED | crash-handlers main.js:143 |
 | 9 spawn-as-node assertion | REMEDIATED | spawn-runs-as-node-guard.test.js |
 | 10 untrue reprobe assertion | REMEDIATED | immune.test.js:578 asserts a definite state on BOTH reprobe branches |
-| 12 skill score ambiguity | CONFIRMED OPEN at HEAD | memory/skills.js:34 `successRate: skillData.successRate || 0`; newborn skills ship uses:0/successRate:0 (:8) — never-tried still indistinguishable from always-fails |
+| 12 skill score ambiguity | REMEDIATED (audit retraction 2026-08-24: an earlier row here said CONFIRMED OPEN — that was wrong, it read only the write/parse defaults and missed recordUse) | memory/skills.js:165-180 implements neverMeasured = priorUses===0 && oldRate===0 with the fail-fail-succeed incident recorded; pinned by test/memory.test.js:453; goals/index.js keys on `uses` for newborn skills |
 | 13 file split + guard | OPEN | index.js 4491 / main.js 2457 / from-browser 1506 / live-tool-adapter 1382 lines; no guard |
 | 14 silent catches | standing decision respected | recount pending |
 

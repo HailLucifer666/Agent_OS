@@ -15,6 +15,17 @@
 
 // Placeholder/generic-template patterns — if any appear, the deliverable is
 // likely a generic template rather than a spec-matched build.
+// Shared with risk-classifier.js — see keyword-match.js's header for why
+// String.includes was wrong here in both directions.
+var keywordMatch = require('../effectors/keyword-match');
+
+// BUG-325: everything above this line checks VOCABULARY — that the artifact
+// mentions a hero, mentions animation, does not say "lorem ipsum". None of it
+// asks whether the page executes what it declares. execution-checks.js does,
+// and its header records the measurement that made it necessary: an artifact
+// that named Newsreader and Roboto, loaded neither, and passed every gate here.
+var executionChecks = require('./execution-checks');
+
 var PLACEHOLDER_PATTERNS = [
   /lorem\s+ipsum/i,
   /50,?000\+\s+(users|creators|listeners|customers|people)/i,
@@ -85,6 +96,42 @@ var DESIGN_ELEMENT_PATTERNS = {
 // artifact is broken". Structural elements deliberately stay out of this set.
 var SOFT_ELEMENTS = new Set(['animation', 'fade-in', 'scroll-reveal', 'particle']);
 
+// BUG-313 — WHAT THE LLM JUDGE IS ALLOWED TO SEE.
+//
+// The judge is asked "does the deliverable match the spec topic? is the content
+// about the right topic? is the title derived from the spec?" and used to be
+// handed content.slice(0, 2000). DELIVERABLE_PREAMBLE instructs the build model
+// to inline all CSS and JS, so on a real single-file page the first 2000
+// characters are entirely a <style> block. The judge was asked about content it
+// had never been shown.
+//
+// Measured on the artifact shipped 2026-08-22:
+//   total chars: 5436 | <body> at: 3329 | first 2000 chars contain <body>? false
+// It answered honestly — "Hero section content not visible in snippet—cannot
+// confirm 'UN Secretary-General lab' topic match" — and the build shipped anyway.
+//
+// So: elide <style> and <script> BODIES (they are not content, and they are what
+// crowds the window), then keep the head — the judge is asked about the <title>,
+// so dropping it would break the other half of the same question — and spend the
+// remaining budget on the body. Bounded, because this runs on every build.
+var HEAD_SHARE = 0.3;
+
+function judgeSample(content, max) {
+  var text = String(content == null ? '' : content);
+  if (!text) return '';
+  var cap = typeof max === 'number' && max > 0 ? max : 2000;
+  var stripped = text
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '<style>/* elided */</style>')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '<script>/* elided */</script>');
+  if (stripped.length <= cap) return stripped;
+  var bodyAt = stripped.search(/<body\b/i);
+  if (bodyAt === -1) return stripped.slice(0, cap);
+  // Keep enough head to carry <title>, then as much body as fits.
+  var headBudget = Math.min(bodyAt, Math.floor(cap * HEAD_SHARE));
+  var bodyBudget = cap - headBudget;
+  return stripped.slice(0, headBudget) + '\n<!-- ... -->\n' + stripped.slice(bodyAt, bodyAt + bodyBudget);
+}
+
 function createVerifier({ brain }) {
   if (!brain || typeof brain.think !== 'function') {
     return { verify: function() { return Promise.resolve({ pass: true, issues: [], warnings: [] }); } };
@@ -134,28 +181,51 @@ function createVerifier({ brain }) {
       var specLower = String(spec).toLowerCase();
       var requiredElements = [];
 
-      if (specLower.includes('hero') || specLower.includes('hero-centric') || specLower.includes('hero section')) {
+      // BUG-312 (requirement half): these were String.includes, which is wrong
+      // in two separate ways and both were live on 2026-08-22.
+      //
+      // Too loose: 'cta' matched inside "spectacular" (and "octagonal"), 'neon'
+      // inside "neonatal", 'mobile' inside "automobile" — so a page could be
+      // required to have a call-to-action because the brief called it
+      // spectacular. Fixed by matching whole words (keyword-match.js).
+      //
+      // Negation-blind: a spec reading "light theme, not dark" pushed
+      // 'dark.theme' onto requiredElements and then hard-failed the artifact for
+      // not being dark. That is the verifier demanding the opposite of the
+      // brief, so the requirement side asks negationAware and an explicitly
+      // ruled-out element is not required. The PATTERN side (what counts as
+      // satisfying the requirement) is a separate defect, handled separately.
+      var needs = function (words) {
+        return keywordMatch.matchesAny(specLower, words, { negationAware: true });
+      };
+
+      if (needs(['hero', 'hero-centric', 'hero section'])) {
         requiredElements.push('hero');
       }
-      if (specLower.includes('cta') || specLower.includes('call to action') || specLower.includes('primary action')) {
+      if (needs(['cta', 'call to action', 'primary action'])) {
         requiredElements.push('cta');
       }
-      if (specLower.includes('animation') || specLower.includes('animate') || specLower.includes('fade') || specLower.includes('smooth')) {
+      if (needs(['animation', 'animate', 'fade', 'smooth'])) {
         requiredElements.push('animation');
       }
-      if (specLower.includes('fade.in') || specLower.includes('fade-in') || specLower.includes('fade in')) {
+      // 'fade.in' was a literal dot in a String.includes call, so it could only
+      // ever match the exact text "fade.in", which no brief writes. Dropped
+      // rather than carried forward as a dead alternative; 'fade-in'/'fade in'
+      // are the real spellings and matchesAny normalises the separator.
+      if (needs(['fade-in', 'fade in'])) {
         requiredElements.push('fade-in');
       }
-      if (specLower.includes('scroll.reveal') || specLower.includes('scroll-reveal') || specLower.includes('reveal on scroll') || specLower.includes('reveal on scroll')) {
+      // Same for 'scroll.reveal', and 'reveal on scroll' was listed twice.
+      if (needs(['scroll-reveal', 'scroll reveal', 'reveal on scroll'])) {
         requiredElements.push('scroll-reveal');
       }
-      if (specLower.includes('particle') || specLower.includes('synapse') || specLower.includes('neon')) {
+      if (needs(['particle', 'synapse', 'neon'])) {
         requiredElements.push('particle');
       }
-      if (specLower.includes('dark') || specLower.includes('dark theme') || specLower.includes('dark mode')) {
+      if (needs(['dark', 'dark theme', 'dark mode'])) {
         requiredElements.push('dark.theme');
       }
-      if (specLower.includes('responsive') || specLower.includes('mobile')) {
+      if (needs(['responsive', 'mobile'])) {
         requiredElements.push('responsive');
       }
 
@@ -168,6 +238,17 @@ function createVerifier({ brain }) {
             found = true;
             break;
           }
+        }
+        // BUG-325: a MEASURED dark surface satisfies a dark-theme requirement
+        // even when the file never says the word. Claude's page for the
+        // 2026-08-23 dark-digest brief contains "dark" zero times, paints
+        // body{background:var(--bg)} with --bg:#09090B, and was hard-failed here
+        // for "missing required design element: dark.theme". A rule that rejects
+        // a correct artifact for its vocabulary is the same defect as one that
+        // accepts a wrong artifact for its vocabulary.
+        if (!found && elem === 'dark.theme') {
+          var darkness = executionChecks.pageDarkness(content);
+          if (darkness.known && darkness.dark) found = true;
         }
         if (!found && patterns.length > 0) {
           var message = 'missing required design element: ' + elem +
@@ -185,6 +266,23 @@ function createVerifier({ brain }) {
         }
       }
     }
+
+    // BUG-325 — EXECUTION, NOT VOCABULARY. Mechanical yes/no questions about
+    // the source: is a named webfont actually loaded, is the headline bigger
+    // than the body copy, is a "landing page" more than a stub. These are
+    // issues rather than warnings deliberately: build-runner feeds issues back
+    // into one regeneration ("your previous output had these problems"), and a
+    // missing stylesheet link is precisely the kind of miss a model fixes when
+    // told. Anything this parser could be wrong about comes back as a warning
+    // instead — see execution-checks.js for what it declines to check at all.
+    //
+    // Measured over the 25 artifacts in the vault on 2026-08-23: 5 fail, every
+    // one for a real reason (four named-but-unloaded faces — Newsreader, Roboto,
+    // Plus Jakarta Sans, Geist — and one 36px landing-page headline), and
+    // Claude's page for the same brief passes clean.
+    var execution = executionChecks.run(content, spec);
+    issues = issues.concat(execution.issues);
+    warnings = warnings.concat(execution.warnings);
 
     // LLM self-check on first 2000 chars. Its findings are ADVISORY warnings,
     // not hard-fail issues — the LLM-judge tends to veto legitimate stylistic
@@ -206,7 +304,7 @@ function createVerifier({ brain }) {
           '". Does the deliverable match the spec topic? Is the title derived from the spec (not an invented brand name)? ' +
           'Is the content about the right topic (not a generic template about a different product)? ' +
           'Respond as JSON: {"pass": true/false, "issues": ["issue1", "issue2"]}\n\n' +
-          'Deliverable (first 2000 chars): ' + content.slice(0, 2000)
+          'Deliverable (CSS/JS elided, head + body sample): ' + judgeSample(content, 2000)
         }],
         schemaHint: '{ pass: boolean, issues: string[] }',
         source: 'build-verifier',
@@ -221,7 +319,38 @@ function createVerifier({ brain }) {
     return { pass: issues.length === 0, issues: issues, warnings: warnings };
   }
 
-  return { verify: verify };
+  return { verify: verify, retryGuidanceFor: retryGuidanceFor };
 }
 
-module.exports = { createVerifier: createVerifier, _PLACEHOLDER_PATTERNS: PLACEHOLDER_PATTERNS };
+// BUG-350 (2026-08-24): retry guidance mapping. The measured @media data
+// (2/9 -> 8/9 passes) showed builds comply when the requirement is stated in
+// the prompt up front — so a failed verification should restate the violated
+// contract, not just echo the rule name. Pure + table-driven so the mapping
+// is testable without generating anything. Unknown rules get the generic
+// verbatim instruction; nothing here softens a hard-fail into a pass.
+const RETRY_GUIDANCE_RULES = [
+  { match: /cta/i, clause: 'Include one primary call-to-action: an <a> or <button> whose class contains "cta".' },
+  { match: /@media|responsive/i, clause: 'Include @media breakpoints so the layout adapts below tablet width.' },
+  { match: /\btitle\b/i, clause: 'The <title> and the visible headline must use words taken from the spec itself - never an invented brand or topic.' },
+  { match: /placeholder|lorem/i, clause: 'Remove every placeholder and lorem-ipsum fragment; all copy must be real spec-derived content.' },
+  { match: /animation/i, clause: 'Include the animation the spec names (CSS keyframes with a visible trigger).' },
+  { match: /dark[ ._-]?theme/i, clause: 'Honour the requested dark theme end-to-end: background, text and accent tokens from the palette section.' },
+];
+
+function retryGuidanceFor(issues) {
+  const list = Array.isArray(issues) ? issues : [issues];
+  if (!list.length) return '';
+  const clauses = [];
+  for (const issue of list.map(String)) {
+    const hit = RETRY_GUIDANCE_RULES.find((r) => r.match.test(issue));
+    clauses.push(hit ? '- ' + hit.clause : '- Fix this exactly as stated: ' + issue);
+  }
+  return 'Contract clauses your regenerated output must satisfy:\n' + clauses.join('\n');
+}
+
+module.exports = {
+  createVerifier: createVerifier,
+  retryGuidanceFor: retryGuidanceFor,
+  _PLACEHOLDER_PATTERNS: PLACEHOLDER_PATTERNS,
+  _judgeSample: judgeSample,
+};

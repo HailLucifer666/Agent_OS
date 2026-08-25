@@ -246,14 +246,31 @@ function createBuildEngine(deps) {
   // re-pointed rather than relaxed. Anyone reading this after the Hermes
   // deletion should not conclude the ruling was quietly dropped along with the
   // program it originally named.
+  //
+  // BUG-321: the install hint used to be unconditional. On 2026-08-22 two builds
+  // died at the 600s ceiling with a load-time crash, and the failure message
+  // told the operator to reinstall — while the SAME audit line reported
+  // state ONLINE, evidence "version-printed-and-matched-pin". The engine was
+  // installed, pinned and version-matched; the task failed. Sending someone to
+  // reinstall a correct install is misdirection, and it costs real time on the
+  // one path where the operator is already blocked.
+  //
+  // getStatus() is synchronous and its `state` is what the probe concluded, so
+  // this needs no extra round-trip. Anything other than a confident ONLINE keeps
+  // the install instruction — an unknown state should err toward telling the
+  // operator how to install, not toward silence.
   function engineFailed(offlineResult) {
     var err = (offlineResult && offlineResult.error) || 'the build engine is unavailable';
-    return {
-      offline: true,
-      engine: 'dsh',
-      error: err + ' — DeepSeek Harness is the only build-content engine and there is no '
-        + 'fallback. Install it with `node mythos/scripts/setup-dsh.js --install`.',
-    };
+    var online = false;
+    try {
+      var st = typeof engine.getStatus === 'function' ? engine.getStatus() : null;
+      online = !!(st && st.state === 'ONLINE');
+    } catch (_) { online = false; }
+    var tail = ' — DeepSeek Harness is the only build-content engine and there is no fallback. '
+      + (online
+        ? 'It is installed and version-matched, so this is a task failure, not a missing install.'
+        : 'Install it with `node mythos/scripts/setup-dsh.js --install`.');
+    return { offline: true, engine: 'dsh', error: err + tail };
   }
 
   // generate({ prompt, source, timeoutMs }) -> brain.think-shaped result.

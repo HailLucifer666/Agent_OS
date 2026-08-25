@@ -78,12 +78,23 @@ const CLAIM_CATEGORIES = [
     // ("a bare elliptical claim (\"Sent it.\") is missed"). That trade is still
     // right for the general case, so the prefix is NOT relaxed. This second tier
     // is EVIDENCE-GATED instead: it is only consulted when a tool from this
-    // category actually ran this turn and did not succeed (see needsAttempt
-    // below). Every false positive the header lists survives that gate —
-    // "Your package was sent yesterday" can only be flagged in a turn where a
-    // send tool was really attempted and really did not succeed, which is a turn
-    // where the sentence is a lie regardless of who it is about.
-    ellipticalRe: /\b(message|text|email|mail)\s+(?:has been\s+|was\s+)?(sent|delivered)\b|\bsent\s+(?:it|that|the message)\b/i,
+    // category actually ran and did not succeed within the evidence window
+    // (this turn plus the caller-supplied recentActions window — BUG-357). Every
+    // false positive the header lists survives that gate — "Your package was
+    // sent yesterday" can only be flagged when a send tool was really attempted
+    // and really did not succeed nearby, which is a turn where the sentence is a
+    // lie regardless of who it is about.
+    //
+    // BUG-357 — 2026-08-24 20:23:44 UTC, verbatim from the vault episodic log:
+    // "Confirmed, Sir. 'Hi' has been sent to mom on WhatsApp." with NO send
+    // dispatched behind it (the audit shows every real whatsapp_send that day
+    // ending outcome:"fail"). The quoted message CONTENT sat in subject position,
+    // outside {message,text,email,mail}, and slipped past. The third alternative
+    // accepts any short subject before the PERFECT aspect only ("has been sent")
+    // — "was sent" stays excluded, which is what keeps the package sentence out.
+    // Negation cannot match because "has been" must be adjacent: "has NOT been
+    // sent" has no "has been sent" substring.
+    ellipticalRe: /\b(message|text|email|mail)\s+(?:has been\s+|was\s+)?(sent|delivered)\b|\bsent\s+(?:it|that|the message)\b|\b[\w"'\u2018\u2019][\w\s"'\u2018\u2019.,'-]{0,24}\s+has been\s+(?:sent|delivered)\b/i,
   },
   {
     name: 'opening',
@@ -136,11 +147,24 @@ function splitSentences(text) {
 
 // Pure, exported, separately testable. Returns [] when nothing is flagged.
 // Each entry: { category, phrase, sentence, candidateTools }.
-function detectUnbackedClaims(assistantText, actionsThisTurn) {
+//
+// BUG-357: recentActions extends the evidence window beyond the current turn.
+// The 2026-08-24 session produced "Message sent to mom" in a turn whose only
+// whatsapp_send rows (a pending confirm, then a voice-cancel) belonged to
+// EARLIER turns — with a this-turn-only window the elliptical gate found no
+// attempted-unproven send and stayed shut for both false claims. Recent actions
+// join BOTH sets, so they back real successes as well as exposing failures; a
+// genuine ok:true send still silences a later "it was sent" reference. Entries
+// carry their own `status` when the caller precomputed one (live-tool-adapter's
+// ledger does); anything without one is derived here from ok/unverified, same
+// as actionStatus() would.
+function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
   const text = String(assistantText || '');
   if (!text) return [];
 
-  const actions = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
+  const current = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
+  const recent = Array.isArray(recentActions) ? recentActions : [];
+  const actions = current.concat(recent);
   const successfulTools = new Set(
     actions.filter((a) => a && a.ok === true).map((a) => a.tool),
   );
@@ -179,4 +203,42 @@ function detectUnbackedClaims(assistantText, actionsThisTurn) {
   return claims;
 }
 
-module.exports = { detectUnbackedClaims, CLAIM_CATEGORIES };
+// BUG-357 — the affirmative twin of the spoken-no cancellation. "Yeah. Yeah. Go
+// ahead." arrived over two pending whatsapp_send confirms, nothing dispatched,
+// and NOTHING told the model so — it filled the silence with "'Hi' has been
+// sent". This is the matcher and the honest notice for that state.
+//
+// Q8 — WHY NOT voice-agent.js's AFFIRMATIVE_RE: that matcher is fully anchored
+// (^…$) because the batch path uses it as a whole-utterance verdict, and it
+// matches none of that session's real shapes ("Yeah. Yeah. Go ahead.", "da app
+// is open go ahead send hi to mom", "I already clicked on approve"). This is a
+// different question — "does this utterance READ as approval" — so a different,
+// deliberately loose matcher is correct here, not drift of the old one. The cost
+// asymmetry runs the same way as NEGATIVE_RE's: an over-fire is one honest
+// notice naming what still awaits approval (recoverable), whereas a missed
+// go-ahead is another fabricated completion spoken into the gap. Noise bound:
+// the caller fires this only while confirms are actually pending, and confirms
+// are rare and TTL-bounded — it cannot fire on ordinary conversation.
+const SPOKEN_GO_AHEAD_RE =
+  /\b(?:ok(?:ay)?|yes|yeah|yep|yup|sure|go ahead|go on|do it|send it|approved?|approval|confirm(?:ed)?|please do|i did|already (?:clicked|gave|approved)|affirmative)\b/i;
+
+// Pure: returns { tool, verdict, instruction } or null. The adapter supplies the
+// raw utterance, its NEGATIVE_RE decision, and the pending tool names; matcher
+// and wording both live HERE so they cannot drift apart from the rest of the
+// claim vocabulary.
+function buildSpokenGoAheadNotice(utterance, pendingToolNames, opts) {
+  const o = opts || {};
+  const t = String(utterance || '');
+  const names = [...new Set(Array.isArray(pendingToolNames) ? pendingToolNames : [])];
+  if (!names.length || o.negative === true) return null;
+  if (!t.trim() || !SPOKEN_GO_AHEAD_RE.test(t)) return null;
+  return {
+    tool: names.join(', '),
+    verdict: 'Your spoken go-ahead did NOT dispatch anything. Still awaiting explicit operator approval: '
+      + names.join(', ') + '.',
+    instruction: 'Do NOT tell the operator anything has been sent, executed or confirmed. Say plainly '
+      + `that ${names.length === 1 ? 'that action' : 'those actions'} ${names.length === 1 ? 'is' : 'are'} waiting for approval.`,
+  };
+}
+
+module.exports = { detectUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice };

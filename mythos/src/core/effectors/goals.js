@@ -193,6 +193,22 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
     return (added && added.degraded) ? markDegraded(list) : list;
   }
 
+  // BUG-342: pre-check surface for the resume route — status BEFORE mutating.
+  function getGoal(id) {
+    return goalSystem.get(id) || null;
+  }
+
+  // BUG-342 (2026-08-24): deliberate unpause. Only a PAUSED goal qualifies —
+  // resuming anything else is a listed no-op, never a silent status rewrite.
+  function resumeGoal(id) {
+    var goal = goalSystem.get(id);
+    if (!goal || goal.status !== 'paused') return listGoals();
+    goalSystem.update(id, { status: 'active', reason: null });
+    var wrote = writeBack();
+    var list = listGoals();
+    return (wrote && wrote.degraded) ? markDegraded(list) : list;
+  }
+
   function toggleGoal(id) {
     var goal = goalSystem.get(id);
     if (!goal) return listGoals();
@@ -311,7 +327,7 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
 
   return {
     sync: sync, writeBack: writeBack, parseGoalsMd: parseGoalsMd,
-    listGoals: listGoals, addGoal: addGoal, toggleGoal: toggleGoal, deleteGoal: deleteGoal, stats: stats,
+    listGoals: listGoals, addGoal: addGoal, toggleGoal: toggleGoal, resumeGoal: resumeGoal, getGoal: getGoal, deleteGoal: deleteGoal, stats: stats,
     // V5 (Phase 4):
     proposeGoal: proposeGoal, listProposals: listProposals,
     acceptProposal: acceptProposal, rejectProposal: rejectProposal

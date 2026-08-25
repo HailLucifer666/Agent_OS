@@ -222,6 +222,10 @@ describe('BUG-297 — the late-for-turn re-narration is the fourth path', () => 
       'confirm-resolved',
       'late-for-turn',
       'late-outcome',
+      // Added by BUG-357 — the affirmative twin of confirm-rejected-by-voice: a
+      // spoken go-ahead over still-pending confirms is told its words dispatched
+      // nothing. Its wording is pinned in bug-357-reply-grounding.test.js.
+      'spoken-go-ahead-no-dispatch',
     ], 'these are the sendSystemNotice sites; the remaining narration path is the awaited '
       + 'functionResponse, which does not inject. If this list changed, a narration path was '
       + 'added or removed — enumerate it here and in bug-273-unverified-payload.test.js, and '
