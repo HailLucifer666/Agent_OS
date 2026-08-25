@@ -65,24 +65,9 @@ function carriesPublicationDates(results) {
   return Array.isArray(results) && results.some(function(r) { return r && r.published })
 }
 
-// Q1 — WHAT ELSE MATCHES THIS? A word list over the operator's transcribed
-// speech, i.e. over input this project has already watched STT mangle into
-// "आदिए". It WILL over-match: "the result of the French Revolution" trips it and
-// earns a caution it does not need. That asymmetry is deliberate and is the whole
-// design — a false positive costs one extra sentence of hedging, a false negative
-// costs a fabricated football score written to a note. Exported as
-// _isTimeSensitive so the list can be argued with in a test rather than guessed at.
-// `news` and `headlines` were missing from the first version of this list and the
-// spec named `news` explicitly. The recency-window test caught it: "Bengal
-// panchayat election news" never entered the rung at all, so a plainly
-// news-shaped question was answered by an encyclopaedia. They are also the two
-// safest possible additions — Correction 6's hazard case ("how to fix a leaking
-// tap") contains neither.
-var FRESHNESS_MARKERS = /\b(news|headlines|today|tonight|tomorrow|yesterday|now|current|currently|latest|live|recent|breaking|score|scores|result|results|final|standings|who won|price|prices|weather|forecast|this (?:morning|afternoon|evening|week|month|year))\b|\b20[2-9][0-9]\b/i
-
-function isTimeSensitive(query) {
-  return FRESHNESS_MARKERS.test(String(query || ''))
-}
+// Freshness vocabulary (marker list, over-matching rationale, BUG-276-F3
+// site:-exemption) lives in search-freshness.js — moved for the size ratchet.
+const { isTimeSensitive } = require('./search-freshness')
 
 var STALE_SOURCE_CAUTION = 'These results carry NO publication date, so none of them can be shown '
   + 'to be current — they may describe a different year entirely. Say plainly that you could not '
@@ -649,7 +634,21 @@ async function web_search({ query, maxResults, bus }) {
     // note further down): RSS never returns zero, so it must never be a catch-all.
     // A timeless query does not enter this block at all and the chain below is
     // byte-for-byte the order it always had.
-    if (isTimeSensitive(q)) {
+    //
+    // BUG-276 F3 (2026-08-24): a SITE-SCOPED query never enters this rung either.
+    // from-dashboard.js's open_web(type:'youtube') asks for "<q> site:youtube.com"
+    // and from-installer.js asks for "<name> site:github.com"; when the title
+    // carries any freshness word ("Breaking Bad trailer" matches /breaking/,
+    // "score-board" matches /score/), the old gate handed those queries to Google
+    // News RSS, which ignores the site: operator entirely — so a video embed got
+    // news articles with zero youtube.com URLs and failed as "could not extract a
+    // YouTube video ID", and repo lookups were answered by newspapers. The scope
+    // IS the intent statement; the marker list's deliberate over-matching (see
+    // Q1 above) was only ever acceptable for queries with no narrower intent.
+    // Intentionally narrow: only the site: operator exempts a query. Every other
+    // over-match ("the result of the French Revolution") keeps existing behaviour,
+    // because there the worst case remains one wasted request plus an honest hedge.
+    if (isTimeSensitive(q) && !/\bsite:\S+/i.test(q)) {
       var newsSkip = skipReason('google-news-rss')
       if (newsSkip) note('google-news-rss', newsSkip)
       else {

@@ -3506,19 +3506,18 @@ function createServer(deps) {
         if (speechTarget) activeSpeech.set(msg.reqId, speechTarget);
         let chunkIndex = 0;
         let sendChain = Promise.resolve(); // serializes synth+send so chunks stay in order
-        // total is unknown until the stream ends; the client's own barge-in-aware
-        // finish (voice-loop.js maybeFinishTurn) already falls back to "queue
-        // drained" rather than relying solely on index===total-1, so an unknown
-        // total here does not stall turn completion.
+        // total is unknown until the stream ends; voice-loop.js's maybeFinishTurn
+        // already falls back to "queue drained", so an unknown total stalls nothing.
         function enqueueChunk(rawText) {
           const i = chunkIndex++;
           sendChain = sendChain.then(async () => {
             const spoken = sanitizeSpoken(rawText);
             if (!spoken) return;
-            let audioB64 = null;
-        let chunkMime;
+            let audioB64 = null, chunkMime;
             try {
-              const out = await activeChain.synthesize({ text: spoken });
+              // A hung sidecar here stalled every later chunk and the whole vision
+              // turn — GAP-ANALYSIS-2026-08-24 M2-sibling; 30s = ACTION_TIMEOUT_MS default.
+              const out = await activeChain.synthesize({ text: spoken, signal: AbortSignal.timeout(30000) });
               audioB64 = out.audio.toString('base64');
               chunkMime = out.mime;
             } catch (err) {

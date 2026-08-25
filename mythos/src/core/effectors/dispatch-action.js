@@ -42,6 +42,23 @@ function humanizeArgs(args) {
 // the same fallback ad hoc.
 const { reasonText } = require('../util/reason-text');
 
+// REVIEW-of-a0c82fe (2026-08-24): hub.invoke now ENFORCES the caller signal
+// (GAP-ANALYSIS-2026-08-24 H1), so this dispatcher's default ACTION_TIMEOUT_MS
+// became a hard kill for tools whose effectors carry their own, larger,
+// documented budgets. Intentionally narrow: an ordinary tool over budget is
+// still killed (pinned by the negative control in
+// test/dispatch-self-timed-tools.test.js). Adding to this set requires naming
+// the effector's own budget in the comment.
+const SELF_TIMED_TOOLS = new Set([
+  // build-engine path — DSH_TEXT_BUILD_TIMEOUT_MS defaults to 600000 (10 min)
+  'build_project', 'revise_project', 'start_project', 'dsh_task',
+  'kanban_build_card', 'kanban_assemble',
+  // ingestion / scanning — unbounded multi-item work with no internal budget yet
+  'index_project', 'document_ingest', 'security_scan',
+  // orchestration — each stage dispatches its own bounded actions
+  'run_mission', 'pipeline_execute',
+]);
+
 async function dispatchAction(decision, ctx) {
   const { effectors, bus, goals, memory, config } = ctx;
   const goalId = ctx.goalId || null;
@@ -50,7 +67,13 @@ async function dispatchAction(decision, ctx) {
   // via working.spendThisTick) pass it through here. Voice/confirm-accept
   // callers omit it → defaults to 0, preserving their existing behavior.
   const spentTokens = ctx.spentTokens || 0;
-  const signal = ctx.signal || AbortSignal.timeout((config && config.ACTION_TIMEOUT_MS) || 30000);
+  const signal = ctx.signal || (SELF_TIMED_TOOLS.has(decision.tool)
+    ? undefined // REVIEW-of-a0c82fe fix: these effectors carry their own larger
+                // budgets (DSH builds: DSH_TEXT_BUILD_TIMEOUT_MS=600000); hub
+                // enforcement made the dispatcher's default binding, killing
+                // legitimate builds at 30s. Their internal budget governs; an
+                // explicit caller signal still applies.
+    : AbortSignal.timeout((config && config.ACTION_TIMEOUT_MS) || 30000));
 
   // 1. Breaker check
   if (effectors.breakers && typeof effectors.breakers.allow === 'function') {

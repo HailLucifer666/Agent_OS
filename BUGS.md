@@ -1482,6 +1482,40 @@ Turns 12, 13, 25: `open_web FAILED: No results found for "CNN news dashboard"`,
 for news, `open_web` looked for videos. Check `from-web.js`/`open_web`'s intent routing:
 "news" should not resolve to a video-search provider.
 
+#### F3 code half — 🔧 CODED 2026-08-24: the mirror image of the original complaint
+
+The original turn was the model choosing type:'youtube' for a news ask — narration/model
+behaviour. But re-reading the chain at `affd38b` found **the routing defect now running in
+the opposite direction**, introduced by BUG-294's rung ordering (2026-08-21): the Google
+News RSS rung gates only on `isTimeSensitive(q)`, and two callers send SITE-SCOPED queries
+whose titles routinely carry freshness words —
+
+- `from-dashboard.js` `open_web(type:'youtube')` → `web_search(q + ' site:youtube.com')`
+  ("Breaking Bad trailer" matches `/breaking/`)
+- `from-installer.js` repo resolution → `web_search(name + ' site:github.com')`
+  ("score-board" matches `/score/`)
+
+Google News RSS ignores the `site:` operator entirely, so those calls got ordinary news
+articles with zero youtube.com/github.com URLs and failed hard ("could not extract a
+YouTube video ID") or were answered by newspapers. Fix: one conjunct on the rung gate —
+`isTimeSensitive(q) && !/\bsite:\S+/i.test(q)` — with the reasoning in the comment beside
+it. Deliberately narrow: only `site:` exempts; every other marker over-match keeps existing
+behaviour (worst case there is one wasted request plus an honest hedge).
+
+Verification:
+```
+node --test test/bug-276-f3-site-scoped-search-skips-news-rung.test.js   4/4 (was 1/4 pre-fix)
+node --test test/bug-294-news-rss-rung.test.js test/p21-web-search-chain.test.js \
+            test/bug-276-f4-search-failure-names-its-causes.test.js + 3 neighbour files  70/70
+```
+Mutation-proven (gate reverted to bare `isTimeSensitive(q)`, diff verified, restored
+byte-identical): 3 fail / 1 pass — the negative control proving plain news queries still
+reach the rung kept passing throughout.
+
+**NOT live-verified** (no MYTHOS session was running): what a healthy next session looks
+like is `open_web(type:'youtube', query:'Breaking Bad trailer …')` resolving a video, and
+zero `google-news-rss` entries in any `site:`-scoped query's tried-list.
+
 ### F4 (P1) — provider outages and billing, reported honestly by the tools
 
 - `cerebras`: **402 Payment required to access this resource**

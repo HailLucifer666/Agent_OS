@@ -14,15 +14,18 @@ it on their machine. Therefore:
 - **External binaries are optional** — with one deliberate exception. cua-driver
   (and anything similar) must degrade gracefully when absent: spawn ENOENT →
   adapter stays OFFLINE → fallback paths take over.
-  **Hermes-Agent is the exception**: since 2026-07-29 it is the only
-  build-content engine (build-runner, the engagement build stage, and Forge all
-  route through `src/core/effectors/build-engine.js`), and there is no
-  brain.think fallback by design — a build with no engine FAILS with an install
-  hint instead of shipping a plausible-but-wrong artifact. Boot still succeeds
-  without it; only builds stop. It installs project-local into
-  `<repo>/Hermes Agent/` (gitignored) via
-  `node mythos/scripts/setup-hermes.js --install`, which clones from git and
-  runs that clone's own installer — never `curl | bash` / `iex (irm …)`.
+  **The DSH harness (DeepSeek Harness) is the exception**: since W6
+  (2026-08-22, replacing Hermes-Agent, which was deleted — W6-AD-8 "delete,
+  don't stub") it is the only build-content engine (build-runner, the
+  engagement build stage, and Forge all route through
+  `src/core/effectors/build-engine.js`), and there is no brain.think fallback
+  by design — a build with no engine FAILS with an install hint instead of
+  shipping a plausible-but-wrong artifact. Boot still succeeds without it;
+  only builds stop. It installs project-local into
+  `<repo>/DeepSeek Harness/` (gitignored; own install root because a mythos/
+  dependency re-resolution measured 26 minutes — setup-dsh.js:24) via
+  `node mythos/scripts/setup-dsh.js --install`. Never
+  `curl | bash` / `iex (irm …)`.
 - **All secrets and provider keys live in `mythos/.env`** (gitignored), with
   every supported key documented in `mythos/.env.example`. No key, no
   hardcoded default — features degrade honestly instead.

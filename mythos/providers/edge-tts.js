@@ -94,7 +94,11 @@ async function listVoices() {
   const now = Date.now();
   if (now - _voiceCache.at < VOICE_CACHE_MS) return _voiceCache.voices;
   try {
-    const res = await fetch(`${BASE}/v1/voices`);
+    // GAP-ANALYSIS-2026-08-24 M2: this fetch had no timeout — a sidecar that
+    // accepted the connection but never answered blocked the caller for undici's
+    // ~300s default. 8s matches the voice path's tolerance elsewhere
+    // (news-feed.js uses the same budget); fail-soft behaviour below is unchanged.
+    const res = await fetch(`${BASE}/v1/voices`, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) throw new Error(`voices ${res.status}`);
     const data = await res.json();
     _voiceCache = { at: now, voices: Array.isArray(data.voices) ? data.voices : [] };
