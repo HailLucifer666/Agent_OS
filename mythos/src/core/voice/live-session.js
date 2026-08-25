@@ -428,7 +428,7 @@ function createLiveSession(deps) {
         // turnCounter increments at turnComplete, so the turn still in flight is
         // the next one — the same id it will be reported under if it ever lands.
         bus.emit('health.anomaly', {
-          kind: 'live-turn-stalled', turnId: turnCounter + 1, waitedMs: TURN_STALL_MS,
+          kind: 'live-turn-stalled', turnId: turnCounter + 1, waitedMs: TURN_STALL_MS, reason: 'No reply of any kind — audio, text or a tool call — arrived within ' + TURN_STALL_MS + 'ms after the operator stopped speaking. The turn was never answered.',  // BUG-324: waitedMs was here and no cause was built from it, so the explainer told the operator "I do not yet know the cause" with the measurement sitting on the event. Says only what was observed (AD-4 — a stall could be client, network or model) and sets no needsOperator, because nobody can make a reply arrive. One line because this file is over the size ratchet's ceiling; mechanism in test/bug-324-anomaly-must-report-a-cause-it-knows.test.js
         });
       }
       logger.warn('live.turn-stalled', { turnId: turnCounter + 1, waitedMs: TURN_STALL_MS });

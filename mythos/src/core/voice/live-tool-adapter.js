@@ -35,7 +35,11 @@ const { logCommitmentIfPresent } = require('../effectors/from-calendar');
 
 // F3: detector-only sibling of the unverified/started evidence discipline
 // above — see claim-check.js for the full contract.
-const { detectUnbackedClaims } = require('./claim-check');
+const { detectUnbackedClaims, buildSpokenGoAheadNotice } = require('./claim-check');
+
+// BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
+// the file-size ratchet; full rationale in that module.
+const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger');
 
 // B3 (2026-08-12 diagnosis, G4): reuse voice-agent.js's own NEGATIVE_RE rather
 // than keep a second, driftable copy of the same regex in this module.
@@ -218,48 +222,8 @@ function createLiveToolAdapter(deps) {
     } catch { /* instrumentation must never break a turn */ }
   }
 
-  const STARTED_MESSAGE =
-    'This action takes longer than this turn. Say what you are DOING, not what happened — ' +
-    'do NOT claim completion. The real outcome will arrive as a [SYSTEM] message; report it then.';
-
-  // A3 (2026-08-14): PENDING IS NOT FAILURE. Both started/ack-deadline paths used
-  // to record `ok:false`, which put a manufactured failure in the ledger for a
-  // call that was running fine — the 2026-08-14 audit has
-  // `browser_navigate=FAIL(started — outcome pending)` at 17:37:02 followed by
-  // `ok` for the SAME call at 17:37:10. That lies in both directions: it invents
-  // failures, and it makes a real failure indistinguishable from an ack.
-  //
-  // `ok: null` rather than `false` is the point — every consumer that asks
-  // "did this succeed?" (`a.ok === true`, `.ok !== true`) is unchanged, so a
-  // pending tool still cannot back a completion claim, while nothing can read it
-  // as a definite failure. `started: true` is kept because
-  // action-outcome-summary.js and commitAction's late-arrival branch both already
-  // key on it; `status` is what makes the vault record legible on its own.
-  function pendingAck(toolName) {
-    return {
-      tool: toolName, ok: null, started: true, status: 'pending',
-      summary: `${toolName} started — outcome pending.`,
-    };
-  }
-
-  // The single place that maps a liveTurnActions entry to a status word. Every
-  // other push site in this file (reportLateOutcome, resolveLiveConfirm, the
-  // spoken-no cancellation) predates `status` and does not set it, so this
-  // derives one rather than trusting the field to be there.
-  function actionStatus(entry) {
-    if (!entry) return 'unknown';
-    if (entry.status) return entry.status;
-    if (entry.confirmPending) return 'awaiting-confirmation';
-    if (entry.started) return 'pending';
-    // Before the ok checks: evaluateOutcome folds unverified INTO ok
-    // (`ok: dispatchOk && !isUnverified`), so an unverified entry arrives here as
-    // ok:false and would otherwise be reported as a flat failure — the exact
-    // flattening src/core/CLAUDE.md's evidence contract forbids.
-    if (entry.unverified) return 'unverified';
-    if (entry.ok === true) return 'ok';
-    if (entry.ok === null || entry.ok === undefined) return 'pending';
-    return 'failed';
-  }
+  // STARTED_MESSAGE and pendingAck moved to action-evidence-ledger.js
+  // (BUG-357 extraction): status:'pending' is that module's vocabulary.
 
   // BUG-120 — the other half. Making browser_switch slow removes the specific
   // trigger seen on 2026-08-05, but nothing in this seam ever stopped the model
@@ -285,6 +249,7 @@ function createLiveToolAdapter(deps) {
 
   const livePendingConfirms = new Map(); // confirmId -> {name, callId, createdAt}
   const liveTurnActions = [];            // AD-4: reconciled on turnComplete
+  const recentActionLedger = createRecentActionLedger(); // BUG-357: cross-turn evidence
   // Security-review fix: onToolCall (live-session.js) is fire-and-forget, so a
   // slow dispatchAction could in principle resolve after turnComplete has
   // already read+cleared liveTurnActions for this turn. Tagging each push
@@ -651,6 +616,7 @@ function createLiveToolAdapter(deps) {
     logBatch(calls);
     const myGeneration = turnGeneration;
     function commitAction(entry) {
+      recentActionLedger.record(entry); // BUG-357, before the check below: late arrivals are exactly the cross-turn facts kept
       // Late arrival after this turn already completed — do not misattribute
       // it to whatever turn is running now (AD-4: accurate reconciliation).
       if (myGeneration !== turnGeneration) {
@@ -987,7 +953,10 @@ function createLiveToolAdapter(deps) {
       // statement, the instruction carries the prohibition.
       if (returnsNoReadableContent(toolName)) instruction = NO_CONTENT_CLAIM;
     }
-    liveTurnActions.push({ tool: toolName, ok: ev.ok, unverified: ev.unverified, summary: verdict });
+    // BUG-357: late outcomes are cross-turn facts by definition.
+    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified, summary: verdict };
+    liveTurnActions.push(lateEntry);
+    recentActionLedger.record(lateEntry);
     sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
       claim: !ev.dispatchOk ? 'failed' : (ev.unverified ? (ev.confirmedStep ? 'unverified-partial' : 'unverified') : 'ok') });
   }
@@ -1110,7 +1079,9 @@ function createLiveToolAdapter(deps) {
     // the audit, not just the model, so a socket that closed while the human was
     // deciding must not erase what happened. reportLateOutcome already ordered
     // it this way.
-    liveTurnActions.push({ tool: pending.name, ok: ok && !unverified, unverified, summary: verdict });
+    const resolvedEntry = { tool: pending.name, ok: ok && !unverified, unverified, summary: verdict };
+    liveTurnActions.push(resolvedEntry);
+    recentActionLedger.record(resolvedEntry);
 
     // BUG-273 D3: this used to build and send the notice itself, duplicating
     // sendSystemNotice's guard and its wire format. Two doors meant the injection
@@ -1155,10 +1126,12 @@ function createLiveToolAdapter(deps) {
       // undefined connectionId would mismatch the 'system'-scoped entry and
       // silently do nothing.
       leash.confirm.reject(id, connectionId || 'system');
-      liveTurnActions.push({
+      const cancelledEntry = { // BUG-357: a cancel is attempted-unproven evidence for later turns
         tool: entry.name, ok: false,
         summary: `${entry.name} cancelled — the operator said no.`,
-      });
+      };
+      liveTurnActions.push(cancelledEntry);
+      recentActionLedger.record(cancelledEntry);
       cancelledNames.push(entry.name);
     }
     livePendingConfirms.clear();
@@ -1173,6 +1146,17 @@ function createLiveToolAdapter(deps) {
       + 'tell the operator plainly what was cancelled.',
       { site: 'confirm-rejected-by-voice', tool: names, claim: 'cancelled' },
     );
+  }
+
+  // BUG-357: the affirmative twin of the path above — matcher, wording and the
+  // why-not-AFFIRMATIVE_RE note live in claim-check.js (buildSpokenGoAheadNotice).
+  function notifySpokenGoAheadWhilePending(text) {
+    if (!livePendingConfirms.size) return;
+    const notice = buildSpokenGoAheadNotice(text,
+      [...livePendingConfirms.values()].map((e) => e.name),
+      { negative: NEGATIVE_RE.test(String(text || '')) });
+    if (notice) sendSystemNotice(notice.verdict, notice.instruction,
+      { site: 'spoken-go-ahead-no-dispatch', tool: notice.tool, claim: 'awaiting-click' });
   }
 
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
@@ -1262,6 +1246,7 @@ function createLiveToolAdapter(deps) {
     // Doing this first means the cancellation itself lands in liveTurnActions
     // before the splice a few lines down captures this turn's actions.
     rejectPendingConfirmsOnNegative(userText);
+    notifySpokenGoAheadWhilePending(userText); // BUG-357: approval speech dispatches nothing
 
     // Atomic snapshot+clear (splice, not read-then-`.length=0`), and advance
     // the generation BEFORE anything else runs — any commitAction() call that
@@ -1323,8 +1308,11 @@ function createLiveToolAdapter(deps) {
     // what the operator hears). Same field names as every other anomaly
     // emitted in this file (kind/tool/target) — no parallel shape.
     if (assistantText) {
-      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn);
-      const statusByTool = new Map(actionsThisTurn.map((a) => [a.tool, actionStatus(a)]));
+      // BUG-357: the detector also sees the bounded recent-turn ledger; ledger
+      // first so a CURRENT-turn row wins any Map collision below.
+      const knownActions = [...recentActionLedger.forClaims(), ...actionsThisTurn];
+      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims());
+      const statusByTool = new Map(knownActions.map((a) => [a.tool, a.status || actionStatus(a)]));
       for (const claim of unbackedClaims) {
         // A3: name the actual tool and its real status. `tool`/`target` stay the
         // CATEGORY on purpose — BUG-105 records every immune consumer keying on
@@ -1348,7 +1336,9 @@ function createLiveToolAdapter(deps) {
         // turn (see sendSystemNotice's header) — a correction of the model's
         // OWN prior claim, not a report about a tool call, so it says so
         // explicitly rather than looking like an ordinary outcome notice.
-        const byTool = new Map(actionsThisTurn.map((a) => [a.tool, a]));
+        // BUG-357: same combined view as statusByTool — the failed/pending tool
+        // a claim is measured against may live one or two turns back.
+        const byTool = new Map(knownActions.map((a) => [a.tool, a]));
         const failedTool = claim.candidateTools.find((t) => byTool.has(t) && byTool.get(t).ok !== true);
         // A3: pending and failed are DIFFERENT corrections, and telling the model
         // a pending tool "did NOT happen" is its own false statement — the real
