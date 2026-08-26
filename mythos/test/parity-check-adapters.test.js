@@ -226,3 +226,69 @@ describe('adapterChecks', () => {
     assert.deepEqual(parity.REQUIRED_ONLINE_ADAPTERS, ['pc-child']);
   });
 });
+
+describe('BUG-363: parity-check asks whether a deep link still serves the HUD', () => {
+  // res.sendFile defaults to dotfiles:'ignore', and send applies that to EVERY
+  // SEGMENT OF THE ABSOLUTE PATH — not just the part below a root. An install
+  // under any dot-directory (a worktree in .claude/worktrees/, a user install
+  // under ~/.config) therefore 404s a file that is plainly present.
+  //
+  // Proven on this machine, same express, two directories differing only by a
+  // leading dot:
+  //     plain path                 / -> 200   /a/b -> 200
+  //     path with a .dot segment   / -> 200   /a/b -> 404
+  //
+  // `/` stays healthy in BOTH because express.static answers it — its dotfiles
+  // rule runs on the REQUEST path relative to its own root, never on the root
+  // itself. So the screen the operator actually opens looks perfect and only
+  // deep links and route reloads die. Identical code, two installs, different
+  // behaviour: exactly what parity-check exists to catch, and it could not
+  // before this.
+  const http = require('node:http');
+
+  // The smallest server runChecks will talk to: enough for it to get past the
+  // settings gate and reach the deep-link probe.
+  function fakeMythos(deepLinkStatus) {
+    return new Promise((resolve) => {
+      const server = http.createServer((req, res) => {
+        const json = (body, status) => {
+          res.writeHead(status || 200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(body));
+        };
+        if (req.url.startsWith('/api/config/settings')) {
+          return json({ file: 'config.json', keys: [{ name: 'VOICE_TTS_CHAIN', value: 'piper', origin: '.env' }], autonomy: {} });
+        }
+        if (req.url === '/health') return json({ ok: true, uptime: 5, authRequired: false });
+        if (req.url.startsWith('/api/config/wakeword')) return json({ enabled: true, modelsPresent: true });
+        if (req.url.startsWith('/api/setup/components')) return json({ components: [] });
+        // The probe. 200 = the SPA fallback answered; 404 = BUG-363.
+        res.writeHead(deepLinkStatus, { 'content-type': 'text/html' });
+        res.end('<!DOCTYPE html><html>HUD</html>');
+      });
+      server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
+    });
+  }
+
+  it('passes when an unknown deep path serves the HUD', async () => {
+    const { server, port } = await fakeMythos(200);
+    try {
+      const checks = await parity.runChecks({ host: '127.0.0.1', port, token: '' });
+      const row = checks.find((c) => c.name === 'spa-deep-link');
+      assert.ok(row, 'the deep-link check must run');
+      assert.equal(row.ok, true, row.detail);
+    } finally { server.close(); }
+  });
+
+  it('FAILS when a deep path 404s, and names BUG-363 rather than leaving a bare status', async () => {
+    // The failure mode is invisible from the HUD, so the message has to do the
+    // explaining — a reader who sees only "404" will go looking at routing.
+    const { server, port } = await fakeMythos(404);
+    try {
+      const checks = await parity.runChecks({ host: '127.0.0.1', port, token: '' });
+      const row = checks.find((c) => c.name === 'spa-deep-link');
+      assert.equal(row.ok, false);
+      assert.match(row.detail, /BUG-363/);
+      assert.match(row.detail, /dot-directory/);
+    } finally { server.close(); }
+  });
+});

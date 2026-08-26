@@ -264,6 +264,35 @@ async function runChecks(opts) {
     }
   }
 
+  // ---- 8b. the HUD survives a deep link, from wherever this install sits --------
+  // BUG-363 (found by a third session, 2026-08-26). res.sendFile() defaults to
+  // dotfiles:'ignore', and send applies that to EVERY SEGMENT OF THE ABSOLUTE
+  // PATH — not just the part below a root. So an install living under any
+  // dot-directory (a worktree in .claude/worktrees/, a user install under
+  // ~/.config) gets NotFoundError for a file that is plainly there.
+  //
+  // WHY NOTHING NOTICED, and why this check is worth its four lines: express.static
+  // is NOT affected, because its dotfiles rule runs on the REQUEST path relative to
+  // its own root. So `/` keeps serving index.html and ONLY DEEP LINKS 404. The HUD
+  // looks perfectly healthy on the screen the operator actually opens. It presented
+  // as one test failing in a worktree while passing in the main checkout on the
+  // identical commit — one variable, where the tree sits on disk.
+  //
+  // That is exactly the class this whole script exists for: identical code, two
+  // installs, different behaviour. It is asked over HTTP against THIS server rather
+  // than reasoned about from the path, because the question is what this install
+  // does, not what its directory name looks like.
+  const deep = await getJson(host, port, '/parity-check-deep-link-probe/a/b', token);
+  // getJson only parses JSON; the HUD is HTML, so a 200 arrives with body:null.
+  // Status is the whole assertion — 200 means the SPA fallback answered.
+  checks.push(check('spa-deep-link', deep.status === 200,
+    deep.status === 200
+      ? 'an unknown deep path serves the HUD'
+      : `GET /parity-check-deep-link-probe/a/b -> ${deep.status || 'no response'} — the SPA fallback `
+        + 'is not answering. If this install sits under a dot-directory, this is BUG-363: '
+        + 'res.sendFile dot-checks every segment of an absolute path. Deep links and reloads '
+        + 'of any HUD route are 404ing while "/" looks fine.'));
+
   // ---- 9. adb, specifically, because it is the one that was silently unresolved ---
   // Asked as a FILE question, not a config one. ANDROID_ADB_BIN sitting at its
   // 'adb' default is not a misconfiguration any more — resolution now searches
