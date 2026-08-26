@@ -4735,7 +4735,9 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | A1 | BUG-352 — effector counter dropped 32 tools into a bare catch | **DONE** | 147→179; `--check` green; 10 assertions, 4 mutations | `716c5a9` |
 | A1b | BUG-352 part 2 — README pie/catalog generated, not hand-typed | **DONE** | pie 108 + table 107 → both 179; 10 missing modules restored; 2 dead rows gone; 11 assertions, 8 mutations | `c5d240d` |
 | — | BUG-367 — one attach contract, so a hung `/health` reads like a refused one | **DONE** | found while blocked by it; deterministic timeout case | `40d2b1e` |
-| A4 | `lint-bug-registry.js` + pre-commit wiring | **DONE** | max=367, next free 368; 13 assertions, 7 mutations (2 survived first pass) | `66b2c82` |
+| A4 | `lint-bug-registry.js` + pre-commit wiring | **DONE** | max=367, next free 368; 15 assertions, 9 mutations (3 survived first pass) | `66b2c82` `f241084` |
+| — | Pre-commit's own fallback ports were squatted, reading as 3 regressions | **DONE** | reproduced with netstat (pids 4296/10904); hook now asks the OS for free ports | `7f93dd5` |
+| A5a | Merge `origin/main` (BUG-353) | **DONE** | 6436/6436/0/0 on the merged tree; BUGS.md resolved as union + named drops | `f241084` |
 | A2 | `build-capability-map.js` — the map stops being hand-edited | open | — | — |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
@@ -4748,6 +4750,21 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 
 These are recorded because each one would otherwise be rediscovered.
 
+- **A NAMED CLASS, worth more than any single item here: a guard that checks
+  "did what I asked happen" is structurally blind to "was what I asked the right
+  thing".** Surfaced by the concurrent session while fixing BUG-353. `ui_type`
+  already had a target cross-check comparing pc-child's `typedIntoPid` against
+  the pid it targeted, and it passed throughout — 2222 against 2222 — while the
+  text landed in the wrong window, because the target had been swapped *before*
+  the check ran. Every honesty guard in this repo examined so far is of the first
+  kind. Treat this as an open question against each of them, not a remark.
+- **C1's `lastLaunchedPid` binding is ANSWERED, not open.** BUG-353 shipped
+  2026-08-27 and deliberately did not key on `goalId`, having measured that
+  `live-tool-adapter.js:833` supplies none — a goal-keyed binding matches
+  everything via `null === null`. Five internal launch sites now declare
+  themselves, a 120s TTL bounds every other caller, and a launch ATTEMPT clears
+  the previous target even when the launch FAILS. Close C1 against `daec3ff`
+  rather than doing it twice.
 - **B5 ("no effector can open a file") is STALE.** `open_file` exists in
   `from-computer.js` with a `resolveSandboxed()` guard, an execute-extension
   denylist, an honest failure when the desktop shell is absent, and a
@@ -4773,7 +4790,7 @@ These are recorded because each one would otherwise be rediscovered.
 
 ## RESUME HERE
 
-**Position:** Wave A, three of six items closed, all pushed on branch
+**Position:** Wave A, four of six items closed (plus a hook defect and the main merge), all pushed on branch
 `fix/closure-wave-a` (PR #28). Working in a worktree at
 `.claude/worktrees/closure-wave-a` because a second session is live in the main
 checkout; that removes the shared git index rather than managing it.
@@ -4791,6 +4808,6 @@ carries a `Hermes engine` node for a program deleted in W6.
 **Blocking:** nothing. `from-pc.js` is held by the concurrent session until
 BUG-353 lands, which only affects C1.
 
-**Suite at the time of writing:** 6412 tests, 6412 pass, 0 fail, 0 skipped.
+**Suite at the time of writing:** 6436 tests, 6436 pass, 0 fail, 0 skipped.
 Numbers here are indicative only — `node scripts/sync-test-count.js --check` is
 the authority, and the count is deliberately not written into `CLAUDE.md`.
