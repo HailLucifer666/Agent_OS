@@ -41,6 +41,90 @@ it is committed.
 
 ---
 
+## BUG-365 — web search had exactly ONE working provider, so spending its free quota was a cliff onto confident wrong answers (✅ FIXED 2026-08-26, live-verified)
+
+**Status:** ✅ FIXED 2026-08-26. Live-verified end to end; 18 regression tests, 12 mutations run.
+
+**Measured 2026-08-26.** Of the chain's rungs, precisely one returned usable
+results — `exa-mcp`, on a keyless free tier the vendor documents at 150
+calls/day. Both DuckDuckGo rungs answered an anti-bot challenge, `jina` 401'd,
+the local open-webSearch daemon returned 0 results from every engine it has, and
+Wikipedia answered irrelevant articles that the chain shipped as `ok:true`.
+
+So the operator's real ceiling was ~150 searches a day across everything MYTHOS
+does — spoken questions, the build engine's research gate, autonomous goals — and
+exhausting it did not degrade search, it **ended** it, in the worst available
+way: by substituting plausible wrong answers for an honest failure.
+
+**The fix adds a second keyless rung**, You.com MCP
+(`https://api.you.com/mcp?profile=free`, `you-search` tool), on a quota entirely
+independent of Exa's. No key, no signup, no card, nothing in `.env`. Measured on
+this machine: 7 of 7 queries answered HTTP 200 with 5–20 results each. Live
+chain check with `WEB_SEARCH_DISABLED_PROVIDERS=exa-mcp,exa` returned the correct
+answer from `you-mcp` in 2.7s.
+
+Two independent free quotas mean exhausting one is a step down, not a cliff.
+
+**THE MORE IMPORTANT HALF: the SSE frame reader was wrong, and the new provider
+is only what exposed it.** The existing exa-mcp reader took the FIRST `data:`
+line as the JSON-RPC reply:
+
+```js
+var m = String(txt).match(/data:\s*(\{[\s\S]*?\})\s*\n/)
+```
+
+You.com sends a log notification first, so a first-frame reader turns an HTTP 200
+carrying 20 results into **zero results** — indistinguishable upstream from a
+dead endpoint, and exactly the plausible-empty shape that hid the other dead
+rungs for weeks. The first probe written during this work did precisely that and
+reported the provider broken. Both rungs now parse every frame and select the
+reply by structure (`src/core/effectors/mcp-search.js`).
+
+**A latency number is a property of the caller, not of the endpoint.** A
+hand-written probe measured You.com at 1.85s against Exa at 2.8s, and "fastest
+first" would have acted on that and placed You.com ahead. Both numbers were
+artefacts: the probe skipped the `initialized` notification, so it timed two
+round trips where the real client pays three. Re-measured *through the shipping
+module*, three queries each, the order inverts — exa-mcp 1531/1634/1899ms
+(median 1634) against you-mcp 2227/2621/3148ms (median 2621). exa-mcp keeps first
+place; the ordering is now pinned by a test.
+
+**Three of twelve mutations survived on the first pass, and each meant something
+different** — worth recording because two of the three would have shipped as
+"tested":
+
+1. Deleting the `if (f.method) continue` notification guard broke nothing. Correct
+   verdict: a notification carries `params`, never `result`/`error`, so the
+   structural check already rejected it. The guard defended an unreachable state
+   and was **removed**, not test-papered.
+2. Deleting the `isError` check broke nothing, twice. That one was a genuine gap —
+   `isError: true` is a real MCP tool-failure shape. The first replacement test was
+   still vacuous, because ignoring `isError` also ends in zero results.
+3. Deleting the JSON-RPC `error` branch broke nothing, for the same reason.
+
+The pattern behind 2 and 3: **every fault path in this module produces the same
+OUTCOME as a miss, and differs only in whether the cause survives.** So a test
+that asserts `ok:false` proves nothing about them. Both are now pinned on the
+failure trace (`you-mcp tool reported isError`, `you-mcp daily free quota
+exhausted`) and on the cooldown actually arming — a fault reported as "no
+results" leaves the provider looking healthy and re-paid on every later call.
+
+**What this does NOT fix.** The scrape rungs are still dead and still cost their
+timeouts when both keyless rungs are spent (BUG-361's cooldown limits how often).
+The local daemon still returns 0 results from every engine. Wikipedia still ships
+as `ok:true`. Google CSE and Brave remain unconfigured — CSE needs the Custom
+Search API enabled on the operator's Cloud project plus a `GOOGLE_CSE_ID`, and is
+a separate ~100/day pool that would take the ceiling to ~350/day across three
+vendors. And **both daily caps are vendor claims, not measurements**: neither
+endpoint publishes a rate-limit header, so the chain treats a sudden 429 as
+normal rather than exceptional and says so in the trace.
+
+**Files:** `src/core/effectors/mcp-search.js` (new — both MCP rungs and the shared
+frame reader; `web-search.js` was at its 862-line ratchet ceiling, and moving
+exa-mcp out brought it to 801), `src/core/effectors/web-search.js`,
+`mythos/.env.example`.
+**Test:** `test/bug-365-search-has-a-second-free-quota.test.js` (18 tests).
+
 ## BUG-360 — every deep link in the HUD 404'd when the install path contained a dot-segment, while `/` kept working (✅ FIXED 2026-08-26, live-verified in-suite)
 
 Found by accident: the full suite failed `express-5-compat.test.js`'s "the SPA fallback serves the

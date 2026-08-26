@@ -5,6 +5,8 @@ const { isTimeSensitive, entersNewsRung } = require('./search-intent.js');
 // effectors/web-search.js — web search effector with a provider chain.
 // 0. Local open-webSearch daemon (BUG-280) — POST http://127.0.0.1:3100/search
 // 1. Exa (only when EXA_API_KEY is set) — POST with x-api-key header
+// 1b. Exa MCP, keyless free tier — see mcp-search.js
+// 1c. You.com MCP, keyless free tier (BUG-365) — see mcp-search.js
 // 2. DuckDuckGo HTML direct — https://html.duckduckgo.com/html/?q=
 // 3. DuckDuckGo Lite — https://lite.duckduckgo.com/lite/?q=
 // 4. Wikipedia full-text — https://en.wikipedia.org/w/api.php?action=query&list=search
@@ -21,7 +23,13 @@ var isSearchProviderSuppressed = require('../immune/healer').isSearchProviderSup
 
 var BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 var EXA_SEARCH_URL = 'https://api.exa.ai/search'
-var EXA_MCP_URL = 'https://mcp.exa.ai/mcp'
+// The two keyless MCP-over-SSE rungs live in their own module: this file is at
+// its file-size ratchet ceiling, and their shared SSE frame reader is a
+// correctness concern in its own right (see mcp-search.js).
+var mcpSearch = require('./mcp-search')
+var exaMcpSearch = mcpSearch.exaMcpSearch
+var parseExaMcpText = mcpSearch.parseExaMcpText
+var youMcpSearch = mcpSearch.youMcpSearch
 var DDG_HTML_URL = 'https://html.duckduckgo.com/html/?q='
 var DDG_LITE_URL = 'https://lite.duckduckgo.com/lite/?q='
 // BUG-280 (2026-08-20): action=opensearch is TITLE-PREFIX matching, so it could
@@ -423,97 +431,6 @@ function wikiSearch(q, maxResults, bus) {
   })
 }
 
-// --- Exa MCP free tier (zero-config, no API key required) ---
-// The hosted MCP endpoint at https://mcp.exa.ai/mcp offers an unauthenticated
-// free tier (3 QPS, 150 calls/day) via JSON-RPC over Server-Sent Events.
-// This is the reliable default — DuckDuckGo HTML scraping below is the
-// brittle fallback. Verified working 2026-07.
-//
-// Flow: initialize handshake -> notifications/initialized -> tools/call.
-// The SSE response carries the JSON-RPC reply on a `data:` line.
-async function exaMcpSearch(q, maxResults, bus) {
-  var rpcId = 1
-  function parseSse(txt) {
-    var m = String(txt).match(/data:\s*(\{[\s\S]*?\})\s*\n/)
-    return m ? JSON.parse(m[1]) : null
-  }
-  async function rpc(method, params, includeId) {
-    var body = { jsonrpc: '2.0', method: method }
-    if (includeId) { body.id = rpcId++; body.params = params || {}; }
-    var controller = new AbortController()
-    var timer = setTimeout(function() { controller.abort() }, PROVIDER_TIMEOUT)
-    try {
-      var res = await fetch(EXA_MCP_URL, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream' },
-        body: JSON.stringify(body)
-      })
-      clearTimeout(timer)
-      // BUG-276 F4: the same silent swallow as jina's. A bare `return null` here made a
-      // 429/402/500 from the free MCP tier read as "no results" upstream.
-      if (!res.ok) {
-        if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: 'HTTP ' + res.status })
-        return null
-      }
-      return parseSse(await res.text())
-    } catch (err) {
-      clearTimeout(timer)
-      if (bus) bus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'exa-mcp', error: err.message })
-      return null
-    }
-  }
-
-  // 1. Handshake
-  var init = await rpc('initialize', {
-    protocolVersion: '2024-11-05', capabilities: {},
-    clientInfo: { name: 'mythos', version: '0.1.0' }
-  }, true)
-  if (!init || !init.result) return []
-
-  // 2. Notification (no id, no response expected)
-  await rpc('notifications/initialized', {}, false)
-
-  // 3. Search
-  var search = await rpc('tools/call', {
-    name: 'web_search_exa',
-    arguments: { query: q, numResults: maxResults }
-  }, true)
-  if (!search || !search.result || !search.result.content) return []
-
-  // The MCP tool returns content as [{type:'text', text:'Title: ...\nURL: ...'}].
-  // Parse the text block into structured results.
-  var textBlock = ''
-  for (var i = 0; i < search.result.content.length; i++) {
-    if (search.result.content[i].type === 'text') {
-      textBlock += search.result.content[i].text + '\n'
-    }
-  }
-  return parseExaMcpText(textBlock)
-}
-
-// Parse the Exa MCP text response into {title, url, snippet} objects.
-// Format observed: "Title: <t>\nURL: <u>\nPublished: ...\nHighlights:\n<snip>\n\n---\n"
-function parseExaMcpText(text) {
-  var blocks = String(text).split(/\n*---\n*/)
-  var results = []
-  for (var i = 0; i < blocks.length; i++) {
-    var b = blocks[i].trim()
-    if (!b) continue
-    var titleM = b.match(/Title:\s*(.+)/)
-    var urlM = b.match(/URL:\s*(\S+)/)
-    var hlM = b.match(/Highlights:\s*\n([\s\S]*?)$/)
-    if (titleM && urlM) {
-      results.push({
-        title: titleM[1].trim(),
-        url: urlM[1].trim(),
-        snippet: hlM ? hlM[1].trim().slice(0, 300) : ''
-      })
-    }
-  }
-  return results
-}
-
 // --- main entry point ---
 
 async function web_search({ query, maxResults, bus }) {
@@ -739,6 +656,28 @@ async function web_search({ query, maxResults, bus }) {
       failed('exa-mcp')
     }
 
+    // 1c. You.com MCP free tier — the second keyless rung, ~100 calls/day on a
+    // quota entirely independent of Exa's. Placed here, after exa-mcp and ahead
+    // of the scrape rungs, on measured latency through this exact call path:
+    // exa-mcp median 1634ms, you-mcp median 2621ms over three queries each.
+    // Both answered 3 of 3; the scrape rungs below answered 0 of 3.
+    //
+    // Why this matters more than one more provider: before it, a single spent
+    // quota dropped the chain straight onto DuckDuckGo (anti-botted) and then
+    // Wikipedia (irrelevant-but-shipped-as-success). Two independent free
+    // quotas mean exhausting one is no longer a cliff.
+    var youSkip = skipReason('you-mcp')
+    if (youSkip) note('you-mcp', youSkip)
+    else {
+      try {
+        var youResults = await youMcpSearch(q, max, traceBus)
+        if (youResults.length) {
+          worked('you-mcp'); return succeed(q, youResults.slice(0, max), 'you-mcp')
+        }
+      } catch (err) { traceBus.emit('health.anomaly', { kind: 'search-provider-failed', provider: 'you-mcp', error: err.message }); }
+      failed('you-mcp')
+    }
+
     // 2. DuckDuckGo HTML direct (+ fallback parser if primary returns nothing).
     // Suppression key matches the anomaly's own `provider` field ('ddg-html'),
     // not the success-path `source` label ('duckduckgo-html') — they differ.
@@ -857,6 +796,8 @@ module.exports = {
   _localSearchEngines: localSearchEngines,
   _exaMcpSearch: exaMcpSearch,
   _parseExaMcpText: parseExaMcpText,
+  _youMcpSearch: youMcpSearch,
+  _parseYouMcpText: mcpSearch.parseYouMcpText,
   _isTimeSensitive: isTimeSensitive,
   _succeed: succeed
 }
