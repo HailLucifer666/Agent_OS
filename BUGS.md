@@ -13831,12 +13831,45 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   an orphaned listener (bind-failed-again x336, Jul->Aug). Add terminal
   condition after N attempts -> OFFLINE + hint running a new
   scripts/diagnose-aether-port.ps1 that names the squatter PID.
-- BUG-352 - catalog truth. sync-test-count.js counts effectors against an
-  inert ctx and silently zeroes factories needing deps: headline says 147,
-  real registrations are 179. Fix counter, regenerate pie/table rows, delete
-  dead claims (hermes_task, speak), document Phone/WhatsApp/CUA/OKF/MCP/
-  doc-RAG modules. Badges node>=18 vs engines>=22 and tests 4716 were fixed
-  in BUG-332; effectors badge remains.
+- BUG-352 - catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);
+  the README catalog table and pie are NOT yet generated — see below.**
+
+  The counter was dropping 32 tools through two independent mechanisms, both
+  swallowed by a bare `catch {}` in `computeEffectorCount()`:
+
+  | module | tools | why it counted zero |
+  |---|---|---|
+  | `from-dashboard.js` | 28 | `buildTools(ctx)` threw `TypeError: Cannot convert object to primitive value` — the inert ctx returned `undefined` for `Symbol.toPrimitive`, so any factory that string-coerces it blew up. Lost `open_web`, `camera_look`, and the whole goals/kanban set. |
+  | `from-mcp.js` | 3 | `buildTools(ctx)` returns `{ tools: [...] }`; the counter recognised only `{ TOOLS: [...] }` — the same key `registerFromMcp` itself reads. |
+  | `from-strix.js` | 1 | same lowercase-key shape (`security_scan`). |
+
+  147 + 32 = 179, which is the capabilities manifest's independent number. The
+  fix was not tuned to 179: three mechanisms were repaired and 179 fell out.
+  52 of 78 files in `src/core/effectors/` still contribute zero and that is
+  correct — 49 are genuine helpers with no tools.
+
+  A `build*Tools` export that cannot be counted now THROWS instead of counting
+  zero. The guard is narrow to that idiom; the `create*` probe stays tolerant
+  because most `create*` exports there are helpers that legitimately refuse an
+  inert ctx. Regression test: `test/bug-352-effector-count-drops-tools.test.js`
+  (10 assertions), mutation-proven — see its header for the two defects the
+  mutation run found in the fix and in the test itself.
+
+  Verified: `node --test` in a worktree on `93991df` + this fix reports
+  tests=6387 pass=6387 fail=0 skipped=0; `sync-test-count.js --check` passes
+  with `effectors=179`; 16 stale doc numbers rewritten by `--write`.
+
+  **STILL OPEN under this number** (the ticket named more than the counter):
+  the README "Tool Distribution" pie and the "Full effector catalog" table are
+  still hand-typed and now sum to ~107 against a real 179, and both dead claims
+  the ticket names are still in the table — a `Hermes Build Engine | hermes_task`
+  row for an engine deleted in the W6 dsh swap, and a `Voice | speak` row for an
+  effector removed 2026-07-31 as unreachable dead code. Both should be GENERATED
+  from `computeEffectorTools().perFile` (which now returns real tool ids per
+  file) rather than corrected by hand, or they drift again by construction.
+  Also still owed: documenting the Phone/WhatsApp/CUA/OKF/MCP/doc-RAG modules.
+  Badges node>=18 vs engines>=22 and tests 4716 were fixed in BUG-332; the
+  effectors badge is now generated and correct.
 - BUG-353 - lastLaunchedPid is a process-wide default for pid-less
   ui_type/ui_click (from-pc.js :47); any intervening launch_app retargets
   typing. Bind per conversation/goal with TTL, clear on launch.

@@ -115,11 +115,26 @@ function computeProviderCount() {
 // tool-definition objects (closures over it), never to execute logic at
 // definition time, so a real vault/bus/brain is never required just to ask
 // "how many tools does this file define."
+// BUG-352 (2026-08-27): returning undefined for Symbol.toPrimitive made this
+// ctx un-coercible, so any factory that put a ctx-derived value in a template
+// literal or a string concat threw "Cannot convert object to primitive value"
+// — and the bare catch below turned that into a silent zero. from-dashboard.js
+// coerces, so all 28 of its tools (open_web, camera_look, the goals and kanban
+// verbs) were missing from every count this script has ever printed. It must
+// stay non-thenable and non-iterable — an await or a spread on it would change
+// what the factory does rather than just what it prints — but coercing to a
+// marker string is harmless and is what a factory building a description needs.
+// One line does it, not two: a `toString` branch would fix the same coercion,
+// and the first draft of this fix carried both until a mutation run showed the
+// test could not tell them apart — either alone yields all 28 tools. Kept the
+// Symbol.toPrimitive arm because it is the protocol consulted first and it
+// covers numeric coercion as well; the toString arm was dead surface.
 function createInertCtx() {
   const noop = function () { return handle; };
   const handle = new Proxy(noop, {
     get(_target, prop) {
-      if (prop === 'then' || prop === Symbol.iterator || prop === Symbol.toPrimitive) return undefined;
+      if (prop === 'then' || prop === Symbol.iterator) return undefined;
+      if (prop === Symbol.toPrimitive) return () => '[inert-ctx]';
       return handle;
     },
     apply() { return handle; },
@@ -139,10 +154,12 @@ function createInertCtx() {
 // a special case. Nothing uses shape (3) today: voice.js's `speak` effector was
 // its only user and was removed 2026-07-31 as unreachable dead code (it had no
 // describeMeta(), so it never appeared in any catalog the model sees).
-function computeEffectorCount() {
-  const dir = path.join(MYTHOS_ROOT, 'src/core/effectors');
+function computeEffectorTools(dir = path.join(MYTHOS_ROOT, 'src/core/effectors')) {
   const ctx = createInertCtx();
   let total = 0;
+  const perFile = {};
+  const unreadable = [];
+  const idsOf = (tools) => tools.map((tool) => (tool && (tool.name || tool.id)) || '(unnamed)');
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
     let mod;
     try {
@@ -161,19 +178,46 @@ function computeEffectorCount() {
       }
       console.warn('sync-test-count: ' + file + ' is not requirable in isolation ('
         + (err.code || err.message) + ') — counted as 0 tools');
+      unreadable.push({ file, reason: err.code || err.message });
       continue;
     }
     if (Array.isArray(mod.TOOLS)) {
       total += mod.TOOLS.length;
+      perFile[file] = idsOf(mod.TOOLS);
       continue;
     }
+    // A `build*Tools` export exists for exactly one purpose: to declare tools.
+    // So when one cannot be counted, that is news, not a shrug. Both arms below
+    // used to `catch {}` into a silent zero, which is how a 32-tool gap between
+    // this script and the capabilities manifest (147 vs 179) survived long
+    // enough to be written into the README. The guard is deliberately narrow —
+    // the `create*` probe further down stays tolerant, because most `create*`
+    // exports in this directory are helpers that legitimately refuse an inert
+    // ctx and were never tool factories.
     const buildFn = Object.keys(mod).find((k) => /^build.*Tools$/i.test(k) && typeof mod[k] === 'function');
     if (buildFn) {
+      let result;
       try {
-        let result = mod[buildFn](ctx);
-        if (!Array.isArray(result) && result && Array.isArray(result.TOOLS)) result = result.TOOLS;
-        if (Array.isArray(result)) { total += result.length; continue; }
-      } catch { /* needs real deps to build its tool list — not from-*.js shaped, skip */ }
+        result = mod[buildFn](ctx);
+      } catch (err) {
+        throw new Error('sync-test-count: ' + file + ' exports ' + buildFn + '() but it threw — '
+          + err.message + '. Refusing to report a tool count that silently excludes it.');
+      }
+      // from-mcp.js and from-strix.js return { tools: [...] } — the same key
+      // their own registerFrom* functions read — while from-dashboard.js and
+      // others return { TOOLS: [...] }. Only the uppercase spelling was
+      // recognised, so the MCP bridge's 3 tools and security_scan were dropped.
+      if (!Array.isArray(result) && result && typeof result === 'object') {
+        if (Array.isArray(result.TOOLS)) result = result.TOOLS;
+        else if (Array.isArray(result.tools)) result = result.tools;
+      }
+      if (!Array.isArray(result)) {
+        throw new Error('sync-test-count: ' + file + ' exports ' + buildFn + '() but it returned no tool array '
+          + '(neither an array, nor .TOOLS, nor .tools). Refusing to report a tool count that silently excludes it.');
+      }
+      total += result.length;
+      perFile[file] = idsOf(result);
+      continue;
     }
     const createFn = Object.keys(mod).find((k) => /^create/.test(k) && typeof mod[k] === 'function');
     if (createFn) {
@@ -181,11 +225,16 @@ function computeEffectorCount() {
         const result = mod[createFn]({ config: ctx });
         if (result && typeof result === 'object' && typeof result.id === 'string' && typeof result.invoke === 'function') {
           total += 1;
+          perFile[file] = [result.id];
         }
       } catch { /* not a single-tool effector factory (e.g. needs a real vault) — skip */ }
     }
   }
-  return total;
+  return { total, perFile, unreadable };
+}
+
+function computeEffectorCount(dir) {
+  return computeEffectorTools(dir).total;
 }
 
 // Each slot is anchored on stable surrounding text (not a line number) so it
@@ -400,4 +449,6 @@ async function main() {
   console.log(staleCount > 0 ? `sync-test-count --write: updated ${staleCount} number(s).` : 'sync-test-count --write: already in sync, nothing to do.');
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { computeEffectorTools, computeEffectorCount, createInertCtx };
