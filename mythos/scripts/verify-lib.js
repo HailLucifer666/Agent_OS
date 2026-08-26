@@ -147,7 +147,16 @@ function attachMythos(opts) {
         });
       });
     });
-    req.on('timeout', () => { req.destroy(); reject(new Error(`attach failed: /health timed out after ${timeoutMs}ms on port ${port}`)); });
+    // BUG-367 (2026-08-27): this used to stop at "on port N", while the error
+    // path below ended with the "Is MYTHOS running on port N?" hint. Two
+    // rejection paths, two different contracts — and a caller that asserted the
+    // hint passed or failed depending on which one won the race. Under
+    // full-suite load a connect to an unbound port reaches this deadline before
+    // ECONNREFUSED arrives, so verify-lib-attach.test.js blocked a commit in two
+    // independent sessions, hours apart, and passed every time it was run alone.
+    // Both paths now say the same thing; the hint is as true of a hang as of a
+    // refusal, and it is the sentence that tells a harness user what to do.
+    req.on('timeout', () => { req.destroy(); reject(new Error(`attach failed: /health timed out after ${timeoutMs}ms on port ${port}. Is MYTHOS running on port ${port}?`)); });
     req.on('error', (err) => reject(new Error(`attach failed: ${err.message}. Is MYTHOS running on port ${port}?`)));
   });
 }

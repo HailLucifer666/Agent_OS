@@ -4691,3 +4691,211 @@ Copy this to a fresh agent. It should need nothing else but this document and
 | 2026-08-22 | Step 7 — root `CLAUDE.md` rewritten in the SAME commit as the deletion | *(this commit)* | The single-engine paragraph now says the RULE survived a change of ENGINE, in those words, so nobody reads the Hermes deletion as ruling A being quietly dropped. It also states the two things most likely to be got wrong: the harness changed and the models did not (no `DEEPSEEK_API_KEY` anywhere; the lane is the source of truth), and the version is pinned and asserted before every task because dsh is a preview that promises breaking changes. `src/core/CLAUDE.md`'s `NEVER_TRUSTABLE` list moved `hermes_task` → `dsh_task` |
 | 2026-08-22 | Step 8 — **licence closure enumerated, and it adds no new class** | *(this commit)* | `node mythos/scripts/audit-licences.js --check` → PASS, every shipped package permissive or recorded. Then the dsh tree itself, 434 packages read from disk: **349 MIT, 55 Apache-2.0, 15 BSD-3-Clause, 10 ISC, 2 BSD-2-Clause, 1 0BSD, 1 Python-2.0, and exactly ONE non-permissive** — `@img/sharp-win32-x64` at `Apache-2.0 AND LGPL-3.0-or-later`, reached via `@deepseek-ai/dsh-attachment-local` → `sharp`. That is the **same libvips exposure this repo already ships and already documents** (through `kokoro-js` → `@huggingface/transformers` → `sharp`), so dsh introduces no new licence class — but it adds a second path to it, and `THIRD_PARTY_NOTICES.md` now records that. Whether an LGPL-3.0 libvips inside a BYO, non-vendored, operator-installed tree matters for a paid product is **left unconcluded on purpose** — root `CLAUDE.md` forbids writing a confident legal conclusion into a tracked file |
 | 2026-08-22 | The `Hermes Agent/` DIRECTORY was deliberately NOT deleted from disk | *(this commit)* | The plan's step-6 list names it, and the `.gitignore` rule is kept rather than dropped, with the reason written in: the directory holds a third-party checkout, its own CPython/uv/PortableGit, and **Hermes's own `config.yaml`/`auth.json` with provider credentials**. Removing the ignore rule would surface all of that as untracked files and invite committing a secret. Nothing in MYTHOS reads it any more, so deleting it is a one-command operator decision about disk space, not something a session should do to an install it did not create |
+
+---
+
+# CLOSURE CAMPAIGN (opened 2026-08-27)
+
+Everything on `MYTHOS-CAPABILITY-MAP.html` goes green, or gets a **recorded
+disposition**. Appended here rather than started as a fourth plan document: the
+three-document ceiling in root `CLAUDE.md` holds, and a campaign that lives in an
+untracked file is a campaign that gets lost.
+
+The map as found (refreshed 2026-08-26): 44 capability nodes — **9 fail, 19 warn,
+8 dark (never exercised), ~18 ok** — plus **34 untriaged incidents**, **74 tools
+withheld from voice**, and ~17 open bugs. The suite was green throughout, which
+is the campaign's founding observation: **a green suite is not a working
+product**, and every red on that map is a live-behaviour defect the suite
+structurally cannot see.
+
+## Operator decisions already taken (2026-08-27)
+
+1. **Withheld-74:** verify off-voice; the curated `DEFAULT_ALLOWLIST` stays.
+   Green means exercised and verified via dashboard/API/harness. Voice promotion
+   only on operator request, one tool at a time.
+2. **No paid spend.** BYO-free lanes only. Quota-capped nodes close as
+   *green-with-caveat*, with dead lanes removed from rank so no dead time is paid.
+3. **Operator sessions available**, batched into ~30-minute live-verify sessions.
+
+## Definition of GREEN (the acceptance contract)
+
+A node is green when all of: mechanism verified **live** against the running
+system or its oracle; a regression test shipped, shown failing first and
+mutation-proven; evidence recorded as counts and literal commands; and the map
+row **regenerates from data**. A node may instead close as **DISPOSITION** — a
+recorded deliberate non-change — when the behaviour is correct by design; that
+needs a code comment, a regression test locking it, and a map row that says so.
+
+## Ledger — the only progress truth
+
+Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
+
+| Item | What | State | Evidence | SHA |
+|---|---|---|---|---|
+| A1 | BUG-352 — effector counter dropped 32 tools into a bare catch | **DONE** | 147→179; `--check` green; 10 assertions, 4 mutations | `716c5a9` |
+| A1b | BUG-352 part 2 — README pie/catalog generated, not hand-typed | **DONE** | pie 108 + table 107 → both 179; 10 missing modules restored; 2 dead rows gone; 11 assertions, 8 mutations | `c5d240d` |
+| — | BUG-367 — one attach contract, so a hung `/health` reads like a refused one | **DONE** | found while blocked by it; deterministic timeout case | `40d2b1e` |
+| A4 | `lint-bug-registry.js` + pre-commit wiring | **DONE** | max=367, next free 368; 15 assertions, 9 mutations (3 survived first pass) | `66b2c82` `f241084` |
+| — | Pre-commit's own fallback ports were squatted, reading as 3 regressions | **DONE** | reproduced with netstat (pids 4296/10904); hook now asks the OS for free ports | `7f93dd5` |
+| A5a | Merge `origin/main` (BUG-353) | **DONE** | 6436/6436/0/0 on the merged tree; BUGS.md resolved as union + named drops | `f241084` |
+| A2 | `build-capability-map.js` — the map stops being hand-edited | open | — | — |
+| A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
+| A5 | Merge/abandon the in-flight fix branches | open | — | — |
+| B1–B11 | Kill the 9 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
+| C1–C6 | 19 warn nodes, grouped by shared mechanism | open | — | — |
+| D1–D2 | 8 dark nodes + the withheld-74, via one `verify-withheld.js` harness | open | — | — |
+| E | Decisions wearing bug clothes (BUG-358, BUG-276, two product calls) | open | — | — |
+
+## Corrections to the plan, made on evidence rather than argument
+
+These are recorded because each one would otherwise be rediscovered.
+
+### A named class: delivery checks masquerading as correctness checks
+
+Worth more than any single ledger row. **A guard that checks "did what I asked
+happen" is structurally blind to "was what I asked the right thing".**
+
+Surfaced by the concurrent session while fixing BUG-353. `ui_type` already had a
+target cross-check comparing pc-child's `typedIntoPid` against the pid it
+targeted, and it passed throughout — 2222 against 2222 — while the text landed
+in the wrong window, because the target had been swapped *before* the check ran.
+
+**The discriminating question:** does the guard compare its result against the
+REQUEST, or against the WORLD? A guard that compares against the request moves
+with the request, so both sides can be wrong together and still agree.
+
+| instance | evidence | verdict |
+|---|---|---|
+| `ui_type` target cross-check | 2222 vs 2222 while text went elsewhere | **confirmed**, fixed in `daec3ff` |
+| `media_status` (BUG-348) | `GetCurrentSession()` returns one SMTC session; nothing asks whether it is the one making sound | **confirmed**, open — and this is a better argument for fixing it than the one in BUGS.md |
+| `see_and_click` | known grounding failures read MYTHOS's own HUD; both the OCR match and the `expect` check ask "did it happen" | candidate, **not reproduced under this framing** |
+| `web_search` before BUG-365 | returned Wikipedia with `ok:true`; "did a search complete" yes, "does it answer" unasked | confirmed, already fixed — and the fix is the template |
+| `index_project` | reports success while **94% of what it indexed is `.venv`** — 1879 of 2000 files, 8 from `src/`, `from-pc.js` absent entirely. Asks "did indexing complete", never "did it index the right thing" | **confirmed**, found independently 2026-08-27 |
+| `search_files` | returns `entries: [], truncated: true, ok: true` — "did the walk run" yes, "did it reach the content" unasked, and indistinguishable from an honest miss | **confirmed**, same root cause |
+| `claim-check.js` (non-effector) | compares a spoken claim against MYTHOS's own outcome ledger (`ok === true`) | **inherits** the blindness — see below |
+| `leash.check()` (non-effector) | static `TIER_TABLE` lookup on the tool name | **not an instance** — policy, not verification |
+| `launch_app`'s process-window oracle | compares the resolved process NAME against what was asked for | **the counter-example** — catches "a pid belonging to a different application" |
+
+**The remedy is not a stronger delivery check.** `web_search` shows the shape
+that worked: not a better completion check, but `authoritative:false` plus an
+honest `ok:false` when every rung returns nothing. You cannot strengthen a
+delivery check into a correctness check — you carry the uncertainty in the
+payload and let the consumer see it. That is the evidence contract this repo
+already has, applied to targeting rather than to success.
+
+`launch_app` matters most here: a guard of the right kind already exists, in the
+same file as the bug, which makes the pattern teachable rather than theoretical.
+
+**On `claim-check.js`, precisely.** It is correctly scoped for its stated job —
+catching a spoken claim with no backing action. But its backing is a delivery
+check, so a fabrication guard resting on "a tool returned ok" is still blind to
+"the tool did the right thing to the wrong target". Not a defect in claim-check;
+a limit on what any honesty layer above a delivery check can promise.
+
+**Honest limits on this table.** Most rows were examined on 2026-08-27, so the
+cluster may partly be availability rather than reality. `see_and_click` is
+inference from known grounding failures, not a reproduction. The non-effector
+sample is TWO modules, which found one inheritance and one non-instance — enough
+to say the class is not confined to effectors, nowhere near enough to call it
+general.
+
+**What weakens the availability worry:** `index_project` and `search_files` were
+found INDEPENDENTLY, by the concurrent session, while triaging an unrelated
+ticket — not by anyone looking for this pattern. They were found by checking a
+sibling tool before inventing a policy, and the house-convention question turned
+out to be the bug. Two unsought instances is better evidence for the class than
+any number of sought ones.
+- **C1's `lastLaunchedPid` binding is ANSWERED, not open.** BUG-353 shipped
+  2026-08-27 and deliberately did not key on `goalId`, having measured that
+  `live-tool-adapter.js:833` supplies none — a goal-keyed binding matches
+  everything via `null === null`. Five internal launch sites now declare
+  themselves, a 120s TTL bounds every other caller, and a launch ATTEMPT clears
+  the previous target even when the launch FAILS. Close C1 against `daec3ff`
+  rather than doing it twice.
+- **D2's code-search item WOULD HAVE PRODUCED A FALSE GREEN, and is rewritten.**
+  It said "index the mythos repo itself; verify a known-answer query". Measured
+  2026-08-27 by the concurrent session: `index_project` returns 2000 files with
+  `truncated:true`, of which **1879 (94%) come from `.venv`** and 8 from `src/`;
+  `from-pc.js` is not indexed at all. `SKIP_DIRS` omits `.venv`, `venv` and
+  `__pycache__`. So `search_code` searches a Python virtualenv, reports success,
+  and is the index behind "understand the codebase" queries. Building the index
+  and getting an answer would have turned the node green over the wrong corpus.
+  **A false green is worse than a red** — the red at least gets worked on. D2 now
+  requires a known-answer query naming a file that MUST be present (`from-pc.js`
+  is the measured example, currently absent), not merely "the index built".
+- **THE `.venv` BUGS DO NOT REPRODUCE IN A WORKTREE, and that is a verification
+  trap.** `mythos/.venv` in a worktree is a symlink created by
+  `setup-worktree.js`. Both walks use `readdirSync(…, { withFileTypes: true })`,
+  and a Dirent for a symlink reports `isDirectory() === false` —
+  `from-code-search.js:42` skips symlinks outright, and `search_files` never
+  recurses into one, costing a single `scanned++` instead of 5202. So in a
+  worktree the budget survives, the index is clean, and both defects vanish.
+  Measured here: 6026 files under the link's realpath within depth 6. Any fix or
+  before/after table for these must state that it was measured in the MAIN
+  CHECKOUT, and any regression test must build its own fixture tree from
+  `os.tmpdir()` rather than walking the repo, because the tree it runs in decides
+  the answer.
+
+  **This generalises past `.venv`, and it binds D1.** `setup-worktree.js` links
+  SIX paths, and the same Dirent behaviour makes every one of them invisible to
+  anything that walks the tree. A worktree is therefore not merely a *smaller*
+  checkout — it is **structurally a different tree** for any file-walking tool.
+  The `verify-withheld.js` harness exercises file operations, code search and
+  document ingest, so **it must not certify those tools from a worktree**: it
+  would exercise a tree the operator does not have and report green. Either run
+  that harness in the main checkout, or have it refuse to run where
+  `mythos/.venv` is a symlink and say why.
+
+  Related, from the concurrent session and worth pinning: `search_files` has no
+  symlink guard, and there is nonetheless **no sandbox escape** — a junction
+  planted inside the sandbox is not followed, because `entry.isDirectory()` is
+  false for it. But that containment is **incidental, not intentional**. Changing
+  `entry.isDirectory()` to `statSync(full).isDirectory()` reads like a robustness
+  improvement and would open a real escape. It is being pinned with a test rather
+  than left as an accident that happens to hold.
+- **B5 ("no effector can open a file") is STALE.** `open_file` exists in
+  `from-computer.js` with a `resolveSandboxed()` guard, an execute-extension
+  denylist, an honest failure when the desktop shell is absent, and a
+  `findWindowByTitle` read-back oracle. It was written 2026-08-21, *after* the
+  operator sessions the plan cites. The capability map still shows the gap,
+  which is A2's job, not a code task.
+- **The `triage-incidents.js` writer loop is DROPPED.** That script's own header
+  records a deliberate decision against auto-filing: an automated filer would
+  produce 31 entries and a triage problem one layer up, which is the shape of the
+  bug it exists to fix. A3 stays human judgement.
+- **"Exclude test fixtures" from the bug registry is WRONG as stated.** Three
+  numbers have no trace outside `test/`: BUG-999, BUG-164, BUG-364. Only 999 is a
+  fixture. The other two are real defects whose only record is their regression
+  test — the healthy case in this repo. The shortcut would hide two real bugs to
+  hide one string literal.
+- **`ctx.goalId` does not exist on the voice path** (reported by the concurrent
+  session, `live-tool-adapter.js:833`). Any fix keyed on `goalId` is inert
+  exactly where the bug lives, and fails silently because null matches null.
+  This disqualifies the goal-keyed form of C1's `lastLaunchedPid` binding.
+- **CI is billing-blocked**: every Actions check fails before a job starts. Red
+  CI says nothing about the code. The local full suite plus the pre-commit hook
+  is the merge gate until O6 is done.
+
+## RESUME HERE
+
+**Position:** Wave A, four of six items closed (plus a hook defect and the main merge), all pushed on branch
+`fix/closure-wave-a` (PR #28). Working in a worktree at
+`.claude/worktrees/closure-wave-a` because a second session is live in the main
+checkout; that removes the shared git index rather than managing it.
+
+**Next action:** A2 — `mythos/scripts/build-capability-map.js`. Split
+`MYTHOS-CAPABILITY-MAP.html` into a layout template plus a `<script id="map-data">`
+JSON island, and generate the island from the vault Audit ledger, `triage-incidents.js`,
+`sync-test-count.js`, the live-tools allowlist and BUGS.md. Preserve each node's
+hand-written note in a `curated` field the generator does not touch. Two traps
+already identified: call `capabilities.collectAdapterStatuses()` from
+`src/core/identity/capabilities.js`, **not** the removed `adapterStatuses()` in
+`main.js` (which is also at its file-size ratchet ceiling); and the map still
+carries a `Hermes engine` node for a program deleted in W6.
+
+**Blocking:** nothing. `from-pc.js` is held by the concurrent session until
+BUG-353 lands, which only affects C1.
+
+**Suite at the time of writing:** 6436 tests, 6436 pass, 0 fail, 0 skipped.
+Numbers here are indicative only — `node scripts/sync-test-count.js --check` is
+the authority, and the count is deliberately not written into `CLAUDE.md`.

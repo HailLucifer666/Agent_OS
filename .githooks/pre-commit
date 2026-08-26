@@ -42,18 +42,47 @@ if [ -n "$canon" ]; then
   echo "pre-commit: temp dir pinned to $TEMP"
 fi
 
-# FAULT 2 — a running MYTHOS instance holding the real default ports.
+# FAULT 2 — a port the suite needs is already held, and it reads as broken code.
 # test/boot.test.js spawns src/main.js on 4478 and the legacy proactive-speak
 # path needs the edge-tts server on 5050 — the same two ports the desktop
 # launcher frees on start. With the app open they fail as EADDRINUSE and as "the
-# legacy path must still complete a proactive turn", both of which read as broken
-# code. Defaults rather than overrides, so an operator who set one deliberately
-# keeps it. MYTHOS_PORT=0 is NOT an ephemeral port here: the config schema
-# enforces a minimum of 1024 and rejects it as a config error.
-: "${MYTHOS_PORT:=4997}"
-: "${EDGE_TTS_PORT:=5097}"
+# legacy path must still complete a proactive turn", neither of which mentions a
+# port.
+#
+# THIS HOOK'S FIRST FIX FOR THAT WAS ITSELF SQUATTABLE, and it was squatted.
+# It defaulted to 4997/5097, and on 2026-08-27 both were listening: pid 4296
+# (node src/main.js) on 4997 and pid 10904 (edge-tts-server.py, from the .venv of
+# a worktree that no longer exists) on 5097 — orphaned children of a dead
+# session's suite run, not the operator's app. A commit was blocked with three
+# failures (`boot`, `BUG-274 T4 engine attribution`, `proactiveSpeak routes
+# through the Live session`) on a tree that had just run green. Swapping one
+# hardcoded pair for another only moved the collision, and the recovery still
+# required knowing to run netstat first — the exact required-knowledge the temp
+# fix above exists to abolish.
+#
+# So: ASK the OS which ports are free instead of naming any. Still `:=`, so an
+# operator or CI that set one deliberately keeps it. MYTHOS_PORT=0 is NOT an
+# ephemeral port here — the config schema enforces a minimum of 1024 and rejects
+# it as a config error — which is why the picker validates what it hands back.
+if [ -z "$MYTHOS_PORT" ] || [ -z "$EDGE_TTS_PORT" ]; then
+  picked=$(node scripts/pick-free-ports.js 2>/dev/null)
+  if [ -n "$picked" ]; then
+    : "${MYTHOS_PORT:=$(printf '%s' "$picked" | cut -d' ' -f1)}"
+    : "${EDGE_TTS_PORT:=$(printf '%s' "$picked" | cut -d' ' -f2)}"
+  else
+    # Deliberate fallback rather than a blocked commit: failing to pick a port is
+    # not evidence about the code being committed. Loud, because these are the
+    # numbers that were squatted before.
+    echo "pre-commit: WARNING — could not pick free ports; falling back to 4997/5097."
+    echo "pre-commit:   If the suite now fails on boot/proactive-speak, check for a listener:"
+    echo "pre-commit:   node scripts/pick-free-ports.js --report"
+    : "${MYTHOS_PORT:=4997}"
+    : "${EDGE_TTS_PORT:=5097}"
+  fi
+fi
 : "${EDGE_TTS_URL:=http://127.0.0.1:$EDGE_TTS_PORT}"
 export MYTHOS_PORT EDGE_TTS_PORT EDGE_TTS_URL
+echo "pre-commit: ports MYTHOS_PORT=$MYTHOS_PORT EDGE_TTS_PORT=$EDGE_TTS_PORT"
 
 # No path args: node's own recursive discovery, not a shallow test/*.test.js glob
 # (which silently skipped test/assistant/*.test.js + test/engagements/*.test.js —
@@ -82,6 +111,21 @@ if [ "$fails" -gt 0 ]; then
 fi
 if ! printf '%s' "$out" | node scripts/sync-test-count.js --check; then
   echo "pre-commit: BLOCKED — tracked test-count numbers are stale. Run 'node scripts/sync-test-count.js --write' and commit the result."
+  exit 1
+fi
+
+# BUG numbering. Two numbers already carry two unrelated defects each (BUG-280,
+# BUG-360) because "re-grep the max before you assign one" is a rule that lives
+# in a human's memory. ~0.8s, no network.
+#
+# KNOWN LAG, stated rather than papered over: this reads committed history, so a
+# number that appears ONLY in the message of the commit being made is not seen
+# until the next commit. A number that also appears in source or in BUGS.md —
+# which is every number worth gating on — is seen immediately, because those are
+# read from the working tree.
+if ! node scripts/lint-bug-registry.js; then
+  echo "pre-commit: BLOCKED — bug registry. Renumber, write the missing BUGS.md entries, or"
+  echo "            adjudicate with a reason in scripts/lint-bug-registry.js."
   exit 1
 fi
 exit 0

@@ -3,7 +3,7 @@
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f0c29,50:302b63,100:24243e&height=220&section=header&text=MYTHOS&fontSize=80&fontColor=43e5a0&fontAlignY=35&desc=Autonomous%20Entity%20OS&descSize=24&descAlignY=58&descColor=4fd8ff&animation=fadeIn" width="100%" alt="MYTHOS header"/>
 
 <a href="https://github.com/HailLucifer666/Agent_OS">
-  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;6394+tests+green.+Zero+build+step." alt="Typing SVG" />
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;6436+tests+green.+Zero+build+step." alt="Typing SVG" />
 </a>
 
 <br/>
@@ -11,7 +11,7 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D22-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
 [![Tests](https://img.shields.io/badge/tests-6139%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9?style=for-the-badge)](ROADMAP.md)
-[![Effectors](https://img.shields.io/badge/effectors-147%20tools-eab308?style=for-the-badge)](#-147-tool-effectors)
+[![Effectors](https://img.shields.io/badge/effectors-179%20tools-eab308?style=for-the-badge)](#-179-tool-effectors)
 [![Deploy](https://img.shields.io/badge/deploy-render-4fc08d?style=for-the-badge&logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
 [![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey?style=for-the-badge)](#%EF%B8%8F-license)
 
@@ -31,13 +31,13 @@
 > [!IMPORTANT]
 > **Honest-inert by design.** Missing keys, dead providers, failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you *see* that it doesn't work.
 
-A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 6394 tests.
+A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 6436 tests.
 
 <div align="center">
 
 ### 🧭 Navigate
 
-[**Architecture**](#-architecture-overview) · [**OODA Loop**](#-the-ooda-cognitive-loop) · [**Brain**](#-brain--multi-provider-chain) · [**Memory**](#%EF%B8%8F-memory-system) · [**Immune System**](#%EF%B8%8F-immune-system) · [**Safety**](#-tiered-autonomy--safety) · [**Voice**](#%EF%B8%8F-voice-system) · [**147 Tools**](#-147-tool-effectors) · [**Engagements**](#-engagement-layer--structured-task-lifecycle) · [**Deploy**](#-deploy) · [**Screenshots**](#-screenshots) · [**History**](#-build-history) · [**Stack**](#%EF%B8%8F-tech-stack) · [**Docs**](#-documentation)
+[**Architecture**](#-architecture-overview) · [**OODA Loop**](#-the-ooda-cognitive-loop) · [**Brain**](#-brain--multi-provider-chain) · [**Memory**](#%EF%B8%8F-memory-system) · [**Immune System**](#%EF%B8%8F-immune-system) · [**Safety**](#-tiered-autonomy--safety) · [**Voice**](#%EF%B8%8F-voice-system) · [**179 Tools**](#-179-tool-effectors) · [**Engagements**](#-engagement-layer--structured-task-lifecycle) · [**Deploy**](#-deploy) · [**Screenshots**](#-screenshots) · [**History**](#-build-history) · [**Stack**](#%EF%B8%8F-tech-stack) · [**Docs**](#-documentation)
 
 </div>
 
@@ -75,7 +75,7 @@ flowchart TB
         end
         subgraph IOLayer["I/O"]
             SENS["10 Sensors"]
-            EFF["147 Effectors"]
+            EFF["179 Effectors"]
         end
         CORT --> BRN --> Cloud
         SENS --> BUS --> EFF
@@ -159,7 +159,7 @@ flowchart LR
 │              IDENTITY                                │  self.md · boundaries.md
 │         Human-editable persona                       │  Entity has no write path
 ├─────────────────────────────────────────────────────┤
-│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  11 sensors · 147 effectors
+│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  11 sensors · 179 effectors
 │  timer·file·ws·job·metric·gmail·screen·window·       │  Publish/subscribe, never direct
 │  reminder·calendar                                   │
 ├─────────────────────────────────────────────────────┤
@@ -408,29 +408,34 @@ screen-share only. So MYTHOS can look when asked; it is not watching the room.
 
 ---
 
-## 147-Tool Effectors
+## 179-Tool Effectors
 
-🧰 Every action MYTHOS can take goes through one of these 147 registered effectors. Counts are generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays — not hand-typed:
+🧰 Every action MYTHOS can take goes through one of these 179 registered effectors. Counts are generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays — not hand-typed:
 
-- [147-Tool Effectors](#147-tool-effectors) — the full catalog, generated from the real `from-*.js` arrays.
+- [179-Tool Effectors](#179-tool-effectors) — the full catalog, generated from the real `from-*.js` arrays.
+
+<!-- SYNC:EFFECTOR-CATALOG:START -->
+<!-- Generated by mythos/scripts/sync-test-count.js from the real from-*.js tool
+     arrays (AD-10). Hand edits inside these sentinels are overwritten by
+     `node scripts/sync-test-count.js --write`. Change the code, or the label
+     map in that script, not this table. -->
 
 ```mermaid
 pie showData title Tool Distribution
-    "Dashboard" : 26
-    "PC Control" : 23
-    "Browser Automation" : 13
-    "Computer" : 7
+    "PC Control" : 29
+    "Dashboard" : 28
+    "Browser Automation" : 21
+    "Computer & Files" : 15
+    "Phone (Android)" : 14
+    "Memory & Notes" : 10
+    "Calendar & Timers" : 7
     "Spotify" : 7
+    "CUA Driver" : 4
+    "Documents (RAG)" : 4
     "Gmail" : 4
-    "Memory" : 4
-    "Calendar & Timers" : 3
-    "Documents" : 3
-    "Forge (Multi-file Build)" : 3
-    "Mission Orchestrator" : 2
-    "Persona" : 2
-    "System" : 2
-    "Widgets" : 2
-    "Other (1 each)" : 7
+    "System" : 4
+    "WhatsApp" : 4
+    "Other (16 modules, under 4 tools each)" : 28
 ```
 
 <details>
@@ -438,30 +443,40 @@ pie showData title Tool Distribution
 
 <br/>
 
-| Catalog | Count | Examples |
-|---------|:-----:|----------|
-| **Dashboard** | 26 | navigate, create_goal, pipeline_execute, kanban_build_card, ask_agent, read_status |
-| **PC Control** | 23 | launch_app, focus_window, screen_look, ui_click, ui_type, media_key |
-| **Browser Automation** | 13 | browser_navigate, browser_click, browser_screenshot, browser_evaluate |
-| **Computer** | 7 | open_folder, list_folder, read_file, delete_file, compose_email |
-| **Spotify** | 7 | spotify_play_pause, spotify_next, spotify_search, spotify_status |
-| **Gmail** | 4 | gmail_unread, gmail_read, gmail_send |
-| **Memory** | 4 | remember, recall_memory, log_incident, self_capabilities |
-| **Calendar & Timers** | 3 | reminder_add, reminder_list, reminder_cancel |
-| **Documents** | 3 | generate_spreadsheet, generate_deck, generate_pdf |
-| **Forge (Multi-file Build)** | 3 | build_project, revise_project, project_status |
-| **Mission Orchestrator** | 2 | run_mission, mission_status |
-| **Persona** | 2 | persona_status, set_persona_level |
-| **System** | 2 | get_time, get_weather |
-| **Widgets** | 2 | spawn_widget, manage_widget |
-| **Hermes Build Engine** | 1 | hermes_task |
-| **GitHub Installer** | 1 | install_from_github |
-| **Project** | 1 | start_project (auto-pipeline) |
-| **Command Runner** | 1 | run_command (allowlist-gated) |
-| **Skills** | 1 | use_skill |
-| **Voice** | 1 | speak (edge-tts, registered directly) |
+| Catalog | Module | Tools | Registered |
+|---------|--------|:-----:|------------|
+| **PC Control** | `from-pc.js` | 29 | `launch_app`, `list_windows`, `focus_window`, `close_window`, `media_key`, `get_volume`, `set_volume`, `set_app_volume`, `get_app_volume`, `set_app_mute`, `screen_look`, `capture_screenshot`, `ui_elements`, `ui_click`, `ui_type`, `send_key`, `click_at`, `see_and_click`, `move_window`, `snap_window`, `scroll_at`, `right_click_at`, `drag`, `write_note`, `ambient_awareness`, `show_desktop`, `media_status`, `screen_read_text`, `set_wallpaper` |
+| **Dashboard** | `from-dashboard.js` | 28 | `navigate`, `close_panel`, `open_web`, `open_artifact`, `delete_artifact`, `read_status`, `read_system_specs`, `web_fetch`, `web_search`, `job_status`, `create_goal`, `propose_goal`, `list_goals`, `toggle_goal`, `delete_goal`, `capture_idea`, `pipeline_status`, `pipeline_advance`, `pipeline_execute`, `kanban_status`, `kanban_add_card`, `kanban_move_card`, `kanban_assemble`, `kanban_build_card`, `ask_agent`, `camera_look`, `camera_on`, `daily_plan` |
+| **Browser Automation** | `from-browser.js` | 21 | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_get_title`, `browser_get_text`, `browser_scroll`, `browser_tabs`, `browser_go_back`, `browser_wait_for`, `browser_fill_form`, `browser_dismiss_overlays`, `browser_check_captcha`, `browser_upload_file`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_evaluate`, `browser_launch_debug`, `browser_switch` |
+| **Computer & Files** | `from-computer.js` | 15 | `open_file`, `open_folder`, `list_folder`, `read_file`, `write_file`, `create_folder`, `delete_file`, `move_file`, `copy_file`, `rename_file`, `search_files`, `compose_email`, `clipboard_read`, `clipboard_write`, `think_deeply` |
+| **Phone (Android)** | `from-android.js` | 14 | `phone_list_devices`, `phone_screenshot`, `phone_notifications`, `phone_contacts_search`, `phone_sms_send`, `phone_call`, `phone_whatsapp_send`, `phone_wifi_toggle`, `phone_bluetooth_toggle`, `phone_hotspot_toggle`, `phone_app_launch`, `phone_app_close`, `phone_file_pull`, `phone_file_push` |
+| **Memory & Notes** | `from-memory.js` | 10 | `note_take`, `note_read`, `note_search`, `self_capabilities`, `remember`, `forget_fact`, `log_incident`, `recall_memory`, `list_incidents`, `incident_status` |
+| **Calendar & Timers** | `from-calendar.js` | 7 | `reminder_add`, `reminder_list`, `reminder_cancel`, `reminder_approve_action`, `timer_add`, `timer_cancel`, `calendar_upcoming` |
+| **Spotify** | `from-spotify.js` | 7 | `spotify_play_pause`, `spotify_next`, `spotify_previous`, `spotify_volume`, `spotify_play`, `spotify_search`, `spotify_status` |
+| **CUA Driver** | `from-cua.js` | 4 | `cua_list_windows`, `cua_bring_to_front`, `cua_get_window_state`, `cua_click` |
+| **Documents (RAG)** | `from-documents.js` | 4 | `document_ingest`, `document_list`, `document_search`, `document_answer` |
+| **Gmail** | `from-gmail.js` | 4 | `gmail_unread`, `gmail_read`, `gmail_send`, `gmail_draft` |
+| **System** | `from-system.js` | 4 | `get_time`, `get_weather`, `get_directions`, `system_status` |
+| **WhatsApp** | `from-whatsapp.js` | 4 | `whatsapp_send`, `whatsapp_contacts`, `whatsapp_contact_save`, `whatsapp_contact_delete` |
+| **Document Generation** | `from-docs.js` | 3 | `generate_spreadsheet`, `generate_deck`, `generate_pdf` |
+| **Forge (multi-file build)** | `from-forge.js` | 3 | `build_project`, `revise_project`, `project_status` |
+| **MCP Bridge** | `from-mcp.js` | 3 | `mcp_list_servers`, `mcp_list_tools`, `mcp_call_tool` |
+| **OKF Knowledge Exchange** | `from-okf.js` | 3 | `okf_export`, `okf_list`, `okf_import` |
+| **Code Search** | `from-code-search.js` | 2 | `index_project`, `search_code` |
+| **Mission Orchestrator** | `from-mission.js` | 2 | `run_mission`, `mission_status` |
+| **Persona** | `from-persona.js` | 2 | `persona_status`, `set_persona_level` |
+| **Widgets** | `from-widgets.js` | 2 | `manage_widget`, `spawn_widget` |
+| **App Reply** | `from-app-reply.js` | 1 | `app_reply` |
+| **DeepSeek Harness (build engine)** | `from-dsh.js` | 1 | `dsh_task` |
+| **Image Generation** | `from-image-gen.js` | 1 | `generate_image` |
+| **GitHub Installer** | `from-installer.js` | 1 | `install_from_github` |
+| **Project** | `from-project.js` | 1 | `start_project` |
+| **Command Runner** | `from-runner.js` | 1 | `run_command` |
+| **Skills** | `from-skills.js` | 1 | `use_skill` |
+| **Security Scan** | `from-strix.js` | 1 | `security_scan` |
 
 </details>
+<!-- SYNC:EFFECTOR-CATALOG:END -->
 
 > [!WARNING]
 > All dangerous tools (delete, execute, kill) require confirmation via the Leash system.
@@ -589,7 +604,7 @@ Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any key
 
 ## 📈 Build History
 
-**20 phases shipped.** Linear history on `main`. 6394 tests green.
+**20 phases shipped.** Linear history on `main`. 6436 tests green.
 
 ```mermaid
 gantt
@@ -663,7 +678,7 @@ Full history: [ROADMAP.md](ROADMAP.md) · [MYTHOS-ARCHITECTURE.md](MYTHOS-ARCHIT
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 5 gestures: confirm, deny, mute, unmute, vision |
-| **Tests** | Built-in `node:test` | 6394 tests, zero test framework deps |
+| **Tests** | Built-in `node:test` | 6436 tests, zero test framework deps |
 | **Deps** | 9 total | `@huggingface/transformers` · `@mediapipe/tasks-vision` · `exceljs` · `express` · `kokoro-js` · `onnxruntime-web` · `playwright-core` · `pptxgenjs` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
@@ -677,7 +692,7 @@ Agent_OS/
 ├── mythos/                      # MYTHOS entity runtime
 │   ├── Dockerfile               # Docker image for cloud deploy
 │   ├── .env.example             # All config knobs (documented)
-│   ├── package.json             # 9 deps, 6394 tests
+│   ├── package.json             # 9 deps, 6436 tests
 │   ├── src/
 │   │   ├── main.js              # Boot sequence (13 lifecycle steps)
 │   │   └── core/
@@ -685,7 +700,7 @@ Agent_OS/
 │   │       ├── bus/             # Event bus (pub/sub, middleware, storm guard)
 │   │       ├── config/          # Schema validation + env loading
 │   │       ├── cortex/          # OODA loop + orient/decide
-│   │       ├── effectors/       # 147 tools, build-runner, orchestrator
+│   │       ├── effectors/       # 179 tools, build-runner, orchestrator
 │   │       ├── goals/           # Arbitrage + budget system
 │   │       ├── identity/        # self.md + boundaries.md
 │   │       ├── immune/          # watchdog, healer, breakers, announcer
@@ -707,7 +722,7 @@ Agent_OS/
 │   ├── ui/public/               # JARVIS HUD (canvas + widgets)
 │   │   ├── js/                  # app.js, ws.js, voice, neural-map
 │   │   └── css/                 # 10 stylesheets, design tokens
-│   ├── test/                    # 6394 tests (node --test)
+│   ├── test/                    # 6436 tests (node --test)
 │   └── vault/                   # Persistent data (gitignored)
 ├── render.yaml                  # Render Blueprint (cloud deploy)
 ├── Start Agent OS.bat           # Windows launcher

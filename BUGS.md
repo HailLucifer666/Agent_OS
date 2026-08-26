@@ -41,6 +41,63 @@ it is committed.
 
 ---
 
+## BUG-367 — `attachMythos` had two failure messages for one contract, so a test asserting the hint passed or failed on a race (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 1 new regression test, 1 mutation run. Not
+live-verified and does not need to be: the defect is entirely in the wording of
+a rejection, and both paths are exercised deterministically in-suite.
+
+**Symptom, as it presented:** `test/verify-lib-attach.test.js` failed the
+pre-commit hook with `fails = 1` while passing 21/21 in isolation and passing
+in full runs minutes either side. It read exactly like flakiness, and it cost
+two sessions a blocked commit — `not ok 607` in one tree and `not ok 609` in
+another, hours apart. The index differs because the trees have different test
+counts; the file is the same file.
+
+**Why "flaky" was the wrong verdict.** This repo's `CLAUDE.md` documents
+wandering Windows failures as fork exhaustion from concurrent node processes,
+and that was the first hypothesis. It is wrong here, and the diagnostic
+property is what rules it out: **fork exhaustion wanders, and this landed on
+the same file twice for two independent sessions**, once with zero orphan
+`node.exe` on the machine. A failure that keeps choosing the same file is not a
+random casualty.
+
+**Mechanism.** `attachMythos()` (`scripts/verify-lib.js`) rejects down two
+paths, and they did not say the same thing:
+
+    req.on('error')    →  "attach failed: <msg>. Is MYTHOS running on port N?"
+    req.on('timeout')  →  "attach failed: /health timed out after Nms on port N"
+
+The test asserted `/Is MYTHOS running on port 1\?/` against port 1 — privileged
+and unbound, so normally an instant `ECONNREFUSED` down the *error* path. Under
+full-suite load the connect attempt instead reaches the 2000ms deadline and
+takes the *timeout* path, whose message never carried the hint. The test was
+racing two of its own subject's failure modes and only one of them satisfied it.
+
+**Fix, and why it is in the source rather than the test.** Loosening the
+assertion to accept either wording would have made the test pass while leaving
+two contracts in place. The hint is as true of a hang as of a refusal, and it is
+the sentence that tells a harness user what to do, so the timeout path now
+carries it too. One contract, no race, and the original assertion stays strict.
+
+**Regression test:** a second case in the same file drives the timeout path
+deterministically — a server that accepts the connection and never answers
+*cannot* take the error path — and asserts both that it still says it timed out
+and that it names the port with the hint. Mutation: removing the appended hint
+fails it with "the timeout path must carry the same hint as the refused path";
+restore verified by sha256, not by `git checkout --`.
+
+**Verified:** `node --test test/verify-lib-attach.test.js` → 22 pass, 0 fail
+(21 before). Nothing else reads the timeout string —
+`grep -rn "health timed out"` finds only the definition and this fix's own
+comment — and the change is additive, so a matcher on `/timed out/` still holds.
+
+**Not fixed by this, deliberately:** the underlying scheduling sensitivity is
+untouched. A connect to an unbound port can still lose the race to a short
+deadline; that is a property of the machine under load, not a defect, and the
+fix makes the outcome identical either way instead of pretending the race is
+gone.
+
 ## BUG-353 — the implicit ui_type/ui_click target was process-wide and never expired, so an app MYTHOS opened for its own reasons silently became the thing you dictated into (✅ FIXED 2026-08-27)
 
 **Status:** ✅ FIXED 2026-08-27. 17 regression tests, 17 mutations run, none survived.
@@ -13987,12 +14044,78 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   an orphaned listener (bind-failed-again x336, Jul->Aug). Add terminal
   condition after N attempts -> OFFLINE + hint running a new
   scripts/diagnose-aether-port.ps1 that names the squatter PID.
-- BUG-352 - catalog truth. sync-test-count.js counts effectors against an
-  inert ctx and silently zeroes factories needing deps: headline says 147,
-  real registrations are 179. Fix counter, regenerate pie/table rows, delete
-  dead claims (hermes_task, speak), document Phone/WhatsApp/CUA/OKF/MCP/
-  doc-RAG modules. Badges node>=18 vs engines>=22 and tests 4716 were fixed
-  in BUG-332; effectors badge remains.
+- BUG-352 - catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);
+  the README catalog table and pie are NOT yet generated — see below.**
+
+  The counter was dropping 32 tools through two independent mechanisms, both
+  swallowed by a bare `catch {}` in `computeEffectorCount()`:
+
+  | module | tools | why it counted zero |
+  |---|---|---|
+  | `from-dashboard.js` | 28 | `buildTools(ctx)` threw `TypeError: Cannot convert object to primitive value` — the inert ctx returned `undefined` for `Symbol.toPrimitive`, so any factory that string-coerces it blew up. Lost `open_web`, `camera_look`, and the whole goals/kanban set. |
+  | `from-mcp.js` | 3 | `buildTools(ctx)` returns `{ tools: [...] }`; the counter recognised only `{ TOOLS: [...] }` — the same key `registerFromMcp` itself reads. |
+  | `from-strix.js` | 1 | same lowercase-key shape (`security_scan`). |
+
+  147 + 32 = 179, which is the capabilities manifest's independent number. The
+  fix was not tuned to 179: three mechanisms were repaired and 179 fell out.
+  52 of 78 files in `src/core/effectors/` still contribute zero and that is
+  correct — 49 are genuine helpers with no tools.
+
+  A `build*Tools` export that cannot be counted now THROWS instead of counting
+  zero. The guard is narrow to that idiom; the `create*` probe stays tolerant
+  because most `create*` exports there are helpers that legitimately refuse an
+  inert ctx. Regression test: `test/bug-352-effector-count-drops-tools.test.js`
+  (10 assertions), mutation-proven — see its header for the two defects the
+  mutation run found in the fix and in the test itself.
+
+  Verified: `node --test` in a worktree on `93991df` + this fix reports
+  tests=6387 pass=6387 fail=0 skipped=0; `sync-test-count.js --check` passes
+  with `effectors=179`; 16 stale doc numbers rewritten by `--write`.
+
+  **Part 2 — CLOSED 2026-08-27.** The README "Tool Distribution" pie and "Full
+  effector catalog" table were the last hand-typed numbers in the file, and by
+  then they lied three ways at once: the pie summed to 108, the table to 107,
+  the code registered 179. TEN whole modules were absent — android (14), cua
+  (4), whatsapp (4), doc-RAG (4), okf (3), mcp (3), code-search (2), app-reply,
+  image-gen, strix — 44 tools the README never mentioned, on top of the
+  miscounts on the rows it did have. Both dead rows the ticket named were still
+  there: `Hermes Build Engine | hermes_task` for an engine deleted in the W6 dsh
+  swap, and `Voice | speak` for an effector removed 2026-07-31.
+
+  Now generated by `sync-test-count.js` from `computeEffectorTools().perFile`
+  into a sentinel-delimited block (`SYNC:EFFECTOR-CATALOG:START/END`) — the same
+  treatment the ROADMAP test-count block gets. The table lists all 29 modules,
+  their real counts and every registered tool id, which also closes the ticket's
+  "document the Phone/WhatsApp/CUA/OKF/MCP/doc-RAG modules" item.
+
+  The one hand-written thing left is the module→label map, and it holds names
+  only: no counts, no tool ids. It is checked in BOTH directions — a `from-*.js`
+  with no label and a label with no module are both hard errors, reported
+  together. That last part is a defect the mutation run found in the first
+  draft: the checks ran in sequence, so a single unlabelled new module made all
+  29 real labels look orphaned and the error told the reader to delete every one
+  of them.
+
+  Regression test: `test/bug-352-readme-catalog-generated.test.js` (11
+  assertions). Four read the README as TEXT and compare it against the effector
+  directory, so they survive a rewrite of the generator and cannot pass by
+  agreeing with a generator that is itself wrong; seven drive the generator.
+
+  Eight mutations, each confirmed applied before its result was believed — one
+  was REFUSED by the harness (the replacement contained its own anchor, so "did
+  it apply" was unanswerable) and was reshaped rather than assumed: sequential
+  label checks, silently skipping unlabelled modules, silently skipping orphan
+  labels, dropping the grouped pie slice, hardcoding `\n` over the file's CRLF,
+  and three README-side edits (a wrong count, a deleted row, a row for a module
+  that no longer exists). All eight killed a test; every restore was a file copy
+  verified by sha256.
+
+  No new gate, deliberately: `sync-test-count.js --check` already runs in the
+  pre-commit hook and CI, and the catalog rides on its exit code, so a stale
+  table blocks a commit through the path that already existed.
+
+  Badges node>=18 vs engines>=22 and tests 4716 were fixed in BUG-332; the
+  effectors badge is generated and correct.
 - BUG-353 - process-wide implicit ui_type/ui_click target, never expiring.
   FIXED 2026-08-27 (full entry above). NOT as this ticket specified: per-goal
   binding was measured INERT, because live-tool-adapter.js:833 dispatches

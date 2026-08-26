@@ -115,11 +115,26 @@ function computeProviderCount() {
 // tool-definition objects (closures over it), never to execute logic at
 // definition time, so a real vault/bus/brain is never required just to ask
 // "how many tools does this file define."
+// BUG-352 (2026-08-27): returning undefined for Symbol.toPrimitive made this
+// ctx un-coercible, so any factory that put a ctx-derived value in a template
+// literal or a string concat threw "Cannot convert object to primitive value"
+// — and the bare catch below turned that into a silent zero. from-dashboard.js
+// coerces, so all 28 of its tools (open_web, camera_look, the goals and kanban
+// verbs) were missing from every count this script has ever printed. It must
+// stay non-thenable and non-iterable — an await or a spread on it would change
+// what the factory does rather than just what it prints — but coercing to a
+// marker string is harmless and is what a factory building a description needs.
+// One line does it, not two: a `toString` branch would fix the same coercion,
+// and the first draft of this fix carried both until a mutation run showed the
+// test could not tell them apart — either alone yields all 28 tools. Kept the
+// Symbol.toPrimitive arm because it is the protocol consulted first and it
+// covers numeric coercion as well; the toString arm was dead surface.
 function createInertCtx() {
   const noop = function () { return handle; };
   const handle = new Proxy(noop, {
     get(_target, prop) {
-      if (prop === 'then' || prop === Symbol.iterator || prop === Symbol.toPrimitive) return undefined;
+      if (prop === 'then' || prop === Symbol.iterator) return undefined;
+      if (prop === Symbol.toPrimitive) return () => '[inert-ctx]';
       return handle;
     },
     apply() { return handle; },
@@ -139,10 +154,12 @@ function createInertCtx() {
 // a special case. Nothing uses shape (3) today: voice.js's `speak` effector was
 // its only user and was removed 2026-07-31 as unreachable dead code (it had no
 // describeMeta(), so it never appeared in any catalog the model sees).
-function computeEffectorCount() {
-  const dir = path.join(MYTHOS_ROOT, 'src/core/effectors');
+function computeEffectorTools(dir = path.join(MYTHOS_ROOT, 'src/core/effectors')) {
   const ctx = createInertCtx();
   let total = 0;
+  const perFile = {};
+  const unreadable = [];
+  const idsOf = (tools) => tools.map((tool) => (tool && (tool.name || tool.id)) || '(unnamed)');
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
     let mod;
     try {
@@ -161,19 +178,46 @@ function computeEffectorCount() {
       }
       console.warn('sync-test-count: ' + file + ' is not requirable in isolation ('
         + (err.code || err.message) + ') — counted as 0 tools');
+      unreadable.push({ file, reason: err.code || err.message });
       continue;
     }
     if (Array.isArray(mod.TOOLS)) {
       total += mod.TOOLS.length;
+      perFile[file] = idsOf(mod.TOOLS);
       continue;
     }
+    // A `build*Tools` export exists for exactly one purpose: to declare tools.
+    // So when one cannot be counted, that is news, not a shrug. Both arms below
+    // used to `catch {}` into a silent zero, which is how a 32-tool gap between
+    // this script and the capabilities manifest (147 vs 179) survived long
+    // enough to be written into the README. The guard is deliberately narrow —
+    // the `create*` probe further down stays tolerant, because most `create*`
+    // exports in this directory are helpers that legitimately refuse an inert
+    // ctx and were never tool factories.
     const buildFn = Object.keys(mod).find((k) => /^build.*Tools$/i.test(k) && typeof mod[k] === 'function');
     if (buildFn) {
+      let result;
       try {
-        let result = mod[buildFn](ctx);
-        if (!Array.isArray(result) && result && Array.isArray(result.TOOLS)) result = result.TOOLS;
-        if (Array.isArray(result)) { total += result.length; continue; }
-      } catch { /* needs real deps to build its tool list — not from-*.js shaped, skip */ }
+        result = mod[buildFn](ctx);
+      } catch (err) {
+        throw new Error('sync-test-count: ' + file + ' exports ' + buildFn + '() but it threw — '
+          + err.message + '. Refusing to report a tool count that silently excludes it.');
+      }
+      // from-mcp.js and from-strix.js return { tools: [...] } — the same key
+      // their own registerFrom* functions read — while from-dashboard.js and
+      // others return { TOOLS: [...] }. Only the uppercase spelling was
+      // recognised, so the MCP bridge's 3 tools and security_scan were dropped.
+      if (!Array.isArray(result) && result && typeof result === 'object') {
+        if (Array.isArray(result.TOOLS)) result = result.TOOLS;
+        else if (Array.isArray(result.tools)) result = result.tools;
+      }
+      if (!Array.isArray(result)) {
+        throw new Error('sync-test-count: ' + file + ' exports ' + buildFn + '() but it returned no tool array '
+          + '(neither an array, nor .TOOLS, nor .tools). Refusing to report a tool count that silently excludes it.');
+      }
+      total += result.length;
+      perFile[file] = idsOf(result);
+      continue;
     }
     const createFn = Object.keys(mod).find((k) => /^create/.test(k) && typeof mod[k] === 'function');
     if (createFn) {
@@ -181,11 +225,16 @@ function computeEffectorCount() {
         const result = mod[createFn]({ config: ctx });
         if (result && typeof result === 'object' && typeof result.id === 'string' && typeof result.invoke === 'function') {
           total += 1;
+          perFile[file] = [result.id];
         }
       } catch { /* not a single-tool effector factory (e.g. needs a real vault) — skip */ }
     }
   }
-  return total;
+  return { total, perFile, unreadable };
+}
+
+function computeEffectorCount(dir) {
+  return computeEffectorTools(dir).total;
 }
 
 // Each slot is anchored on stable surrounding text (not a line number) so it
@@ -260,6 +309,175 @@ function readmeSlots(counts) {
     { file, pattern: /(providers\/               # )(\d+)( providers \(openai-compat factory\))/, value: counts.providers },
     { file, pattern: /(\*\*Deps\*\* \| )(\d+)( total \|)/, value: counts.deps },
   ];
+}
+
+// ---------------------------------------------------------------------------
+// The README effector CATALOG (pie + table), generated (BUG-352 part 2).
+//
+// Everything above this point rewrites single numbers in place. The catalog is
+// a whole section, so it gets the block treatment the ROADMAP sync block uses:
+// sentinels, regenerate wholesale, emit the file's own line ending.
+//
+// It was hand-typed until 2026-08-27 and had drifted three ways at once — pie
+// summing to 108, table to 107, code registering 179, ten modules absent, and
+// two rows naming things that no longer exist (a `Hermes Build Engine` row for
+// an engine deleted in the W6 dsh swap, a `Voice | speak` row for an effector
+// removed as dead code in July). Hand-correcting those numbers is what
+// guarantees they drift a fourth time; this generates them instead.
+//
+// The ONE piece of judgement a generator cannot supply is the human-readable
+// label for a module, so that map stays here — but it holds only names. It
+// carries no counts and no tool ids, and it is checked in BOTH directions:
+// a new from-*.js with no label is a hard error, and a label whose module has
+// been deleted is a hard error. A map that can only fail loudly cannot rot the
+// way the table it replaces did.
+const EFFECTOR_LABELS = {
+  'from-android.js': 'Phone (Android)',
+  'from-app-reply.js': 'App Reply',
+  'from-browser.js': 'Browser Automation',
+  'from-calendar.js': 'Calendar & Timers',
+  'from-code-search.js': 'Code Search',
+  'from-computer.js': 'Computer & Files',
+  'from-cua.js': 'CUA Driver',
+  'from-dashboard.js': 'Dashboard',
+  'from-docs.js': 'Document Generation',
+  'from-documents.js': 'Documents (RAG)',
+  'from-dsh.js': 'DeepSeek Harness (build engine)',
+  'from-forge.js': 'Forge (multi-file build)',
+  'from-gmail.js': 'Gmail',
+  'from-image-gen.js': 'Image Generation',
+  'from-installer.js': 'GitHub Installer',
+  'from-mcp.js': 'MCP Bridge',
+  'from-memory.js': 'Memory & Notes',
+  'from-mission.js': 'Mission Orchestrator',
+  'from-okf.js': 'OKF Knowledge Exchange',
+  'from-pc.js': 'PC Control',
+  'from-persona.js': 'Persona',
+  'from-project.js': 'Project',
+  'from-runner.js': 'Command Runner',
+  'from-skills.js': 'Skills',
+  'from-spotify.js': 'Spotify',
+  'from-strix.js': 'Security Scan',
+  'from-system.js': 'System',
+  'from-whatsapp.js': 'WhatsApp',
+  'from-widgets.js': 'Widgets',
+};
+
+// A mermaid pie with 29 slices is unreadable, so small modules are grouped —
+// but the grouped slice CARRIES the tools it groups. The old hand-written pie
+// had an "Other (1 each) : 7" slice covering six rows, which is how a pie and
+// a table in the same section ended up one apart from each other.
+const PIE_MIN_SLICE = 4;
+
+// Attacked before shipping, answers kept here where they will be read:
+//   What else matches the guard's row regex? Nothing. `from-*.js` inside a
+//     markdown table row appears in README exactly once — inside this block
+//     (measured, not assumed). The regex is anchored on the backticked module
+//     filename, so restyling the label column cannot unhook it.
+//   Who else reads the old table? Nobody. It was prose for humans only; no
+//     script, workflow or test parsed it before this one.
+//   Does anything get hidden? No: both label-map failures are thrown, name the
+//     offending file, and are reported together rather than one at a time.
+//   What class is this? The third instance of "a doc section a human types that
+//     the code could generate" — after the test counts and the ROADMAP block.
+//     Same remedy as those two: sentinels plus wholesale regeneration.
+//   Deliberately unchanged: no new gate. `--check` already runs in the
+//     pre-commit hook and CI, and this rides on its exit code, so a stale
+//     catalog now blocks a commit through the path that already existed.
+const CATALOG_START = '<!-- SYNC:EFFECTOR-CATALOG:START -->';
+const CATALOG_END = '<!-- SYNC:EFFECTOR-CATALOG:END -->';
+const CATALOG_BLOCK_RE = /<!-- SYNC:EFFECTOR-CATALOG:START -->[\s\S]*?<!-- SYNC:EFFECTOR-CATALOG:END -->/;
+
+// Both directions are checked in ONE pass and reported together. Checking them
+// in sequence looked equivalent and was not: an unlabelled new module makes
+// every existing label look orphaned, so a sequential check fired the orphan
+// branch and told the reader to delete 29 correct entries. When two conditions
+// can be true at once, a message that names only the first one it happens to
+// test is a message that misdirects exactly when things are worst.
+function catalogRowsFrom(perFile) {
+  const unlabelled = Object.keys(perFile).filter((f) => !EFFECTOR_LABELS[f]);
+  const orphans = Object.keys(EFFECTOR_LABELS).filter((f) => !(f in perFile));
+  if (unlabelled.length || orphans.length) {
+    const parts = [];
+    if (unlabelled.length) {
+      parts.push(
+        `${unlabelled.join(', ')} register tools but have no label in EFFECTOR_LABELS — add one `
+        + '(the map holds names only; counts and tool ids are generated)',
+      );
+    }
+    if (orphans.length) {
+      parts.push(
+        `EFFECTOR_LABELS names ${orphans.join(', ')}, which register no tools — remove the entry `
+        + '(a label outliving its module is how the deleted Hermes engine kept a catalog row)',
+      );
+    }
+    throw new Error(`sync-test-count: effector catalog labels are out of sync. ${parts.join('. ')}.`);
+  }
+  // Sort is by tool count then filename: deterministic, so regenerating without
+  // a real change produces a byte-identical block and --check cannot flap.
+  return Object.entries(perFile)
+    .map(([file, ids]) => ({ file, ids, label: EFFECTOR_LABELS[file] }))
+    .sort((a, b) => b.ids.length - a.ids.length || a.file.localeCompare(b.file));
+}
+
+function effectorCatalogBlock(perFile, eol) {
+  const rows = catalogRowsFrom(perFile);
+  const big = rows.filter((r) => r.ids.length >= PIE_MIN_SLICE);
+  const small = rows.filter((r) => r.ids.length < PIE_MIN_SLICE);
+  const smallTools = small.reduce((sum, r) => sum + r.ids.length, 0);
+
+  const slices = big.map((r) => `    "${r.label}" : ${r.ids.length}`);
+  if (small.length) {
+    slices.push(`    "Other (${small.length} modules, under ${PIE_MIN_SLICE} tools each)" : ${smallTools}`);
+  }
+
+  const table = rows.map(
+    (r) => `| **${r.label}** | \`${r.file}\` | ${r.ids.length} | ${r.ids.map((id) => `\`${id}\``).join(', ')} |`,
+  );
+
+  return [
+    CATALOG_START,
+    '<!-- Generated by mythos/scripts/sync-test-count.js from the real from-*.js tool',
+    '     arrays (AD-10). Hand edits inside these sentinels are overwritten by',
+    '     `node scripts/sync-test-count.js --write`. Change the code, or the label',
+    '     map in that script, not this table. -->',
+    '',
+    '```mermaid',
+    'pie showData title Tool Distribution',
+    ...slices,
+    '```',
+    '',
+    '<details>',
+    '<summary><b>📋 Full effector catalog (click to expand)</b></summary>',
+    '',
+    '<br/>',
+    '',
+    '| Catalog | Module | Tools | Registered |',
+    '|---------|--------|:-----:|------------|',
+    ...table,
+    '',
+    '</details>',
+    CATALOG_END,
+  ].join(eol);
+}
+
+function syncEffectorCatalog(perFile, mode, report) {
+  const file = path.join(REPO_ROOT, 'README.md');
+  const content = fs.readFileSync(file, 'utf8');
+  const eol = content.includes('\r\n') ? '\r\n' : '\n';
+  const existing = content.match(CATALOG_BLOCK_RE);
+  if (!existing) {
+    report.push(`README.md: effector catalog block missing (${CATALOG_START} .. ${CATALOG_END})`);
+    return true;
+  }
+  const next = effectorCatalogBlock(perFile, eol);
+  if (existing[0] === next) return false;
+  report.push('README.md: effector catalog is stale (pie and/or table disagree with the registered tools)');
+  if (mode === 'write') {
+    fs.writeFileSync(file, content.replace(CATALOG_BLOCK_RE, () => next), 'utf8');
+    report.push('  -> written');
+  }
+  return true;
 }
 
 function applySlots(counts, mode, report) {
@@ -370,7 +588,8 @@ async function main() {
   counts.deps = computeDepsCount();
   counts.sensors = computeSensorCount();
   counts.providers = computeProviderCount();
-  counts.effectors = computeEffectorCount();
+  const effectorTools = computeEffectorTools();
+  counts.effectors = effectorTools.total;
   console.log(
     `sync-test-count: tests=${counts.tests} pass=${counts.pass} fail=${counts.fail} skipped=${counts.skipped} ` +
     `deps=${counts.deps} sensors=${counts.sensors} providers=${counts.providers} effectors=${counts.effectors}`,
@@ -385,6 +604,7 @@ async function main() {
   const report = [];
   let staleCount = applySlots(counts, mode, report);
   if (syncRoadmap(counts, mode, report)) staleCount++;
+  if (syncEffectorCatalog(effectorTools.perFile, mode, report)) staleCount++;
 
   if (report.length) console.log(report.join('\n'));
 
@@ -400,4 +620,13 @@ async function main() {
   console.log(staleCount > 0 ? `sync-test-count --write: updated ${staleCount} number(s).` : 'sync-test-count --write: already in sync, nothing to do.');
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = {
+  computeEffectorTools,
+  computeEffectorCount,
+  createInertCtx,
+  effectorCatalogBlock,
+  EFFECTOR_LABELS,
+  PIE_MIN_SLICE,
+};
