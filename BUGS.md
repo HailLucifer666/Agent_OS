@@ -41,6 +41,83 @@ it is committed.
 
 ---
 
+## BUG-369 — a `tolerant` sync slot was skipped by `--write` as well as `--check`, so the README tests badge froze 297 behind (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 5 new regression tests, 5 mutations, 0 survived.
+Not live-verified and does not need to be: the defect is entirely inside a
+documentation generator, and both modes are exercised deterministically
+in-suite against a temp file.
+
+**Symptom.** `README.md` disagreed with itself. Every strict slot read 6436;
+the shields.io tests badge — the first number a visitor sees — read
+`tests-6139%20pass`. Measured 2026-08-27 while building the capability-map
+generator, which was about to consume those numbers as truth.
+
+**Mechanism.** The badge slot carries `tolerant: true`, and that tolerance is
+correct: it guards the PASS count, and pass legitimately varies BY MACHINE.
+Fixture-gated tests `t.skip()` honestly on a fresh clone or a CI runner and
+run as passes on a provisioned one, so strict equality made `--check`
+unsatisfiable on the operator's machine and CI at the same time (that is the
+defect the tolerance was added to fix, 2026-08-16, and it stays fixed).
+
+But `applySlots` implemented "do not FAIL on a mismatch" as "do not LOOK at
+this slot at all":
+
+```js
+if (slot.tolerant) {
+  byFile.set(slot.file, content);   // <- unmodified content
+  continue;                         // <- returns BEFORE the write path
+}
+```
+
+The branch sat above the code that computes staleness and above the code that
+writes, so no `--write` had moved that badge since the tolerance landed, and
+nothing could ever move it again. The number was not merely stale; it was
+structurally unable to catch up.
+
+**Class.** Same shape as the delivery-vs-correctness guards tabulated in the
+closure campaign: a check weakened to stop a false failure stopped doing its
+job entirely. The remedy is the same one — narrow the weakening to exactly the
+question that was wrong (should this FAIL?) and leave the rest of the
+mechanism intact (should this be RECORDED?).
+
+**Fix.** `mythos/scripts/sync-test-count.js`. Staleness is computed before the
+tolerant branch; tolerance now suppresses only `staleCount++` and the stale
+report. `--write` updates the slot and announces it as
+`tolerant slot 6139 -> 6436 (written; not counted stale)` — a generator that
+rewrites a tracked file silently is how a wrong number becomes an unnoticed
+one. `--check` behaviour is unchanged, and a test locks that.
+
+`applySlots`/`readmeSlots` are now exported and `applySlots` takes an
+injectable slot list, so both branches can be driven against a temp README
+instead of the repo's own.
+
+**Attack pass (Stage 3), recorded in the test file's header comment:**
+
+- *What else matches this?* One slot is tolerant, and a test asserts that. A
+  second one appearing later must be a deliberate decision, not an inherited
+  ruling — mutation M4 marks another slot tolerant and that test fails.
+- *Does this hide evidence?* It did: the write was silent-by-omission. It now
+  prints what it changed and from what.
+- *Who reads this?* The badge is the README's most-read number and CI's
+  `--check` reads the same slot table. Both paths are covered.
+- *What is standing next to it?* All slots for one file share a `byFile`
+  accumulator; the old branch seeded it with unmodified content. Mutation M5
+  writes the tolerant edit straight to disk instead, and the strict slot then
+  clobbers it — caught.
+- *Deliberate non-change:* the tolerance itself. `--check` must not fail on a
+  machine whose honest skips lower the pass count. Locked by test 2.
+
+**Verification.**
+
+```
+node --test test/bug-369-tolerant-slot-never-written.test.js
+  before fix: tests 5, pass 3, fail 2
+  after fix:  tests 5, pass 5, fail 0
+mutations: 5 applied, 5 caught by their intended test, 0 survived
+```
+
+---
 ## BUG-367 — `attachMythos` had two failure messages for one contract, so a test asserting the hint passed or failed on a race (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 1 new regression test, 1 mutation run. Not

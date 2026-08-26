@@ -34,10 +34,29 @@ describe('lint-bug-registry — the numbers it reports', () => {
   const report = lint.buildReport();
 
   test('next-free skips the fixture, and is not 1000', () => {
-    assert.strictEqual(report.max, 367, 'the real maximum in use');
-    assert.strictEqual(report.nextFree, 368);
+    // Pinned to INVARIANTS, not to a snapshot. The first draft asserted
+    // `max === 367` and broke the same day, on the very next bug filed — a
+    // machine-state assertion wearing a correctness assertion's clothes, which
+    // is the failure mode this repo files under "machine-state tests look
+    // flaky". The three things that must actually hold:
+    assert.ok(report.max < 999,
+      `the maximum is ${report.max}; anything at or above 999 means the fake `
+      + '`## BUG-999` heading in triage-incidents.test.js has become live and '
+      + '632 numbers are about to be abandoned on a fixture');
+    // Near-tautological and kept knowingly: the script computes `max + 1`
+    // literally, so this line largely restates the implementation. It still
+    // catches next-free being rewired to something else, but the floor and the
+    // ceiling are the two assertions carrying real weight here.
+    assert.strictEqual(report.nextFree, report.max + 1,
+      'next-free is the successor of the maximum in use, never of the maximum DECLARED');
     assert.ok(!report.inUse.includes(999),
       'BUG-999 is a fake BUGS.md heading inside a test string, not a bug');
+    // A ratchet, so the assertion cannot go vacuous: numbers are only ever
+    // allocated, so the maximum can rise but must never fall. A drop means a
+    // number in use stopped being seen — the linter going blind, which looks
+    // exactly like a clean registry.
+    assert.ok(report.max >= 367,
+      `the maximum fell to ${report.max}; a number that was in use has stopped being counted`);
   });
 
   test('a bug whose only trace is its regression test still counts', () => {
