@@ -26,6 +26,7 @@ const { dispatchAction } = require('./dispatch-action');
 const cuaDriver = require('../../../adapters/cua-driver');
 // A click landing is not the right song playing — see evidence.js's header.
 const evidence = require('./evidence');
+const implicitTarget = require('./implicit-target');
 
 function ok(result) {
   return { ok: true, result };
@@ -69,14 +70,13 @@ async function dispatchInner(tool, args) {
 
 async function launchSpotifyUri(uri) {
   if (!pcEffectors) return fail('PC effectors not initialized');
-  // Use Spotify URI scheme - works for both desktop and Windows Store versions
-  return pcEffectors.invoke('launch_app', { name: uri }, {});
+  // URI scheme: covers desktop and Store builds. INTERNAL — see implicit-target.js.
+  return pcEffectors.invoke('launch_app', { name: uri }, implicitTarget.INTERNAL);
 }
 
 async function launchSpotify() {
   if (!pcEffectors) return fail('PC effectors not initialized');
-  // Use Spotify URI scheme - works for both desktop and Windows Store versions
-  return pcEffectors.invoke('launch_app', { name: 'spotify' }, {});
+  return pcEffectors.invoke('launch_app', { name: 'spotify' }, implicitTarget.INTERNAL);
 }
 
 async function getSpotifyWindow() {
