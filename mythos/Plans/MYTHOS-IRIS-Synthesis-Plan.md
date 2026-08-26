@@ -4750,14 +4750,53 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 
 These are recorded because each one would otherwise be rediscovered.
 
-- **A NAMED CLASS, worth more than any single item here: a guard that checks
-  "did what I asked happen" is structurally blind to "was what I asked the right
-  thing".** Surfaced by the concurrent session while fixing BUG-353. `ui_type`
-  already had a target cross-check comparing pc-child's `typedIntoPid` against
-  the pid it targeted, and it passed throughout — 2222 against 2222 — while the
-  text landed in the wrong window, because the target had been swapped *before*
-  the check ran. Every honesty guard in this repo examined so far is of the first
-  kind. Treat this as an open question against each of them, not a remark.
+### A named class: delivery checks masquerading as correctness checks
+
+Worth more than any single ledger row. **A guard that checks "did what I asked
+happen" is structurally blind to "was what I asked the right thing".**
+
+Surfaced by the concurrent session while fixing BUG-353. `ui_type` already had a
+target cross-check comparing pc-child's `typedIntoPid` against the pid it
+targeted, and it passed throughout — 2222 against 2222 — while the text landed
+in the wrong window, because the target had been swapped *before* the check ran.
+
+**The discriminating question:** does the guard compare its result against the
+REQUEST, or against the WORLD? A guard that compares against the request moves
+with the request, so both sides can be wrong together and still agree.
+
+| instance | evidence | verdict |
+|---|---|---|
+| `ui_type` target cross-check | 2222 vs 2222 while text went elsewhere | **confirmed**, fixed in `daec3ff` |
+| `media_status` (BUG-348) | `GetCurrentSession()` returns one SMTC session; nothing asks whether it is the one making sound | **confirmed**, open — and this is a better argument for fixing it than the one in BUGS.md |
+| `see_and_click` | known grounding failures read MYTHOS's own HUD; both the OCR match and the `expect` check ask "did it happen" | candidate, **not reproduced under this framing** |
+| `web_search` before BUG-365 | returned Wikipedia with `ok:true`; "did a search complete" yes, "does it answer" unasked | confirmed, already fixed — and the fix is the template |
+| `claim-check.js` (non-effector) | compares a spoken claim against MYTHOS's own outcome ledger (`ok === true`) | **inherits** the blindness — see below |
+| `leash.check()` (non-effector) | static `TIER_TABLE` lookup on the tool name | **not an instance** — policy, not verification |
+| `launch_app`'s process-window oracle | compares the resolved process NAME against what was asked for | **the counter-example** — catches "a pid belonging to a different application" |
+
+**The remedy is not a stronger delivery check.** `web_search` shows the shape
+that worked: not a better completion check, but `authoritative:false` plus an
+honest `ok:false` when every rung returns nothing. You cannot strengthen a
+delivery check into a correctness check — you carry the uncertainty in the
+payload and let the consumer see it. That is the evidence contract this repo
+already has, applied to targeting rather than to success.
+
+`launch_app` matters most here: a guard of the right kind already exists, in the
+same file as the bug, which makes the pattern teachable rather than theoretical.
+
+**On `claim-check.js`, precisely.** It is correctly scoped for its stated job —
+catching a spoken claim with no backing action. But its backing is a delivery
+check, so a fabrication guard resting on "a tool returned ok" is still blind to
+"the tool did the right thing to the wrong target". Not a defect in claim-check;
+a limit on what any honesty layer above a delivery check can promise.
+
+**Honest limits on this table.** Six of seven rows were examined on 2026-08-27,
+so the cluster may be availability rather than reality. `see_and_click` is
+inference from known grounding failures, not a reproduction. The non-effector
+sample is TWO modules, which found one inheritance and one non-instance — enough
+to say the class is not confined to effectors, nowhere near enough to call it
+general. Sample more guards outside the effector layer before treating the
+pattern as established.
 - **C1's `lastLaunchedPid` binding is ANSWERED, not open.** BUG-353 shipped
   2026-08-27 and deliberately did not key on `goalId`, having measured that
   `live-tool-adapter.js:833` supplies none — a goal-keyed binding matches
