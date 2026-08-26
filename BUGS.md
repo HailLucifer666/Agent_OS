@@ -41,6 +41,65 @@ it is committed.
 
 ---
 
+## BUG-367 — `attachMythos` had two failure messages for one contract, so a test asserting the hint passed or failed on a race (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 1 new regression test, 1 mutation run. Not
+live-verified and does not need to be: the defect is entirely in the wording of
+a rejection, and both paths are exercised deterministically in-suite.
+
+**Symptom, as it presented:** `test/verify-lib-attach.test.js` failed the
+pre-commit hook with `fails = 1` while passing 21/21 in isolation and passing
+in full runs minutes either side. It read exactly like flakiness, and it cost
+two sessions a blocked commit — `not ok 607` in one tree and `not ok 609` in
+another, hours apart. The index differs because the trees have different test
+counts; the file is the same file.
+
+**Why "flaky" was the wrong verdict.** This repo's `CLAUDE.md` documents
+wandering Windows failures as fork exhaustion from concurrent node processes,
+and that was the first hypothesis. It is wrong here, and the diagnostic
+property is what rules it out: **fork exhaustion wanders, and this landed on
+the same file twice for two independent sessions**, once with zero orphan
+`node.exe` on the machine. A failure that keeps choosing the same file is not a
+random casualty.
+
+**Mechanism.** `attachMythos()` (`scripts/verify-lib.js`) rejects down two
+paths, and they did not say the same thing:
+
+    req.on('error')    →  "attach failed: <msg>. Is MYTHOS running on port N?"
+    req.on('timeout')  →  "attach failed: /health timed out after Nms on port N"
+
+The test asserted `/Is MYTHOS running on port 1\?/` against port 1 — privileged
+and unbound, so normally an instant `ECONNREFUSED` down the *error* path. Under
+full-suite load the connect attempt instead reaches the 2000ms deadline and
+takes the *timeout* path, whose message never carried the hint. The test was
+racing two of its own subject's failure modes and only one of them satisfied it.
+
+**Fix, and why it is in the source rather than the test.** Loosening the
+assertion to accept either wording would have made the test pass while leaving
+two contracts in place. The hint is as true of a hang as of a refusal, and it is
+the sentence that tells a harness user what to do, so the timeout path now
+carries it too. One contract, no race, and the original assertion stays strict.
+
+**Regression test:** a second case in the same file drives the timeout path
+deterministically — a server that accepts the connection and never answers
+*cannot* take the error path — and asserts both that it still says it timed out
+and that it names the port with the hint. Mutation: removing the appended hint
+fails it with "the timeout path must carry the same hint as the refused path";
+restore verified by sha256, not by `git checkout --`.
+
+**Verified:** `node --test test/verify-lib-attach.test.js` → 22 pass, 0 fail
+(21 before). Nothing else reads the timeout string —
+`grep -rn "health timed out"` finds only the definition and this fix's own
+comment — and the change is additive, so a matcher on `/timed out/` still holds.
+
+**Not fixed by this, deliberately:** the underlying scheduling sensitivity is
+untouched. A connect to an unbound port can still lose the race to a short
+deadline; that is a property of the machine under load, not a defect, and the
+fix makes the outcome identical either way instead of pretending the race is
+gone.
+
+---
+
 ## BUG-365 — web search had exactly ONE working provider, so spending its free quota was a cliff onto confident wrong answers (✅ FIXED 2026-08-26, live-verified)
 
 **Status:** ✅ FIXED 2026-08-26. Live-verified end to end; 18 regression tests, 12 mutations run.

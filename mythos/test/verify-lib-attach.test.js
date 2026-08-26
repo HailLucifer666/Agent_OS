@@ -118,6 +118,38 @@ describe('attachMythos', () => {
     // and the likely cause rather than surfacing a bare ECONNREFUSED.
     await assert.rejects(() => lib.attachMythos({ port: 1, timeoutMs: 2000 }), /Is MYTHOS running on port 1\?/);
   });
+
+  // BUG-367 (2026-08-27). The assertion above raced two of attachMythos's OWN
+  // failure modes and only one of them satisfied it. Port 1 normally refuses
+  // instantly, taking the 'error' path, whose message ends "Is MYTHOS running
+  // on port 1?". Under full-suite load the connect attempt can instead reach
+  // the 2000ms deadline and take the 'timeout' path, which said only
+  // "attach failed: /health timed out after 2000ms on port 1" — no hint, so
+  // the regex missed and the test failed. It blocked a commit in two
+  // independent sessions on different trees, hours apart, always inside a hook
+  // run and never in isolation, which is what made it read as flakiness.
+  //
+  // Fixed in the SOURCE rather than by loosening the assertion: both rejection
+  // paths now carry the same hint, so there is one failure contract instead of
+  // two and the outcome no longer depends on which path wins. This test pins
+  // the timeout path deterministically — a server that accepts the connection
+  // and never answers cannot take the 'error' path at all.
+  it('names the port and the likely cause when /health hangs, not only when it is refused', async () => {
+    const { server, port } = await fakeServer(() => { /* accept, never respond */ });
+    try {
+      await assert.rejects(
+        () => lib.attachMythos({ port, timeoutMs: 150 }),
+        (err) => {
+          assert.match(err.message, /timed out/, 'the timeout path must still say it timed out');
+          assert.match(err.message, new RegExp(`Is MYTHOS running on port ${port}\\?`),
+            'the timeout path must carry the same hint as the refused path');
+          return true;
+        },
+      );
+    } finally {
+      server.close();
+    }
+  });
 });
 
 describe('interpretDoneFrame — what a reply is allowed to mean', () => {
