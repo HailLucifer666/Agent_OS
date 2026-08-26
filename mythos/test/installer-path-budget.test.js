@@ -160,6 +160,73 @@ describe('BUG-227 installer path budget (Windows MAX_PATH)', () => {
       + targets);
   });
 
+  it('excludes the vendored @huggingface/transformers src/ trees', () => {
+    // BUG-364 (2026-08-26). Found by THIS test, against a real build, minutes after
+    // 0.1.10 was published — which is the only reason it was found at all: the
+    // built-tree assertion below is inert unless dist/win-unpacked exists and is
+    // newer than package.json, and nobody had a fresh build and a suite run at the
+    // same moment.
+    //
+    // Measured on the 0.1.10 build: exactly ONE file over the 180 budget, at 190
+    // chars, and it is source that nothing loads:
+    //   \resources\app.asar.unpacked\mythos\node_modules\kokoro-js\node_modules
+    //     \@huggingface\transformers\src\models\audio_spectrogram_transformer
+    //     \feature_extraction_audio_spectrogram_transformer.js
+    // 190 + the installer's ~63-char temp prefix = 253, seven characters under
+    // MAX_PATH on the machine that BUILT it. The 80-char temp budget exists
+    // precisely because the machine that INSTALLS has a different account name,
+    // and a longer one puts this over 260 — the "cannot be closed / Retry forever"
+    // failure documented at the top of this file, on a fresh PC, which is the exact
+    // scenario 0.1.10 was cut for.
+    //
+    // Excluding both copies of that src/ tree removes 561 files and takes the
+    // longest packaged path from 190 to 156, leaving 24 characters of headroom and
+    // nothing else over budget.
+    const files = (PKG.build && PKG.build.files) || [];
+    assert.ok(files.includes('!**/@huggingface/transformers/src{,/**/*}'),
+      'the vendored @huggingface/transformers src/ trees carry the longest paths in the package '
+      + '(190 chars, over the 180 budget) and nothing loads them — every Node export resolves '
+      + 'into dist/. Removing this exclusion re-introduces a fresh-install failure that only '
+      + 'appears on machines without LongPathsEnabled.');
+  });
+
+  it('no @huggingface/transformers ENTRY POINT resolves into the excluded src/', () => {
+    // Guard on the load-bearing claim above, in the same shape as the
+    // onnxruntime-web one — and with one subtlety that makes this exclusion
+    // riskier than that one, so it is asserted rather than assumed.
+    //
+    // `main` DOES point at ./src/transformers.js. That is a legacy field, and Node
+    // ignores it entirely when `exports` is present (>=12.7; this repo requires
+    // >=22). So the exclusion is safe for Node — but a consumer resolving through
+    // `main` instead of `exports` would get a missing file rather than a fallback.
+    // What must stay true is that the EXPORTS map never routes into src/.
+    const roots = [
+      path.join(REPO_ROOT, 'mythos', 'node_modules', '@huggingface', 'transformers'),
+      path.join(REPO_ROOT, 'mythos', 'node_modules', 'kokoro-js', 'node_modules', '@huggingface', 'transformers'),
+    ];
+    let checked = 0;
+    for (const root of roots) {
+      const pkgPath = path.join(root, 'package.json');
+      if (!fs.existsSync(pkgPath)) continue;   // deps not installed — nothing to check
+      checked += 1;
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+      assert.ok(pkg.exports, root + ' no longer declares an exports map, so Node would fall back '
+        + 'to `main` — which points into the excluded src/. Drop the exclusion or vendor differently.');
+      assert.ok(!/["/]src\//.test(JSON.stringify(pkg.exports)),
+        'an exports entry now resolves into src/, which the build excludes — that is a silent '
+        + 'runtime break rather than saved characters: ' + JSON.stringify(pkg.exports));
+      // And the file the Node condition actually resolves to must really be there.
+      const nodeImport = pkg.exports && pkg.exports.node && pkg.exports.node.import;
+      const target = typeof nodeImport === 'string' ? nodeImport : (nodeImport && nodeImport.default);
+      if (target) {
+        assert.ok(fs.existsSync(path.join(root, target)),
+          'the Node import target ' + target + ' is missing from ' + root
+          + ' — excluding src/ would leave nothing to load.');
+      }
+    }
+    assert.ok(checked > 0, 'neither transformers copy was found, so this guard asserted nothing');
+  });
+
   it('still unpacks native modules, which cannot load from an archive', () => {
     const unpack = (PKG.build && PKG.build.asarUnpack) || [];
     assert.ok(unpack.some((p) => p === 'mythos/**/*'),
