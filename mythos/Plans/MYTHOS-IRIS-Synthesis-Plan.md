@@ -4835,6 +4835,24 @@ any number of sought ones.
   CHECKOUT, and any regression test must build its own fixture tree from
   `os.tmpdir()` rather than walking the repo, because the tree it runs in decides
   the answer.
+
+  **This generalises past `.venv`, and it binds D1.** `setup-worktree.js` links
+  SIX paths, and the same Dirent behaviour makes every one of them invisible to
+  anything that walks the tree. A worktree is therefore not merely a *smaller*
+  checkout — it is **structurally a different tree** for any file-walking tool.
+  The `verify-withheld.js` harness exercises file operations, code search and
+  document ingest, so **it must not certify those tools from a worktree**: it
+  would exercise a tree the operator does not have and report green. Either run
+  that harness in the main checkout, or have it refuse to run where
+  `mythos/.venv` is a symlink and say why.
+
+  Related, from the concurrent session and worth pinning: `search_files` has no
+  symlink guard, and there is nonetheless **no sandbox escape** — a junction
+  planted inside the sandbox is not followed, because `entry.isDirectory()` is
+  false for it. But that containment is **incidental, not intentional**. Changing
+  `entry.isDirectory()` to `statSync(full).isDirectory()` reads like a robustness
+  improvement and would open a real escape. It is being pinned with a test rather
+  than left as an accident that happens to hold.
 - **B5 ("no effector can open a file") is STALE.** `open_file` exists in
   `from-computer.js` with a `resolveSandboxed()` guard, an execute-extension
   denylist, an honest failure when the desktop shell is absent, and a
