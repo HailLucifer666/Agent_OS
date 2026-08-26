@@ -127,6 +127,13 @@ mythos/.tmp-doc-rag-test/
 # dist` — electron-builder otherwise defaults to %LOCALAPPDATA%\electron-builder,
 # which violates the project-isolation rule (nothing outside the repo).
 /dist/
+# Any alternate output dir passed as -c.directories.output=<name>, which is how a
+# build gets verified without disturbing /dist/. One such run (dist-eb26, proving
+# the electron-builder 26 upgrade actually packaged) then blocked scripts/release.js,
+# whose preflight refuses on a non-empty `git status --porcelain=v1` — untracked
+# entries included. A build artifact should never be the thing standing between a
+# verified tree and a release.
+/dist-*/
 /.electron-builder-cache/
 
 # Piper TTS voice models — 60MB each, downloaded per-machine like the wake-word
