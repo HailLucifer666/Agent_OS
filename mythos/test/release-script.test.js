@@ -284,7 +284,11 @@ describe('releaseSteps — the ORDER, which is the part that was wrong', () => {
   // rather than an array buried inside main().
   const steps = () => release.releaseSteps('v1.2.3', { publishing: true, ci: false });
   const idx = (pred) => steps().findIndex(pred);
-  const isBuild = ([cmd, args]) => cmd === 'npx' && args.includes('electron-builder');
+  // Matches the build step by what it INVOKES, not by the command name — because
+  // the command name is exactly what changed. "npx electron-builder" could never
+  // spawn on Windows: npx is npx.cmd, Node gives ENOENT without a shell, and Node
+  // 26 gives EINVAL for a .cmd. It is now process.execPath plus the local cli.js.
+  const isBuild = ([, args]) => args.some((a) => /electron-builder/.test(String(a)));
   const isTagPush = ([cmd, args]) => cmd === 'git' && args[0] === 'push' && args[2] === 'v1.2.3';
   const isMainPush = ([cmd, args]) => cmd === 'git' && args[0] === 'push' && args[2] === 'main';
 
@@ -296,6 +300,33 @@ describe('releaseSteps — the ORDER, which is the part that was wrong', () => {
     assert.ok(tagPush < build,
       `the tag push is at ${tagPush} and the publishing build at ${build}. With releaseType "release", `
       + 'GitHub 422s a published release whose tag it has never seen — so this order must never invert.');
+  });
+
+  it('does not invoke the build through npx, which cannot spawn on Windows', () => {
+    // The defect that cost 0.1.10 AND 0.1.11, both of which stopped at this step
+    // reporting only "failed (exit null)" and no output. npx is npx.cmd on
+    // Windows; Node's spawn does no PATHEXT resolution, so spawnSync('npx', …)
+    // is ENOENT, and Node 26 refuses spawnSync('npx.cmd', …) with EINVAL because
+    // running a .cmd without a shell is the injection hole DEP0190 warns about.
+    // Measured here: ENOENT, EINVAL, and status 0 only with shell:true.
+    //
+    // So this asserts the ABSENCE of the thing that looked most natural to write,
+    // which is the only kind of assertion that would have caught it.
+    for (const [cmd, args] of steps()) {
+      assert.notEqual(cmd, 'npx', 'npx cannot be spawned on Windows without a shell');
+      assert.notEqual(cmd, 'npm', 'npm is a .cmd shim on Windows for the same reason');
+      for (const a of args) {
+        assert.doesNotMatch(String(a), /\.cmd$/,
+          'a .cmd target cannot be spawned without a shell on Node 26 (EINVAL): ' + a);
+      }
+    }
+    const build = steps().find(isBuild);
+    assert.ok(build, 'there must still be a build step');
+    assert.equal(build[0], process.execPath,
+      'the build must run through the current Node binary, which needs no shell and pins the '
+      + 'LOCAL electron-builder rather than whatever npx would resolve');
+    assert.match(String(build[1][0]), /electron-builder[\\/]cli\.js$/,
+      "the first argument must be electron-builder's own CLI entry point");
   });
 
   it('pushes main before the tag, so the tag names a commit origin has', () => {
