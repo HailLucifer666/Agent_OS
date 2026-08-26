@@ -103,6 +103,27 @@ describe('lint-bug-registry — the numbers it reports', () => {
     assert.strictEqual(adj.stillApplies(ctxUnchanged), true);
   });
 
+  test('discussing a number in documentation does not allocate it', () => {
+    // Cost two false failures within an hour of the linter landing. Appending a
+    // section to the plan document that EXPLAINED the BUG-999 fixture made the
+    // fixture's adjudication go stale — 999 became a live number, the maximum
+    // jumped to 999, and the ratchet ticked to 137. The gate blocked a commit
+    // whose only sin was explaining the gate.
+    const inDocs = ['mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md', 'BUGS.md', 'ROADMAP.md'];
+    const report = lint.buildReport({
+      declaredTimes: new Map(),
+      mentionedInBugs: new Set(),
+      inCommits: new Map(),
+      inCommitsHead: new Map(),
+      inSource: new Map([[999, new Set(inDocs)]]),
+    });
+    assert.deepStrictEqual(report.undeclared, [],
+      'a number that appears only in prose is being discussed, not used');
+    assert.strictEqual(report.max, 999,
+      'but it still raises the MAXIMUM — over-reporting there can only make the next free '
+      + 'number larger, which is the safe direction');
+  });
+
   test('every adjudication names a reason and still applies', () => {
     for (const a of report.adjudicated) {
       assert.ok(a.reason && a.reason.length > 20, `BUG-${a.number} needs a real reason`);

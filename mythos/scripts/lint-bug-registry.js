@@ -242,13 +242,29 @@ function collectSources({ runGit = git } = {}) {
 function buildReport(sources) {
   const src = sources || collectSources();
 
+  // DOCUMENTATION IS NOT ALLOCATION. A markdown file that discusses BUG-999 —
+  // a plan, a roadmap, a design note — is talking ABOUT the number, not
+  // claiming it. Conflating the two cost two false failures within an hour:
+  // appending a closure-campaign section that explained the BUG-999 fixture
+  // made the fixture's own adjudication go stale, so 999 became a live number,
+  // the maximum jumped to 999 and the undeclared ratchet ticked to 137. The
+  // gate blocked a commit whose only sin was explaining the gate.
+  //
+  // Code, config and commit messages are where a number gets USED. Markdown is
+  // where it gets discussed. Note the asymmetry, which is deliberate: markdown
+  // still counts toward the MAXIMUM, because over-reporting the maximum can
+  // only make the next free number larger, and that is the safe direction.
+  const isDoc = (file) => /\.mdx?$/i.test(file);
+  const codeFilesFor = (n) => [...(src.inSource.get(n) || [])]
+    .map((f) => f.replace(/\\/g, '/'))
+    .filter((f) => !isDoc(f));
+
   const ctx = {
     declaredTimes: (n) => src.declaredTimes.get(n) || 0,
     onlyIn: (n, files) => {
-      const where = src.inSource.get(n);
-      if (!where || where.size === 0) return false;
-      const normalized = [...where].map((f) => f.replace(/\\/g, '/'));
-      return normalized.every((f) => files.includes(f));
+      const where = codeFilesFor(n);
+      if (where.length === 0) return false;
+      return where.every((f) => files.includes(f));
     },
   };
 
@@ -283,7 +299,14 @@ function buildReport(sources) {
   // HEAD-scoped on purpose (see the two-scope note in collectSources): this is
   // the number the gate compares against a committed baseline, so it has to be
   // the same on every machine at the same commit.
-  const undeclared = [...new Set([...src.inCommitsHead.keys(), ...src.inSource.keys()])]
+  // Code and commits only, for the same reason as the adjudication check above:
+  // writing a paragraph that mentions an unfiled bug does not add to the
+  // backlog, and a gate that blocks a documentation commit for doing so trains
+  // people to stop writing documentation.
+  const undeclared = [...new Set([
+    ...src.inCommitsHead.keys(),
+    ...[...src.inSource.keys()].filter((n) => codeFilesFor(n).length > 0),
+  ])]
     .filter((n) => !notABug.has(n))
     .filter((n) => ctx.declaredTimes(n) === 0)
     .sort((a, b) => a - b);
