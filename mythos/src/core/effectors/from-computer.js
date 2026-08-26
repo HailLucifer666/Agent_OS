@@ -544,6 +544,7 @@ function rename_file({ from, to }) {
 
 const MAX_SEARCH_DEPTH = 6; // safety cap — matches the "depth-capped walk" requirement
 const MAX_SEARCH_SCAN = 5000; // safety cap on total entries examined, independent of the 50-result cap below
+const { walkBreadthFirst } = require('./file-walk');
 
 // Turns a simple glob (`*` = any run of chars, `?` = one char) into an
 // anchored, case-insensitive RegExp. Deliberately minimal — no brace/bracket
@@ -558,46 +559,40 @@ function search_files({ root: rawRoot, pattern }) {
   if (!sandboxed.ok) return fail(sandboxed.reason);
   if (!pattern || !String(pattern).trim()) return fail('A search pattern is required.');
   const matcher = wildcardToRegExp(pattern);
-  const entries = [];
-  let truncated = false;
-  let scanned = 0;
-
-  function walk(dir, depth) {
-    if (truncated || depth > MAX_SEARCH_DEPTH) return;
-    let dirEntries;
-    try {
-      dirEntries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return; // unreadable directory (permissions, race) — best-effort, skip it
-    }
-    for (const entry of dirEntries) {
-      if (truncated) return;
-      scanned++;
-      if (scanned > MAX_SEARCH_SCAN) { truncated = true; return; }
-      const full = path.join(dir, entry.name);
-      if (matcher.test(entry.name)) {
-        if (entries.length >= MAX_LIST_ENTRIES) { truncated = true; return; }
-        let size = null;
-        let mtime = null;
-        try {
-          const stat = fs.statSync(full);
-          size = entry.isDirectory() ? null : stat.size;
-          mtime = stat.mtime.toISOString();
-        } catch {
-          // best-effort — a race (entry deleted mid-walk) shouldn't fail the whole tool
-        }
-        entries.push({ name: entry.name, path: full, isDirectory: entry.isDirectory(), size, mtime });
-      }
-      if (entry.isDirectory()) walk(full, depth + 1);
-    }
-  }
-
+  let walked;
   try {
-    walk(sandboxed.resolved, 0);
-    return { ok: true, result: { root: sandboxed.resolved, pattern: String(pattern), entries, truncated }, needs_result: true };
+    // BUG-362: this used to be a depth-first walk declared inline, which
+    // recursed into each subdirectory before testing the next sibling and
+    // charged everything to one budget — so a dependency tree early in the
+    // listing starved every shallow match. file-walk.js has the measurements.
+    walked = walkBreadthFirst(sandboxed.resolved, {
+      match: (name) => matcher.test(name),
+      maxDepth: MAX_SEARCH_DEPTH, maxScan: MAX_SEARCH_SCAN, maxEntries: MAX_LIST_ENTRIES,
+    });
   } catch (err) {
     return fail(err.message);
   }
+  const entries = walked.entries.map((hit) => {
+    let size = null;
+    let mtime = null;
+    try {
+      const stat = fs.statSync(hit.full);
+      size = hit.dirent.isDirectory() ? null : stat.size;
+      mtime = stat.mtime.toISOString();
+    } catch {
+      // best-effort — a race (entry deleted mid-walk) shouldn't fail the whole tool
+    }
+    return { name: hit.name, path: hit.full, isDirectory: hit.dirent.isDirectory(), size, mtime };
+  });
+  // A walk that gave up having found nothing is NOT "no such file", and
+  // ok:true made the two indistinguishable to every caller. An honest miss
+  // still returns ok:true with truncated:false.
+  if (!entries.length && walked.truncated) {
+    return fail('Searched ' + walked.scanned + ' entries under ' + sandboxed.resolved + ' without finding "' +
+      String(pattern) + '", then stopped at the ' + MAX_SEARCH_SCAN + '-entry limit with the tree not fully ' +
+      'covered. This is NOT "no such file" — search a narrower root to get an answer that means something.');
+  }
+  return { ok: true, result: { root: sandboxed.resolved, pattern: String(pattern), entries, truncated: walked.truncated }, needs_result: true };
 }
 
 // ---- clipboard_read / clipboard_write (Task 3, step 5 desktop gaps) ----
@@ -917,7 +912,7 @@ const TOOLS = [
   { name: 'move_file', description: 'Move (or rename) a file or folder from one location to another inside the allowed sandbox.', params: { from: 'string', to: 'string' }, danger: true, fn: move_file },
   { name: 'copy_file', description: 'Copy a file (not a folder) to a new location inside the allowed sandbox, leaving the original in place.', params: { from: 'string', to: 'string' }, danger: true, fn: copy_file },
   { name: 'rename_file', description: 'Rename a file or folder in place (same folder only — use move_file to relocate across folders).', params: { from: 'string', to: 'string' }, danger: true, fn: rename_file },
-  { name: 'search_files', description: 'Search for files/folders by name (supports * and ? wildcards) under a folder inside the allowed sandbox (max depth 6, max 50 results).', params: { root: 'string', pattern: 'string' }, danger: false, fn: search_files },
+  { name: 'search_files', description: 'Search for files/folders by name (supports * and ? wildcards) under a folder inside the allowed sandbox (max depth 6, max 50 results). Dependency and build folders (node_modules, .venv, dist, .git and similar) are not searched. Shallowest matches are returned first. If it cannot cover the whole tree it FAILS saying so rather than reporting an empty result as "not found".', params: { root: 'string', pattern: 'string' }, danger: false, fn: search_files },
   { name: 'compose_email', description: "Draft an email and open it in a browser Gmail compose tab (or the OS mail app if VOICE_EMAIL_MODE=mailto). Does NOT send it — human must click Send.", params: { to: 'string (optional)', subject: 'string', body: 'string' }, danger: false, fn: compose_email },
   { name: 'clipboard_read', description: 'Read the current text on the Windows clipboard.', params: {}, danger: false, fn: clipboard_read, needs_result: true },
   // danger:false (not true) is deliberate: this repo's own invariant test

@@ -34,8 +34,24 @@ describe('lint-bug-registry — the numbers it reports', () => {
   const report = lint.buildReport();
 
   test('next-free skips the fixture, and is not 1000', () => {
-    assert.strictEqual(report.max, 367, 'the real maximum in use');
-    assert.strictEqual(report.nextFree, 368);
+    // A FLOOR AND A CEILING, NOT AN EQUALITY. This read `=== 367` and went red
+    // on the very next number the project allocated (BUG-368, one day later) —
+    // a live, monotonically-growing value pinned as a constant fails for
+    // everyone, permanently, the first time anyone does the normal thing. It is
+    // the same shape as `wakeword.test.js`'s "no models installed" assertion:
+    // true when written, guaranteed to rot. Assert the DIRECTION, the way this
+    // script's own undeclared-count ratchet already does.
+    //
+    // The floor still does real work: it catches a linter that starts LOSING
+    // numbers, which is the failure that would silently hand out a taken one.
+    assert.ok(report.max >= 367,
+      `the linter must still see at least the numbers that existed when this was `
+      + `written — a maximum that goes DOWN means numbers are being dropped, and a `
+      + `dropped number gets handed out twice; got ${report.max}`);
+    assert.ok(report.max < 999,
+      `the fixture number must never become the maximum; got ${report.max}`);
+    assert.strictEqual(report.nextFree, report.max + 1,
+      'next-free is the successor of the real maximum, never 1000');
     assert.ok(!report.inUse.includes(999),
       'BUG-999 is a fake BUGS.md heading inside a test string, not a bug');
   });

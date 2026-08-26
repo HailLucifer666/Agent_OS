@@ -15,7 +15,12 @@ const { chunkCode } = require('../memory/chunker');
 const defaultEmbeddings = require('../../../providers/embeddings');
 
 const CODE_EXT = new Set(['.js', '.ts', '.py', '.md', '.json']);
-const SKIP_DIRS = new Set(['node_modules', '.git', 'vault', '.vscode', 'dist', 'build', 'coverage', '.next', '_archive']);
+// BUG-368: this list lived here and search_files had none, so the two file
+// walkers disagreed about what to skip and `.venv` was on neither. Measured on
+// the main checkout: index_project filled 94% of its 2,000-file budget with
+// Python packages from mythos/.venv and did not index from-pc.js at all, so
+// search_code was searching a virtualenv rather than MYTHOS. Shared now.
+const { SKIP_DIRS } = require('./file-walk');
 const MAX_FILES = 2000;
 const MAX_CHUNKS = 5000;
 const MAX_FILE_BYTES = 1 * 1024 * 1024; // 1MB per file, matches from-computer.js's read_file cap
