@@ -124,12 +124,26 @@ describe('BUG-168 — boot must probe the build engine and report it like every 
   });
 
   it('the build-engine adapter appears in the capability manifest alongside the others', () => {
-    const block = /function adapterStatuses\(\)[\s\S]*?return out;/.exec(MAIN);
-    assert.ok(block, 'adapterStatuses() must still exist');
-    assert.match(block[0], /name: 'dsh-agent'/, 'the build engine belongs in the honest capability report');
+    // BUG-366 (2026-08-26): this used to regex `function adapterStatuses()` out of
+    // main.js and read adapter names from the matched text. The collector moved to
+    // capabilities.js (main.js was at its file-size ratchet ceiling), and this test
+    // went red on a change that broke nothing — the invariant it guards was never
+    // violated, only relocated. That is the standing hazard of a source-shape
+    // window, and this repo has paid for it before.
+    //
+    // Rewritten as a BEHAVIOURAL assertion now that the collector is an exported
+    // function: it asks what is actually reported rather than where the code sits,
+    // so it survives the next move and is a stronger guard besides. Source-shape
+    // is the fallback for wiring no test can reach, not the default.
+    const names = require('../src/core/identity/capabilities')
+      .collectAdapterStatuses()
+      .map((a) => a.name);
+
+    assert.ok(names.includes('dsh-agent'),
+      'the build engine belongs in the honest capability report');
     // Guard the whole set, so a future edit cannot quietly drop one.
     for (const name of ['pc-child', 'cua-driver', 'android-child', 'browser-agent', 'dsh-agent']) {
-      assert.ok(block[0].includes("name: '" + name + "'"), 'adapterStatuses() must report ' + name);
+      assert.ok(names.includes(name), 'collectAdapterStatuses() must report ' + name);
     }
   });
 });

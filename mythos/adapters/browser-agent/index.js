@@ -581,4 +581,11 @@ module.exports = {
   // code; startAutoConnect wires autoConnectTick to the real interval itself.
   autoConnectTick,
   resetAutoConnectBackoff,
+  // BUG-366: exported so the capabilities-manifest settle write can be derived
+  // from this timeout instead of hardcoding a second copy of the same number.
+  // main.js used to schedule its re-write at a literal 10000 — the same value —
+  // so the write sampled this adapter at the exact instant its connect was
+  // still in flight, and froze `CONNECTING` into the manifest permanently.
+  // A consumer that needs to outlast this attempt must READ it, not restate it.
+  CONNECT_TIMEOUT_MS,
 };

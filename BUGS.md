@@ -73,6 +73,92 @@ will not find this fix.
 
 ---
 
+## BUG-366 — the capabilities manifest was corrected only when an adapter SUCCEEDED, so a failure could stay described as still-in-progress (✅ FIXED 2026-08-26, live-verified)
+
+**Status:** ✅ FIXED 2026-08-26. 7 regression tests, 6 mutations, none survived.
+
+**THE AUDIT'S STATED MECHANISM WAS WRONG, AND SO WAS THE FIRST DRAFT OF THIS
+FIX.** That is the most useful thing in this entry, so it goes first.
+
+The 2026-08-26 E2E audit reported `browser-agent: CONNECTING` frozen permanently
+in `vault/Identity/capabilities.md`, and blamed a coincidence of constants:
+`main.js:1077` scheduling its settle re-write at a literal `10000`, exactly
+`browser-agent`'s own `CONNECT_TIMEOUT_MS`, so the write sampled the adapter at
+the instant its connect expired. Two 10000s, one race. It reads perfectly and it
+survives reading the code.
+
+**Measured, it is false.** With no debug Chrome on :9222 the connect fails with
+`ECONNREFUSED` in **~15ms**, not 10s — the OS refuses immediately rather than
+letting the handshake run to timeout. The two timers are three orders of
+magnitude apart and never race. Measured again through the shipping adapter: 15ms
+to settle, against a 10,000ms timeout.
+
+**What actually produces a wrong manifest is three things together:**
+
+1. The immediate boot `writeIt()` can sample the adapter inside that ~15ms
+   window, because `connect()` sets `state = 'CONNECTING'` **synchronously** and
+   the browser step (`main.js:942`) runs before the manifest step (`:1056`).
+2. **Nothing refreshed on the `CONNECTING → OFFLINE` transition.** Only the three
+   success paths called `refreshCapabilities()`. So a mid-flight sample stood.
+3. The settle timer is `unref()`'d, so a process that exits before it fires never
+   corrects the file at all.
+
+**And the audit's evidence was an artefact of (3), not a live defect.**
+`test/boot.test.js:17` points `MYTHOS_VAULT_ROOT` at the **repo** vault and kills
+the child 200ms after ALIVE — so `mythos/vault/Identity/capabilities.md` is test
+output, not system state. The packaged vault on the same machine, written by a
+long-lived boot, correctly read:
+
+```
+- browser-agent: OFFLINE (CDP connect failed: browserType.connectOverCDP: connect ECONNREFUSED 127.0.0.1:9222
+```
+
+State *and* reason. Confirmed by mtime: packaged vault 16:25, repo vault 14:19.
+
+**The audit's second finding — `hint: null` — is the SAME bug, not a separate
+one.** `connect()` clears `hint` on entry and only sets a real one on settle, so
+a status sampled mid-attempt necessarily carries `CONNECTING` with no reason
+attached. Once settled, a reason always exists. One bug, two symptoms.
+
+**The fix is (2).** Both the `else` (ok === false) and the `.catch()` branches of
+the boot connect now call `refreshCapabilities()`, so the correction lands in
+~15ms instead of waiting on a timer that may never fire. A status file corrected
+only when things go right will always describe a broken system as still trying.
+
+Secondary, and deliberately not sold as the cause: `CONNECT_TIMEOUT_MS` is now
+**exported** and `main.js` derives its settle delay from it plus 2s of headroom,
+instead of restating the number. Two copies of one constant go stale silently
+when either moves, which is true regardless of whether they ever raced.
+
+**Why it mattered enough to fix a "stale test artefact".**
+`src/core/effectors/from-memory.js:314` reads this file back to answer *"what can
+you do?"*, and a dev-mode session reads the repo vault. So the wrong line was
+reachable by the voice model, not merely cosmetic — it just was not reachable in
+the packaged app, which is what the audit thought it had measured.
+
+**DELIBERATELY NOT CHANGED: `boot.test.js`'s vault root.** The obvious root fix —
+point it at a temp dir so it stops overwriting operator-visible state — was
+considered and rejected on evidence. `mythos/vault/` is **tracked**, and **five**
+test files share the `MYTHOS_VAULT_ROOT: './vault'` convention
+(`boot.test.js`, `cortex-goals.test.js`, `memory.test.js`,
+`phase3-run-command.test.js`, `server-auth.test.js`), one of them commenting
+*"identity-only — kept"* — a recorded decision, not an oversight. And a
+`mkdtempSync` vault would walk straight into this repo's documented short-`TEMP`
+libuv abort, which is precisely the trap that makes a spawned server look dead.
+Changing it is the operator's call, on its own ticket.
+
+**What this does NOT fix.** The immediate write can still sample a mid-flight
+adapter — that window is now ~15ms wide and self-corrects, rather than being
+closed. Any adapter whose handshake genuinely takes seconds (a CDP endpoint that
+accepts the socket but never answers) will still be written as `CONNECTING` once,
+and will now be corrected on settle rather than at the timer. And the manifest
+version discrepancy the audit noted separately (packaged vault says one version,
+repo vault another, for the same gitRef) is untouched.
+
+**Files:** `mythos/adapters/browser-agent/index.js` (export the constant),
+`mythos/src/main.js` (derive the delay; refresh on the two failure paths).
+**Test:** `mythos/test/bug-366-settled-adapter-reaches-manifest.test.js` (7 tests).
+
 ## BUG-360 (a) — SPA dot-path. every deep link in the HUD 404'd when the install path contained a dot-segment, while `/` kept working (✅ FIXED 2026-08-26, live-verified in-suite)
 
 Found by accident: the full suite failed `express-5-compat.test.js`'s "the SPA fallback serves the

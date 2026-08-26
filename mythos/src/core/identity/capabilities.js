@@ -219,8 +219,43 @@ function summaryDigest(opts) {
   return lines.join('\n');
 }
 
+// Collect every adapter's live status for the manifest.
+//
+// Moved out of main.js's capabilities-manifest boot step (BUG-366): that file is
+// at its file-size ratchet ceiling, and this belongs beside the writer that
+// consumes it rather than inside a boot closure.
+//
+// Requires are LAZY, one per adapter, for two reasons. Loading browser-agent
+// pulls in playwright-core, which no caller of generateMarkdown() should pay
+// for — capabilities-manifest.test.js requires this module. And each adapter is
+// wrapped individually so one that throws on load or on getStatus() costs its
+// own line in the report, not the whole report. An adapter missing from the
+// manifest is indistinguishable from an adapter that is fine.
+var ADAPTER_MODULES = [
+  ['pc-child', '../../../adapters/pc-child'],
+  ['cua-driver', '../../../adapters/cua-driver'],
+  ['android-child', '../../../adapters/android-child'],
+  ['browser-agent', '../../../adapters/browser-agent'],
+  // BUG-168: the build engine belongs in the honest capability report like every
+  // other adapter. Its probe settles async, which is what the settle re-write in
+  // main.js exists for.
+  ['dsh-agent', '../../../adapters/dsh-agent'],
+];
+
+function collectAdapterStatuses() {
+  var out = [];
+  for (var i = 0; i < ADAPTER_MODULES.length; i++) {
+    var name = ADAPTER_MODULES[i][0];
+    try {
+      out.push(Object.assign({ name: name }, require(ADAPTER_MODULES[i][1]).getStatus()));
+    } catch (_) { /* an adapter that cannot report is omitted, as before */ }
+  }
+  return out;
+}
+
 module.exports = {
   buildCapabilities: buildCapabilities,
+  collectAdapterStatuses: collectAdapterStatuses,
   summaryLine: summaryLine,
   generateMarkdown: generateMarkdown,
   writeManifest: writeManifest,

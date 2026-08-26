@@ -157,13 +157,13 @@
 <header>
   <div class="brand">
     <h1>MY<b>THOS</b> &middot; CAPABILITY MAP</h1>
-    <div class="sub">live audit <i>2026&#8209;08&#8209;21</i> &nbsp;/&nbsp; 29 vault days &nbsp;/&nbsp; 115 tools exercised</div>
+    <div class="sub">audit <i>2026&#8209;08&#8209;21</i> &middot; refreshed <i>08&#8209;26</i> &nbsp;/&nbsp; 179 registered &nbsp;/&nbsp; 115 exercised</div>
   </div>
   <div class="vitals">
-    <div class="vital ok"><div class="n">5592</div><div class="l">tests pass</div></div>
+    <div class="vital ok"><div class="n">6333</div><div class="l">tests pass</div></div>
     <div class="vital ok"><div class="n">0</div><div class="l">tests fail</div></div>
-    <div class="vital fail"><div class="n">72</div><div class="l">open incidents</div></div>
-    <div class="vital warn"><div class="n">74</div><div class="l">tools withheld</div></div>
+    <div class="vital fail"><div class="n">34</div><div class="l">untriaged incidents</div></div>
+    <div class="vital warn"><div class="n">74</div><div class="l">withheld <span style="opacity:.6">(08&#8209;21)</span></div></div>
   </div>
 </header>
 
@@ -223,7 +223,7 @@ var CLUSTERS = [
   { id:"comms",  name:"Comms",      status:"fail" },
   { id:"media",  name:"Media",      status:"ok"   },
   { id:"build",  name:"Build",      status:"warn" },
-  { id:"dev",    name:"Devices",    status:"fail" }
+  { id:"dev",    name:"Devices",    status:"warn" }
 ];
 
 var NODES = [
@@ -277,7 +277,7 @@ var NODES = [
   {c:"desk",n:"file ops",s:"dark",note:"create_folder, move_file, copy_file, rename_file, delete_file, search_files. All present in code, none reachable by voice.",ev:"All six are in the withheld-74 list. create_folder has exactly 1 all-time call."},
 
   /* ---- web ---- */
-  {c:"web",n:"web_search",s:"warn",ok:117,f:10,note:"Works on the uncommitted branch via a Google News rung. On committed main every keyless provider is dead and only Wikipedia answers - with 2023 and 2025 pages.",ev:'Live probe, 2026-08-21: fresh headlines returned, "9h ago" and "5h ago". Fix is UNCOMMITTED.\nOn main: "All search providers are unavailable (tried: exa no EXA_API_KEY set; exa-mcp HTTP 429; ddg-html no results; ddg-lite no results; jina HTTP 401; wikipedia no results)."'},
+  {c:"web",n:"web_search",s:"warn",ok:117,f:10,note:"Still warn on main, but for a different reason than in this audit. It is no longer 'only Wikipedia': exa-mcp answers again, and a second keyless provider plus an escalating per-provider cooldown are now merged to main. The remaining risk is quota, not deadness - two free tiers of ~150 and ~100 calls a day, both vendor claims since neither endpoint publishes a rate-limit header.",ev:'Measured 2026-08-26 through the shipping module: exa-mcp median 1634ms, you-mcp median 2621ms, 3 of 3 queries each answered. ddg-html is alive again too - 4 of 5 queries in ~1s, and its miss failed in 73ms rather than a 10s timeout - so it is intermittent, not dead as recorded here. Fix is MERGED to main as of 2026-08-26 (PR #26, merge 2c0a4e9). (BUG-361, BUG-365)'},
   {c:"web",n:"open_web (widget)",s:"warn",ok:131,f:19,note:"Renders search, weather, flight and YouTube cards in the dashboard. Twelve distinct failure strings.",ev:'7 successful YouTube embeds including "CNN News Central 8/20/26".\n"Found results but could not extract a YouTube video ID."\n"open_web requires a type. Use one of: youtube|weather|search|flights|image|web."'},
   {c:"web",n:"hand-off to browser",s:"warn",note:"It genuinely opens the link in your real browser every time - and then tells you it cannot confirm. The complaint is a missing confirmation, not a broken feature.",ev:'main.log: open-external -> {"opened":true,"reason":null}  x14\nThe "denied external open" line that follows is a second-window guard, not the failure.\nIt lands in Brave (the OS default) when Chrome was asked for.'},
   {c:"web",n:"browser automation",s:"warn",ok:57,f:13,note:"Chrome DevTools control. Boots to standby every time and only comes up when a debug browser is launched on demand.",ev:'browser-automation.standby: "CDP not connected"  on every boot\n41x "UNAVAILABLE on this machine - browser_navigate (no debuggable browser is attached)"\nbrowser_navigate 2 ok / 0 fail in the final session; browser_launch_debug 15 ok / 1 fail.'},
@@ -316,8 +316,8 @@ var NODES = [
 
   /* ---- devices ---- */
   {c:"dev",n:"pc-child",s:"ok",note:"The PowerShell automation child. Online on every boot; it is the transport under every desktop verb.",ev:'"pc-child online" on every boot'},
-  {c:"dev",n:"cua-driver",s:"ok",note:"The UI-tree driver. Online. cua_list_windows never failed.",ev:'"cua-driver.online". cua_list_windows 24 ok / 0 fail, cua_bring_to_front 9 ok / 2 fail.'},
-  {c:"dev",n:"phone / Android",s:"fail",note:"Dead. adb is not installed, so all thirteen phone verbs are unreachable - and they are withheld from voice as well.",ev:'"android-child.offline -- adb not found, run node mythos/scripts/setup-android.js --install"'},
+  {c:"dev",n:"cua-driver",s:"warn",note:"INTERMITTENT, newly observed 2026-08-26. Two live boots minutes apart on the same commit: one OFFLINE on a startup handshake that timed out with the child printing nothing at all, the next ONLINE. Not a regression and not healthy either - a startup race nothing reports, because it degrades gracefully so nothing downstream breaks. Undiagnosed.",ev:'Boot A: "cua-driver: OFFLINE (cua-driver startup handshake timed out. The child printed nothing to stderr.)" Boot B, same commit: "cua-driver: ONLINE". Silent stderr is the whole difficulty. Recorded as warn rather than fail because one run is not a mechanism - the first draft of this very node said REGRESSED off boot A alone.'},
+  {c:"dev",n:"phone / Android",s:"warn",note:"FIXED since this audit. adb WAS installed all along - the adapter just looked for it on PATH while the installer put it project-local, and doctor.js resolved it the other way and reported 'No gaps'. The adapter now shares the installer's resolver. No handset is currently attached, so the verbs are reachable but unproven end-to-end.",ev:'Measured 2026-08-26: findInstalledAdb() -> "<repo>\\Android Platform Tools\\platform-tools\\adb.exe", spawn OK, "Android Debug Bridge version 1.0.41". Live manifest: "android-child: ONLINE". "adb devices" returns an empty list - no device plugged in. (BUG-360 (b))'},
   {c:"dev",n:"Aether mesh",s:"fail",note:"The proxy cannot bind its port and the healer retried it in a loop. The .env says it is disabled; the running app started it anyway.",ev:'"Aether scanner-proxy could not bind 127.0.0.1:4480 for node phone: listen EADDRINUSE"  repeated for hours\nmythos/.env says AETHER_ENABLED=false -- config.json overrides it.'},
   {c:"dev",n:"MCP bridge",s:"dark",note:"mcp_list_servers, mcp_list_tools, mcp_call_tool. Zero calls in the entire history, all withheld from voice.",ev:"Never exercised. Only mythos/mcp/server.js exists."},
   {c:"dev",n:"rejected clients",s:"warn",note:"A client is retrying forever against a server correctly refusing it, and 147 identical lines never name which client.",ev:'ws-upgrade-rejected x147, every one carrying the same reason: "bad or missing token".  BUG-292 in flight.'}
