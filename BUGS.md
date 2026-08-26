@@ -41,6 +41,90 @@ it is committed.
 
 ---
 
+## BUG-365 — web search had exactly ONE working provider, so spending its free quota was a cliff onto confident wrong answers (✅ FIXED 2026-08-26, live-verified)
+
+**Status:** ✅ FIXED 2026-08-26. Live-verified end to end; 18 regression tests, 12 mutations run.
+
+**Measured 2026-08-26.** Of the chain's rungs, precisely one returned usable
+results — `exa-mcp`, on a keyless free tier the vendor documents at 150
+calls/day. Both DuckDuckGo rungs answered an anti-bot challenge, `jina` 401'd,
+the local open-webSearch daemon returned 0 results from every engine it has, and
+Wikipedia answered irrelevant articles that the chain shipped as `ok:true`.
+
+So the operator's real ceiling was ~150 searches a day across everything MYTHOS
+does — spoken questions, the build engine's research gate, autonomous goals — and
+exhausting it did not degrade search, it **ended** it, in the worst available
+way: by substituting plausible wrong answers for an honest failure.
+
+**The fix adds a second keyless rung**, You.com MCP
+(`https://api.you.com/mcp?profile=free`, `you-search` tool), on a quota entirely
+independent of Exa's. No key, no signup, no card, nothing in `.env`. Measured on
+this machine: 7 of 7 queries answered HTTP 200 with 5–20 results each. Live
+chain check with `WEB_SEARCH_DISABLED_PROVIDERS=exa-mcp,exa` returned the correct
+answer from `you-mcp` in 2.7s.
+
+Two independent free quotas mean exhausting one is a step down, not a cliff.
+
+**THE MORE IMPORTANT HALF: the SSE frame reader was wrong, and the new provider
+is only what exposed it.** The existing exa-mcp reader took the FIRST `data:`
+line as the JSON-RPC reply:
+
+```js
+var m = String(txt).match(/data:\s*(\{[\s\S]*?\})\s*\n/)
+```
+
+You.com sends a log notification first, so a first-frame reader turns an HTTP 200
+carrying 20 results into **zero results** — indistinguishable upstream from a
+dead endpoint, and exactly the plausible-empty shape that hid the other dead
+rungs for weeks. The first probe written during this work did precisely that and
+reported the provider broken. Both rungs now parse every frame and select the
+reply by structure (`src/core/effectors/mcp-search.js`).
+
+**A latency number is a property of the caller, not of the endpoint.** A
+hand-written probe measured You.com at 1.85s against Exa at 2.8s, and "fastest
+first" would have acted on that and placed You.com ahead. Both numbers were
+artefacts: the probe skipped the `initialized` notification, so it timed two
+round trips where the real client pays three. Re-measured *through the shipping
+module*, three queries each, the order inverts — exa-mcp 1531/1634/1899ms
+(median 1634) against you-mcp 2227/2621/3148ms (median 2621). exa-mcp keeps first
+place; the ordering is now pinned by a test.
+
+**Three of twelve mutations survived on the first pass, and each meant something
+different** — worth recording because two of the three would have shipped as
+"tested":
+
+1. Deleting the `if (f.method) continue` notification guard broke nothing. Correct
+   verdict: a notification carries `params`, never `result`/`error`, so the
+   structural check already rejected it. The guard defended an unreachable state
+   and was **removed**, not test-papered.
+2. Deleting the `isError` check broke nothing, twice. That one was a genuine gap —
+   `isError: true` is a real MCP tool-failure shape. The first replacement test was
+   still vacuous, because ignoring `isError` also ends in zero results.
+3. Deleting the JSON-RPC `error` branch broke nothing, for the same reason.
+
+The pattern behind 2 and 3: **every fault path in this module produces the same
+OUTCOME as a miss, and differs only in whether the cause survives.** So a test
+that asserts `ok:false` proves nothing about them. Both are now pinned on the
+failure trace (`you-mcp tool reported isError`, `you-mcp daily free quota
+exhausted`) and on the cooldown actually arming — a fault reported as "no
+results" leaves the provider looking healthy and re-paid on every later call.
+
+**What this does NOT fix.** The scrape rungs are still dead and still cost their
+timeouts when both keyless rungs are spent (BUG-361's cooldown limits how often).
+The local daemon still returns 0 results from every engine. Wikipedia still ships
+as `ok:true`. Google CSE and Brave remain unconfigured — CSE needs the Custom
+Search API enabled on the operator's Cloud project plus a `GOOGLE_CSE_ID`, and is
+a separate ~100/day pool that would take the ceiling to ~350/day across three
+vendors. And **both daily caps are vendor claims, not measurements**: neither
+endpoint publishes a rate-limit header, so the chain treats a sudden 429 as
+normal rather than exceptional and says so in the trace.
+
+**Files:** `src/core/effectors/mcp-search.js` (new — both MCP rungs and the shared
+frame reader; `web-search.js` was at its 862-line ratchet ceiling, and moving
+exa-mcp out brought it to 801), `src/core/effectors/web-search.js`,
+`mythos/.env.example`.
+**Test:** `test/bug-365-search-has-a-second-free-quota.test.js` (20 tests).
+
 ## ⚠ NUMBERING COLLISION — BUG-360 is assigned twice (recorded 2026-08-26)
 
 It happened again, in the same shape the note above describes, between two sessions working on
@@ -235,6 +319,120 @@ synchronously for 3 s before yielding, the old assertion passed (the block compl
 `refreshDevices()` can defend against that, and production's runner is `runAdb`, which spawns.
 Properties 2 and 3 of that file are untouched.
 ---
+
+## BUG-363 — duplicate of BUG-360 (a) (found independently the same day); the `{ root }` alternative, and why BUG-360's fix was kept
+
+**Status:** ✅ CLOSED as a duplicate 2026-08-26. No separate fix shipped.
+
+Two sessions hit the dot-segment `sendFile` bug within hours of each other, from
+opposite directions — one from a failing `express-5-compat.test.js` in a worktree,
+one while auditing search. **BUG-360 above is the canonical entry; read that for
+the mechanism.** This stub exists so the number is not silently reused and so the
+alternative fix is on record rather than re-derived.
+
+**The alternative: `res.sendFile('index.html', { root: <dir> })`.** send dot-checks
+only the part BELOW `root`, so a relative name plus a trusted root is immune to
+where the repo sits on disk without changing the dotfiles policy at all. Measured
+identical to BUG-360's fix: 200 for `/`, `/a` and `/a/b/c` from both a main
+checkout and a `.claude/worktrees/` worktree.
+
+**BUG-360's `{ dotfiles: 'allow' }` was kept, deliberately.** It landed first, it
+is live-verified, and its own comment answers the obvious objection: the path is
+the constant `UI_PUBLIC_DIR` and no user input reaches it, so widening the
+dotfiles policy cannot be steered at `.git/` or `.env` here. Preferring `{ root }`
+would have been a taste-level rewrite of a working fix on `main`.
+
+**If that ever stops being true — if the served path becomes derived from a
+request, a config value or an install layout — switch to `{ root }` rather than
+keeping `dotfiles: 'allow'`.** The two are equivalent today only because the
+argument is a constant; `{ root }` stays correct when it is not.
+
+**The reason this took two sessions and a wrong theory to settle.** The first
+explanation written for it blamed Express 5 `encodeURI()`-ing paths containing
+spaces, and was asserted confidently in a tracked file before being caught. The
+isolation behind it was not sloppy — four probes, a real file rather than
+`node -e`, a `{root}` control proving the target existed — but every probe ran
+from inside the worktree, so the single variable that mattered was held constant
+across all four and never became a suspect. It took a second session that could
+not reproduce it to expose the variable.
+
+Two rules, both cheap and both earned twice here: **when two machines disagree
+about the same commit, the difference is a variable neither of them varied** —
+enumerate the environment before theorising about the code. And a confident
+mechanism written into a tracked file is worse than no entry, because it
+misdirects every later reader for as long as it survives.
+
+
+---
+
+## BUG-361 — the search chain paid a full timeout per call for providers that could not answer, and the daemon's own error report was parsed straight past (✅ FIXED 2026-08-26, live-verified)
+
+**Status:** ✅ FIXED 2026-08-26 — live-verified on this machine, tests + mutation-proved.
+
+MEASURED: `web_search({query:'who is the CEO of Anthropic'})` took **32.4 seconds**
+and answered from Wikipedia. Per-rung timings that day: ddg-html 10,014ms/0 results,
+ddg-lite 10,010ms/0, jina 459ms/0 (HTTP 401 — the keyless tier is gone), exa-mcp
+1,029ms/0 (HTTP 429 — free 150/day spent), local daemon 6ms/0, wikipedia answered.
+
+**Two root causes, and neither is "DuckDuckGo is blocked".** That was the first
+theory and it was WRONG — worth recording, because the evidence for it looked
+strong. All three DDG hostnames resolved to 20.204.244.192 through the local
+resolver AND through Cloudflare DoH (ruling out a DNS hijack), and TCP :443
+blackholed at 8s with no RST, including to the raw IP. Four hours later the same
+host answered in 137ms with HTTP 202. **It was transient.** A permanent-block
+conclusion would have shipped a hardcoded disable list encoding one machine's bad
+afternoon into a tracked file, on an open-source project.
+
+*Root cause 1 — nothing remembered a failure between calls.* healer.js's
+`suppress-search-provider` playbook rests a provider for a flat **30 seconds**, in
+memory, and it is driven by a `search-provider-failed` anomaly on the BUS — while
+most callers of `web_search` pass no bus. So on the autonomous path it never fired
+at all: an inert mechanism that read as coverage. Every call re-paid every timeout.
+
+*Root cause 2 — the daemon reports its failures and we discarded them.* The
+contract comment was captured 2026-08-20 and had gone stale; the daemon also
+returns `partialFailures`, `error` and `hint`. Measured against the healthy running
+daemon (HTTP 200 every time): `bing` returned 0 results and said exactly why
+(`engine_error`, `Request failed with status code 301`), while `startpage` — the
+configured default — and `duckduckgo` returned 0 with an EMPTY partialFailures
+array. `status:'ok'` describes the REQUEST, not the search. So a total scrape
+failure arrived indistinguishable from "your query matched nothing".
+
+**THE FIX.** New `src/core/effectors/provider-cooldown.js`: a provider that
+*faults* is skipped for progressively longer (1 min → 5 min → 1 hour → 1 day), and
+a single success clears the ladder outright. Behavioural, not geographic — a
+machine where DDG works never triggers it. An expired window permits one retry but
+KEEPS the count, so a permanently dead endpoint escalates instead of ping-ponging
+at the first rung forever. `WEB_SEARCH_DISABLED_PROVIDERS` is the explicit
+override, deliberately empty by default. localWebSearch now reads
+`partialFailures` and names the engine that failed.
+
+**The trap, caught by an existing test rather than by me.** The first version
+cooled down on ANY empty outcome — including Wikipedia correctly matching nothing
+for a shopping query, which would have removed the chain's last honest rung after
+four ordinary queries. `bug-276-f4`'s "distinguishes a provider that
+answered-and-matched-nothing from one that failed" caught it. Only a real fault
+(`seen[provider]`, set by a transport error/non-200/timeout) now cools a provider.
+
+**SCOPE — deliberately not done.** A second, provenance-based caution on the
+Wikipedia rung was written and then REVERTED: `bug-280`'s "an encyclopaedia
+answering an encyclopaedia question is not a defect" is a deliberate, tested
+contract, and Wikipedia's Anthropic article does in fact name the CEO. Recorded as
+a non-change in `succeed()` so it is not "fixed" again. The chain-degradation
+signal it was reaching for belongs on the health channel, where root cause 2 now
+puts it. Also untouched: adding new free providers (Google CSE needs an operator-
+created engine ID; Gemini grounding 429s on the existing key today).
+
+LIVE, same machine, same query: **32.4s → 4.2s cold, ~2.2s warm.** A freshness
+query went 11s → 1.4s, because the news rung's DuckDuckGo corroboration call went
+straight to `ddgHtml` around `skipReason` and is now gated like every other
+attempt. Note the honest caveat: the network recovered between the two
+measurements, so the cold-call figure is mostly the network and the cold→warm
+delta (4.2s → 2.2s) is the part this fix owns.
+
+Tests: `test/provider-cooldown.test.js` (10), `test/bug-361-search-stops-paying-
+for-dead-providers.test.js` (7). Both mutation-proved — 3 mutations each, every
+one caught by the intended assertion.
 
 ## BUG-362 — `search_files` spends its whole scan budget inside `node_modules` and reports "found nothing" instead of "gave up" (🔍 DIAGNOSED 2026-08-26, NOT fixed)
 

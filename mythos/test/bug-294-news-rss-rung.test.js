@@ -35,7 +35,7 @@
 // SSRF bypasses already recorded in web-fetch.js. It is display/attribution only,
 // and the publisher name is already in the title suffix.
 
-const { describe, it, afterEach } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -70,6 +70,12 @@ function stubNews(opts) {
 }
 
 describe('BUG-294: the query actually reaches Google News', () => {
+  // The chain remembers a provider that FAULTED and skips it for a spell
+  // (provider-cooldown.js). That memory is module-level because its purpose is
+  // to survive between calls, so without this reset an earlier test in this file
+  // leaves the news rung cooling and the next one asserts against a rung that
+  // was never dialled.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   it('a freshness-marked search requests /rss/search with the encoded terms', async () => {
@@ -109,6 +115,12 @@ describe('BUG-294: the query actually reaches Google News', () => {
 });
 
 describe('BUG-294: the rung is preferred over the encyclopaedia for a live question', () => {
+  // The chain remembers a provider that FAULTED and skips it for a spell
+  // (provider-cooldown.js). That memory is module-level because its purpose is
+  // to survive between calls, so without this reset an earlier test in this file
+  // leaves the news rung cooling and the next one asserts against a rung that
+  // was never dialled.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   it('a freshness-marked query never reaches Wikipedia', async () => {
@@ -192,6 +204,12 @@ describe('BUG-294: the rung is preferred over the encyclopaedia for a live quest
 });
 
 describe('BUG-294: the redirector link is never fetched', () => {
+  // The chain remembers a provider that FAULTED and skips it for a spell
+  // (provider-cooldown.js). That memory is module-level because its purpose is
+  // to survive between calls, so without this reset an earlier test in this file
+  // leaves the news rung cooling and the next one asserts against a rung that
+  // was never dialled.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   it('no request is issued for any item link', async () => {
@@ -217,6 +235,12 @@ describe('BUG-294: the redirector link is never fetched', () => {
 });
 
 describe('BUG-294: failure and non-changes', () => {
+  // The chain remembers a provider that FAULTED and skips it for a spell
+  // (provider-cooldown.js). That memory is module-level because its purpose is
+  // to survive between calls, so without this reset an earlier test in this file
+  // leaves the news rung cooling and the next one asserts against a rung that
+  // was never dialled.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   it('a dead feed is named in the failure and the chain continues', async () => {
@@ -298,6 +322,12 @@ describe('BUG-294: failure and non-changes', () => {
 // the winning source can PROVE recency, i.e. whether its results carry a date.
 // ---------------------------------------------------------------------------
 describe('BUG-294: the daemon must not preempt the news rung on a live question', () => {
+  // The chain remembers a provider that FAULTED and skips it for a spell
+  // (provider-cooldown.js). That memory is module-level because its purpose is
+  // to survive between calls, so without this reset an earlier test in this file
+  // leaves the news rung cooling and the next one asserts against a rung that
+  // was never dialled.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   const DAEMON_UNDATED = {
@@ -435,6 +465,12 @@ describe('BUG-294: the daemon must not preempt the news rung on a live question'
 // keep asking for exactly what it always asked for.
 // ---------------------------------------------------------------------------
 describe('BUG-294 follow-up: the recency window', () => {
+  // The chain remembers a provider that FAULTED and skips it for a spell
+  // (provider-cooldown.js). That memory is module-level because its purpose is
+  // to survive between calls, so without this reset an earlier test in this file
+  // leaves the news rung cooling and the next one asserts against a rung that
+  // was never dialled.
+  beforeEach(() => { search._resetProviderCooldown(); });
   afterEach(() => { global.fetch = realFetch; });
 
   const EMPTY_FEED = '<rss><channel><title>x</title></channel></rss>';
