@@ -58,11 +58,27 @@ describe('the worktree link list stays honest', () => {
     //
     // So: a single spawn, and anything that is not a clean 0-or-1 exit is rethrown
     // rather than silently becoming evidence.
+    // ASK ABOUT A DIRECTORY, BECAUSE EVERY LINKED PATH IS ONE. `.gitignore`
+    // spells these as `/Android Platform Tools/` and `/mythos/models/piper/`,
+    // and a pattern ending in `/` matches a DIRECTORY only. `git check-ignore`
+    // infers directory-ness from disk, so for a path that does not exist yet it
+    // cannot match a `dir/` pattern at all.
+    //
+    // That made this test measure the wrong thing: it answered from what happened
+    // to be present on disk rather than from the ignore rules. In the main
+    // checkout all eight paths exist and it passed; in a fresh worktree — the
+    // exact situation the linking exists FOR — the two not yet installed here
+    // reported "not gitignored" and the failure named them as entries to delete,
+    // which would have removed correct links. Same worktree-vs-main-checkout
+    // divergence as BUG-360 (a), one layer down.
+    //
+    // The trailing slash asks git about the ignore rules instead of about the
+    // filesystem, so the verdict is identical in both trees.
     const rels = LINKS.map((l) => l.rel);
     let ignoredOut = '';
     try {
       ignoredOut = execFileSync('git', ['check-ignore', '--stdin'],
-        { cwd: REPO_ROOT, encoding: 'utf8', input: rels.join('\n') });
+        { cwd: REPO_ROOT, encoding: 'utf8', input: rels.map((r) => r + '/').join('\n') });
     } catch (err) {
       // Exit 1 is git's documented "nothing matched" and carries real output
       // (empty). Anything else — 128, a signal, ENOENT, a spawn failure — is the
@@ -74,7 +90,10 @@ describe('the worktree link list stays honest', () => {
       }
       ignoredOut = err.stdout || '';
     }
-    const ignored = new Set(ignoredOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
+    // git echoes back what it was given, so strip the slash added above before
+    // comparing against the bare rels.
+    const ignored = new Set(ignoredOut.split(/\r?\n/)
+      .map((s) => s.trim().replace(/\/$/, '')).filter(Boolean));
     const tracked = rels.filter((rel) => !ignored.has(rel));
     assert.deepEqual(tracked, [],
       'these entries are not gitignored, so a fresh worktree already has them and linking is '
@@ -129,6 +148,51 @@ describe('the worktree link list stays honest', () => {
       + 'until a licence guard has been dormant for weeks. Add the fixture to LINKS (with a '
       + 'reason), or if it genuinely cannot be shared between checkouts, say so in that test\'s '
       + 'skip message: ' + offenders.join(', '));
+  });
+
+  it('covers every wizard component that installs into a gitignored directory', () => {
+    // BUG-360. The "fixture-gated skip" assertion above only finds things whose
+    // absence makes a TEST go quiet. It cannot see the other half of the problem:
+    // a per-machine dependency whose absence makes a FEATURE go quiet while the
+    // suite is entirely happy. adb was exactly that — the wizard downloads it,
+    // nothing linked it into a worktree, and a worktree therefore ran with all 14
+    // phone_* tools withheld from the model with no test saying anything at all.
+    //
+    // The catalogue drives this, not a hand-written list, so a SEVENTH component
+    // added later fails here until someone decides where it belongs. That is the
+    // point: the previous list rotted by standing still while the product grew.
+    const { catalog } = require('../src/core/setup/components.js');
+
+    // component id -> the LINKS path that carries its install, or null with a
+    // stated reason. An entry of null is a claim that nothing on disk needs
+    // sharing; say why, because a wrong null is invisible.
+    const EXPECTED = {
+      silero:    'mythos/ui/public/models/silero',
+      wakeword:  'mythos/ui/public/models/wakeword',
+      piper:     'mythos/models/piper',
+      dsh:       'DeepSeek Harness',
+      adb:       'Android Platform Tools',
+      // Not a file. setup-autostart.js registers a Windows Scheduled Task, which
+      // is machine state outside the repo entirely — a worktree neither has nor
+      // needs a copy, and linking is not a concept that applies.
+      autostart: null,
+    };
+
+    const catalogue = catalog().map((c) => c.id).sort();
+    assert.deepEqual(catalogue, Object.keys(EXPECTED).sort(),
+      'the wizard\'s component list changed and this map did not. Every component either '
+      + 'installs into a gitignored directory that a worktree must share (add it to LINKS and '
+      + 'name it here), or it does not (map it to null and say why). Leaving it out means the '
+      + 'next worktree silently runs without it.');
+
+    const linked = new Set(LINKS.map((l) => l.rel));
+    const missing = Object.entries(EXPECTED)
+      .filter(([, rel]) => rel !== null && !linked.has(rel))
+      .map(([id, rel]) => `${id} -> ${rel}`);
+    assert.deepEqual(missing, [],
+      'these wizard components install into a gitignored directory that LINKS does not carry, so '
+      + 'a worktree runs without them and NOTHING FAILS — the feature is just absent: '
+      + missing.join(', '));
   });
 
   it('core.bare is false, so git can still see a working tree', () => {

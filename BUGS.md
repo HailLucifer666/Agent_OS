@@ -123,9 +123,41 @@ normal rather than exceptional and says so in the trace.
 frame reader; `web-search.js` was at its 862-line ratchet ceiling, and moving
 exa-mcp out brought it to 801), `src/core/effectors/web-search.js`,
 `mythos/.env.example`.
-**Test:** `test/bug-365-search-has-a-second-free-quota.test.js` (18 tests).
+**Test:** `test/bug-365-search-has-a-second-free-quota.test.js` (20 tests).
 
-## BUG-360 — every deep link in the HUD 404'd when the install path contained a dot-segment, while `/` kept working (✅ FIXED 2026-08-26, live-verified in-suite)
+## ⚠ NUMBERING COLLISION — BUG-360 is assigned twice (recorded 2026-08-26)
+
+It happened again, in the same shape the note above describes, between two sessions working on
+the same day.
+
+- **BUG-360 (a)** — the SPA dot-path 404 (commit `8f22877`, on `main` at 03:30). Its number is
+  embedded in the `res.sendFile` comment at `mythos/server/index.js:1541` and in
+  `mythos/test/spa-fallback-dot-path.test.js`.
+- **BUG-360 (b)** — adb resolution (commit `29fb263`, at 04:28). Its number is embedded in three
+  commit messages, `mythos/scripts/setup-android.js`, `mythos/adapters/android-child/index.js`,
+  `mythos/scripts/doctor.js`, `mythos/scripts/parity-check.js` and two test filenames.
+
+**(a) holds the number by this file’s own rule** — a number is yours once it is committed, and (a)
+was committed an hour earlier. (b) grepped `BUGS.md` at 04:07, saw 359 as the maximum, and was
+wrong because (a)’s commit had not been fetched to the local ref yet. That is exactly the failure
+the note above warns about, one step further out: **grepping this file is not enough on a shared
+tree, and neither is grepping the branch you are standing on. `git fetch` first.**
+
+**Neither is renumbered**, for the same reason as BUG-280: the numbers are already in pushed
+commits, four code files and three test filenames, so rewriting them is churn the operator should
+authorise rather than a session deciding unilaterally. The two headings are disambiguated instead,
+so the registry stops being ambiguous even though the tickets stay as they shipped.
+
+**A second thing worth recording about (a):** it shipped inside a commit whose subject is
+`test(android): make the poll-starvation guard immune to host load`. That message describes one of
+the six files it touched; the SPA fix, its new test and a 78-line BUGS.md entry are not mentioned.
+Root `CLAUDE.md` already records this exact shape — 262 lines of BUG-322 committed under a BUG-319
+message — as a consequence of two sessions sharing one git index. Searching history by subject
+will not find this fix.
+
+---
+
+## BUG-360 (a) — SPA dot-path. every deep link in the HUD 404'd when the install path contained a dot-segment, while `/` kept working (✅ FIXED 2026-08-26, live-verified in-suite)
 
 Found by accident: the full suite failed `express-5-compat.test.js`'s "the SPA fallback serves the
 HUD at / and at an unknown deep path" in a git worktree under `.claude/worktrees/`, and passed on
@@ -202,7 +234,7 @@ synchronously for 3 s before yielding, the old assertion passed (the block compl
 Properties 2 and 3 of that file are untouched.
 ---
 
-## BUG-363 — duplicate of BUG-360 (found independently the same day); the `{ root }` alternative, and why BUG-360's fix was kept
+## BUG-363 — duplicate of BUG-360 (a) (found independently the same day); the `{ root }` alternative, and why BUG-360's fix was kept
 
 **Status:** ✅ CLOSED as a duplicate 2026-08-26. No separate fix shipped.
 
@@ -315,6 +347,103 @@ delta (4.2s → 2.2s) is the part this fix owns.
 Tests: `test/provider-cooldown.test.js` (10), `test/bug-361-search-stops-paying-
 for-dead-providers.test.js` (7). Both mutation-proved — 3 mutations each, every
 one caught by the intended assertion.
+
+## BUG-362 — `search_files` spends its whole scan budget inside `node_modules` and reports "found nothing" instead of "gave up" (🔍 DIAGNOSED 2026-08-26, NOT fixed)
+
+Found by the new packaged-app sweep (`scripts/verify-packaged.js`), which is the first harness
+able to invoke a named tool against a running MYTHOS — so this is also evidence the sweep works.
+
+**The symptom.** Against the real server, `search_files {root:'.', pattern:'package.json'}` returns
+`{entries: [], truncated: true}` — zero results, from a directory that plainly contains
+`package.json`. The same call with `pattern:'*.json'` returns files normally. Zero results *and*
+`truncated: true` together are incoherent: nothing was found, yet the search claims it stopped early.
+
+**The mechanism**, from `src/core/effectors/from-computer.js:556`. `walk()` is DEPTH-FIRST and
+charges every examined entry against one global `MAX_SEARCH_SCAN = 5000` budget. For each entry in
+a directory it tests the name, and if that entry is a directory it recurses **immediately** —
+fully — before moving to the next sibling. So in `mythos/` the walk descends into the early
+subdirectories, `node_modules` among them, and a tree with hundreds of thousands of entries
+exhausts a 5,000-entry budget long before the loop ever reaches `package.json` in the root
+listing. The root's own file is never tested at all. `*.json` only succeeded by luck: it matched
+`issue.json` early, while the budget still had room.
+
+**Why it matters more than it looks.** The failure is silent and directional — it hides SHALLOW
+matches, which are the ones a person searching a project root actually wants, while returning
+whatever happened to be found deep in a dependency tree. And it surfaces as `ok: true`, so every
+caller reads it as an authoritative empty result. `truncated` is the only tell, and nothing in the
+tool's own description tells a reader to check it.
+
+**Not fixed here** — unrelated to the adb work this branch carries. Two directions when someone
+takes it: walk breadth-first so every entry at the current depth is tested before any recursion
+(shallow matches then cannot be starved by a deep sibling), and/or skip `node_modules`/`.git` the
+way any file search is expected to. Either way `truncated: true` with zero entries should not be
+reported as a plain success.
+
+---
+
+## BUG-360 (b) — adb resolution. adb was installed in two places and resolved from neither, so all 14 `phone_*` tools were withheld from the model as if they did not exist (✅ FIXED 2026-08-26, live-verified)
+
+**THE BUG, mechanically.** `ANDROID_ADB_BIN`'s schema default is the bare string `'adb'`
+(`src/core/config/schema.js:492`). `src/main.js` passes it straight to
+`startAndroidChild({ adbBin: config.ANDROID_ADB_BIN, … })`, and the adapter did
+`adbBin = o.adbBin || DEFAULT_ADB_BIN` — so `'adb'` survived untouched and `spawnSync` did a
+PATH lookup. **adb is never on PATH here, by design:** `setup-android.js --install` unpacks
+Google's platform-tools *inside the project* rather than touching the machine, exactly as the
+portability rule requires. The probe therefore ENOENT'd, `android-child` settled OFFLINE, and
+`buildCapabilitySnapshot()` withheld every `phone_*` tool from the Live session.
+
+**Why it read as a missing feature rather than a bug.** A withheld tool is not a failing tool.
+The model was never told a call had failed — it was told the tool did not exist, so nothing
+surfaced an error, no incident was logged, and the honest-degradation contract (AD-9) worked
+perfectly while the feature was silently absent. The only visible trace was one boot line,
+`android-child.offline`, whose hint read `adb not found — run … --install`: advice the operator
+had *already followed*, which made the line look like a to-do they had skipped.
+
+**WHY NOT HYPOTHETICAL.** Measured on this machine 2026-08-26, before the fix: `adb.exe` present
+at BOTH `<repo>\Android Platform Tools\platform-tools\` and
+`%APPDATA%\MYTHOS\tools\Android Platform Tools\platform-tools\`, `which adb` empty, adapter
+OFFLINE, 14 `phone_*` tools absent from `vault/Identity/capabilities.md`. The binary had been
+installed the whole time.
+
+**The second half — the one that also breaks the packaged app.** `setup-android.js` computed a
+single install directory at *require* time: `<userData>/tools` when Electron injected
+`MYTHOS_TOOLS_DIR`, the repo otherwise. It WROTE to one place and READ from only that same
+place, so a dev run could not see a packaged install's adb and a packaged run could not see a
+dev checkout's. `doctor.js` already records this identical defect and its fix for the build
+engine — *"Both sides search userData/tools (MYTHOS_TOOLS_DIR) first and the repo second"* — and
+`setup-dsh.js`'s `dshSearchHomes()` is the shape both now follow. `--install`'s closing line also
+told the operator to paste `ANDROID_ADB_BIN=<path>` into `.env`; the first-run wizard runs
+`--install` unattended, so nobody ever saw it. **A setup step whose last instruction is a manual
+paste has not finished setting anything up.**
+
+**THE FIX.** `androidSearchDirs()` / `findInstalledAdb()` in `scripts/setup-android.js` search
+every install location, resolved when called rather than when required; `android-child` treats
+the bare `'adb'` as "resolve this for me" and obeys an absolute path verbatim; `--install` no
+longer advertises a `.env` line, because none is needed; and both `--check` and the OFFLINE hint
+now name the paths that were actually tried. **`'adb'` rather than `''` as the sentinel is
+deliberate** — `.env.example` ships a commented `# ANDROID_ADB_BIN=adb`, and an empty-string
+sentinel would leave anyone who uncommented it broken in precisely the way this bug was broken.
+
+**Live-verified 2026-08-26:** real boot of `src/main.js` → `{"msg":"android-child.online"}`,
+`{"msg":"effectors.ready","count":179}`, `MYTHOS ALIVE`, `capabilities.md` listing
+`android-child: ONLINE` and all **14** `phone_*` tools. Regression tests in
+`test/android-adb-resolution.test.js` (14) and `test/parity-check-adapters.test.js` (18);
+both mutation-proved — reverting the adapter wiring, the dual-location search, the manifest
+freshness gate and the reason parser each turns a test red.
+
+**Also fixed, in the guard rather than the product:** `parity-check.js` now asserts adapter
+state, wizard components and adb resolution — the layer that would have caught this on its own.
+Its first version reported `browser-agent … NO REASON GIVEN` for an adapter that *had* given a
+reason: `src/main.js` writes the adapter reason into a line-oriented manifest unescaped, and
+Playwright's CDP error contains a newline, so the line ends mid-reason with no closing `)`. The
+parser demanded one. **The guard reproduced the exact defect class it was added to catch.**
+
+**SCOPE — what this does NOT fix.** A phone that is resolvable but not PAIRED still yields zero
+devices and every `phone_*` tool still fails honestly; that is `--pair`/`--connect`'s job and
+needs a physical handset, which this machine does not have. The multi-line reason in the manifest
+writer (`src/main.js`) is left alone deliberately — the parser tolerates both shapes and fixing
+the writer is a separate, unrelated change. And `component:autostart` reports NOT installed on
+this machine: real, pre-existing, out of scope here.
 
 ---
 

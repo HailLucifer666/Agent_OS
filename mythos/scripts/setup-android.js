@@ -6,14 +6,16 @@
 // Modeled on setup-dsh.js's --check/--install shape.
 //
 // WHAT IT DOES
-//   --check (default)   resolve adb (ANDROID_ADB_BIN, the project-local
-//                        install, or PATH), run `adb version` + `adb
+//   --check (default)   resolve adb (ANDROID_ADB_BIN, then every install
+//                        location, then PATH), run `adb version` + `adb
 //                        devices -l`, print per-device pairing status and
-//                        the smoke-test command to run.
+//                        the smoke-test command to run. On failure it names
+//                        every path it looked in.
 //   --install            download Google's OFFICIAL platform-tools zip for
-//                        this OS into <repo>/Android Platform Tools/ and
-//                        unzip it there. A plain versioned zip download —
-//                        never `curl | bash` / `iex (irm …)`.
+//                        this OS into the install dir and unzip it there. A
+//                        plain versioned zip download — never `curl | bash` /
+//                        `iex (irm …)`. Requires NO follow-up .env edit: the
+//                        runtime finds the result by searching (BUG-360).
 //   --pair <ip:port> <code>   `adb pair` (Android 11+ Wireless Debugging).
 //                        The pairing code is shown on the phone's own
 //                        Developer Options screen — a manual on-phone step
@@ -34,6 +36,19 @@ const fs = require('fs');
 const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
+const DIR_NAME = 'Android Platform Tools';
+const REPO_INSTALL_DIR = path.join(REPO_ROOT, DIR_NAME);
+// Two different strings, deliberately. ADB_EXE is a FILENAME inside an install
+// tree ('adb.exe' on Windows); DEFAULT_ADB_BIN is the bare COMMAND handed to
+// spawn so the OS resolves it on PATH — and it stays 'adb' on Windows too,
+// because that is what a PATH lookup wants. Conflating them is how you get a
+// spawn of 'adb.exe' that misses a PATH entry, or a file probe for 'adb' that
+// misses the real binary. Kept in sync with android-child's own constant of the
+// same name, and a test asserts they agree.
+const DEFAULT_ADB_BIN = 'adb';
+const ADB_EXE = process.platform === 'win32' ? 'adb.exe' : 'adb';
+const VAULT_DEVICES_PATH = path.resolve(__dirname, '..', 'vault', 'Identity', 'android-devices.json');
+
 // Installer parity (2026-08-11): in a PACKAGED install, <repo>/Android Platform
 // Tools resolves inside the install tree — which an update replaces wholesale, so
 // every upgrade would silently un-install adb and take every phone_* effector
@@ -41,10 +56,53 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 // beside the models directory and for the same three reasons: writable without
 // elevation, survives an update, survives a reinstall. A dev checkout sets nothing
 // and keeps the historical in-repo location, so existing installs are untouched.
-const INSTALL_DIR = process.env.MYTHOS_TOOLS_DIR
-  ? path.join(path.resolve(process.env.MYTHOS_TOOLS_DIR), 'Android Platform Tools')
-  : path.join(REPO_ROOT, 'Android Platform Tools');
-const VAULT_DEVICES_PATH = path.resolve(__dirname, '..', 'vault', 'Identity', 'android-devices.json');
+function toolsInstallDir(env) {
+  const e = env || process.env;
+  if (!e.MYTHOS_TOOLS_DIR) return null;
+  return path.join(path.resolve(e.MYTHOS_TOOLS_DIR), DIR_NAME);
+}
+
+// A WRITE goes to userData/tools when Electron told us where that is, else the
+// repo root — unchanged behaviour, but resolved when CALLED rather than when
+// required. It used to be a module-level const, which meant whichever value
+// process.env held at require time was frozen in; the adapter that now asks this
+// question is required during boot wiring, so a const would have answered for
+// the wrong tree.
+function resolveInstallDir(env) {
+  return toolsInstallDir(env) || REPO_INSTALL_DIR;
+}
+
+// BUG-360 (2026-08-26): every READ must consider BOTH locations, most-preferred
+// first. This is the half that was missing, and it took all 14 phone_* tools with
+// it. --install wrote adb correctly (this machine has it in BOTH
+// %APPDATA%\MYTHOS\tools\ and <repo>\Android Platform Tools\), but resolution
+// looked in exactly one place — whichever MYTHOS_TOOLS_DIR selected — so a dev
+// run could not see a packaged install's copy and vice versa. Same defect,
+// same shape, and the same fix as the one doctor.js already records for the
+// build engine: "Both sides search userData/tools (MYTHOS_TOOLS_DIR) first and
+// the repo second." setup-dsh.js's dshSearchHomes() is the precedent this
+// mirrors deliberately, rather than inventing a second convention.
+function androidSearchDirs(env) {
+  const dirs = [];
+  const tools = toolsInstallDir(env);
+  if (tools) dirs.push(tools);
+  dirs.push(REPO_INSTALL_DIR);
+  return dirs.filter(function(d, i) { return dirs.indexOf(d) === i; });
+}
+
+// The first installed adb across every search dir, or null. Returns a real path
+// that exists — never a plausible-looking guess, because the caller's next move
+// is to spawn it and report OFFLINE on ENOENT.
+function findInstalledAdb(env, dirs) {
+  const candidates = dirs || androidSearchDirs(env);
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = path.join(candidates[i], 'platform-tools', ADB_EXE);
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch (_) { /* unreadable dir — try the next */ }
+  }
+  return null;
+}
 
 function platformToken() {
   if (process.platform === 'win32') return 'windows';
@@ -61,12 +119,14 @@ function buildDownloadUrl(platform) {
   return 'https://dl.google.com/android/repository/platform-tools-latest-' + platform + '.zip';
 }
 
-function resolvePlatformToolsDir() {
-  return path.join(INSTALL_DIR, 'platform-tools');
+// Both describe the WRITE target — where --install puts things. Read paths go
+// through findInstalledAdb(), which considers every search dir.
+function resolvePlatformToolsDir(env) {
+  return path.join(resolveInstallDir(env), 'platform-tools');
 }
 
-function resolveAdbPath() {
-  return path.join(resolvePlatformToolsDir(), process.platform === 'win32' ? 'adb.exe' : 'adb');
+function resolveAdbPath(env) {
+  return path.join(resolvePlatformToolsDir(env), ADB_EXE);
 }
 
 // Resolution order: explicit env override -> the project-local install this
@@ -80,13 +140,19 @@ function resolveAdbPath() {
 // what happened here on 2026-08-10. Production passes nothing and resolves the
 // real path; the test passes a path it controls and can therefore cover BOTH
 // branches instead of whichever one the machine happens to be in.
-function resolveAdbBin(localAdbPath) {
-  if (process.env.ANDROID_ADB_BIN) return process.env.ANDROID_ADB_BIN;
-  const candidate = localAdbPath || resolveAdbPath();
-  try {
-    if (fs.existsSync(candidate)) return candidate;
-  } catch (_) { /* fall through to PATH */ }
-  return 'adb';
+function resolveAdbBin(localAdbPath, env) {
+  const e = env || process.env;
+  if (e.ANDROID_ADB_BIN) return e.ANDROID_ADB_BIN;
+  if (localAdbPath) {
+    // Injected seam: check exactly the path the caller named, nothing else, so a
+    // test asking for the not-installed branch gets it on a machine that DOES
+    // have an install.
+    try {
+      if (fs.existsSync(localAdbPath)) return localAdbPath;
+    } catch (_) { /* fall through to PATH */ }
+    return DEFAULT_ADB_BIN;
+  }
+  return findInstalledAdb(e) || DEFAULT_ADB_BIN;
 }
 
 // Pure parser for `adb devices -l` output — no adb call, so it's testable
@@ -151,6 +217,14 @@ function check() {
   const version = spawnSync(adb, ['version'], { encoding: 'utf8', timeout: 5000 });
   if (version.error || version.status !== 0) {
     console.log('adb: NOT FOUND (' + adb + ')');
+    // Name the places that were looked in. "NOT FOUND (adb)" alone cannot
+    // distinguish "never installed" from "installed somewhere this build does
+    // not search", and that ambiguity is exactly what hid BUG-360 — adb was
+    // present in two directories the whole time.
+    console.log('  searched: ' + androidSearchDirs().map(function(d) {
+      return path.join(d, 'platform-tools', ADB_EXE);
+    }).join('\n            '));
+    console.log('  then PATH (as "' + DEFAULT_ADB_BIN + '")');
     console.log('  run: node mythos/scripts/setup-android.js --install');
     return 1;
   }
@@ -225,8 +299,9 @@ function extractZip(zipPath, destDir) {
 async function install() {
   const platform = platformToken();
   const url = buildDownloadUrl(platform);
-  fs.mkdirSync(INSTALL_DIR, { recursive: true });
-  const zipPath = path.join(INSTALL_DIR, 'platform-tools-latest-' + platform + '.zip');
+  const installDir = resolveInstallDir();
+  fs.mkdirSync(installDir, { recursive: true });
+  const zipPath = path.join(installDir, 'platform-tools-latest-' + platform + '.zip');
 
   console.log('Downloading ' + url);
   try {
@@ -236,8 +311,8 @@ async function install() {
     return 1;
   }
 
-  console.log('Extracting to ' + INSTALL_DIR);
-  const result = extractZip(zipPath, INSTALL_DIR);
+  console.log('Extracting to ' + installDir);
+  const result = extractZip(zipPath, installDir);
   if (!result || result.error || result.status !== 0) {
     console.log('ERROR: extraction failed');
     if (result && result.stdout) console.log(result.stdout);
@@ -250,8 +325,16 @@ async function install() {
     console.log('ERROR: extraction completed but adb was not found at ' + adbPath);
     return 1;
   }
-  console.log('\nInstalled. Set in mythos/.env:');
-  console.log('  ANDROID_ADB_BIN=' + adbPath);
+  // BUG-360: this used to print "Set in mythos/.env: ANDROID_ADB_BIN=<path>" and
+  // stop there. A setup step whose last instruction is a manual paste has not
+  // finished setting anything up — the first-run wizard runs this unattended, so
+  // nobody ever saw the line, ANDROID_ADB_BIN stayed at its 'adb' default, and
+  // every phone_* tool was withheld from the model as UNAVAILABLE. The path is
+  // now discovered by findInstalledAdb() at boot, so no .env line is required at
+  // all and none is advertised.
+  console.log('\nInstalled: ' + adbPath);
+  console.log('No .env change needed — MYTHOS resolves this path on its own at startup.');
+  console.log('  verify: node mythos/scripts/setup-android.js --check');
   return 0;
 }
 
@@ -312,11 +395,14 @@ module.exports = {
   resolvePlatformToolsDir,
   resolveAdbPath,
   resolveAdbBin,
+  androidSearchDirs,
+  findInstalledAdb,
+  DEFAULT_ADB_BIN,
   parseDevicesOutput,
   buildPairArgs,
   buildConnectArgs,
   mergeDeviceRecord,
-  INSTALL_DIR: function() { return INSTALL_DIR; },
+  INSTALL_DIR: function(env) { return resolveInstallDir(env); },
   REPO_ROOT: function() { return REPO_ROOT; },
   VAULT_DEVICES_PATH: function() { return VAULT_DEVICES_PATH; },
 };

@@ -268,3 +268,109 @@ describe('release cli', () => {
     } finally { console.error = realError; console.log = realLog; }
   });
 });
+
+describe('releaseSteps — the ORDER, which is the part that was wrong', () => {
+  // Cutting 0.1.10 on 2026-08-26 failed on this, and the failure was expensive:
+  // a full 271MB installer built, the blockmap uploaded, then GitHub refused the
+  // release with
+  //     422 Unprocessable Entity — "Published releases must have a valid tag"
+  // because the tag was still LOCAL when electron-builder posted. What remained
+  // on GitHub was a PUBLISHED release marked "Latest" containing one 263KB
+  // blockmap and no installer — worse than no release, because auto-update
+  // advertises it.
+  //
+  // Every individual step read correctly. Only their SEQUENCE was wrong, which is
+  // why it survived review and why the list is now a pure exported function
+  // rather than an array buried inside main().
+  const steps = () => release.releaseSteps('v1.2.3', { publishing: true, ci: false });
+  const idx = (pred) => steps().findIndex(pred);
+  // Matches the build step by what it INVOKES, not by the command name — because
+  // the command name is exactly what changed. "npx electron-builder" could never
+  // spawn on Windows: npx is npx.cmd, Node gives ENOENT without a shell, and Node
+  // 26 gives EINVAL for a .cmd. It is now process.execPath plus the local cli.js.
+  const isBuild = ([, args]) => args.some((a) => /electron-builder/.test(String(a)));
+  const isTagPush = ([cmd, args]) => cmd === 'git' && args[0] === 'push' && args[2] === 'v1.2.3';
+  const isMainPush = ([cmd, args]) => cmd === 'git' && args[0] === 'push' && args[2] === 'main';
+
+  it('pushes the tag BEFORE the build that publishes against it', () => {
+    const tagPush = idx(isTagPush);
+    const build = idx(isBuild);
+    assert.ok(tagPush >= 0, 'the tag must still be pushed');
+    assert.ok(build >= 0, 'the build step must still exist');
+    assert.ok(tagPush < build,
+      `the tag push is at ${tagPush} and the publishing build at ${build}. With releaseType "release", `
+      + 'GitHub 422s a published release whose tag it has never seen — so this order must never invert.');
+  });
+
+  it('does not invoke the build through npx, which cannot spawn on Windows', () => {
+    // The defect that cost 0.1.10 AND 0.1.11, both of which stopped at this step
+    // reporting only "failed (exit null)" and no output. npx is npx.cmd on
+    // Windows; Node's spawn does no PATHEXT resolution, so spawnSync('npx', …)
+    // is ENOENT, and Node 26 refuses spawnSync('npx.cmd', …) with EINVAL because
+    // running a .cmd without a shell is the injection hole DEP0190 warns about.
+    // Measured here: ENOENT, EINVAL, and status 0 only with shell:true.
+    //
+    // So this asserts the ABSENCE of the thing that looked most natural to write,
+    // which is the only kind of assertion that would have caught it.
+    for (const [cmd, args] of steps()) {
+      assert.notEqual(cmd, 'npx', 'npx cannot be spawned on Windows without a shell');
+      assert.notEqual(cmd, 'npm', 'npm is a .cmd shim on Windows for the same reason');
+      for (const a of args) {
+        assert.doesNotMatch(String(a), /\.cmd$/,
+          'a .cmd target cannot be spawned without a shell on Node 26 (EINVAL): ' + a);
+      }
+    }
+    const build = steps().find(isBuild);
+    assert.ok(build, 'there must still be a build step');
+    assert.equal(build[0], process.execPath,
+      'the build must run through the current Node binary, which needs no shell and pins the '
+      + 'LOCAL electron-builder rather than whatever npx would resolve');
+    assert.match(String(build[1][0]), /electron-builder[\\/]cli\.js$/,
+      "the first argument must be electron-builder's own CLI entry point");
+  });
+
+  it('pushes main before the tag, so the tag names a commit origin has', () => {
+    assert.ok(idx(isMainPush) < idx(isTagPush));
+  });
+
+  it('creates the tag locally before pushing it', () => {
+    const create = idx(([cmd, args]) => cmd === 'git' && args[0] === 'tag');
+    assert.ok(create >= 0 && create < idx(isTagPush));
+  });
+
+  it('commits the version bump before tagging it', () => {
+    // Otherwise the tag names a commit whose package.json still says the OLD
+    // version — which is exactly the state the remote tag ended up in during the
+    // 0.1.10 recovery, when GitHub created the tag itself against main.
+    const commit = idx(([cmd, args]) => cmd === 'git' && args[0] === 'commit');
+    const tag = idx(([cmd, args]) => cmd === 'git' && args[0] === 'tag');
+    assert.ok(commit >= 0 && commit < tag);
+  });
+
+  it('omits --publish under --ci, where the workflow does the upload', () => {
+    const ciSteps = release.releaseSteps('v1.2.3', { publishing: true, ci: true });
+    const build = ciSteps.find(isBuild);
+    assert.ok(build, 'the build still runs as a smoke test');
+    assert.equal(build[1].includes('--publish'), false);
+    // The pushes must STILL come first here — under --ci the tag push is what
+    // triggers the release workflow, so a build placed before it would run
+    // against a tag that does not exist yet for a different reason.
+    const order = ciSteps.map(([cmd, args]) => cmd + ' ' + args.join(' '));
+    assert.ok(order.findIndex((s) => s.includes('push origin v1.2.3')) < order.findIndex((s) => s.includes('electron-builder')));
+  });
+
+  it('omits --publish under --no-publish', () => {
+    const build = release.releaseSteps('v1.2.3', { publishing: false, ci: false }).find(isBuild);
+    assert.equal(build[1].includes('--publish'), false);
+  });
+
+  it('names the tag consistently in every step that mentions it', () => {
+    // A mismatch here produces a tag and a release that disagree, which is only
+    // discoverable after a full build and upload.
+    for (const [cmd, args] of steps()) {
+      if (cmd !== 'git') continue;
+      const mentions = args.filter((a) => /^v\d+\.\d+\.\d+$/.test(a));
+      for (const m of mentions) assert.equal(m, 'v1.2.3');
+    }
+  });
+});

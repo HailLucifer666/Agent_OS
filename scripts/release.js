@@ -79,6 +79,74 @@ function publishTarget(pkg) {
   return { owner: github.owner, repo: github.repo };
 }
 
+// The ordered command list a release runs. Pure and exported so the ORDER itself
+// is testable — it is the part that was wrong, and it is invisible in review
+// because every individual step reads correctly.
+//
+// THE PUSHES COME BEFORE THE BUILD, and that ordering is load-bearing.
+//
+// package.json's publish config is `releaseType: "release"`, i.e. publish
+// immediately rather than as a draft. GitHub REFUSES to create a published
+// release for a tag it does not have:
+//
+//     422 Unprocessable Entity — "Published releases must have a valid tag"
+//
+// With the build running first that is guaranteed on EVERY release, because the
+// tag is still local when electron-builder posts. Cutting 0.1.10 on 2026-08-26
+// hit it: a full 271MB installer built, the blockmap uploaded, the release POST
+// 422'd, and what was left on GitHub was a PUBLISHED release marked "Latest"
+// holding one 263KB blockmap and no installer.
+//
+// It also explains v0.1.4, which has sat as a draft ever since. A DRAFT release
+// does NOT need an existing tag, so the same wrong order fails differently
+// depending on releaseType — a silent draft under one setting, a 422 under this
+// one. Neither delivers anything, and a draft is invisible to electron-updater.
+//
+// WHY NOT build -> push -> publish, which would be strictly safer: that needs two
+// electron-builder invocations (--publish never, then always) and the second
+// rebuilds the whole 271MB installer. The tradeoff taken instead is that a build
+// failure leaves a pushed tag with no artifacts — recoverable by re-running the
+// publish alone, which is what the failure message tells you to do, and visible
+// rather than silent.
+// electron-builder is invoked as `node <its cli.js>`, NOT as `npx electron-builder`,
+// and that is the difference between a release that works on Windows and one that
+// cannot run at all.
+//
+// `npx` on Windows is `npx.cmd`. Node's spawn does not do PATHEXT resolution, so
+// spawnSync('npx', …) fails ENOENT — and Node 26 refuses spawnSync('npx.cmd', …)
+// outright with EINVAL, because executing a .cmd without a shell is the argument-
+// injection hole DEP0190 warns about. Measured on this machine:
+//
+//     spawnSync('npx',     ['--version'])                -> status null, ENOENT
+//     spawnSync('npx.cmd', ['--version'])                -> status null, EINVAL
+//     spawnSync('npx',     ['--version'], {shell:true})  -> status 0, "11.13.0"
+//
+// So this step has NEVER been able to run from this script on Windows. It cost two
+// releases on 2026-08-26 — 0.1.10 and 0.1.11 both stopped here — and it presented
+// as "failed (exit null)" with no output whatsoever, because status is null for a
+// spawn that never started just as it is for a signal kill, and run() was
+// discarding res.error. That missing error is what made this look like a mystery
+// kill; the fix to run() below is the more important half of this change.
+//
+// `shell: true` would also work and is what most projects reach for. Spawning the
+// CLI's own JS entry point through process.execPath is preferred because it needs
+// no shell, cannot be affected by argument escaping, and pins the LOCAL
+// electron-builder rather than whatever npx would resolve.
+const BUILDER_CLI = path.join(REPO_ROOT, 'node_modules', 'electron-builder', 'cli.js');
+
+function releaseSteps(tag, opts) {
+  const o = opts || {};
+  const uploads = o.publishing && !o.ci ? ['--publish', 'always'] : [];
+  return [
+    ['git', ['add', 'package.json']],
+    ['git', ['commit', '-m', `chore(release): ${tag}`]],
+    ['git', ['tag', '-a', tag, '-m', `MYTHOS ${tag}`]],
+    ['git', ['push', 'origin', 'main']],
+    ['git', ['push', 'origin', tag]],
+    [process.execPath, [BUILDER_CLI, '--win', ...uploads]],
+  ];
+}
+
 // evaluatePreflight(facts) -> {ok, blockers[], warnings[]}
 // Split out from the shelling-out so every branch is testable without a git
 // repo, a network, or a gh login.
@@ -128,11 +196,42 @@ function evaluatePreflight(facts) {
 
 // ---- shelling out -----------------------------------------------------------
 
+// ELECTRON_BUILDER_CACHE is set here, for every shell-out, and it is not
+// cosmetic. electron-builder downloads NSIS (nsis-3.0.4.1.7z,
+// nsis-resources-3.4.1.7z) before it can build an installer, and with this unset
+// it writes them to %LOCALAPPDATA%\electron-builder — outside the repo, which
+// root CLAUDE.md's project-isolation rule forbids. .gitignore already says the
+// variable "must be set to this cache dir when running `npm run dist`"; this
+// script shells out to `npx electron-builder` directly and was the one path that
+// never set it.
+//
+// CORRECTION, recorded because the wrong version of this comment stood for an
+// hour and shaped a diagnosis: this variable was NOT the cause of the 0.1.10 build
+// failure. It looked like it, because a manual run with it exported succeeded where
+// the script failed — but 0.1.11 then failed identically WITH the script setting
+// it. The real cause was `npx` being unspawnable on Windows (see BUILDER_CLI
+// below). A coincidence that survives one comparison is not a mechanism; the
+// second data point is what killed it.
+//
+// This is kept purely because the isolation rule requires it, not as a fix.
+//
+// Deliberately does not override an existing value: an operator with a warm cache
+// elsewhere keeps it.
+const BUILDER_CACHE = path.join(REPO_ROOT, '.electron-builder-cache');
+
 function run(cmd, args, opts) {
-  const res = spawnSync(cmd, args, Object.assign({ cwd: REPO_ROOT, encoding: 'utf8' }, opts || {}));
+  const env = Object.assign({ ELECTRON_BUILDER_CACHE: BUILDER_CACHE }, process.env);
+  const res = spawnSync(cmd, args, Object.assign({ cwd: REPO_ROOT, encoding: 'utf8', env }, opts || {}));
   return {
     ok: res.status === 0,
     status: res.status,
+    // res.error is set when the process NEVER STARTED — ENOENT for a command that
+    // is not executable, EINVAL for a .cmd on Node 26. Dropping it, as this used
+    // to, is why two failed releases reported only "failed (exit null)" with no
+    // output: status is null for a spawn that never happened exactly as it is for
+    // a signal kill, so the one field that told the two apart was thrown away.
+    // Twice diagnosed wrong off that missing line.
+    error: res.error ? `${res.error.code || 'spawn failed'}: ${res.error.message}` : null,
     stdout: String(res.stdout || '').trim(),
     stderr: String(res.stderr || '').trim(),
   };
@@ -218,14 +317,7 @@ function main(argv) {
     return 1;
   }
 
-  const steps = [
-    ['git', ['add', 'package.json']],
-    ['git', ['commit', '-m', `chore(release): ${tag}`]],
-    ['git', ['tag', '-a', tag, '-m', `MYTHOS ${tag}`]],
-    ['npx', ['electron-builder', '--win', ...(publishing && !ci ? ['--publish', 'always'] : [])]],
-    ['git', ['push', 'origin', 'main']],
-    ['git', ['push', 'origin', tag]],
-  ];
+  const steps = releaseSteps(tag, { publishing, ci });
 
   if (!confirmed) {
     console.log('');
@@ -247,9 +339,21 @@ function main(argv) {
     const res = run(cmd, cmdArgs, { stdio: 'inherit' });
     if (!res.ok) {
       // Stop at the first failure and say exactly where, because the recovery
-      // differs per step: before the tag, `git reset`; after the build, re-run
-      // with --publish; after the push, nothing to undo.
-      console.error(`release: "${cmd} ${cmdArgs.join(' ')}" failed (exit ${res.status}). Stopped at that step — nothing after it ran.`);
+      // differs per step, and the order changed:
+      //   before the tag is pushed  -> local only: `git tag -d`, `git reset --hard HEAD~1`
+      //   after the pushes, in the build -> the tag is public with no artifacts.
+      //       Re-run `npx electron-builder --win --publish always`; it reuses the
+      //       release the tag already has. Do NOT re-run this script — the tag
+      //       exists, so its own preflight will (correctly) refuse.
+      // Export ELECTRON_BUILDER_CACHE for that manual re-run, or it writes its
+      // NSIS download outside the repo — see the note on BUILDER_CACHE above.
+      // Print the spawn error when there is one. Without it a step that never
+      // started is indistinguishable from one that ran and failed — the exact
+      // ambiguity that made two releases look like mystery kills.
+      console.error(`release: "${cmd} ${cmdArgs.join(' ')}" failed (exit ${res.status}).`
+        + (res.error ? ` The process did not start: ${res.error}` : '')
+        + ' Stopped at that step — nothing after it ran.');
+      if (res.stderr) console.error(res.stderr.slice(-2000));
       return 1;
     }
   }
@@ -263,4 +367,4 @@ if (require.main === module) {
   process.exitCode = main(process.argv.slice(2));
 }
 
-module.exports = { bumpVersion, isNewer, publishTarget, evaluatePreflight, main };
+module.exports = { bumpVersion, isNewer, publishTarget, releaseSteps, evaluatePreflight, main };

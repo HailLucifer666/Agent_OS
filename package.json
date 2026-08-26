@@ -1,6 +1,6 @@
 {
   "name": "agent-os",
-  "version": "0.1.9",
+  "version": "0.1.11",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -57,7 +57,8 @@
       "!mythos/scripts/e2e{,/**/*}",
       "!**/onnxruntime-node/bin/napi-v*/darwin{,/**/*}",
       "!**/onnxruntime-node/bin/napi-v*/linux{,/**/*}",
-      "!**/onnxruntime-web/lib{,/**/*}"
+      "!**/onnxruntime-web/lib{,/**/*}",
+      "!**/@huggingface/transformers/src{,/**/*}"
     ],
     "win": {
       "target": "nsis",
