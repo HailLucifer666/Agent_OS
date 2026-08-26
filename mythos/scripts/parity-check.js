@@ -220,7 +220,215 @@ async function runChecks(opts) {
     checks.push(check('vault:Skills/*.md', skills > 0, `${skills} learned skill(s)`));
   }
 
+  // ---- 7. every adapter's state, and the tools that depend on it -----------------
+  // BUG-360 (2026-08-26). This script's whole premise is that a packaged install
+  // can be byte-identical to the dev tree and still behave differently — and
+  // ADAPTERS are the largest such surface, because each one gates a whole family
+  // of tools and each resolves an external binary at boot. Until now nothing here
+  // asked about them, and the cost was measurable: android-child sat OFFLINE
+  // because nothing ever resolved the adb that setup-android.js had already
+  // installed, so all 14 phone_* tools were withheld from the model as
+  // UNAVAILABLE — for weeks, with every check in this file passing.
+  //
+  // Read from capabilities.md rather than a new HTTP route, deliberately. That
+  // file is written by the running server at boot from adapterStatuses(), so it is
+  // this install's own answer rather than a fresh in-process guess — the same
+  // reason this script attaches instead of booting. It also means no new
+  // authenticated surface exists just to be tested.
+  //
+  // THE CATCH, and the guard for it: capabilities.md is a BOOT SNAPSHOT and
+  // survives the process that wrote it. A manifest older than the current server
+  // describes a DIFFERENT run, so believing it would be worse than not asking.
+  // Anything older than this server's own uptime is reported INDETERMINATE, never
+  // as a pass or a fail.
+  const manifest = vaultRoot ? readCapabilityManifest(path.join(vaultRoot, 'Identity', 'capabilities.md')) : null;
+  const uptimeSec = health.ok && health.body && typeof health.body.uptime === 'number' ? health.body.uptime : null;
+  for (const c of adapterChecks(manifest, uptimeSec, Date.now())) checks.push(c);
+
+  // ---- 8. the wizard's components, as the server itself reports them --------------
+  // The first-run wizard installs these; a fresh machine that skipped or failed a
+  // step looks exactly like a working one until the feature is used.
+  const components = await getJson(host, port, '/api/setup/components', token);
+  if (!components.ok || !components.body || !Array.isArray(components.body.components)) {
+    checks.push(check('components', null, `GET /api/setup/components -> ${components.status} ${components.raw}`));
+  } else {
+    for (const c of components.body.components) {
+      // available:false means this machine cannot install it at all (no key, no
+      // network, unsupported platform) and the server says why. Not installed AND
+      // not available is a fact about the machine, not a parity failure.
+      const ok = c.installed === true ? true : (c.available === false ? null : false);
+      checks.push(check(`component:${c.id}`, ok,
+        c.installed ? 'installed'
+          : c.available === false ? `not installed, and not installable here — ${c.unavailableReason || 'no reason given'}`
+            : 'NOT installed — run the wizard\'s Components step'));
+    }
+  }
+
+  // ---- 8b. the HUD survives a deep link, from wherever this install sits --------
+  // BUG-363 (found by a third session, 2026-08-26). res.sendFile() defaults to
+  // dotfiles:'ignore', and send applies that to EVERY SEGMENT OF THE ABSOLUTE
+  // PATH — not just the part below a root. So an install living under any
+  // dot-directory (a worktree in .claude/worktrees/, a user install under
+  // ~/.config) gets NotFoundError for a file that is plainly there.
+  //
+  // WHY NOTHING NOTICED, and why this check is worth its four lines: express.static
+  // is NOT affected, because its dotfiles rule runs on the REQUEST path relative to
+  // its own root. So `/` keeps serving index.html and ONLY DEEP LINKS 404. The HUD
+  // looks perfectly healthy on the screen the operator actually opens. It presented
+  // as one test failing in a worktree while passing in the main checkout on the
+  // identical commit — one variable, where the tree sits on disk.
+  //
+  // That is exactly the class this whole script exists for: identical code, two
+  // installs, different behaviour. It is asked over HTTP against THIS server rather
+  // than reasoned about from the path, because the question is what this install
+  // does, not what its directory name looks like.
+  const deep = await getJson(host, port, '/parity-check-deep-link-probe/a/b', token);
+  // getJson only parses JSON; the HUD is HTML, so a 200 arrives with body:null.
+  // Status is the whole assertion — 200 means the SPA fallback answered.
+  checks.push(check('spa-deep-link', deep.status === 200,
+    deep.status === 200
+      ? 'an unknown deep path serves the HUD'
+      : `GET /parity-check-deep-link-probe/a/b -> ${deep.status || 'no response'} — the SPA fallback `
+        + 'is not answering. If this install sits under a dot-directory, this is BUG-363: '
+        + 'res.sendFile dot-checks every segment of an absolute path. Deep links and reloads '
+        + 'of any HUD route are 404ing while "/" looks fine.'));
+
+  // ---- 9. adb, specifically, because it is the one that was silently unresolved ---
+  // Asked as a FILE question, not a config one. ANDROID_ADB_BIN sitting at its
+  // 'adb' default is not a misconfiguration any more — resolution now searches
+  // both install locations — so the only meaningful question is whether a binary
+  // was actually found.
+  try {
+    const setupAndroid = require(path.join(__dirname, 'setup-android.js'));
+    const found = setupAndroid.findInstalledAdb();
+    const searched = setupAndroid.androidSearchDirs();
+    checks.push(check('adb-resolved', Boolean(found),
+      found ? found : `no adb in any of: ${searched.join(', ')} (nor on PATH) — run node mythos/scripts/setup-android.js --install`));
+  } catch (err) {
+    checks.push(check('adb-resolved', null, `could not ask setup-android.js: ${err && err.message}`));
+  }
+
   return checks;
+}
+
+// Adapters whose OFFLINE state is a real failure rather than an expected
+// degraded mode. Deliberately short: browser-agent is OFFLINE until the debug
+// browser is launched (by design, see browser_launch_debug), cua-driver and
+// android-child are optional binaries, and mcp-client depends on configured
+// servers. pc-child is the one that must always be up — it is the desktop
+// automation surface every ui_* tool sits on, and nothing else can substitute.
+const REQUIRED_ONLINE_ADAPTERS = ['pc-child'];
+
+// adapter -> the tool-name prefix it gates. Used only to catch the
+// online-but-no-tools contradiction; an adapter absent from this map is skipped
+// rather than assumed to gate nothing.
+const ADAPTER_TOOL_PREFIXES = [
+  ['android-child', 'phone_'],
+];
+
+// Pure so it can be tested without a server, a vault, or a particular machine:
+// hand it a parsed manifest, the server's uptime and a clock reading, get the
+// checks back. `nowMs` is a parameter for the same reason — a freshness rule
+// tested against a frozen clock the test controls proves nothing about the
+// branch that fires when time actually passes.
+function adapterChecks(manifest, uptimeSec, nowMs) {
+  const out = [];
+  const fresh = manifest && uptimeSec !== null && uptimeSec !== undefined
+    ? (nowMs - manifest.mtimeMs) / 1000 <= uptimeSec + MANIFEST_FRESHNESS_SLACK_SEC
+    : null;
+
+  if (!manifest) {
+    out.push(check('adapters', null, 'no Identity/capabilities.md in the vault this server reported'));
+    return out;
+  }
+  if (fresh === false) {
+    out.push(check('adapters', null,
+      `capabilities.md is older than this server's ${Math.round(uptimeSec)}s uptime — it describes a previous boot, `
+      + 'so its adapter states are not evidence about this one'));
+    return out;
+  }
+  if (manifest.adapters.length === 0) {
+    out.push(check('adapters', false, 'capabilities.md has no "## Adapters" section — the manifest format changed'));
+    return out;
+  }
+
+  for (const adapter of manifest.adapters) {
+    // OFFLINE is not automatically a failure: browser-agent is OFFLINE by design
+    // until the debug browser is launched, and cua-driver is an optional binary.
+    // Reporting those as failures is how a check gets ignored. What IS asserted
+    // for every adapter is that an OFFLINE one carries a REASON — an adapter that
+    // is off with no explanation is the exact shape BUG-360 hid in.
+    if (REQUIRED_ONLINE_ADAPTERS.includes(adapter.name)) {
+      out.push(check(`adapter:${adapter.name}`, adapter.online,
+        adapter.online ? 'ONLINE' : `OFFLINE — ${adapter.reason || 'NO REASON GIVEN'}`));
+    } else {
+      out.push(check(`adapter:${adapter.name}`, adapter.online || Boolean(adapter.reason),
+        adapter.online ? 'ONLINE'
+          : `OFFLINE (optional) — ${adapter.reason || 'NO REASON GIVEN: an adapter must always say why it is off'}`));
+    }
+  }
+
+  // The consequence check. An adapter's state only matters through the tools it
+  // gates, and buildCapabilitySnapshot withholds a tool whose adapter is offline
+  // — so the model is told the tool does not EXIST rather than that it failed.
+  // That is why BUG-360 read as a missing feature for weeks instead of as a bug.
+  for (const [adapterName, toolPrefix] of ADAPTER_TOOL_PREFIXES) {
+    const adapter = manifest.adapters.find((a) => a.name === adapterName);
+    if (!adapter) continue;
+    const count = manifest.tools.filter((t) => t.startsWith(toolPrefix)).length;
+    out.push(check(`adapter-tools:${adapterName}`, adapter.online ? count > 0 : true,
+      `${adapterName} is ${adapter.online ? 'ONLINE' : 'OFFLINE'} and the manifest lists ${count} ${toolPrefix}* tool(s)`
+      + (adapter.online && count === 0 ? ' — an online adapter whose tools are all withheld is the BUG-360 signature' : '')));
+  }
+  return out;
+}
+
+// A boot snapshot may legitimately be a little older than `uptime` reports
+// (the manifest is written during boot, before uptime starts being measured from
+// the same instant). Slack rather than an exact comparison, so this cannot fail
+// on a rounding difference.
+const MANIFEST_FRESHNESS_SLACK_SEC = 120;
+
+// Parse the boot-written capability manifest. Format is fixed by whoever writes
+// it in src/main.js: a '## Adapters' section of '- name: STATE (reason)' lines,
+// and tool lines of '- tool_name — description'. Returns null if absent, so the
+// caller reports INDETERMINATE rather than inventing a failure.
+function readCapabilityManifest(file) {
+  let raw;
+  let mtimeMs;
+  try {
+    raw = fs.readFileSync(file, 'utf8');
+    mtimeMs = fs.statSync(file).mtimeMs;
+  } catch { return null; }
+
+  const adapters = [];
+  const tools = [];
+  let inAdapters = false;
+  // Split on \r?\n: this file is written by the app but read on a machine whose
+  // other vault files are operator-edited and CRLF, and a literal \n split has
+  // silently returned defaults here before.
+  for (const line of raw.split(/\r?\n/)) {
+    if (/^##\s/.test(line)) { inAdapters = /^##\s+Adapters\s*$/i.test(line); continue; }
+    // The trailing group is NOT required to close its parenthesis, and that is
+    // not defensive padding — a real line in this manifest reads:
+    //   - browser-agent: OFFLINE (CDP connect failed: browserType.connectOverCDP:
+    // and stops there, because the underlying error string contains a newline and
+    // the writer emits it into a line-oriented format unescaped. Demanding a ')'
+    // made this parser report "NO REASON GIVEN" for an adapter that gave a
+    // perfectly good reason — the guard reproducing the exact defect it was added
+    // to catch. The multi-line reason itself is a (small, separate) flaw in the
+    // manifest writer in src/main.js; it is left alone here rather than fixed
+    // in passing, and this parser tolerates both shapes.
+    const entry = /^-\s+([A-Za-z0-9_-]+):\s+(ONLINE|OFFLINE)\b\s*(.*)$/.exec(line);
+    if (inAdapters && entry) {
+      const reason = String(entry[3] || '').trim().replace(/^\(/, '').replace(/\)$/, '').trim();
+      adapters.push({ name: entry[1], online: entry[2] === 'ONLINE', reason });
+      continue;
+    }
+    const tool = /^-\s+([a-z][a-z0-9_]*)\s+—/.exec(line);
+    if (tool) tools.push(tool[1]);
+  }
+  return { adapters, tools, mtimeMs };
 }
 
 function resolveVaultRootFromSettings(byName) {
@@ -295,4 +503,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseArgs, runChecks, report, PARITY_KEYS };
+module.exports = { parseArgs, runChecks, report, PARITY_KEYS, readCapabilityManifest, adapterChecks, REQUIRED_ONLINE_ADAPTERS, ADAPTER_TOOL_PREFIXES, MANIFEST_FRESHNESS_SLACK_SEC };
