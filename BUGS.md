@@ -41,54 +41,125 @@ it is committed.
 
 ---
 
-## BUG-363 — the SPA fallback 404s from any git worktree, because send inspects the whole absolute path and every worktree lives under a dot-directory (✅ FIXED 2026-08-26)
+## BUG-360 — every deep link in the HUD 404'd when the install path contained a dot-segment, while `/` kept working (✅ FIXED 2026-08-26, live-verified in-suite)
 
-**Status:** ✅ FIXED 2026-08-26 — narrow, environment-scoped, and NOT a defect on a normal checkout.
+Found by accident: the full suite failed `express-5-compat.test.js`'s "the SPA fallback serves the
+HUD at / and at an unknown deep path" in a git worktree under `.claude/worktrees/`, and passed on
+the identical commit in the main checkout. Same HEAD, same `node_modules` junction, one variable —
+where the tree sits on disk.
 
-**READ THIS FIRST IF YOU ARE CHASING A RED `express-5-compat.test.js`.** It fails
-in a worktree and passes in the main checkout, at the same commit, with the same
-express, send and node. That is not flakiness and it is not a routing bug.
+**Mechanism.** `server/index.js`'s SPA fallback called
+`res.sendFile(path.join(__dirname, '..', 'ui', 'public', 'index.html'))` with no options.
+`res.sendFile`'s `dotfiles` option defaults to `'ignore'`, and `send` applies it to **every
+segment of the absolute path it is handed**, not only to the part beneath a `root`. Any segment
+beginning with a dot therefore made `send` raise `NotFoundError` for a file that plainly exists;
+the error middleware turned that into `{"error":"Not Found"}` with status 404. Measured directly
+on express 5.2.1: the same absolute path returns 404 with the default and 200 with
+`{ dotfiles: 'allow' }`.
 
-`res.sendFile(absolutePath)` hands the WHOLE path to `send@1`, whose `dotfiles`
-option defaults to `'ignore'` — so any path containing a segment that starts with
-a dot is refused with send's own `Error('Not Found')`, which the 4xx branch of the
-error handler turns into `{"error":"Not Found"}`. CLAUDE.md tells every concurrent
-session to work from `git worktree add .claude/worktrees/<name>`, so **every
-worktree checkout has a `.claude` segment in its absolute path** and the HUD
-fallback 404s there. Measured with one file, same express 5.2.1 / send 1.2.1 /
-node v26.1.0, only the directory differing:
+**Why it hid.** `/` never broke. `express.static` served the root from its own `index.html`, and
+static's dotfiles check runs on the **request** path relative to its root — never on the root
+itself. So the HUD loaded, looked healthy, and only deep links were dead. Under the
+open-source-portability rule this is a real user-facing bug, not a worktree artefact: anyone
+installing under `~/.local/share/mythos`, `~/.config/…`, or any other dot-directory got the same
+half-working HUD.
 
-```
-.../Agent_OS-main/mythos/ui/public                 /  200    /a/b/c  200
-.../.claude/worktrees/<name>/mythos/ui/public      /  404    /a/b/c  404
-```
+**The fix.** `{ dotfiles: 'allow' }` on that one `sendFile`, and the path now comes from the
+existing `UI_PUBLIC_DIR` const instead of a second hand-built copy of it. No user input reaches
+the path — it is `UI_PUBLIC_DIR` plus a fixed basename — so `'allow'` adds no traversal surface.
+`UI_PUBLIC_DIR` also became injectable (`deps.uiPublicDir`), the same seam shape as
+`routes/config.js`'s `wakewordModelsDir`, because the property could not otherwise be tested
+anywhere except from a dotted checkout.
 
-**The fix** is the documented form — a RELATIVE name plus `{ root }`. send then
-dot-checks only the part BELOW root (`index.html`), which is what the `dotfiles`
-option is actually for; the root itself is trusted. Immune to wherever the repo is
-checked out. `server/index.js` sits at its 4680-line ratchet ceiling, so the
-explanation lives here and the code carries a one-line pointer.
+**Tests.** `test/spa-fallback-dot-path.test.js` builds a `<tmpdir>/.dotted/ui/public/index.html`,
+serves from it, and asserts the deep link is a 200 `text/html` while pinning that the root still
+works. A second test guards the seam itself — that production still falls back to the real
+`ui/public`, and that the `sendFile` still carries `dotfiles: 'allow'` — the same
+guard-the-injected-path precedent the wakeword fix set. Mutation-proved both ways: removing the
+option reddens the behavioural test with the 404 body quoted in the message; typo'ing the fallback
+default reddens the seam guard.
 
-**A WRONG EXPLANATION WAS NEARLY COMMITTED HERE, and how it failed is the lesson.**
-The first version of this entry asserted that the fallback "had never served a
-single request", including `/`, and blamed Express 5 `encodeURI()`-ing paths that
-contain spaces. Both claims were false. The isolation behind them looked sound —
-four probes, a real file rather than `node -e`, and a `{root}` control proving the
-target existed — but every probe ran from inside the worktree, so the one variable
-that mattered was held constant across all four and never became a suspect. A
-second session could not reproduce it, pushed back with its own measurements, and
-was right.
+**Not covered.** Only this one `sendFile` existed in the tree; `express.static` and the gzip
+handler were never affected and are unchanged. A path segment that is dotted *and* attacker-chosen
+would be a different problem — there is no such path here.
 
-Two rules out of it. When two machines disagree about the same commit, the
-difference is **a variable neither of you varied** — enumerate the environment
-before theorising about the code. And a confident mechanism written into a tracked
-file is worse than no entry at all, because it misdirects every later reader for
-as long as it survives; this repo already says that about legal conclusions, and
-it is just as true of technical ones.
+---
 
-Worth keeping despite being environment-scoped: `{ root }` is the documented form,
-it removes the absolute-path question permanently, and it makes the suite honest
-under the worktree workflow this repo mandates for concurrent sessions.
+## BUG-334-F — the event-loop starvation guard was a wall-clock throughput floor, so a busy host failed a correct fix (✅ FIXED 2026-08-26, live-verified under synthetic load)
+
+Follow-up to BUG-334, whose fix (async device poll) is correct and unchanged. Only its **proof**
+was wrong. `test/android-child-poll-starvation.test.js` property 1 asserted that a 10 ms
+`setInterval` fired at least 15 times in 300 ms of wall clock. Observed 2026-08-25: the same tree
+reported `ok 59` in a standalone `node --test` run and `not ok 59` from the pre-commit hook minutes
+later, while a 1.3 GB installer was being written and scanned on the same machine. A throughput
+floor measures the host at least as much as it measures the code, so the gate blocked commits for
+reasons that had nothing to do with the repo.
+
+**Replaced with a structural proof.** The property is that `refreshDevices()` hands control back
+to the event loop **before** the device probe settles — a `spawnSync` body cannot do that at all,
+because no window exists in which the probe is outstanding and the loop is still turning. The test
+now asserts the existence of that window (the injected runner was invoked, the probe is unsettled,
+and control is back in the test), that control came back within a ceiling rather than after a
+floor, and that a fixed, test-chosen number of awaited loop turns all complete with the probe
+still outstanding. Wall clock appears only as a 2 s ceiling — far above load jitter, far below the
+10 s adb timeout this pins.
+
+**Measured, both directions.** Under 16 CPU-saturating processes on 8 cores: the old assertion
+fails (`only 3 ticks in 300ms`) and the new one passes. Under the mutation that reverts the poll to
+a blocking `spawnSync` body, the new assertion fails deterministically on
+`the poll started 0 device probes through the injected runner`. The new assertion is also strictly
+stronger, not merely steadier: against a mutation that starts the async probe and *then* blocks
+synchronously for 3 s before yielding, the old assertion passed (the block completes inside
+`startAndroidChild`, before the 300 ms window opens) while the new one fails on
+`the poll held the event loop for 3075ms after starting the device probe`.
+
+**Not covered.** The test cannot detect a runner that itself blocks synchronously — nothing inside
+`refreshDevices()` can defend against that, and production's runner is `runAdb`, which spawns.
+Properties 2 and 3 of that file are untouched.
+---
+
+## BUG-363 — duplicate of BUG-360 (found independently the same day); the `{ root }` alternative, and why BUG-360's fix was kept
+
+**Status:** ✅ CLOSED as a duplicate 2026-08-26. No separate fix shipped.
+
+Two sessions hit the dot-segment `sendFile` bug within hours of each other, from
+opposite directions — one from a failing `express-5-compat.test.js` in a worktree,
+one while auditing search. **BUG-360 above is the canonical entry; read that for
+the mechanism.** This stub exists so the number is not silently reused and so the
+alternative fix is on record rather than re-derived.
+
+**The alternative: `res.sendFile('index.html', { root: <dir> })`.** send dot-checks
+only the part BELOW `root`, so a relative name plus a trusted root is immune to
+where the repo sits on disk without changing the dotfiles policy at all. Measured
+identical to BUG-360's fix: 200 for `/`, `/a` and `/a/b/c` from both a main
+checkout and a `.claude/worktrees/` worktree.
+
+**BUG-360's `{ dotfiles: 'allow' }` was kept, deliberately.** It landed first, it
+is live-verified, and its own comment answers the obvious objection: the path is
+the constant `UI_PUBLIC_DIR` and no user input reaches it, so widening the
+dotfiles policy cannot be steered at `.git/` or `.env` here. Preferring `{ root }`
+would have been a taste-level rewrite of a working fix on `main`.
+
+**If that ever stops being true — if the served path becomes derived from a
+request, a config value or an install layout — switch to `{ root }` rather than
+keeping `dotfiles: 'allow'`.** The two are equivalent today only because the
+argument is a constant; `{ root }` stays correct when it is not.
+
+**The reason this took two sessions and a wrong theory to settle.** The first
+explanation written for it blamed Express 5 `encodeURI()`-ing paths containing
+spaces, and was asserted confidently in a tracked file before being caught. The
+isolation behind it was not sloppy — four probes, a real file rather than
+`node -e`, a `{root}` control proving the target existed — but every probe ran
+from inside the worktree, so the single variable that mattered was held constant
+across all four and never became a suspect. It took a second session that could
+not reproduce it to expose the variable.
+
+Two rules, both cheap and both earned twice here: **when two machines disagree
+about the same commit, the difference is a variable neither of them varied** —
+enumerate the environment before theorising about the code. And a confident
+mechanism written into a tracked file is worse than no entry, because it
+misdirects every later reader for as long as it survives.
+
 
 ---
 
