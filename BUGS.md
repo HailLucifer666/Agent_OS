@@ -41,6 +41,115 @@ it is committed.
 
 ---
 
+## ⚠ NUMBERING COLLISION — BUG-360 is assigned twice (recorded 2026-08-26)
+
+It happened again, in the same shape the note above describes, between two sessions working on
+the same day.
+
+- **BUG-360 (a)** — the SPA dot-path 404 (commit `8f22877`, on `main` at 03:30). Its number is
+  embedded in the `res.sendFile` comment at `mythos/server/index.js:1541` and in
+  `mythos/test/spa-fallback-dot-path.test.js`.
+- **BUG-360 (b)** — adb resolution (commit `29fb263`, at 04:28). Its number is embedded in three
+  commit messages, `mythos/scripts/setup-android.js`, `mythos/adapters/android-child/index.js`,
+  `mythos/scripts/doctor.js`, `mythos/scripts/parity-check.js` and two test filenames.
+
+**(a) holds the number by this file’s own rule** — a number is yours once it is committed, and (a)
+was committed an hour earlier. (b) grepped `BUGS.md` at 04:07, saw 359 as the maximum, and was
+wrong because (a)’s commit had not been fetched to the local ref yet. That is exactly the failure
+the note above warns about, one step further out: **grepping this file is not enough on a shared
+tree, and neither is grepping the branch you are standing on. `git fetch` first.**
+
+**Neither is renumbered**, for the same reason as BUG-280: the numbers are already in pushed
+commits, four code files and three test filenames, so rewriting them is churn the operator should
+authorise rather than a session deciding unilaterally. The two headings are disambiguated instead,
+so the registry stops being ambiguous even though the tickets stay as they shipped.
+
+**A second thing worth recording about (a):** it shipped inside a commit whose subject is
+`test(android): make the poll-starvation guard immune to host load`. That message describes one of
+the six files it touched; the SPA fix, its new test and a 78-line BUGS.md entry are not mentioned.
+Root `CLAUDE.md` already records this exact shape — 262 lines of BUG-322 committed under a BUG-319
+message — as a consequence of two sessions sharing one git index. Searching history by subject
+will not find this fix.
+
+---
+
+## BUG-360 (a) — SPA dot-path. every deep link in the HUD 404'd when the install path contained a dot-segment, while `/` kept working (✅ FIXED 2026-08-26, live-verified in-suite)
+
+Found by accident: the full suite failed `express-5-compat.test.js`'s "the SPA fallback serves the
+HUD at / and at an unknown deep path" in a git worktree under `.claude/worktrees/`, and passed on
+the identical commit in the main checkout. Same HEAD, same `node_modules` junction, one variable —
+where the tree sits on disk.
+
+**Mechanism.** `server/index.js`'s SPA fallback called
+`res.sendFile(path.join(__dirname, '..', 'ui', 'public', 'index.html'))` with no options.
+`res.sendFile`'s `dotfiles` option defaults to `'ignore'`, and `send` applies it to **every
+segment of the absolute path it is handed**, not only to the part beneath a `root`. Any segment
+beginning with a dot therefore made `send` raise `NotFoundError` for a file that plainly exists;
+the error middleware turned that into `{"error":"Not Found"}` with status 404. Measured directly
+on express 5.2.1: the same absolute path returns 404 with the default and 200 with
+`{ dotfiles: 'allow' }`.
+
+**Why it hid.** `/` never broke. `express.static` served the root from its own `index.html`, and
+static's dotfiles check runs on the **request** path relative to its root — never on the root
+itself. So the HUD loaded, looked healthy, and only deep links were dead. Under the
+open-source-portability rule this is a real user-facing bug, not a worktree artefact: anyone
+installing under `~/.local/share/mythos`, `~/.config/…`, or any other dot-directory got the same
+half-working HUD.
+
+**The fix.** `{ dotfiles: 'allow' }` on that one `sendFile`, and the path now comes from the
+existing `UI_PUBLIC_DIR` const instead of a second hand-built copy of it. No user input reaches
+the path — it is `UI_PUBLIC_DIR` plus a fixed basename — so `'allow'` adds no traversal surface.
+`UI_PUBLIC_DIR` also became injectable (`deps.uiPublicDir`), the same seam shape as
+`routes/config.js`'s `wakewordModelsDir`, because the property could not otherwise be tested
+anywhere except from a dotted checkout.
+
+**Tests.** `test/spa-fallback-dot-path.test.js` builds a `<tmpdir>/.dotted/ui/public/index.html`,
+serves from it, and asserts the deep link is a 200 `text/html` while pinning that the root still
+works. A second test guards the seam itself — that production still falls back to the real
+`ui/public`, and that the `sendFile` still carries `dotfiles: 'allow'` — the same
+guard-the-injected-path precedent the wakeword fix set. Mutation-proved both ways: removing the
+option reddens the behavioural test with the 404 body quoted in the message; typo'ing the fallback
+default reddens the seam guard.
+
+**Not covered.** Only this one `sendFile` existed in the tree; `express.static` and the gzip
+handler were never affected and are unchanged. A path segment that is dotted *and* attacker-chosen
+would be a different problem — there is no such path here.
+
+---
+
+## BUG-334-F — the event-loop starvation guard was a wall-clock throughput floor, so a busy host failed a correct fix (✅ FIXED 2026-08-26, live-verified under synthetic load)
+
+Follow-up to BUG-334, whose fix (async device poll) is correct and unchanged. Only its **proof**
+was wrong. `test/android-child-poll-starvation.test.js` property 1 asserted that a 10 ms
+`setInterval` fired at least 15 times in 300 ms of wall clock. Observed 2026-08-25: the same tree
+reported `ok 59` in a standalone `node --test` run and `not ok 59` from the pre-commit hook minutes
+later, while a 1.3 GB installer was being written and scanned on the same machine. A throughput
+floor measures the host at least as much as it measures the code, so the gate blocked commits for
+reasons that had nothing to do with the repo.
+
+**Replaced with a structural proof.** The property is that `refreshDevices()` hands control back
+to the event loop **before** the device probe settles — a `spawnSync` body cannot do that at all,
+because no window exists in which the probe is outstanding and the loop is still turning. The test
+now asserts the existence of that window (the injected runner was invoked, the probe is unsettled,
+and control is back in the test), that control came back within a ceiling rather than after a
+floor, and that a fixed, test-chosen number of awaited loop turns all complete with the probe
+still outstanding. Wall clock appears only as a 2 s ceiling — far above load jitter, far below the
+10 s adb timeout this pins.
+
+**Measured, both directions.** Under 16 CPU-saturating processes on 8 cores: the old assertion
+fails (`only 3 ticks in 300ms`) and the new one passes. Under the mutation that reverts the poll to
+a blocking `spawnSync` body, the new assertion fails deterministically on
+`the poll started 0 device probes through the injected runner`. The new assertion is also strictly
+stronger, not merely steadier: against a mutation that starts the async probe and *then* blocks
+synchronously for 3 s before yielding, the old assertion passed (the block completes inside
+`startAndroidChild`, before the 300 ms window opens) while the new one fails on
+`the poll held the event loop for 3075ms after starting the device probe`.
+
+**Not covered.** The test cannot detect a runner that itself blocks synchronously — nothing inside
+`refreshDevices()` can defend against that, and production's runner is `runAdb`, which spawns.
+Properties 2 and 3 of that file are untouched.
+---
+
 ## BUG-362 — `search_files` spends its whole scan budget inside `node_modules` and reports "found nothing" instead of "gave up" (🔍 DIAGNOSED 2026-08-26, NOT fixed)
 
 Found by the new packaged-app sweep (`scripts/verify-packaged.js`), which is the first harness
@@ -74,7 +183,7 @@ reported as a plain success.
 
 ---
 
-## BUG-360 — adb was installed in two places and resolved from neither, so all 14 `phone_*` tools were withheld from the model as if they did not exist (✅ FIXED 2026-08-26, live-verified)
+## BUG-360 (b) — adb resolution. adb was installed in two places and resolved from neither, so all 14 `phone_*` tools were withheld from the model as if they did not exist (✅ FIXED 2026-08-26, live-verified)
 
 **THE BUG, mechanically.** `ANDROID_ADB_BIN`'s schema default is the bare string `'adb'`
 (`src/core/config/schema.js:492`). `src/main.js` passes it straight to
