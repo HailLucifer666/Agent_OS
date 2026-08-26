@@ -58,11 +58,27 @@ describe('the worktree link list stays honest', () => {
     //
     // So: a single spawn, and anything that is not a clean 0-or-1 exit is rethrown
     // rather than silently becoming evidence.
+    // ASK ABOUT A DIRECTORY, BECAUSE EVERY LINKED PATH IS ONE. `.gitignore`
+    // spells these as `/Android Platform Tools/` and `/mythos/models/piper/`,
+    // and a pattern ending in `/` matches a DIRECTORY only. `git check-ignore`
+    // infers directory-ness from disk, so for a path that does not exist yet it
+    // cannot match a `dir/` pattern at all.
+    //
+    // That made this test measure the wrong thing: it answered from what happened
+    // to be present on disk rather than from the ignore rules. In the main
+    // checkout all eight paths exist and it passed; in a fresh worktree — the
+    // exact situation the linking exists FOR — the two not yet installed here
+    // reported "not gitignored" and the failure named them as entries to delete,
+    // which would have removed correct links. Same worktree-vs-main-checkout
+    // divergence as BUG-360 (a), one layer down.
+    //
+    // The trailing slash asks git about the ignore rules instead of about the
+    // filesystem, so the verdict is identical in both trees.
     const rels = LINKS.map((l) => l.rel);
     let ignoredOut = '';
     try {
       ignoredOut = execFileSync('git', ['check-ignore', '--stdin'],
-        { cwd: REPO_ROOT, encoding: 'utf8', input: rels.join('\n') });
+        { cwd: REPO_ROOT, encoding: 'utf8', input: rels.map((r) => r + '/').join('\n') });
     } catch (err) {
       // Exit 1 is git's documented "nothing matched" and carries real output
       // (empty). Anything else — 128, a signal, ENOENT, a spawn failure — is the
@@ -74,7 +90,10 @@ describe('the worktree link list stays honest', () => {
       }
       ignoredOut = err.stdout || '';
     }
-    const ignored = new Set(ignoredOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
+    // git echoes back what it was given, so strip the slash added above before
+    // comparing against the bare rels.
+    const ignored = new Set(ignoredOut.split(/\r?\n/)
+      .map((s) => s.trim().replace(/\/$/, '')).filter(Boolean));
     const tracked = rels.filter((rel) => !ignored.has(rel));
     assert.deepEqual(tracked, [],
       'these entries are not gitignored, so a fresh worktree already has them and linking is '

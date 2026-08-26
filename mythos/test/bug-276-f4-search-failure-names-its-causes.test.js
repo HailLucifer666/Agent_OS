@@ -36,7 +36,7 @@
 const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { web_search } = require('../src/core/effectors/web-search');
+const { web_search, _resetProviderCooldown } = require('../src/core/effectors/web-search');
 const healerLib = require('../src/core/immune/healer');
 
 const realFetch = globalThis.fetch;
@@ -73,7 +73,12 @@ const ALL_FAIL = [
 ];
 
 describe('BUG-276 F4 — a total search failure must name what it tried and why each failed', () => {
-  beforeEach(() => { delete process.env.EXA_API_KEY; });
+  // The chain now REMEMBERS a provider that faulted and skips it for a spell
+  // (see provider-cooldown.js). That memory is module-level, because its whole
+  // point is to survive between calls — so without this reset, the first test
+  // in this file puts every provider on cooldown and the rest assert against a
+  // chain that never tried anything.
+  beforeEach(() => { delete process.env.EXA_API_KEY; _resetProviderCooldown(); });
   afterEach(() => {
     globalThis.fetch = realFetch;
     if (realExaKey === undefined) delete process.env.EXA_API_KEY;
