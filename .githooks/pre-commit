@@ -84,4 +84,19 @@ if ! printf '%s' "$out" | node scripts/sync-test-count.js --check; then
   echo "pre-commit: BLOCKED — tracked test-count numbers are stale. Run 'node scripts/sync-test-count.js --write' and commit the result."
   exit 1
 fi
+
+# BUG numbering. Two numbers already carry two unrelated defects each (BUG-280,
+# BUG-360) because "re-grep the max before you assign one" is a rule that lives
+# in a human's memory. ~0.8s, no network.
+#
+# KNOWN LAG, stated rather than papered over: this reads committed history, so a
+# number that appears ONLY in the message of the commit being made is not seen
+# until the next commit. A number that also appears in source or in BUGS.md —
+# which is every number worth gating on — is seen immediately, because those are
+# read from the working tree.
+if ! node scripts/lint-bug-registry.js; then
+  echo "pre-commit: BLOCKED — bug registry. Renumber, write the missing BUGS.md entries, or"
+  echo "            adjudicate with a reason in scripts/lint-bug-registry.js."
+  exit 1
+fi
 exit 0
