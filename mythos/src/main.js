@@ -953,9 +953,15 @@ async function main() {
             refreshCapabilities();
           } else {
             logger.info('browser-automation.standby', { hint: 'CDP not connected — auto-connect poller + on-demand launch will bring it online' });
+            // BUG-366, the actual fix: only the SUCCESS paths refreshed, so a
+            // CONNECTING -> OFFLINE settle never reached the manifest.
+            refreshCapabilities();
           }
         }).catch(function(err) {
           logger.warn('browser-automation.connect-failed', { error: err.message });
+          // A thrown connect is also a settled outcome — the adapter has set
+          // state OFFLINE and a hint by now, and the manifest must say so.
+          refreshCapabilities();
         });
 
         // Auto-connect poller: attach the moment a debug Chrome appears (operator
@@ -1050,21 +1056,9 @@ async function main() {
       // answer to "what can you do" / "what's new". Adapters spawn async just
       // above, so write once now (may show STARTING) and refresh once after
       // they settle.
-      function adapterStatuses() {
-        var out = [];
-        try { out.push(Object.assign({ name: 'pc-child' }, pcChild.getStatus())); } catch (_) {}
-        try { out.push(Object.assign({ name: 'cua-driver' }, cuaDriver.getStatus())); } catch (_) {}
-        try { out.push(Object.assign({ name: 'android-child' }, androidChild.getStatus())); } catch (_) {}
-        try { out.push(Object.assign({ name: 'browser-agent' }, browserAgent.getStatus())); } catch (_) {}
-        // BUG-168: the build engine belongs in the honest capability report
-        // like every other adapter. Its probe settles async (above), which is
-        // exactly what the 10s re-write below already exists for.
-        try { out.push(Object.assign({ name: 'dsh-agent' }, require('../adapters/dsh-agent').getStatus())); } catch (_) {}
-        return out;
-      }
       function writeIt() {
         try {
-          capabilities.writeManifest(memory.fs, effectors, adapterStatuses());
+          capabilities.writeManifest(memory.fs, effectors, capabilities.collectAdapterStatuses());
         } catch (err) {
           logger.warn('capabilities-manifest.write-failed', { error: err.message });
         }
@@ -1074,7 +1068,13 @@ async function main() {
       // settle async, after this step) can re-write the manifest when the adapter
       // flips ONLINE — otherwise it keeps the stale OFFLINE line written here.
       refreshCapabilities = writeIt;
-      var settleTimer = setTimeout(writeIt, 10000);
+      // BUG-366: derived from the adapter's handshake timeout, never a second
+      // copy of it. The audit blamed two literal 10000s racing; measurably not
+      // the cause. Mechanism and evidence in BUGS.md — this file is at its
+      // ratchet ceiling, so the explanation lives there.
+      var SETTLE_HEADROOM_MS = 2000;
+      var settleDelayMs = browserAgent.CONNECT_TIMEOUT_MS + SETTLE_HEADROOM_MS;
+      var settleTimer = setTimeout(writeIt, settleDelayMs);
       if (settleTimer.unref) settleTimer.unref();
       logger.info('capabilities-manifest.written', { tools: effectors.count() });
 
