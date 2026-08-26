@@ -40,6 +40,10 @@
 
 const { effectorFromTool } = require('./adapter');
 const fromPc = require('./from-pc');
+// Every launch_app below resolves a WhatsApp window this module then drives by
+// explicit pid. Passing INTERNAL keeps those launches from evicting the
+// operator's implicit ui_type/ui_click target (BUG-353).
+const implicitTarget = require('./implicit-target');
 const { formatOutgoingMessage } = require('./message-format');
 
 function ok(result) {
@@ -300,7 +304,7 @@ async function whatsapp_send({ to, text, send }) {
   // 1. Ask WhatsApp to open this exact conversation. The URI scheme is what makes
   //    contact resolution WhatsApp's problem rather than ours.
   const uri = 'whatsapp://send?phone=' + recipient.number.replace(/^\+/, '');
-  const launched = await fromPc.launch_app({ name: uri });
+  const launched = await fromPc.launch_app({ name: uri }, implicitTarget.INTERNAL);
   if (!launched.ok) {
     return fail('Could not open WhatsApp for ' + label + ': ' + reasonText(launched) +
       ' — is WhatsApp Desktop installed?');
@@ -310,7 +314,7 @@ async function whatsapp_send({ to, text, send }) {
   //    handler rather than the app, so resolve by name as well.
   let pid = launched.result && typeof launched.result.pid === 'number' ? launched.result.pid : null;
   if (!pid) {
-    const byName = await fromPc.launch_app({ name: 'whatsapp' });
+    const byName = await fromPc.launch_app({ name: 'whatsapp' }, implicitTarget.INTERNAL);
     if (byName.ok && byName.result && typeof byName.result.pid === 'number') pid = byName.result.pid;
   }
   // BUG-273 C1 — 2026-08-18: two sends failed here, to `mom` and to `alex`, both
@@ -500,7 +504,7 @@ async function whatsapp_send({ to, text, send }) {
     // one retry consistent with the architecture already chosen; it either
     // recovers from whatever made the first navigation not take, or the
     // retry proves it wasn't a fluke and the honest fail below stands.
-    const retryLaunch = await fromPc.launch_app({ name: uri });
+    const retryLaunch = await fromPc.launch_app({ name: uri }, implicitTarget.INTERNAL);
     if (retryLaunch.ok) {
       await new Promise((resolve) => setTimeout(resolve, 400));
       const retryComposer = await fromPc.readComposeBox(pid);

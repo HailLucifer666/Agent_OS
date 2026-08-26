@@ -41,6 +41,146 @@ it is committed.
 
 ---
 
+## BUG-353 — the implicit ui_type/ui_click target was process-wide and never expired, so an app MYTHOS opened for its own reasons silently became the thing you dictated into (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27. 17 regression tests, 17 mutations run, none survived.
+
+**The ticket called this hypothetical. It was not.** `from-pc.js`'s own comment
+described the scope limit and then guessed at a future trigger — *"a concurrent
+internal `launch_app` (e.g. from-spotify.js's own auto-launch path, **if** it
+ever routes through this same function)"*. It already routed through it.
+`from-whatsapp.js` calls `launch_app` at three sites and `from-spotify.js` at
+two, all to resolve a window they then drive by **explicit** pid. Neither module
+has ever read the implicit target. They were writing to a slot only the operator
+reads.
+
+**Measured 2026-08-27** by driving the real effector with a stubbed pc-child:
+
+```
+launch_app('notepad')            -> implicit target 1111   (the operator)
+launch_app('whatsapp')           -> implicit target 2222   (from-whatsapp,
+                                    resolving its OWN window internally)
+ui_type('dear diary')   no pid   -> typed into 2222, ok:true
+```
+
+**Why no honesty guard caught it, which is the part worth keeping.** `ui_type`
+has a target cross-check: pc-child reports `typedIntoPid`, and `ui_type`
+compares it to the pid it targeted. Those agreed — 2222 and 2222. **A check on
+the delivered target cannot see a target that was swapped before it ran.** The
+call was honest about everything except which window the operator meant.
+
+**The second defect in the same variable: it never expired.** A pid recorded an
+hour ago was still the default for the next pid-omitted call. `close_window`'s
+own comment already made the argument — *"Windows recycles PIDs, so a stale
+value could target an unrelated process"* — and then applied it only to closes.
+A process that dies without `close_window` (crash, the operator clicks X, Task
+Manager) leaves its pid behind to be recycled by something else.
+
+**THE SCOPING KEY THE PLAN ASKED FOR DOES NOT EXIST, and building it would have
+been inert.** The repair plan says *"bind it per conversation/goal with a TTL"*.
+`ctx.goalId` is the only such key, and `live-tool-adapter.js:833` dispatches
+every Live-voice tool call as `dispatchAction(decision, { tier, channel,
+traceId })` — **no goalId at all.** On the voice path, the path that actually
+says "open notepad and type this", the key would have been `null` on both sides
+and matched everything. `traceId` is worse: it is per tool CALL, so `launch_app`
+and the `ui_type` after it carry different ones and would never match. A
+mechanism that cannot see the traffic it exists to separate is not a guard.
+
+**THE TICKET HAD FOUR CLAUSES AND THE FOURTH HAD NO IMPLEMENTATION.** Read back
+literally, BUG-353 asked for: (1) stop it being a process-wide default, (2) stop
+any intervening launch retargeting typing, (3) bind per conversation/goal with a
+TTL, (4) **"clear on launch"**. The first pass of this fix did 1, 2 and the TTL
+half of 3, and silently skipped 4 — it only surfaced on a deliberate re-read of
+the ticket text as a checklist.
+
+Clause 4 is the one that produces a wrong-window **WRITE** rather than a stale
+default. A launch ATTEMPT moves the operator intent, so the previous target stops
+being what they mean whether or not the launch succeeds. Without it: Notepad is
+open, the operator says "open Spotify", the launch FAILS, they dictate — and the
+text went into Notepad, confidently. `launch_app` now clears the target before
+delegating (INTERNAL callers exempt), so a failed launch leaves NO target and
+`ui_type` falls through to its focused-window branch, which carries its own
+`typedIntoTitle` cross-check. No target beats a stale one.
+
+**So the split is made where the knowledge is.** New module
+`src/core/effectors/implicit-target.js` (110 lines) owns the record, the TTL and
+the expiry. The five internal call sites pass `implicitTarget.INTERNAL`, which
+declares "I am resolving this window for myself and will address it by explicit
+pid." Everything else — including any future caller that forgets — is bounded by
+the TTL.
+
+**TTL = 120s, and the number is argued rather than picked.** The implicit target
+exists to bridge one flow: `launch_app`, then the `ui_type`/`ui_click` that acts
+on what was launched. That is seconds of machine time, but the human confirm step
+sits inside it (`ui_type`'s own FIX E comment records OS focus drifting during
+that round trip) and `launch_app` itself polls up to 6–8s for a windowed
+process. Two minutes clears a slow confirm and still expires long before a pid
+can plausibly be recycled.
+
+**Expiry is evaluated on READ, not on a timer.** A timer would have to be
+`unref()`'d not to hold the process open, and an unref'd timer that never fires
+is exactly how the capabilities manifest stayed wrong in BUG-366. Nothing here
+needs to happen at a moment in time; it only needs to be true when asked.
+
+**A latent bug fell out on the way.** The wrong-app branch of `launch_app`
+(asked for X, a process named Y came up) cleared the target **unconditionally**.
+An INTERNAL launch that resolved to the wrong app would therefore have wiped the
+operator's still-valid target. It now clears only its own pid, and both halves
+are pinned: a non-internal mismatch must still clear, because it set it.
+
+**One line that looks like a hack and is not.** `from-pc.js` calls
+`implicitTarget.forget()` at module load. In production that runs once at boot,
+where nothing is launched to point at. It is there because the state used to be
+declared *in* `from-pc.js`, so the ~20 test files that reset it by dropping
+from-pc from the require cache would otherwise inherit a target from whichever
+test ran before them. Making "a fresh module instance owns no target" explicit is
+better than depending on where a variable happens to be declared.
+
+**TWO MUTATIONS SURVIVED THE FIRST PASS AND BOTH WERE REAL GAPS**, not noise.
+Deleting `remember()`'s pid validation changed nothing (no test asserted the
+module's own contract), and deleting the module-load reset changed nothing *in
+this file* — it is guarded only in the ~20 other test files that reload from-pc,
+so a reader of this file would have seen an unexplained `forget()` at module scope
+and deleted it. Both are now pinned locally.
+
+Writing the first of those assertions immediately found a defect in the guard this
+same change introduced: `remember(1.5)` was **accepted**, because
+`typeof number && Number.isFinite && > 0` passes fractions. Now
+`Number.isInteger(pid) && pid > 0`, which is both simpler and correct. Review had
+not caught it; the boring loop over bad inputs did. `coercePid` in from-pc.js
+shares the same fraction laxness and was deliberately left alone — it is a
+caller's one-shot argument, whereas a value stored here outlives its call and is
+aimed at a window later. That difference is now stated in code rather than
+accidental.
+
+**Two things were REMOVED before shipping rather than defended.** `describe()` and
+the record's `name` field had a writer and no reader — nothing reads it, so delete
+it rather than keep new-module surface that becomes load-bearing by accident. And
+a `coercePid(r.pid)` added at the `remember` call site was reverted once
+`launch_app`'s `byProcess` check (:238) was read properly: it already requires
+`typeof r.pid === 'number'`, so coercing there defended a state that cannot reach
+it and told the next reader a string could arrive when it cannot.
+
+**A deliberate divergence is now pinned:** `send_key` does NOT default to the
+implicit target, because with a pid `ps-automation.ps1` refuses the key when the
+caret belongs to another app, which would break "press escape" aimed at whatever
+the operator is looking at. That was documented in a comment and is now locked by
+a test, so the next reader cannot "fix" the inconsistency with `ui_type`.
+
+**What this does NOT fix.** A caller that omits `INTERNAL` still contaminates the
+target for up to the TTL — proven deliberately as the negative control, so the
+limit is measured rather than assumed. Closing it properly needs a real
+per-conversation key threaded through `live-tool-adapter`, which is its own
+ticket. Nothing here makes an autonomous engagement's launch distinguishable
+from the operator's; the TTL is the only bound on that too.
+
+**Files:** `mythos/src/core/effectors/implicit-target.js` (new),
+`from-pc.js` (eleven sites rewired, 1552 → 1549 lines), `from-whatsapp.js`,
+`from-spotify.js` (both opt their launches out).
+**Test:** `mythos/test/bug-353-implicit-target-scope.test.js` (17 tests).
+
+---
+
 ## BUG-365 — web search had exactly ONE working provider, so spending its free quota was a cliff onto confident wrong answers (✅ FIXED 2026-08-26, live-verified)
 
 **Status:** ✅ FIXED 2026-08-26. Live-verified end to end; 18 regression tests, 12 mutations run.
@@ -13819,8 +13959,24 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
 ### Medium (each needs its own design pass)
 
 - BUG-348 - media_status reads ONE SMTC session (ps-automation.ps1
-  Handle-MediaStatus ~:4275). Enumerate GetSessions(), report primary owner;
-  kills "song playing but says paused" when another app owns the session.
+  Handle-MediaStatus ~:4275, $sessionManager.GetCurrentSession()). Enumerate
+  the SMTC sessions and report the primary owner; kills "song playing but
+  says paused" when another app owns the session.
+  **CORRECTION 2026-08-27 — the repair plan’s stated mechanism is FALSE and
+  must not be inherited.** The plan says *"a GetSessions() enumerator already
+  exists in the same file at :1586 and is used by the per-app volume path —
+  the fix is present and unused"*. Read: the :1586 `GetSessions()` is a C#
+  `private static` inside `MythosAppVolume` that enumerates Windows AUDIO
+  sessions via IMythosSessionManager2/GetSessionEnumerator (used only at
+  :1610/:1631/:1664/:1696). That is a different API from WinRT SMTC which
+  merely shares a method name, and it is not callable from PowerShell. The
+  WinRT session manager's own GetSessions() appears NOWHERE in the file, so
+  nothing is present-and-unused. Note also that the CONTROL path
+  (Send-SmtcControl, ~:430) calls GetCurrentSession() as well, so status and
+  control diverge unless both change together. Real cost: a WinRT enumeration
+  through Await-WinRTOperation with an explicit [type] ResultType, in a file
+  with a documented history of breaking subtly — bigger than "call the
+  function that is already there". Awaiting an operator decision on scope.
 - BUG-349 - see_and_click occluded-click refusal. FIXED 3ce6c8e:
 - BUG-350 - verifier retry-guidance mapping. FIXED 1adad59. Original: hard-fails cta/title-overlap killed most of the 11
   failed builds (design/verify.js :167-169,:236-247). Keep rules HARD
@@ -13837,9 +13993,11 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   dead claims (hermes_task, speak), document Phone/WhatsApp/CUA/OKF/MCP/
   doc-RAG modules. Badges node>=18 vs engines>=22 and tests 4716 were fixed
   in BUG-332; effectors badge remains.
-- BUG-353 - lastLaunchedPid is a process-wide default for pid-less
-  ui_type/ui_click (from-pc.js :47); any intervening launch_app retargets
-  typing. Bind per conversation/goal with TTL, clear on launch.
+- BUG-353 - process-wide implicit ui_type/ui_click target, never expiring.
+  FIXED 2026-08-27 (full entry above). NOT as this ticket specified: per-goal
+  binding was measured INERT, because live-tool-adapter.js:833 dispatches
+  every Live-voice tool call with no goalId. Instead the five internal launch
+  sites opt out explicitly and a 120s TTL bounds everything else.
 - BUG-354 - cua-driver shares pc-child's reject-on-timeout shape for
   cua_click (adapters/cua-driver/index.js :146) with no kill/budget split.
   Mirror BUG-335's toucher/looker split with its own budget; honest
