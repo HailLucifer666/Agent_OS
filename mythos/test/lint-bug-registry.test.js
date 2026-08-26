@@ -75,13 +75,26 @@ describe('lint-bug-registry — the numbers it reports', () => {
   });
 
   test('adjudicated non-collisions stay out of the failure list but stay visible', () => {
-    // 214/006 are a bug plus a follow-up entry; 083/084 are a heading plus a
-    // later prose reference. Real duplicates in the text, not real collisions.
-    for (const n of [214, 6, 83, 84]) {
+    // 214 and 006 are one defect plus a follow-up or historical entry: two real
+    // headings, so only a recorded human judgement can clear them.
+    for (const n of [214, 6]) {
       assert.ok(!report.duplicates.includes(n), `BUG-${n} was adjudicated as not a collision`);
       assert.ok(report.adjudicated.some((a) => a.number === n && a.reason),
         `BUG-${n} must carry a recorded reason — an unexplained suppression is how a real `
         + 'collision gets silenced later');
+    }
+  });
+
+  test('a full entry plus a pointer in the open-bug list is one declaration, not two', () => {
+    // This file's convention is a `## BUG-NNN` entry AND a one-line pointer to it
+    // in the backlog list. Counting both made BUG-353 look like a collision the
+    // hour this script landed — main itself would have failed the gate.
+    for (const n of [353, 83, 84]) {
+      assert.ok(!report.duplicates.includes(n),
+        `BUG-${n} has a heading and a list pointer; that is the normal shape, not a collision`);
+      assert.ok(!report.adjudicated.some((a) => a.number === n),
+        `BUG-${n} must be handled by the declaration rule, not by a hand-written exception — `
+        + 'suppressions that structure can retire should be deleted, not kept');
     }
   });
 

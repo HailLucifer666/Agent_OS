@@ -15,6 +15,11 @@ const { resolveSandboxed, open_folder } = require('./from-computer');
 const evidence = require('./evidence');
 const { reasonText } = require('../util/reason-text');
 const { visionThink } = require('./vision-call');
+// The window a pid-omitted ui_type/ui_click aims at. Was a bare module-scope
+// `lastLaunchedPid` here that any launch overwrote and nothing expired (BUG-353).
+const implicitTarget = require('./implicit-target');
+// A fresh module instance owns no target — see forget() for why this line exists.
+implicitTarget.forget();
 
 function ok(result) {
   return { ok: true, result };
@@ -34,25 +39,13 @@ var visionAttemptTimeoutMs = null;
 // option — see from-dashboard.js's identical comment on visionChainFor.
 var visionChainForOverride = null;
 
-// FIX 1: last pid returned by a successful launch_app. ui_type/ui_click use
-// this as their default target when the caller (the planning LLM) omits pid,
-// so foregroundThenRetry engages deterministically instead of depending on
-// the model remembering to thread pid through itself.
-// Known scope limit: this is process-wide shared state, not per-conversation
-// or per-goal — a concurrent internal launch_app (e.g. from-spotify.js's own
-// auto-launch path, if it ever routes through this same function) could
-// overwrite it between a user's launch_app and a pid-omitted ui_type/ui_click.
-// Acceptable for a single-PC assistant handling one voice command at a time;
-// revisit if concurrent desktop actions become a real use case.
-var lastLaunchedPid = null;
-
 // The planning LLM sometimes emits a non-numeric placeholder ("Notepad PID")
-// instead of a real pid. That string is truthy, so `pid || lastLaunchedPid`
+// instead of a real pid. That string is truthy, so `pid || <implicit target>`
 // picked it over the real fallback — sent straight to focus_window, whose PS
 // Get-Process -Id (Int32) rejects it, and foregroundThenRetry aborts before
 // ui_type/ui_click ever run. Coerce: a real number or numeric string passes
 // through as a number; anything else counts as "no pid supplied" so
-// lastLaunchedPid actually engages.
+// the implicit target actually engages.
 function coercePid(pid) {
   if (typeof pid === 'number' && Number.isFinite(pid) && pid > 0) return pid;
   if (typeof pid === 'string' && /^\d+$/.test(pid.trim())) return Number(pid.trim());
@@ -134,7 +127,7 @@ async function delegateWithRetry(cmdObj, opts) {
 //      yet (fresh launch, foreground-lock blip) is not the same as a corpse,
 //      and a single retry is what the original phase-3 retry discipline in
 //      delegateWithRetry already assumes should happen before giving up.
-//   2. If it STILL fails, the pid is treated as gone: lastLaunchedPid is
+//   2. If it STILL fails, the pid is treated as gone: the implicit target is
 //      cleared if it matches (so the next omitted-pid call doesn't retarget the
 //      same corpse), and the message names list_windows literally — that is
 //      the recovery tool, and the model must re-resolve, not retry a pid that
@@ -146,7 +139,7 @@ async function foregroundThenRetry(pid, cmdObj, opts) {
       focus = await delegate({ cmd: 'focus_window', pid: pid });
     }
     if (!focus.ok) {
-      if (pid === lastLaunchedPid) lastLaunchedPid = null;
+      implicitTarget.forgetIf(pid);
       return fail('That window is gone (' + (focus.result || 'could not focus it') +
         '). Call list_windows again to find the right target — retrying this pid will not help.');
     }
@@ -212,6 +205,10 @@ async function launch_app({ name, existing }, ctx) {
     return ok(payload);
   }
 
+  // BUG-353 "clear on launch": a launch ATTEMPT invalidates the old target even
+  // when it FAILS, or "open Spotify" that did not open types into Notepad. Full
+  // reasoning on forget() in implicit-target.js. INTERNAL callers are exempt.
+  if (!implicitTarget.isInternal(ctx)) implicitTarget.forget();
   var res = await delegate({ cmd: 'launch_app', name });
 
   // WAVE 1. ps-automation.ps1 now distinguishes a real resolution
@@ -250,7 +247,12 @@ async function launch_app({ name, existing }, ctx) {
   var nameAgrees = !(byProcess && resolvedName) || normName(resolvedName) === normName(name);
 
   if (res.ok && byProcess) {
-    lastLaunchedPid = r.pid;
+    // BUG-353: from-whatsapp.js and from-spotify.js launch apps to resolve a
+    // window they then drive by explicit pid. Their launches used to evict the
+    // operator's target, so a pid-omitted ui_type after "message someone on
+    // WhatsApp" typed into WhatsApp. They now pass implicitTarget.INTERNAL.
+    // r.pid raw: byProcess above already required it to be a number.
+    if (!implicitTarget.isInternal(ctx)) implicitTarget.remember(r.pid);
 
     // Fresh document. Best-effort by design: if focus or the new-tab step fails the
     // launch itself still succeeded, and reporting a launch failure because a
@@ -270,9 +272,9 @@ async function launch_app({ name, existing }, ctx) {
       // NOTE: fail() puts its message in .result, not .error (see the helper at
       // the top of this file) — reading .error here would silently discard the
       // real reason and report a generic one.
-      var focused = await delegate({ cmd: 'focus_window', pid: lastLaunchedPid });
+      var focused = await delegate({ cmd: 'focus_window', pid: r.pid });
       if (focused.ok) {
-        var fresh = await delegate({ cmd: 'new_document', pid: lastLaunchedPid });
+        var fresh = await delegate({ cmd: 'new_document', pid: r.pid });
         res.result.freshDocument = Boolean(fresh.ok && fresh.result && fresh.result.fresh);
         if (!res.result.freshDocument) {
           res.result.freshDocumentError = String((fresh.result && fresh.result.error) || fresh.result || 'could not confirm a blank document');
@@ -309,7 +311,7 @@ async function launch_app({ name, existing }, ctx) {
   // implicit target, and name both sides so the model asks instead of assuming.
   // Failing loudly beats a confident wrong answer.
   if (byProcess && !nameAgrees) {
-    lastLaunchedPid = null;
+    implicitTarget.forgetIf(r.pid);
     return evidence.unverified(res, 'asked for "' + String(name).trim() + '" but the windowed process ' +
       'that came up is "' + resolvedName + '" (pid ' + r.pid + '), a different application — not ' +
       'targeting it. Call list_windows to see what is actually open.');
@@ -428,7 +430,7 @@ async function focus_window({ pid }) {
   // A non-numeric placeholder pid (e.g. "Notepad PID") must not be forwarded
   // toward PS's Get-Process -Id (Int32) — coerce it away so it degrades to the
   // existing "PID is required" validation failure instead of a type-conversion
-  // crash. focus_window has no lastLaunchedPid fallback (unlike ui_click/ui_type):
+  // crash. focus_window has no implicit-target fallback (unlike ui_click/ui_type):
   // it requires an explicit real pid.
   var targetPid = coercePid(pid);
   if (!targetPid) return fail('PID is required.');
@@ -480,7 +482,7 @@ async function close_window({ pid }) {
   // AUDIT FIX: a closed pid must not linger as the ui_type/ui_click default —
   // Windows recycles PIDs, so a stale value could target an unrelated process.
   // Only on a REAL close: a failed close leaves the window (and the pid) valid.
-  if (res.ok && Number(pid) === lastLaunchedPid) lastLaunchedPid = null;
+  if (res.ok) implicitTarget.forgetIf(pid);
   return res;
 }
 
@@ -777,7 +779,7 @@ async function ui_elements({ pid, depth }) {
 async function ui_click({ pid, elementPath }) {
   // FIX 1: default the omitted pid to the last app launch_app opened, so the
   // planner doesn't have to remember to thread it through itself.
-  var targetPid = coercePid(pid) || lastLaunchedPid;
+  var targetPid = coercePid(pid) || implicitTarget.get();
   if (!targetPid) return fail('PID is required.');
   if (!elementPath || !Array.isArray(elementPath)) return fail('elementPath is required (array of index strings).');
   // Phase 3 hardening: focus the target window first, then retry on failure —
@@ -888,7 +890,7 @@ async function ui_type({ text, pid, elementPath }) {
   // FIX 1: default the omitted pid to the last app launch_app opened — the
   // real root cause of the "typed nothing" bug was ui_type carrying no pid at
   // all, which made the foregroundThenRetry branch below dead code.
-  var targetPid = coercePid(pid) || lastLaunchedPid;
+  var targetPid = coercePid(pid) || implicitTarget.get();
   const cmdObj = { cmd: 'ui_type', text };
   if (targetPid) cmdObj.pid = targetPid;
   if (elementPath) cmdObj.elementPath = elementPath;
@@ -905,7 +907,7 @@ async function ui_type({ text, pid, elementPath }) {
   // window actually received the keystrokes (typedIntoPid/typedIntoTitle), and
   // NOTHING here ever compared it to the intended target. Reproduced live in
   // vault/Episodic/2026-07-31.jsonl: launch_app("notepad") returned ok with NO
-  // pid (MSIX activation stub exits, so lastLaunchedPid stayed null), the human
+  // pid (MSIX activation stub exits, so no implicit target was recorded), the human
   // clicked Approve which put OS focus on the MYTHOS dashboard, ui_type fell to
   // the no-pid branch and SendInput typed all 24 characters into MYTHOS's own
   // window — returning ok:true with typedIntoTitle:"MYTHOS". Both voice-agent
@@ -1116,7 +1118,7 @@ function isValidKeyName(name) {
 async function send_key({ key, pid }) {
   if (!key) return fail(`Key name is required (${NAMED_KEYS.join(', ')}, a single letter, or a combo like ctrl+n).`);
   const raw = String(key).toLowerCase().trim();
-  // pid is OPTIONAL and is NOT defaulted to lastLaunchedPid the way ui_type's is.
+  // pid is OPTIONAL and is NOT defaulted to the implicit target the way ui_type's is.
   // With a pid, ps-automation.ps1 refuses to fire the key when the caret belongs to a
   // different app. Defaulting it would break the common legitimate case — "press
   // escape" aimed at whatever the operator is looking at now, which is frequently not

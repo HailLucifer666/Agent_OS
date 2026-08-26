@@ -58,9 +58,22 @@ const { execFileSync } = require('node:child_process');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const BUGS_FILE = path.join(REPO_ROOT, 'BUGS.md');
 
-// A bug is DECLARED by a heading or a top-level list entry in BUGS.md. Any
-// other appearance of BUG-NNN in that file is a cross-reference.
-const DECLARATION_RE = /^(?:#{1,6} |- )BUG-(\d+)\b/gm;
+// WHAT COUNTS AS DECLARING A BUG.
+//
+// A heading declares. A top-level list entry declares ONLY if that number has no
+// heading — because this file's normal convention is a full `## BUG-NNN` entry
+// PLUS a one-line pointer to it in the open-bug list, and counting both made a
+// perfectly ordinary bug look like a collision.
+//
+// Caught the hour this script landed, by merging main: BUG-353 arrived with a
+// heading and a list line reading "FIXED 2026-08-27 (full entry above)", and the
+// gate called it a collision. Main itself would have failed the check. Treating
+// the second mention as a pointer rather than a declaration fixes the class, and
+// it also retired two adjudications (BUG-083, BUG-084) that existed only to
+// suppress this same shape — structure doing the work a hand-written exception
+// list was doing before.
+const HEADING_DECLARATION_RE = /^#{1,6} BUG-(\d+)\b/gm;
+const LIST_DECLARATION_RE = /^- BUG-(\d+)\b/gm;
 const ANY_REF_RE = /BUG-(\d+)/g;
 
 /**
@@ -127,21 +140,12 @@ const ADJUDICATIONS = [
       + 'pre-2026-07-22 investigation entry explicitly kept for context.',
     stillApplies: (ctx) => ctx.declaredTimes(6) === 2,
   },
-  {
-    number: 83,
-    kind: 'not-a-collision',
-    reason: 'one heading plus one later prose bullet that REFERS to the fix ("BUG-083 routed '
-      + "MYTHOS's own edge-tts speech through sendText()\"). A reference in a narrative "
-      + 'section, not a second declaration.',
-    stillApplies: (ctx) => ctx.declaredTimes(83) === 2,
-  },
-  {
-    number: 84,
-    kind: 'not-a-collision',
-    reason: 'one heading plus one later prose bullet referring to the fix (pcm-player.js '
-      + 'TAIL_GUARD_SEC). Same shape as BUG-083.',
-    stillApplies: (ctx) => ctx.declaredTimes(84) === 2,
-  },
+  // BUG-083 and BUG-084 were adjudicated here until 2026-08-27 and have been
+  // REMOVED rather than kept. Both were "one heading plus one list line
+  // referring to the fix", which the declaration rule above now handles
+  // structurally. An adjudication whose condition the code no longer produces is
+  // dead suppression, and this script's own gate treats it as an error — so
+  // deleting them is the behaviour it demands of everyone else.
 ];
 
 /**
@@ -175,9 +179,15 @@ function git(...args) {
 function collectSources({ runGit = git } = {}) {
   const bugsText = fs.readFileSync(BUGS_FILE, 'utf8');
 
-  const declaredTimes = new Map();
-  for (const m of bugsText.matchAll(DECLARATION_RE)) {
+  const headings = new Map();
+  for (const m of bugsText.matchAll(HEADING_DECLARATION_RE)) {
     const n = Number(m[1]);
+    headings.set(n, (headings.get(n) || 0) + 1);
+  }
+  const declaredTimes = new Map(headings);
+  for (const m of bugsText.matchAll(LIST_DECLARATION_RE)) {
+    const n = Number(m[1]);
+    if (headings.has(n)) continue; // a pointer to the full entry, not a second declaration
     declaredTimes.set(n, (declaredTimes.get(n) || 0) + 1);
   }
 
