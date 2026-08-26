@@ -210,3 +210,23 @@ test('repeated identical phrases are matched positionally, not collapsed by a na
   assert.equal(transcript.filter((m) => m.role === 'assistant' && m.text === 'pong').length, 2);
   assert.equal(transcript.length, 4);
 });
+
+test('F7: the dedupe key is joined by a NUL, not a printable character', () => {
+  // transcript-model.js used to write this separator as a RAW 0x00 byte, which made
+  // git classify the file as binary: `git diff` reported only "Binary files differ"
+  // and grep answered "Binary file ... matches" instead of the matching line. The fix
+  // changed only the source representation, so this asserts the runtime value did not
+  // move with it. The raw byte cannot come back (source-has-no-nul-byte.test.js fails
+  // on it); what this stops is the escape being tidied into a visible character.
+  const NUL = String.fromCharCode(0);
+  assert.strictEqual(mod.dedupeKey('user', 'hello'), 'user' + NUL + 'hello');
+  const key = mod.dedupeKey('assistant', 'hi there');
+  assert.strictEqual(key.charCodeAt('assistant'.length), 0, 'the separator must be U+0000');
+  assert.strictEqual(key.split(NUL).length, 2, 'exactly one separator');
+  // Message text is arbitrary operator prose, so every printable candidate below can
+  // occur inside it and would let a role and a text prefix run together.
+  for (const visible of [' ', ':', '|', '-']) {
+    assert.notStrictEqual(mod.dedupeKey('user', 'x'), 'user' + visible + 'x',
+      'the separator has become ' + JSON.stringify(visible));
+  }
+});

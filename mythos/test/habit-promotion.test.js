@@ -19,7 +19,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { createHabitPromoter, WATCHED, subjectOf } = require('../src/core/memory/habit-promoter');
+const { createHabitPromoter, WATCHED, subjectOf, keyFor } = require('../src/core/memory/habit-promoter');
 const { TIER_TABLE } = require('../src/core/leash/tiers');
 
 function harness(opts) {
@@ -160,5 +160,49 @@ describe('F9 — dispatch actually calls it', () => {
     assert.match(call, /actionOk\s*&&\s*!actionUnverified/,
       'an action that only MIGHT have landed is not evidence of a habit — the evidence '
       + 'contract must survive this far down (src/core/CLAUDE.md)');
+  });
+});
+
+describe('the (tool, subject) counter key is joined by a NUL', () => {
+  // habit-promoter.js used to write this separator as a RAW 0x00 byte, which made
+  // git classify the whole file as binary: no line-level diff, nothing reviewable in
+  // a pull request, and grep answering "Binary file ... matches" instead of the line.
+  // The fix changed only the SOURCE representation (a JavaScript escape), so these
+  // assertions are what prove the runtime VALUE did not move with it.
+  //
+  // The raw byte cannot come back -- source-has-no-nul-byte.test.js fails on it.
+  // What this block stops is the opposite mistake: reading the escape as noise and
+  // tidying it into a visible character, which is a silent behaviour change.
+  const NUL = String.fromCharCode(0);
+
+  it('keyFor joins the two halves with exactly one NUL', () => {
+    assert.strictEqual(keyFor('spotify_play', 'radiohead'), 'spotify_play' + NUL + 'radiohead');
+    const key = keyFor('launch_app', 'notepad');
+    assert.strictEqual(key.charCodeAt('launch_app'.length), 0,
+      'the separator must be U+0000');
+    assert.strictEqual(key.split(NUL).length, 2, 'exactly one separator');
+  });
+
+  it('the separator is not a character that can occur in either half', () => {
+    // Not a cosmetic choice. A subject is free text off a tool argument, so any
+    // printable character can appear inside one; only a NUL is guaranteed absent
+    // from both a tool name and a normalized subject.
+    for (const visible of [' ', ':', '|', '-', '/', ',', '.']) {
+      assert.notStrictEqual(keyFor('launch_app', 'x'), 'launch_app' + visible + 'x',
+        'the separator has become ' + JSON.stringify(visible) + ' -- a printable character '
+        + 'can occur inside a subject, so two different habits could collide on one key');
+    }
+  });
+
+  it('observe() counts on that key rather than building its own', () => {
+    // keyFor could be correct and unused. This is the one line that has to keep
+    // pointing at it, so it is asserted directly.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const src = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'core', 'memory', 'habit-promoter.js'), 'utf8');
+    assert.match(src, /const key = keyFor\(tool, subject\);/,
+      'observe() must build its counter key with keyFor -- an inlined separator here would '
+      + 'pass every assertion above while behaving differently');
   });
 });
