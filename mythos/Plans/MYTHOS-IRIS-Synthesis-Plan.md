@@ -4770,6 +4770,8 @@ with the request, so both sides can be wrong together and still agree.
 | `media_status` (BUG-348) | `GetCurrentSession()` returns one SMTC session; nothing asks whether it is the one making sound | **confirmed**, open — and this is a better argument for fixing it than the one in BUGS.md |
 | `see_and_click` | known grounding failures read MYTHOS's own HUD; both the OCR match and the `expect` check ask "did it happen" | candidate, **not reproduced under this framing** |
 | `web_search` before BUG-365 | returned Wikipedia with `ok:true`; "did a search complete" yes, "does it answer" unasked | confirmed, already fixed — and the fix is the template |
+| `index_project` | reports success while **94% of what it indexed is `.venv`** — 1879 of 2000 files, 8 from `src/`, `from-pc.js` absent entirely. Asks "did indexing complete", never "did it index the right thing" | **confirmed**, found independently 2026-08-27 |
+| `search_files` | returns `entries: [], truncated: true, ok: true` — "did the walk run" yes, "did it reach the content" unasked, and indistinguishable from an honest miss | **confirmed**, same root cause |
 | `claim-check.js` (non-effector) | compares a spoken claim against MYTHOS's own outcome ledger (`ok === true`) | **inherits** the blindness — see below |
 | `leash.check()` (non-effector) | static `TIER_TABLE` lookup on the tool name | **not an instance** — policy, not verification |
 | `launch_app`'s process-window oracle | compares the resolved process NAME against what was asked for | **the counter-example** — catches "a pid belonging to a different application" |
@@ -4790,13 +4792,19 @@ check, so a fabrication guard resting on "a tool returned ok" is still blind to
 "the tool did the right thing to the wrong target". Not a defect in claim-check;
 a limit on what any honesty layer above a delivery check can promise.
 
-**Honest limits on this table.** Six of seven rows were examined on 2026-08-27,
-so the cluster may be availability rather than reality. `see_and_click` is
+**Honest limits on this table.** Most rows were examined on 2026-08-27, so the
+cluster may partly be availability rather than reality. `see_and_click` is
 inference from known grounding failures, not a reproduction. The non-effector
 sample is TWO modules, which found one inheritance and one non-instance — enough
 to say the class is not confined to effectors, nowhere near enough to call it
-general. Sample more guards outside the effector layer before treating the
-pattern as established.
+general.
+
+**What weakens the availability worry:** `index_project` and `search_files` were
+found INDEPENDENTLY, by the concurrent session, while triaging an unrelated
+ticket — not by anyone looking for this pattern. They were found by checking a
+sibling tool before inventing a policy, and the house-convention question turned
+out to be the bug. Two unsought instances is better evidence for the class than
+any number of sought ones.
 - **C1's `lastLaunchedPid` binding is ANSWERED, not open.** BUG-353 shipped
   2026-08-27 and deliberately did not key on `goalId`, having measured that
   `live-tool-adapter.js:833` supplies none — a goal-keyed binding matches
@@ -4804,6 +4812,29 @@ pattern as established.
   themselves, a 120s TTL bounds every other caller, and a launch ATTEMPT clears
   the previous target even when the launch FAILS. Close C1 against `daec3ff`
   rather than doing it twice.
+- **D2's code-search item WOULD HAVE PRODUCED A FALSE GREEN, and is rewritten.**
+  It said "index the mythos repo itself; verify a known-answer query". Measured
+  2026-08-27 by the concurrent session: `index_project` returns 2000 files with
+  `truncated:true`, of which **1879 (94%) come from `.venv`** and 8 from `src/`;
+  `from-pc.js` is not indexed at all. `SKIP_DIRS` omits `.venv`, `venv` and
+  `__pycache__`. So `search_code` searches a Python virtualenv, reports success,
+  and is the index behind "understand the codebase" queries. Building the index
+  and getting an answer would have turned the node green over the wrong corpus.
+  **A false green is worse than a red** — the red at least gets worked on. D2 now
+  requires a known-answer query naming a file that MUST be present (`from-pc.js`
+  is the measured example, currently absent), not merely "the index built".
+- **THE `.venv` BUGS DO NOT REPRODUCE IN A WORKTREE, and that is a verification
+  trap.** `mythos/.venv` in a worktree is a symlink created by
+  `setup-worktree.js`. Both walks use `readdirSync(…, { withFileTypes: true })`,
+  and a Dirent for a symlink reports `isDirectory() === false` —
+  `from-code-search.js:42` skips symlinks outright, and `search_files` never
+  recurses into one, costing a single `scanned++` instead of 5202. So in a
+  worktree the budget survives, the index is clean, and both defects vanish.
+  Measured here: 6026 files under the link's realpath within depth 6. Any fix or
+  before/after table for these must state that it was measured in the MAIN
+  CHECKOUT, and any regression test must build its own fixture tree from
+  `os.tmpdir()` rather than walking the repo, because the tree it runs in decides
+  the answer.
 - **B5 ("no effector can open a file") is STALE.** `open_file` exists in
   `from-computer.js` with a `resolveSandboxed()` guard, an execute-extension
   denylist, an honest failure when the desktop shell is absent, and a
