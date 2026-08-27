@@ -41,6 +41,435 @@ it is committed.
 
 ---
 
+## BUG-373 — a bug number MENTIONED in a commit message counted as CLAIMING it, so one sentence blocked every commit from a checkout (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 10 new regression tests, mutations run, 0
+survived. Second instance of one class — the first was markdown, fixed the
+same day this one was filed.
+
+**How it bit.** Two sessions were handed BUG-371 by `--next` within one
+minute. Both answers were correct: the tool reads the refs and the working
+tree at the instant it is asked, and neither entry existed yet. **The window
+is between ASKING and WRITING**, not between committing and pushing, and no
+amount of reading can close it — for most of that window the number exists
+only in someone's intent. `--next` is an observation, not a lock.
+
+The second session renumbered to 372. Its commit body still read
+`...gemini,kokoro,edge,piper (BUG-371)`, so 371 was in-use-and-undeclared in
+that tree, the ratchet went 136 → 137, and **every commit from that checkout
+was blocked** — not only ones citing a number.
+
+**The trap underneath.** `git commit --amend` runs the pre-commit hook while
+`HEAD` is still the OLD commit. Proved in a throwaway repo rather than
+reasoned:
+
+```
+hook echoes `git log HEAD -1 --format=%s`
+
+git commit --amend -m "renamed: cites BUG-372"
+  HOOK SEES HEAD SUBJECT: first: cites BUG-371      <- the OLD body
+
+git reset --soft HEAD~1 ; git commit -m "replacement"
+  HOOK SEES HEAD SUBJECT: renamed: cites BUG-372    <- HEAD already moved
+```
+
+So the amend that removes the citation is blocked by the citation it is
+removing, with a message that already looks corrected. **A gate that reads
+`HEAD` cannot be satisfied by rewriting `HEAD`.** The escape is
+`git reset --soft HEAD~1` then a fresh commit.
+
+**Class.** `isDoc` already exists in this script because a markdown file that
+discusses BUG-999 is talking ABOUT the number, not claiming it — that fix
+landed after a plan document explaining the BUG-999 fixture blocked a commit
+whose only sin was explaining the gate. Commit messages are documentation too
+and never got the same treatment. Same invariant, second instance, so the fix
+goes at the class rather than the instance.
+
+**The cost, measured rather than estimated — and the estimate was wrong.**
+This change was argued against on the grounds that "~20 legacy bugs exist only
+in commit messages, and the ratchet is the only thing pointing at them". That
+claim was stated twice before anyone measured it. Measured:
+
+```
+undeclared in CODE         : 130
+undeclared in COMMITS only :   6   -> 43, 44, 45, 132, 145, 318
+of BUG-323..342 commit-only:   0
+```
+
+Six, not twenty, and **none** of the BUG-323..342 block the argument named —
+every one of those appears in code as well. So the ratchet loses sight of six
+numbers, and the new listing names all six, which is strictly more actionable
+than the aggregate that hid them.
+
+**Fix.** `mythos/scripts/lint-bug-registry.js`. The undeclared ratchet reads
+code only. Commit messages keep counting toward the MAXIMUM — the same
+asymmetry `isDoc` uses, because over-reporting the maximum can only make the
+next free number larger, and that is the safe direction. New
+`--undeclared-in-commits` names what the ratchet no longer counts, plus a
+one-line mention in the normal report so the set cannot grow unnoticed.
+`UNDECLARED_BASELINE` 136 → 130.
+
+**The gate caught its own author, twice while building this.** First, adding the
+test file put `BUG-373` in the source with no entry, so the ratchet read 131
+against the new baseline of 130. Then, with that written, it read 131 again for
+a different reason: the same test file cites the fixture number 999 to explain
+that markdown was the FIRST instance of this class, and that number carries a
+deliberately narrow adjudication listing exactly which files may mention it. A
+`.js` file counts as code by design — BUG-164 and BUG-364 are real defects whose
+only trace is a test file — so the adjudication went stale and 999 became live,
+exactly as its comment promises a new file should make it. Widened to four files
+with the reason recorded, rather than rewording the mention to slip past a
+scanner that is correctly designed to see it.
+
+**The older note, kept:** Adding the test file
+put `BUG-373` in the source with no entry, so the ratchet read 131 against the
+new baseline of 130 and blocked the commit. Fixed by writing this entry, which
+is the intended remedy rather than a workaround.
+
+**Attack pass (Stage 3):**
+
+- *What else matches this?* Any prose channel the scan reads. Markdown and
+  commit messages are both now excluded from the ratchet; the remaining inputs
+  are code and config, which is where a number in use actually hides.
+- *Does this hide evidence?* That was the risk, and it is why the listing
+  exists. Nothing is dropped — six numbers moved from a count to a name.
+- *Who reads this?* The pre-commit hook, and both sessions working this repo.
+  The listing is never an exit code.
+- *Is the constant correct?* The baseline is measured, not chosen: 130 is the
+  code-only count on 2026-08-27, and a sibling test fails if it drifts more
+  than 10 above reality so it cannot quietly stop biting.
+- *Deliberate non-changes:* commit messages still feed the maximum. The
+  cross-branch duplicate gap is NOT fixed — two branches can each hold a clean
+  registry while their union is broken, which is exactly how both sessions
+  were handed 371. It has never blocked anything and it was caught by two
+  humans in under a minute; recorded, not built.
+
+**Related, recorded, not fixed: the gate measures a different artifact from
+the one being committed.** Three faces found the same day:
+
+1. The hook validates the WORKTREE; git commits the INDEX. A stale `git add`
+   from an interrupted attempt shipped a duplicate declaration past every
+   check, with no concurrency involved.
+2. The ratchet reads `HEAD`; `--amend` replaces `HEAD` (above).
+3. Declarations are scanned in one tree; numbers are claimed across refs.
+
+The practice that covers (1) is a PAIR and neither half suffices:
+`git commit -- <pathspec>` so a stale index cannot ship, AND
+`git status --porcelain` empty afterwards, because a file dirty on disk but
+outside the pathspec is validated by the hook and never committed — the green
+run then describes a tree absent from history. Both verified in throwaway
+repos.
+
+**Verification.**
+
+```
+node --test test/bug-373-commit-prose-is-not-allocation.test.js
+  before fix: tests 10, pass 1, fail 9
+  after fix:  tests 10, pass 10, fail 0
+node scripts/lint-bug-registry.js --undeclared-in-commits
+  6 numbers named: BUG-43, BUG-44, BUG-45, BUG-132, BUG-145, BUG-318
+```
+
+---
+## BUG-371 — the commit gate named the failing FILE and threw away the failing ASSERTION, so a blocked commit taught nothing (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 8 new regression tests, 5 mutations, 0
+survived. Verified end-to-end against the real TAP of the run that exposed it,
+not only against the fixture.
+
+**Found by two sessions on the same day, independently.** One had its commit
+blocked and had to `sed` into raw TAP by line number to recover the numbers.
+The other took a single unreproducible red in a 6460-test run and could
+conclude nothing at all from it, because the assertion text was already gone by
+the time it was printed.
+
+**The gate had already learned this lesson once, and half-learned it.** It used
+to print `tail -40` of raw TAP — the last few PASSING tests plus the summary —
+so a blocked commit gave you a number and nothing else. Cause 3 of
+`precommit-hook-environment.test.js` fixed that by grepping for `not ok`.
+
+**The anchor was the bug.** Node's TAP nests subtests under their describe
+block and INDENTS them, so `^not ok` matches only the top-level roll-up. On the
+real failure that started this:
+
+```
+=== what the gate printed ===
+not ok 1252 - lint-bug-registry — the numbers it reports
+
+=== what was four levels down, indented, and discarded ===
+    not ok 1 - next-free skips the fixture, and is not 1000
+      error: |-
+        the real maximum in use
+        369 !== 367
+```
+
+The discarded half is the entire diagnosis. `369 !== 367` says *stale constant*
+at a glance; without it the obvious next move is to go hunting for a bug in the
+linter, which is the wrong file.
+
+**Why no test caught it.** The cause-3 test asserts that the hook SOURCE
+contains the string `not ok`. That is true of the broken anchor too, so it
+passed throughout — a shape guard that cannot distinguish a working filter from
+a broken one. The same vacuous-guard shape recorded elsewhere in this file.
+
+**Fix.** `.githooks/pre-commit`. Both patterns anchored `^[[:space:]]*` rather
+than `^`, and an `awk` that carries each failure's `error:` body with it,
+bounded at 80 lines. The `-qE` guard that decides whether to report at all
+carries the same anchor deliberately: if it ever disagrees with the filter, a
+run whose only failures are nested reports "the suite died without a summary"
+and falls back to `tail -40` — the exact output this block exists to replace.
+
+Measured on the real TAP, before and after:
+
+```
+before: 1 line   — the describe-block name, which names the file and no more
+after:  6 lines  — the nested assertion, its message, and 369 !== 367
+```
+
+**The test runs the hook, it does not restate it.** The pipeline is sliced from
+between `REPORT-FILTER:START` / `REPORT-FILTER:END` sentinels in the hook and
+executed with `out` supplied through the environment. A copy of the command in
+the test would be a test of the copy.
+
+**Two defects in the test, caught during its own development, both recorded in
+the file because both generalise:**
+
+1. The first extractor grepped for one line containing both `grep -E` and
+   `not ok`. Fixing the defect made the pipeline three lines, the extractor
+   silently matched nothing, and every assertion would have passed vacuously.
+   Test 1 exists to watch for exactly that and caught it on the first run.
+2. The first `runFilter` stripped the `printf ... |` prefix and fed the fixture
+   on stdin. The strip silently failed to match, so every command ran against
+   an empty `$out` and three assertions went red for a reason unrelated to the
+   defect. Running the real line cannot half-work.
+
+**Attack pass (Stage 3):**
+
+- *Does this hide evidence?* That was the whole defect. The fix is entirely
+  about surfacing evidence the gate was already holding.
+- *What else matches this?* The `error:` body is now printed whenever it
+  appears, independently of which `not ok` preceded it. Mutation P1 confirmed
+  this: reverting the anchor drops the assertion lines but the numbers still
+  print. Slightly odd output under a broken anchor, never silent — the correct
+  trade for a diagnostic.
+- *What is standing next to it?* The `-qE` guard, which would have drifted out
+  of step. Asserted.
+- *Is the output still bounded?* Yes — `head -80`, raised from 40 because each
+  failure now costs several lines. An unbounded dump of a 6000-test suite is
+  how this block came to print `tail -40` originally.
+- *Deliberate non-change:* the else-branch `tail -40` fallback stays. A suite
+  that dies without a summary emits no `not ok` at all, and an empty failure
+  list there would be worse than the tail.
+
+**Verification.**
+
+```
+node --test test/bug-371-hook-hides-nested-failures.test.js
+  before fix: tests 6, pass 4, fail 2
+  after fix:  tests 8, pass 8, fail 0
+mutations: 5 applied, 5 caught, 0 survived; hook restored sha256-identical
+end-to-end: the real suite369 TAP through the shipped filter, 1 line -> 6
+```
+
+**Not closed by this.** The unreproducible `verify-lib-attach` red that
+prompted it is still unexplained: 22/22 in isolation, 36 concurrent runs by a
+second session with zero failures, and four clean full suites. One occurrence,
+no assertion text, nothing to work with. What this fixes is that the NEXT one
+will carry its evidence.
+
+---
+## BUG-370 — the capability map was hand-typed, so the surface the closure campaign is measured against could not be wrong out loud (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 19 new regression tests, 10 mutations, 0
+survived. Rendering verified in a real browser, not inferred from the source.
+
+**Why this is filed as a defect and not just campaign work.** The map is the
+acceptance surface: "everything green" means green on that map. It was 73
+hand-typed nodes, and hand-typed numbers in this repository have gone stale
+four separate times with a script eventually written to stop each one. This
+was the last big one left.
+
+**What was measured wrong, on 2026-08-27, before anything was changed.**
+
+| claim on the map | reality |
+|---|---|
+| 6333 tests | 6436 at the time, 6441 now |
+| 74 withheld from voice | 64 |
+| a node named `Hermes engine` | Hermes-Agent was deleted in the W6 swap on 2026-08-22 |
+| `open a file` — "no working path", status fail | `open_file` has existed in `from-computer.js` since 2026-08-21, with a sandbox guard and a read-back oracle |
+| 179 registered | correct, and the only header number that was |
+
+**And the one that mattered most.** The map named 144 of 179 registered
+tools. Thirty-five had no node at all: every widget, persona, mission,
+pipeline, kanban, OKF, installer, clipboard, security-scan, HUD-navigation,
+artifact and local-info verb. A tool with no node cannot be shown broken,
+working or dark — it is invisible, and on a map invisible reads as fine. The
+campaign would have declared "everything green" over a fifth of the tool
+surface it had never looked at.
+
+**Also corrected: the campaign plan's own figures were wrong.** The plan
+opens "44 capability nodes — 9 fail, 19 warn, 8 dark, ~18 ok". Measured, the
+map held **73 nodes — 28 ok, 25 warn, 13 fail, 7 dark**. Every number in that
+sentence was wrong, including the total. Corrected in the plan in the same
+change.
+
+**Fix.**
+
+`MYTHOS-CAPABILITY-MAP.html` now carries a
+`<script type="application/json" id="map-data">` island; the renderer reads
+`CORE`/`CLUSTERS`/`NODES` out of it and the header renders every number from
+it. No number in the header markup is typed by hand, and a test fails if one
+reappears.
+
+New `mythos/scripts/build-capability-map.js` (`--check` / `--write` /
+`--json`), wired into the pre-commit hook. It reads only the repository — the
+registered tool list, live-tools' allowlist, and the suite numbers
+`sync-test-count.js` already committed to ROADMAP.md — so it costs about a
+second, runs on a worktree and would run on CI. It deliberately does NOT
+measure the suite itself: two generators measuring the same thing are two
+numbers that can disagree.
+
+The node-to-tool mapping is names only and is checked in **both** directions,
+the shape that caught README drift in BUG-352: a tool named by a node but not
+registered fails, and a registered tool named by no node fails. The second
+direction is the one that would have caught `open_file` on the day it landed.
+
+**A fifth status, `unknown`, distinct from `dark`.** The 18 newly-mapped
+nodes are not dark. `dark` asserts a measured fact — a call count of zero was
+read from the vault. Nothing has measured these, and colouring them dark
+would launder "I did not look" into "there is nothing there". They render in
+their own colour, labelled *not yet measured*.
+
+**The vault is not always reachable, and the generator must not pretend.**
+Per-tool call counts and the incident backlog live in the operator's live
+vault. A worktree and a CI runner cannot see it — measured here,
+`resolveVaultRoot()` falls back to the stale in-repo twin and reports **zero**
+incidents. Writing that zero turns "I could not look" into "there is nothing
+wrong", which is the most expensive mistake this repository keeps making. So
+a vault-derived vital is preserved with its own stamp, flagged stale, and
+rendered dim as `last read 2026-08-26`. It is never overwritten with a
+confident zero, and it is exempt from `--check` — a gate that can only pass
+on one desktop is a gate that gets switched off.
+
+**Attack pass (Stage 3), recorded in the script's header and next to each
+check:**
+
+- *What else matches this?* A prose check ("the string Hermes must not
+  appear") was considered and deliberately NOT added: it would fire on an
+  honest historical note, and a gate that fires on correct content gets
+  switched off. The structural check — the node's tools must exist — is what
+  ships. The name was fixed by hand.
+- *Does this hide evidence?* The stale-vault path is the danger, and it is
+  handled above: preserved and flagged, never zeroed.
+- *Who reads this?* The map is the campaign's acceptance surface and now the
+  pre-commit hook. Rendering was verified in a browser — 91 nodes, five
+  legend chips, the panel opening on an `unknown` node — because a green
+  suite has never been able to tell this repository that a page renders.
+- *What is standing next to it?* The first draft wrote the resolved vault
+  path into `staleReason`, which would have committed the operator's
+  directory layout into a tracked file. AD-7 violation, caught before commit;
+  a test now asserts the map holds no absolute path.
+- *Is this constant correct?* The suite figures are read from ROADMAP.md
+  rather than re-measured, and a missing block throws instead of defaulting.
+- *Deliberate non-changes:* the prose name check (above); per-node ok/fail
+  counts stay curated, because only the live vault can refresh them.
+
+**Verification.**
+
+```
+node --test test/bug-370-capability-map-generated.test.js   19 tests, 19 pass, 0 fail
+node scripts/build-capability-map.js --check                exit 0
+  91 nodes, 179 registered, 115 reachable by voice, 64 withheld
+  (42 curated with a recorded reason, 22 danger-tier)
+  ok 28 · warn 25 · fail 13 · dark 7 · unknown 18
+mutations: 10 applied, 10 caught, 0 survived (7 in the script, 3 in the map data)
+browser: header renders "generated 2026-08-27 / 179 registered / 115 reachable
+  by voice / 91 nodes"; untriaged renders dim, "last read 2026-08-26"
+```
+
+**Not closed by this.** No map node turned green. This change makes the
+instrument honest; it does not fix a single capability. The 13 fail and 7
+dark nodes are still fail and dark, and there are now 18 more that nobody has
+measured at all.
+
+---
+## BUG-369 — a `tolerant` sync slot was skipped by `--write` as well as `--check`, so the README tests badge froze 297 behind (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 5 new regression tests, 5 mutations, 0 survived.
+Not live-verified and does not need to be: the defect is entirely inside a
+documentation generator, and both modes are exercised deterministically
+in-suite against a temp file.
+
+**Symptom.** `README.md` disagreed with itself. Every strict slot read 6436;
+the shields.io tests badge — the first number a visitor sees — read
+`tests-6139%20pass`. Measured 2026-08-27 while building the capability-map
+generator, which was about to consume those numbers as truth.
+
+**Mechanism.** The badge slot carries `tolerant: true`, and that tolerance is
+correct: it guards the PASS count, and pass legitimately varies BY MACHINE.
+Fixture-gated tests `t.skip()` honestly on a fresh clone or a CI runner and
+run as passes on a provisioned one, so strict equality made `--check`
+unsatisfiable on the operator's machine and CI at the same time (that is the
+defect the tolerance was added to fix, 2026-08-16, and it stays fixed).
+
+But `applySlots` implemented "do not FAIL on a mismatch" as "do not LOOK at
+this slot at all":
+
+```js
+if (slot.tolerant) {
+  byFile.set(slot.file, content);   // <- unmodified content
+  continue;                         // <- returns BEFORE the write path
+}
+```
+
+The branch sat above the code that computes staleness and above the code that
+writes, so no `--write` had moved that badge since the tolerance landed, and
+nothing could ever move it again. The number was not merely stale; it was
+structurally unable to catch up.
+
+**Class.** Same shape as the delivery-vs-correctness guards tabulated in the
+closure campaign: a check weakened to stop a false failure stopped doing its
+job entirely. The remedy is the same one — narrow the weakening to exactly the
+question that was wrong (should this FAIL?) and leave the rest of the
+mechanism intact (should this be RECORDED?).
+
+**Fix.** `mythos/scripts/sync-test-count.js`. Staleness is computed before the
+tolerant branch; tolerance now suppresses only `staleCount++` and the stale
+report. `--write` updates the slot and announces it as
+`tolerant slot 6139 -> 6436 (written; not counted stale)` — a generator that
+rewrites a tracked file silently is how a wrong number becomes an unnoticed
+one. `--check` behaviour is unchanged, and a test locks that.
+
+`applySlots`/`readmeSlots` are now exported and `applySlots` takes an
+injectable slot list, so both branches can be driven against a temp README
+instead of the repo's own.
+
+**Attack pass (Stage 3), recorded in the test file's header comment:**
+
+- *What else matches this?* One slot is tolerant, and a test asserts that. A
+  second one appearing later must be a deliberate decision, not an inherited
+  ruling — mutation M4 marks another slot tolerant and that test fails.
+- *Does this hide evidence?* It did: the write was silent-by-omission. It now
+  prints what it changed and from what.
+- *Who reads this?* The badge is the README's most-read number and CI's
+  `--check` reads the same slot table. Both paths are covered.
+- *What is standing next to it?* All slots for one file share a `byFile`
+  accumulator; the old branch seeded it with unmodified content. Mutation M5
+  writes the tolerant edit straight to disk instead, and the strict slot then
+  clobbers it — caught.
+- *Deliberate non-change:* the tolerance itself. `--check` must not fail on a
+  machine whose honest skips lower the pass count. Locked by test 2.
+
+**Verification.**
+
+```
+node --test test/bug-369-tolerant-slot-never-written.test.js
+  before fix: tests 5, pass 3, fail 2
+  after fix:  tests 5, pass 5, fail 0
+mutations: 5 applied, 5 caught by their intended test, 0 survived
+```
+
+---
 ## BUG-367 — `attachMythos` had two failure messages for one contract, so a test asserting the hint passed or failed on a race (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 1 new regression test, 1 mutation run. Not

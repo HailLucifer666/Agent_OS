@@ -4701,9 +4701,13 @@ disposition**. Appended here rather than started as a fourth plan document: the
 three-document ceiling in root `CLAUDE.md` holds, and a campaign that lives in an
 untracked file is a campaign that gets lost.
 
-The map as found (refreshed 2026-08-26): 44 capability nodes — **9 fail, 19 warn,
-8 dark (never exercised), ~18 ok** — plus **34 untriaged incidents**, **74 tools
-withheld from voice**, and ~17 open bugs. The suite was green throughout, which
+The map as found (refreshed 2026-08-26), **as measured on 2026-08-27 rather than
+as this paragraph first claimed**: 73 capability nodes — **28 ok, 25 warn, 13
+fail, 7 dark** — plus **34 untriaged incidents**, **64 tools withheld from
+voice**, and ~17 open bugs. The original sentence here read "44 nodes — 9 fail,
+19 warn, 8 dark, ~18 ok" and "74 withheld"; every one of those figures was wrong,
+including the total, and the corrected ones come from A2's generator rather than
+from counting by eye. The suite was green throughout, which
 is the campaign's founding observation: **a green suite is not a working
 product**, and every red on that map is a live-behaviour defect the suite
 structurally cannot see.
@@ -4738,10 +4742,10 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | A4 | `lint-bug-registry.js` + pre-commit wiring | **DONE** | max=367, next free 368; 15 assertions, 9 mutations (3 survived first pass) | `66b2c82` `f241084` |
 | — | Pre-commit's own fallback ports were squatted, reading as 3 regressions | **DONE** | reproduced with netstat (pids 4296/10904); hook now asks the OS for free ports | `7f93dd5` |
 | A5a | Merge `origin/main` (BUG-353) | **DONE** | 6436/6436/0/0 on the merged tree; BUGS.md resolved as union + named drops | `f241084` |
-| A2 | `build-capability-map.js` — the map stops being hand-edited | open | — | — |
+| A2 | BUG-370 — `build-capability-map.js`; the map stops being hand-edited | **DONE** | 73→91 nodes, 179/179 tools covered both ways, 5th status `unknown`; 19 assertions, 10 mutations; rendering verified in a browser | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
-| B1–B11 | Kill the 9 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
+| B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
 | C1–C6 | 19 warn nodes, grouped by shared mechanism | open | — | — |
 | D1–D2 | 8 dark nodes + the withheld-74, via one `verify-withheld.js` harness | open | — | — |
 | E | Decisions wearing bug clothes (BUG-358, BUG-276, two product calls) | open | — | — |
@@ -4749,6 +4753,41 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 ## Corrections to the plan, made on evidence rather than argument
 
 These are recorded because each one would otherwise be rediscovered.
+
+### The map covered 144 of 179 tools and presented itself as complete
+
+Found by A2's coverage check on its first run, and the largest single finding
+of Wave A. Thirty-five registered tools had **no node on the map at all** —
+every widget, persona, mission, pipeline, kanban, OKF, installer, clipboard,
+security-scan, HUD-navigation, artifact and local-info verb. A tool with no
+node cannot be shown broken, working or dark. It is invisible, and on a map
+invisible reads as fine.
+
+This campaign would therefore have been able to declare "everything green" over
+a fifth of the tool surface it had never looked at. The 35 are now nodes with
+the status `unknown` — deliberately not `dark`, because `dark` asserts a
+measured zero and nothing has measured these.
+
+**The generalisable part:** the coverage check that found this is the same
+both-directions shape as `EFFECTOR_LABELS` in `sync-test-count.js`. Any
+hand-written map of a generated set needs it, and the direction that matters is
+the unglamorous one — not "does everything you named exist", but "did you name
+everything that exists".
+
+### D1 is much smaller than planned: 64 withheld, not 74, and 42 already have a reason
+
+The plan calls D1 (`verify-withheld.js`) "the single biggest green-mover in the
+campaign (74 rows)". Measured against the real `DEFAULT_ALLOWLIST` on
+2026-08-27: **64** tools are withheld, not 74. Of those, **42** are in
+`VOICE_ALLOWLIST_EXEMPT`, each carrying a recorded curation reason in
+`live-tools.js`, and the remaining **22** are danger-tier verbs — `delete_file`,
+`run_command`, `phone_call`, `browser_evaluate`, `install_from_github` and
+similar — which the T0–T2 reachability gate deliberately does not cover.
+
+So D1 is not 74 rows of unknown reachability. It is 64 tools that are already
+accounted for, and its real job is narrower and more honest: prove they
+**function** off-voice, not decide whether they should be on it. The
+voice-surface question is already answered, in writing, per tool.
 
 ### A named class: delivery checks masquerading as correctness checks
 
@@ -4878,24 +4917,39 @@ any number of sought ones.
 
 ## RESUME HERE
 
-**Position:** Wave A, four of six items closed (plus a hook defect and the main merge), all pushed on branch
-`fix/closure-wave-a` (PR #28). Working in a worktree at
-`.claude/worktrees/closure-wave-a` because a second session is live in the main
-checkout; that removes the shared git index rather than managing it.
+**Position:** Wave A is **complete**. Six ledger items closed plus two defects
+found while closing them (BUG-367 the attach contract, BUG-369 the frozen
+README badge). Branch `fix/a2-capability-map`, cut fresh from `ee69497` after
+PR #28 merged. Still working in the worktree at `.claude/worktrees/closure-wave-a`
+because a second session is live in the main checkout.
 
-**Next action:** A2 — `mythos/scripts/build-capability-map.js`. Split
-`MYTHOS-CAPABILITY-MAP.html` into a layout template plus a `<script id="map-data">`
-JSON island, and generate the island from the vault Audit ledger, `triage-incidents.js`,
-`sync-test-count.js`, the live-tools allowlist and BUGS.md. Preserve each node's
-hand-written note in a `curated` field the generator does not touch. Two traps
-already identified: call `capabilities.collectAdapterStatuses()` from
-`src/core/identity/capabilities.js`, **not** the removed `adapterStatuses()` in
-`main.js` (which is also at its file-size ratchet ceiling); and the map still
-carries a `Hermes engine` node for a program deleted in W6.
+**What Wave A actually bought.** Not one map node turned green, and that is the
+correct outcome: Wave A was about making the instruments honest before using
+them to declare anything. The instruments now say, and can no longer stop
+saying: 179 registered tools, 115 reachable by voice, 64 withheld, 91 nodes,
+28 ok · 25 warn · 13 fail · 7 dark · 18 not-yet-measured, 34 untriaged
+incidents last read 2026-08-26.
 
-**Blocking:** nothing. `from-pc.js` is held by the concurrent session until
-BUG-353 lands, which only affects C1.
+**Next action:** A3, the incident drain — 34 untriaged to zero by human
+judgement, the writer loop deliberately dropped (see the correction above).
+**It cannot be done from this worktree**: `resolveVaultRoot()` here falls back
+to the stale in-repo twin and reports zero incidents, which is precisely the
+false-green A2 was built to refuse. Run it in the main checkout with
+`MYTHOS_VAULT_ROOT` pointed at the live vault, or not at all.
 
-**Suite at the time of writing:** 6436 tests, 6436 pass, 0 fail, 0 skipped.
+The same constraint binds **D1** (`verify-withheld.js`): a worktree links only
+six gitignored paths and `mythos/.venv` is a symlink here, which both file
+walkers skip because `Dirent.isDirectory()` is false for a symlink. D1 must run
+in the main checkout or refuse to run at all.
+
+**Blocking:** nothing in code. Two things are waiting on the operator: **O1**
+(`node mythos/scripts/google-auth.js`, five minutes, unblocks B8 and the whole
+gmail node) and **O6** (GitHub Actions billing — every check still fails before
+a job starts, so red CI on this repository says nothing about the code and the
+local suite plus the pre-commit hook remain the only real gate).
+
+**Suite at the time of writing:** 6441 tests, 6441 pass, 0 fail, 0 skipped.
 Numbers here are indicative only — `node scripts/sync-test-count.js --check` is
-the authority, and the count is deliberately not written into `CLAUDE.md`.
+the authority, and `node scripts/build-capability-map.js --check` is now the
+authority for the map. Neither number is hand-typed anywhere, including here:
+this line is prose and will go stale, which is why both commands exist.

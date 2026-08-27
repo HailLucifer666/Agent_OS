@@ -480,10 +480,13 @@ function syncEffectorCatalog(perFile, mode, report) {
   return true;
 }
 
-function applySlots(counts, mode, report) {
+// `slots` is injectable so the tolerant/strict branches can be driven against a
+// temp file instead of the repo's own README, which this function otherwise
+// reads and rewrites in place (BUG-369).
+function applySlots(counts, mode, report, slots = readmeSlots(counts)) {
   let staleCount = 0;
   const byFile = new Map();
-  for (const slot of readmeSlots(counts)) {
+  for (const slot of slots) {
     const content = byFile.get(slot.file) ?? fs.readFileSync(slot.file, 'utf8');
     // EVERY occurrence, not just the first. `content.replace(nonGlobalRegex)`
     // rewrites one match, and `content.match()` only ever inspected one — so a
@@ -498,13 +501,33 @@ function applySlots(counts, mode, report) {
       staleCount++;
       continue;
     }
+    const stale = matches.filter((m) => parseInt(m[2], 10) !== slot.value);
     if (slot.tolerant) {
-      // Presence-only (see the slot's own comment): the value legitimately
-      // varies by machine, so a mismatch is not staleness.
-      byFile.set(slot.file, content);
+      // BUG-369. Presence-only for --check (see the slot's own comment): the
+      // value legitimately varies BY MACHINE, so a mismatch here is not
+      // staleness and must not fail a CI runner whose honest fixture-skips
+      // lower the pass count.
+      //
+      // It is still WRITTEN. "Do not FAIL on a mismatch" had been implemented
+      // as "do not LOOK at this slot at all" — the branch returned before the
+      // write path — so no --write had moved the README tests badge since the
+      // tolerance landed, and it sat 297 behind every strict slot in the same
+      // file with no mechanism able to catch it up. A check weakened to stop a
+      // false failure had stopped doing its job entirely.
+      if (mode === 'write') {
+        byFile.set(slot.file, content.replace(gre, `$1${slot.value}$3`));
+        // Announced, never silent: a generator that rewrites a tracked file
+        // without saying so is how a wrong number becomes an unnoticed one.
+        if (stale.length) {
+          report.push(`${path.relative(REPO_ROOT, slot.file)}: tolerant slot `
+            + `${[...new Set(stale.map((m) => m[2]))].join('/')} -> ${slot.value} `
+            + '(written; not counted stale)');
+        }
+      } else {
+        byFile.set(slot.file, content);
+      }
       continue;
     }
-    const stale = matches.filter((m) => parseInt(m[2], 10) !== slot.value);
     if (stale.length === 0) {
       byFile.set(slot.file, content);
       continue;
@@ -629,4 +652,6 @@ module.exports = {
   effectorCatalogBlock,
   EFFECTOR_LABELS,
   PIE_MIN_SLICE,
+  applySlots,
+  readmeSlots,
 };
