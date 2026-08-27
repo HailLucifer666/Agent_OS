@@ -228,9 +228,28 @@ describe('BUG-360: doctor and the runtime cannot disagree about whether adb is h
     const rows = doctor.assetChecks();
     const row = rows.find((g) => g.id === 'adb');
     assert.ok(row, 'doctor must still have an adb row');
-    assert.equal(row.ok, Boolean(setupAndroid.findInstalledAdb()),
-      'doctor and the runtime resolver must give the same verdict — a diagnostic that '
-      + 'disagrees with the runtime is worse than no diagnostic');
+    // BUG-374 — THIS ASSERTION USED TO BE A TAUTOLOGY. It read
+    //   assert.equal(row.ok, Boolean(setupAndroid.findInstalledAdb()))
+    // while the row itself WAS `ok: Boolean(findInstalledAdb())`. The same
+    // expression on both sides, so it passed for every possible input, under the
+    // comment above claiming it pinned doctor and the adapter together. It did
+    // not: with ANDROID_ADB_BIN set to a nonexistent path, doctor said OK and the
+    // runtime went OFFLINE — BUG-360's outage, reproducible after BUG-360 closed.
+    //
+    // Two resolvers cannot be compared by asking one of them twice. Compare
+    // against the ADAPTER, which is the actual runtime consumer, and against the
+    // input src/main.js actually passes (config.ANDROID_ADB_BIN, schema default
+    // the bare string 'adb'). The override cases live in
+    // test/bug-374-doctor-adb-override.test.js.
+    const requested = process.env.ANDROID_ADB_BIN || setupAndroid.DEFAULT_ADB_BIN;
+    const adapterBin = androidChild.resolveAdbBin(requested);
+    const doctorBin = setupAndroid.resolveAdbBin(null, process.env);
+    assert.equal(doctorBin, adapterBin,
+      'doctor resolves "' + doctorBin + '" and the adapter resolves "' + adapterBin
+      + '" — a diagnostic naming a different binary from the one the runtime spawns is '
+      + 'the whole of BUG-360, whichever way it points');
+    assert.ok(row.detail.indexOf(adapterBin) !== -1 || row.detail.indexOf('PATH') !== -1,
+      "the row must describe the adapter's binary (" + adapterBin + '), got: ' + row.detail);
   });
 
   it('doctor asks the search resolver, not the single write-target path', () => {
@@ -239,10 +258,28 @@ describe('BUG-360: doctor and the runtime cannot disagree about whether adb is h
     // the repo, i.e. the one this was missed on. Deliberately narrow: it pins
     // WHICH function the adb row calls, not the row's formatting.
     const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'doctor.js'), 'utf8');
-    const adbRow = /id:\s*'adb'[\s\S]{0,400}?\},/.exec(src);
-    assert.ok(adbRow, "doctor.js must still carry an id:'adb' row");
-    assert.match(adbRow[0], /findInstalledAdb\(\)/,
-      "doctor's adb row must resolve through findInstalledAdb()");
+    // The window is anchored to the NEXT row rather than to a character budget.
+    // It was `[\s\S]{0,400}?`, and BUG-374's comment pushed the row past 400 —
+    // so the match failed and the test reported "doctor.js must still carry an
+    // id:'adb' row" about a file that plainly still had one. A source-shape guard
+    // whose window is a magic number fails for reasons that have nothing to do
+    // with its invariant, which is how these get deleted instead of fixed.
+    const adbRow = /id:\s*'adb'[\s\S]*?(?=id:\s*')/.exec(src);
+    assert.ok(adbRow, "doctor.js must still carry an id:'adb' row followed by another row");
+    // BUG-374 changed WHICH function is correct here, and the invariant got
+    // stronger rather than weaker — so this is rewritten, not deleted. A guard
+    // dropped during a refactor is a guard nobody can find again.
+    //
+    // findInstalledAdb() is only the FALLBACK rung: it searches install
+    // locations and cannot see ANDROID_ADB_BIN, so a row resolving through it
+    // alone is blind to the override the runtime honours first. The row must go
+    // through the override-aware resolution and then judge reachability.
+    assert.match(adbRow[0], /adbReach\b/,
+      "doctor's adb row must report on the RUNTIME's resolution (adbReachable of "
+      + 'resolveAdbBin), not on an install search that ignores ANDROID_ADB_BIN');
+    assert.doesNotMatch(adbRow[0], /ok:\s*Boolean\(android\.findInstalledAdb\(\)\)/,
+      'resolving through findInstalledAdb() alone is the BUG-374 defect: it reported OK '
+      + 'while ANDROID_ADB_BIN pointed at a path the runtime could not spawn');
     assert.doesNotMatch(adbRow[0], /ok:\s*fileAtLeast\(android\.resolveAdbPath\(\)/,
       'resolveAdbPath() is the WRITE target only — using it here is the exact check that '
       + 'reported "No gaps" while every phone tool was dead');

@@ -79,6 +79,47 @@ function treeHasOnnx(dir, maxDepth) {
   return false;
 }
 
+// whichOnPath(cmd) — a PATH lookup done with the filesystem, never a spawn.
+// doctor's closing line promises it reports what is CONFIGURED and points at the
+// verify-*.js harnesses for real calls, so resolving `adb` must not execute it.
+function whichOnPath(cmd) {
+  const exts = process.platform === 'win32'
+    ? String(process.env.PATHEXT || '.EXE;.CMD;.BAT').split(';').filter(Boolean)
+    : [''];
+  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = path.join(dir, cmd + ext);
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch (_) { /* next */ }
+    }
+  }
+  return null;
+}
+
+// adbReachable(bin) — BUG-374. Given the path the RUNTIME will use, can it be
+// used? This is a separate question from "where would adb be", and conflating
+// them is what let BUG-360 survive a fix.
+//
+// It matters because `resolveAdbBin()` returns an explicit `ANDROID_ADB_BIN`
+// WITHOUT checking that it exists — correctly, since an override is an
+// instruction, not a guess. Nothing downstream checked either, so doctor is the
+// one that has to.
+function adbReachable(bin) {
+  if (!bin) return { ok: false, why: 'no adb path resolved at all' };
+  if (bin === android.DEFAULT_ADB_BIN) {
+    const hit = whichOnPath(bin);
+    return hit
+      ? { ok: true, why: 'on PATH: ' + hit }
+      : { ok: false, why: "resolved to bare 'adb' and there is no adb on PATH" };
+  }
+  try {
+    if (fs.statSync(bin).isFile()) return { ok: true, why: bin };
+    return { ok: false, why: 'not a file: ' + bin };
+  } catch (_) {
+    return { ok: false, why: 'ANDROID_ADB_BIN names a path that does not exist: ' + bin };
+  }
+}
+
 // ttsChain(env) — parsed in ONE place. It was read inline in the voice section
 // only; the kokoro asset row below needs the same answer, and two parses of one
 // setting is how a report starts disagreeing with itself.
@@ -236,6 +277,12 @@ function assetChecks() {
   // second, and setup-dsh.js keeps that rule.
   const dshFound = dsh.findInstalled();
 
+  // BUG-374: resolve adb the way the RUNTIME resolves it — explicit override
+  // first — then ask whether that resolution is usable. `findInstalledAdb()`
+  // alone answers a different question and cannot see the override.
+  const adbRuntimeBin = android.resolveAdbBin(null, process.env);
+  const adbReach = adbReachable(adbRuntimeBin);
+
   // Ask the provider where it reads from. Recomputing this path here is the
   // BUG-360 defect with a different noun — see the kokoro row below.
   const kokoroDir = kokoro.modelCacheDir();
@@ -345,14 +392,38 @@ function assetChecks() {
       // answering "is adb here" with two different functions is the defect
       // class, not the individual wrong answer — test/android-adb-resolution
       // pins that doctor and the adapter cannot diverge again.
+      // BUG-374 — the paragraph above was still true and still not enough.
+      // findInstalledAdb() is only the FALLBACK rung. The runtime's first rung is
+      // an explicit ANDROID_ADB_BIN, taken VERBATIM
+      // (adapters/android-child/index.js: `if (requested && requested !==
+      // DEFAULT_ADB_BIN) return requested`), and findInstalledAdb() never looks
+      // at that variable at all. Measured 2026-08-27 with
+      // ANDROID_ADB_BIN=<nonexistent-dir>/adb.exe:
+      //
+      //   doctor  -> findInstalledAdb() -> the repo copy      -> "OK", "No gaps"
+      //   runtime -> the bogus path verbatim -> spawn ENOENT  -> OFFLINE
+      //
+      // So BUG-360's outage was reproducible through the documented override,
+      // after BUG-360 was closed. The old guard could not catch it: it asserted
+      // `row.ok === Boolean(findInstalledAdb())` while the row WAS
+      // Boolean(findInstalledAdb()) — the same expression on both sides, a
+      // tautology that passes for every input, under a comment claiming it
+      // pinned doctor and the adapter together.
+      //
+      // Now: resolve exactly as the runtime resolves, then ask whether that
+      // resolution is usable. Reachability is checked with the filesystem, never
+      // a spawn, so this stays a report about configuration.
       id: 'adb',
       label: 'Android platform-tools (adb)',
       required: false,
-      ok: Boolean(android.findInstalledAdb()),
-      detail: android.findInstalledAdb()
-        || 'not found in ' + android.androidSearchDirs().join(' | '),
-      why: 'every phone_* effector shells out to adb',
-      fix: 'node scripts/setup-android.js --install',
+      ok: adbReach.ok,
+      detail: adbReach.ok ? adbReach.why : adbReach.why + '  [the runtime spawns this path]',
+      why: 'every phone_* effector shells out to adb — all 14 go dark if this is wrong',
+      fix: process.env.ANDROID_ADB_BIN
+        ? 'ANDROID_ADB_BIN is set and overrides every install location — correct it or '
+          + 'unset it, then re-run. `node scripts/setup-android.js --install` will NOT '
+          + 'help while it points somewhere wrong.'
+        : 'node scripts/setup-android.js --install',
     },
     {
       id: 'pc-child',
@@ -650,6 +721,16 @@ module.exports = {
   envPresent,
   keyStoreNames,
   assetChecks,
+  // Exported for test, and for a specific reason: the bare-'adb' PATH branch is
+  // unreachable through assetChecks() on any machine that has a repo-local adb,
+  // which is every developer machine here. A test that tried to reach it through
+  // the environment had to guard with an early return, and a mutation proving
+  // whichOnPath() always-misses then SURVIVED — the branch was untested and the
+  // escape hatch hid it. Same remedy the repo already applies to
+  // wakewordModelsDir and localAdbPath: expose the seam instead of hoping the
+  // machine is in the right state.
+  adbReachable,
+  whichOnPath,
   evaluateKeyChecks,
   collectSettings,
   compareSettings,
