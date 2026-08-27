@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6758,
+      "value": 6766,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3458,7 +3458,7 @@
       {
         "n": 344,
         "shape": "pointer",
-        "state": "open",
+        "state": "fixed",
         "title": "websearch absence already announces its remedy at boot.",
         "detail": {},
         "excerpt": "websearch absence already announces its remedy at boot. VERIFIED-SATISFIED 2026-08-24: live boot logged websearch.not-installed with \"node mythos/scripts/setup-websearch.js --install\". Remaining (optional): promote to health.anomaly if HUD visibility is wanted."
@@ -3474,10 +3474,10 @@
       {
         "n": 346,
         "shape": "pointer",
-        "state": "open",
+        "state": "verified",
         "title": "wake-word suspended state must feed the re-arm ladder.",
         "detail": {},
-        "excerpt": "wake-word suspended state must feed the re-arm ladder. wakeword.js reports status 'degraded' on AudioContext suspend (~:349) but app.js invokes scheduleWakewordRearm (~:707) only on start/load failure. Sustained 'degraded'/'silent' should schedule re-arm; likeliest survivor of \"listener ceases spontaneously\"."
+        "excerpt": "wake-word suspended state must feed the re-arm ladder. wakeword.js reports status 'degraded' on AudioContext suspend (~:349) but app.js invokes scheduleWakewordRearm (~:707) only on start/load failure. Sustained 'degraded'/'silent' should schedule re-arm; likeliest survivor of \"listener ceases spontaneously\". **FIXED 2026-08-28 (BUG-346), mutation-proven — and BOTH halves of the description above are wrong, which is why the fix is narrower than it asks for.** (1) `silent` was ALREADY handled: it calls `stop()` and returns false, so `start()` resolves false and app.js's else-branch schedules the re-arm. (2) The OTHER `degraded` (`fallbackFired`) means the saved mic was missing and the system default was used — that detector IS listening, and re-arming it would tear down a working wake word on a healthy fallback, which is the opposite failure and strictly worse. THE REAL GAP was exactly on…"
       },
       {
         "n": 347,
@@ -3514,10 +3514,10 @@
       {
         "n": 351,
         "shape": "pointer",
-        "state": "open",
+        "state": "verified",
         "title": "Aether proxy :4480 war. Healer playbook rebinds forever against",
         "detail": {},
-        "excerpt": "Aether proxy :4480 war. Healer playbook rebinds forever against an orphaned listener (bind-failed-again x336, Jul->Aug). Add terminal condition after N attempts -> OFFLINE + hint running a new scripts/diagnose-aether-port.ps1 that names the squatter PID."
+        "excerpt": "Aether proxy :4480 war. Healer playbook rebinds forever against an orphaned listener (bind-failed-again x336, Jul->Aug). Add terminal condition after N attempts -> OFFLINE + hint running a new scripts/diagnose-aether-port.ps1 that names the squatter PID. **FIXED by BUG-379 (2026-08-27, mutation-proven).** Both halves shipped: `src/core/immune/aether-rebind.js` gives the playbook a terminal condition (three attempts, then OFFLINE with a spoken reason), and `src/core/util/port-holder.js` + `src/core/aether/bind-failure.js` name the process holding the port. **Two of this bullet's own claims were false and must not be inherited:** the healer did NOT rebind forever — the playbook ran ONCE ever, and the 336 records were 336 PROCESSES, one anomaly each from a whenReady() rejection arm; and no `diagnose-aether-port.ps1` was needed, because the diagnostic belongs in the bind path, not in a separ…"
       },
       {
         "n": 352,
@@ -3895,9 +3895,9 @@
       }
     ],
     "counts": {
-      "verified": 45,
-      "fixed": 167,
-      "open": 16,
+      "verified": 47,
+      "fixed": 168,
+      "open": 13,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
@@ -3905,11 +3905,8 @@
     },
     "total": 240,
     "openDeclared": [
-      344,
-      346,
       347,
       348,
-      351,
       354,
       356
     ],
