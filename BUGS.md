@@ -41,6 +41,163 @@ it is committed.
 
 ---
 
+## BUG-375 — a withheld phone tool blamed a missing handset when adb itself was unreachable (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27. 9 regression tests, 6 mutations, none survived.
+Found by running the 2026-08-26 audit plan's **verification step 3**, which named
+this rule specifically and had never been executed.
+
+**Mechanism.** `tool-capability.js`'s phone rule gated on one boolean carrying two
+facts:
+
+```js
+androidDevice = state === 'ONLINE' && Array.isArray(st.devices) && st.devices.length > 0;
+```
+
+so a false value meant *either* "adb is unreachable" *or* "adb is fine, no phone
+plugged in" — and both produced the single reason string **"no Android device is
+attached over adb"**. When the adapter is down, that sends the operator looking
+for a handset for a problem no handset can fix.
+
+Not hypothetical: BUG-374 measured `doctor.js` reporting `OK` for adb while
+`ANDROID_ADB_BIN` pointed at a nonexistent path, which is exactly the state that
+produces an OFFLINE adapter. The two bugs are the same defect in two reports, and
+were found in the same hour.
+
+**The audience makes it worse than a log line.** This reason is what
+`live-tools.js` withholds a tool with, so it reaches the **model**, which relays
+the remedy out loud. A wrong cause here becomes a wrong instruction spoken to the
+operator.
+
+**Fix.** `androidOnline` is now a separate snapshot fact, and the phone rule's
+`reason` is a function of the snapshot rather than a constant — so the refusal
+names the cause that was actually measured. `reason` may now be a string *or* a
+function; the other four rules keep their strings, and the consumer resolves
+either. Three things are pinned deliberately:
+
+- **The two branches must produce DIFFERENT strings**, so a "fix" that appends
+  the adb sentence to both branches fails.
+- **Unknown is not offline.** A missing adapter, a `getStatus()` that throws, and
+  an empty `state` all leave `androidOnline` true. Blaming adb on a failure to
+  *ask* would put a wrong remedy in the model's mouth on the strength of an
+  exception. Both the absent-adapter and the throwing-adapter paths are covered —
+  they are different code paths, and a mutation proved it (below).
+- **Every reason reaching a caller is a string**, checked across all five rules
+  and both phone branches. The shape `reason: rule.reason` would have handed the
+  model a function body.
+
+**A mutation survived and it was a gap in the new test.** Setting
+`androidOnline = false` inside the `catch` changed nothing, because the
+"unreadable adapter" test passes `adapters: {}` — which skips the `try` body
+entirely and never reaches the `catch`. A throwing `getStatus()` is a different
+path, and it is now its own test. Second time in one session that an
+absent-versus-throwing distinction hid an untested branch.
+
+**What this does NOT fix.** `androidDevice` is still false for an unknown state,
+so an unreadable-but-present adapter withholds the phone tools while reporting
+the *device* reason. That is pre-existing, it is recorded by a test rather than
+changed, and altering it inside a fix about wording would be a behaviour change
+smuggled in under a message change.
+
+**Files:** `mythos/src/core/voice/tool-capability.js`.
+**Test:** `mythos/test/bug-375-phone-refusal-names-the-cause.test.js` (9 tests).
+
+---
+
+## BUG-374 — BUG-360's outage was still reproducible through the documented override, and the guard against it was a tautology (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27. 7 new tests, 2 existing ones repaired, 6
+mutations, none survived. Found by running the 2026-08-26 audit plan's
+**verification step 4**, which had never been executed.
+
+**Symptom.** With `ANDROID_ADB_BIN` pointing at a path that does not exist,
+`node scripts/doctor.js` printed:
+
+```
+  OK    Android platform-tools (adb)   <repo>/Android Platform Tools/platform-tools/adb.exe
+```
+
+while the runtime spawned the nonexistent path and android-child went OFFLINE
+with all 14 `phone_*` tools withheld. That is BUG-360's outage, verbatim,
+reachable after BUG-360 was closed — through the override the setup script itself
+tells operators to set.
+
+**Mechanism.** The runtime resolves adb in two rungs. The first is the explicit
+override, taken **verbatim** — `adapters/android-child/index.js`:
+`if (requested && requested !== DEFAULT_ADB_BIN) return requested`. The second is
+`findInstalledAdb()`, which searches install locations and **never reads
+`ANDROID_ADB_BIN` at all**. doctor's row asked only the second. Measured
+2026-08-27:
+
+| `ANDROID_ADB_BIN` | doctor asks `findInstalledAdb()` | runtime uses |
+|---|---|---|
+| unset | repo copy → **OK** | repo copy |
+| `<nonexistent-dir>/adb.exe` | repo copy → **OK** | the bogus path → ENOENT → **OFFLINE** |
+
+BUG-360's fix moved doctor from `resolveAdbPath()` (the write target) to
+`findInstalledAdb()` (the fallback rung). Correct, and one rung short.
+
+**THE GUARD WAS A TAUTOLOGY, which is why a closed bug stayed reproducible.**
+`test/android-adb-resolution.test.js` asserted:
+
+```js
+assert.equal(row.ok, Boolean(setupAndroid.findInstalledAdb()), 'doctor and the
+  runtime resolver must give the same verdict …');
+```
+
+while the row *was* `ok: Boolean(android.findInstalledAdb())`. The same
+expression on both sides — it passes for every possible input, under a comment
+claiming it pinned doctor and the adapter together. **Two resolvers cannot be
+compared by asking one of them twice.** It now compares doctor's resolution
+against the **adapter's**, for the input `src/main.js` actually passes, across
+both the override and no-override cases.
+
+**Fix.** doctor resolves through `resolveAdbBin(null, process.env)` — the same
+order the runtime uses — then asks whether that resolution is *usable*, which is
+a separate question that nothing was asking. `resolveAdbBin` returns an explicit
+override without checking it exists (correctly: an override is an instruction,
+not a guess), so doctor is the only place left to check.
+
+Reachability is answered with the **filesystem, never a spawn** — a PATH scan for
+the bare-command case, `statSync` for an absolute path. doctor's closing line
+promises it reports what is *configured* and points at the `verify-*.js`
+harnesses for real calls, and a report that executes adb would break that
+contract. Pinned behaviourally: an existing but non-runnable file reports OK.
+
+The hint also changes when the override is set, because BUG-360's hint is a
+recorded example of one that loops forever: it said "run `setup-android.js
+--install`", which re-downloaded into an already-populated directory and left the
+override untouched. With the override wrong, `--install` cannot help, and the
+hint now says so outright.
+
+**A mutation survived, and it was a real gap in the new test.** Making
+`whichOnPath()` always miss changed nothing, because the bare-`adb` branch is
+**unreachable from the environment** on any machine with a repo-local adb — and
+the first version of that test had an `if (row.detail.includes('platform-tools'))
+return;` escape hatch, so it fired and asserted nothing. The branch is now driven
+through exported `adbReachable`/`whichOnPath` seams with a controlled `PATH`,
+the same remedy already applied to `wakewordModelsDir` and `localAdbPath`. A
+guard with a conditional return reports the machine's state, not the code's.
+
+**Also repaired: a source-shape window that failed for the wrong reason.** The
+neighbouring guard matched `id:'adb'` plus at most 400 characters; this entry's
+comment pushed the row past 400, so it failed claiming doctor.js no longer had an
+adb row. Re-anchored to the next row rather than to a character budget. The
+invariant it protects got stronger, so it was rewritten rather than deleted.
+
+**What this does NOT fix.** The adapter keeps its own `resolveAdbBin`, a second
+implementation of the same two rungs; it agrees with `setup-android.js`'s today
+and is now pinned by test to keep agreeing, but it is still duplication rather
+than one resolver. And reachability is a file question, not an execution one — an
+adb that exists and cannot run still reports OK here, deliberately. Whether the
+binary actually answers is `verify-*.js`'s job.
+
+**Files:** `mythos/scripts/doctor.js` (658 → 739).
+**Tests:** `mythos/test/bug-374-doctor-adb-override.test.js` (7),
+`mythos/test/android-adb-resolution.test.js` (2 assertions repaired).
+
+---
+
 ## BUG-373 — a bug number MENTIONED in a commit message counted as CLAIMING it, so one sentence blocked every commit from a checkout (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 10 new regression tests, mutations run, 0

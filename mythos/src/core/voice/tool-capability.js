@@ -53,7 +53,11 @@ const RULES = [
     // A running android-child is not enough — adb with NO device attached
     // answers every call with "no devices". The device list is the real oracle.
     requires: (snap) => snap.androidDevice,
-    reason: 'no Android device is attached over adb',
+    // A function, not a string: the two causes need two different remedies.
+    reason: (snap) => (snap.androidOnline === false
+      ? 'the android-child adapter is not ONLINE, so adb itself is unreachable and no device '
+        + 'can be seen at all — check ANDROID_ADB_BIN and run scripts/doctor.js'
+      : 'no Android device is attached over adb'),
   },
   {
     id: 'browser',
@@ -99,14 +103,25 @@ function buildCapabilitySnapshot({ config, adapters } = {}) {
     return st === null ? true : st === 'ONLINE';
   };
 
+  // BUG-375 — androidDevice used to be the ONLY phone fact, and it collapsed two
+  // very different causes into one: an adapter that is not online (adb missing,
+  // or ANDROID_ADB_BIN pointing somewhere wrong — see BUG-374) and an adapter
+  // that is perfectly healthy with no handset plugged in. Both produced
+  // "no Android device is attached over adb", which sends the operator looking
+  // for a phone when the actual problem is a binary. Kept as two facts so the
+  // refusal can name the right one.
   let androidDevice = true;
+  let androidOnline = true;
   try {
     if (a.android && typeof a.android.getStatus === 'function') {
       const st = a.android.getStatus() || {};
       const state = String(st.state || '').toUpperCase();
+      // Same "null state means could not ask" convention as onlineOrUnknown: an
+      // empty state is unknown, not offline, and must not manufacture a hint.
+      androidOnline = state ? state === 'ONLINE' : true;
       androidDevice = state === 'ONLINE' && Array.isArray(st.devices) && st.devices.length > 0;
     }
-  } catch (_) { androidDevice = true; }
+  } catch (_) { androidDevice = true; androidOnline = true; }
 
   return {
     googleOAuth: set(cfg.GOOGLE_CLIENT_ID) && set(cfg.GOOGLE_CLIENT_SECRET) && set(cfg.GOOGLE_REFRESH_TOKEN),
@@ -114,6 +129,7 @@ function buildCapabilitySnapshot({ config, adapters } = {}) {
     cuaOnline: onlineOrUnknown(a.cua),
     pcChildOnline: onlineOrUnknown(a.pcChild),
     androidDevice,
+    androidOnline,
   };
 }
 
@@ -125,7 +141,10 @@ function checkToolCapability(name, snapshot) {
     if (!rule.match(toolName)) continue;
     if (rule.except && rule.except(toolName)) continue;
     if (rule.requires(snap)) return { ok: true };
-    return { ok: false, rule: rule.id, reason: rule.reason };
+    // reason may be a string or a function of the snapshot. Strings stay strings
+    // so the other four rules are untouched by BUG-375.
+    const reason = typeof rule.reason === 'function' ? rule.reason(snap) : rule.reason;
+    return { ok: false, rule: rule.id, reason: reason };
   }
   return { ok: true };
 }
