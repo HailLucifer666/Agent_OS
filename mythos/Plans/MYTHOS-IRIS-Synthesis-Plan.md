@@ -4743,6 +4743,7 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | — | Pre-commit's own fallback ports were squatted, reading as 3 regressions | **DONE** | reproduced with netstat (pids 4296/10904); hook now asks the OS for free ports | `7f93dd5` |
 | A5a | Merge `origin/main` (BUG-353) | **DONE** | 6436/6436/0/0 on the merged tree; BUGS.md resolved as union + named drops | `f241084` |
 | A2 | BUG-370 — `build-capability-map.js`; the map stops being hand-edited | **DONE** | 73→91 nodes, 179/179 tools covered both ways, 5th status `unknown`; 19 assertions, 10 mutations; rendering verified in a browser | (this commit) |
+| D-2 | BUG-379 — the bind failure names the squatter. **Both named causes were false and the loop did not exist** | **DONE** | measured 65 events = 65 PROCESSES not one loop (healer outcomes: no-match 63, error 1); no config.json exists anywhere; found a 3rd defect nobody named (`target` tested `.length` on an object, so the port-naming branch was unreachable and would have thrown); 29 assertions, 17 mutations all caught, 4 survived a first pass | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5006,61 +5007,106 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position:** Wave A is complete and merged. The instruments are honest; no map
-node has turned green yet, and that was the point. **Track D is the next work,
-and it is the first track that changes a capability rather than a gauge.**
+**Position:** Wave A is complete and merged. **Track D-2 is DONE (BUG-379).**
+Track D-1 (BUG-378, the error-shape class) is DONE but sits in an OPEN PR — see
+the conflict note below. D-3 … D-6 remain and can be taken in any order.
 
-**Start state, verified 2026-08-27:**
+**Start state, verified 2026-08-27 (post-D-2):**
 
 ```
-main                       744aecf   (zero open PRs)
-suite                      6520 tests / 6520 pass / 0 fail / 0 skipped
+main                       b04ec8e
+PR #37  (Track D-1)        fix/bug-378-effector-error-shape   OPEN, not merged
+PR for D-2                 fix/bug-379-aether-rebind-terminal
+suite                      6562 tests / 6562 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
-build-capability-map       --check clean
-map                        91 nodes: 28 ok / 25 warn / 13 fail / 7 dark / 18 unknown
-next free BUG number       376
+file-size ratchet          main.js 1369 (ceiling 1373), healer.js 875 (ceiling 876)
+next free BUG number       380
 ```
 
-**First action:** branch fresh from `744aecf` and take **D-1, the error-shape
-class** (above). It is the only item in Track D where the failures are
-currently invisible, so it is the only one where you cannot even read the bug
-until the fix lands. Everything else in Track D can be picked up in any order.
+> **⚠ DECISION FOR THE OPERATOR — two open PRs will conflict on the docs.**
+> D-1 and D-2 were branched independently off `main`, so both edit `BUGS.md`,
+> `index.html`, `README.md`, `ROADMAP.md` and this file. The code does not
+> overlap at all. Resolve by taking BOTH ledger rows and BOTH BUGS.md entries,
+> then re-running, in this order: `sync-test-count --write`, then
+> `build-capability-map --write`, then `build-index --write`. Merging D-1 first
+> is marginally simpler because its map-node edits are the smaller set.
+
+**THE LESSON THAT NOW HAS TWO INSTANCES, so read it before taking D-3.**
+
+Track D-1 and Track D-2 each named specific causes, and **in both cases the
+named cause was wrong while a real defect sat next to it**:
+
+- **D-1** blamed three nodes on one error shape. Two of them did not have it —
+  `run_command`'s evidence was a pre-fix record from 2026-07-29 and
+  `list_folder` had never had the defect at all (3 ok / 2 fail, not 0 / 2).
+- **D-2** blamed a looping healer playbook and a `config.json` override.
+  Neither exists. The playbook ran ONCE ever; there is no `config.json` on any
+  path that would be read; and `.env` enables the proxy deliberately under a
+  different key than the one the work order quoted. The real third defect —
+  `target` testing `.length` on an object, making the port-naming branch
+  unreachable and its `.join()` a latent throw inside an error handler — is not
+  mentioned in the work order at all.
+
+So: **run the item's own oracle FIRST, before writing anything.** D-2's work
+order supplied one ("boot with an orphaned listener on the port, get exactly N
+attempts and one honest anomaly, not a loop") and running it took ten minutes
+and refuted two of three claims. Where an item has no oracle, the vault does:
+date the rows the claim derives from, then count them.
+
+**First action:** take **D-3 (dead provider lanes)**, **D-4 (YouTube id
+extraction)**, **D-5 (never exercised — needs a harness)** or **D-6 (the ten
+singles)** from the TRACK D WORK ORDER above. Nothing is blocked on ordering.
+
+**Carry forward, cheap and reusable:**
+
+- `src/core/util/port-holder.js` — bounded "what holds this port?", injectable,
+  honest null with a reason. D-6's `rejected clients` item ("147 identical lines
+  that never name the client") is the same shape of defect and can reuse it.
+- `test/bug-379-...test.js`'s live oracle pattern: make the TEST be the squatter,
+  so the expected pid is known exactly rather than plausibly. Any "identify the
+  other process" item should copy it.
+- The three-route diff from D-1 (adapter / dispatcher / breaker remedy) and the
+  evasion probes from its review pass. Mutation alone cannot tell you a guard is
+  looking in the wrong PLACE.
 
 ### Five things that will cost you an hour each if nobody tells you
 
-**1. The pre-commit hook runs FOUR gates, and one is new.** Full suite,
-`sync-test-count --check`, `lint-bug-registry`, and `build-capability-map
---check`. **Add or remove a registered tool and your commit is blocked until
-that tool is mapped to a node on the capability map.** One line in the island
-plus `--write`; the hook message says so.
+**1. The pre-commit hook runs FOUR gates** — full suite, `sync-test-count
+--check`, `lint-bug-registry`, `build-capability-map --check` — plus
+`build-index --check`. Add or remove a registered tool and the commit is blocked
+until that tool is mapped to a node in `index.html`'s island.
 
-**2. Ordering: `sync-test-count --write` must run BEFORE
-`build-capability-map --write`.** The map reads the suite figures out of
-ROADMAP.md's SYNC block. Reverse them and the hook blocks you on a map that is
-one number behind.
+**2. Ordering: `sync-test-count --write` BEFORE `build-capability-map --write`.**
+The map reads the suite figures out of ROADMAP.md. Hit again on 2026-08-27: the
+map printed `! vitals.tests: island says 6533, the code says 6562` and needed a
+second `--write` after the sync. And if BUGS.md changed, `build-index --write`
+too — a new entry makes `test/…the real index.html` fail until the register is
+regenerated, which looks like a regression and is not.
 
-**3. Run the suite with the overrides or it lies to you.** Long-form `TEMP` and
-`TMP` (an 8.3 short path makes spawned servers abort with a libuv assertion and
-report only ECONNREFUSED), plus free ports from
-`node scripts/pick-free-ports.js`. Without them a clean tree measures
-`fail=1 skipped=1`, and `sync-test-count --check` will then recommend writing
-that red result in as the baseline. **Do not follow that recommendation.**
+**3. Run the suite with the overrides or it lies to you** — long-form `TEMP`/`TMP`
+plus free ports from `node scripts/pick-free-ports.js`. Without them a clean tree
+measures `fail=1 skipped=1` and `sync-test-count` will recommend recording that
+red run as the baseline. **Do not follow that recommendation.** `--write` records
+whatever it measures, including a one-test flake — re-run, and re-run the failing
+file in isolation, before believing a single red number.
 
 **4. Commit with `git commit -- <pathspec>`, then demand an empty
-`git status --porcelain`.** Both halves, neither sufficient. Pathspec stops a
-stale index from shipping content the gates never tested; the porcelain check
-stops a file dirty on disk but outside the pathspec from being tested and then
-left out, which makes the green run describe a tree absent from history. Both
-happened on 2026-08-27.
+`git status --porcelain`.** Both halves, neither sufficient.
 
-**5. `--next` is an observation, not a lock.** It reads refs and the working
-tree at the instant asked, and it is correct — but two sessions were handed the
-same number inside one minute, because the window is between ASKING and
-WRITING. Write the BUGS.md entry early. Earlier commit wins a collision, and
-renumber by `git reset --soft HEAD~1` rather than `--amend`: the hook runs
-while HEAD is still the old commit, so an amend that removes a citation is
-blocked by the citation it is removing.
+**5. `--next` is an observation, not a lock.** It reads **branch names** too, so
+naming a branch `fix/bug-NNN-…` claims NNN immediately. Write the BUGS.md entry
+early, and renumber with `git reset --soft HEAD~1`, never `--amend`.
 
+**6. Do not edit a tracked file while the suite is running.** The anti-drift
+tests scan tracked files — BUGS.md, `index.html`, these plan documents — so an
+edit mid-run invalidates the run and reads as a regression.
+
+**7. The file-size ratchet will refuse your fix, and it is usually right.**
+`main.js` (1373) and `healer.js` (876) are pinned one-directional and the failure
+message says the baseline is a ceiling, not a suggestion. BUG-379 hit both;
+extracting the new code into `aether/bind-failure.js` and
+`immune/aether-rebind.js` made it testable without booting the app, which was a
+better outcome than the inline version. Do not raise the numbers.
 ### Standing constraints
 
 - **Two machines and sometimes two sessions share this repo.** Branch, PR,
