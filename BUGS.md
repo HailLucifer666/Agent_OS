@@ -41,6 +41,136 @@ it is committed.
 
 ---
 
+## BUG-373 — a bug number MENTIONED in a commit message counted as CLAIMING it, so one sentence blocked every commit from a checkout (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 10 new regression tests, mutations run, 0
+survived. Second instance of one class — the first was markdown, fixed the
+same day this one was filed.
+
+**How it bit.** Two sessions were handed BUG-371 by `--next` within one
+minute. Both answers were correct: the tool reads the refs and the working
+tree at the instant it is asked, and neither entry existed yet. **The window
+is between ASKING and WRITING**, not between committing and pushing, and no
+amount of reading can close it — for most of that window the number exists
+only in someone's intent. `--next` is an observation, not a lock.
+
+The second session renumbered to 372. Its commit body still read
+`...gemini,kokoro,edge,piper (BUG-371)`, so 371 was in-use-and-undeclared in
+that tree, the ratchet went 136 → 137, and **every commit from that checkout
+was blocked** — not only ones citing a number.
+
+**The trap underneath.** `git commit --amend` runs the pre-commit hook while
+`HEAD` is still the OLD commit. Proved in a throwaway repo rather than
+reasoned:
+
+```
+hook echoes `git log HEAD -1 --format=%s`
+
+git commit --amend -m "renamed: cites BUG-372"
+  HOOK SEES HEAD SUBJECT: first: cites BUG-371      <- the OLD body
+
+git reset --soft HEAD~1 ; git commit -m "replacement"
+  HOOK SEES HEAD SUBJECT: renamed: cites BUG-372    <- HEAD already moved
+```
+
+So the amend that removes the citation is blocked by the citation it is
+removing, with a message that already looks corrected. **A gate that reads
+`HEAD` cannot be satisfied by rewriting `HEAD`.** The escape is
+`git reset --soft HEAD~1` then a fresh commit.
+
+**Class.** `isDoc` already exists in this script because a markdown file that
+discusses BUG-999 is talking ABOUT the number, not claiming it — that fix
+landed after a plan document explaining the BUG-999 fixture blocked a commit
+whose only sin was explaining the gate. Commit messages are documentation too
+and never got the same treatment. Same invariant, second instance, so the fix
+goes at the class rather than the instance.
+
+**The cost, measured rather than estimated — and the estimate was wrong.**
+This change was argued against on the grounds that "~20 legacy bugs exist only
+in commit messages, and the ratchet is the only thing pointing at them". That
+claim was stated twice before anyone measured it. Measured:
+
+```
+undeclared in CODE         : 130
+undeclared in COMMITS only :   6   -> 43, 44, 45, 132, 145, 318
+of BUG-323..342 commit-only:   0
+```
+
+Six, not twenty, and **none** of the BUG-323..342 block the argument named —
+every one of those appears in code as well. So the ratchet loses sight of six
+numbers, and the new listing names all six, which is strictly more actionable
+than the aggregate that hid them.
+
+**Fix.** `mythos/scripts/lint-bug-registry.js`. The undeclared ratchet reads
+code only. Commit messages keep counting toward the MAXIMUM — the same
+asymmetry `isDoc` uses, because over-reporting the maximum can only make the
+next free number larger, and that is the safe direction. New
+`--undeclared-in-commits` names what the ratchet no longer counts, plus a
+one-line mention in the normal report so the set cannot grow unnoticed.
+`UNDECLARED_BASELINE` 136 → 130.
+
+**The gate caught its own author, twice while building this.** First, adding the
+test file put `BUG-373` in the source with no entry, so the ratchet read 131
+against the new baseline of 130. Then, with that written, it read 131 again for
+a different reason: the same test file cites the fixture number 999 to explain
+that markdown was the FIRST instance of this class, and that number carries a
+deliberately narrow adjudication listing exactly which files may mention it. A
+`.js` file counts as code by design — BUG-164 and BUG-364 are real defects whose
+only trace is a test file — so the adjudication went stale and 999 became live,
+exactly as its comment promises a new file should make it. Widened to four files
+with the reason recorded, rather than rewording the mention to slip past a
+scanner that is correctly designed to see it.
+
+**The older note, kept:** Adding the test file
+put `BUG-373` in the source with no entry, so the ratchet read 131 against the
+new baseline of 130 and blocked the commit. Fixed by writing this entry, which
+is the intended remedy rather than a workaround.
+
+**Attack pass (Stage 3):**
+
+- *What else matches this?* Any prose channel the scan reads. Markdown and
+  commit messages are both now excluded from the ratchet; the remaining inputs
+  are code and config, which is where a number in use actually hides.
+- *Does this hide evidence?* That was the risk, and it is why the listing
+  exists. Nothing is dropped — six numbers moved from a count to a name.
+- *Who reads this?* The pre-commit hook, and both sessions working this repo.
+  The listing is never an exit code.
+- *Is the constant correct?* The baseline is measured, not chosen: 130 is the
+  code-only count on 2026-08-27, and a sibling test fails if it drifts more
+  than 10 above reality so it cannot quietly stop biting.
+- *Deliberate non-changes:* commit messages still feed the maximum. The
+  cross-branch duplicate gap is NOT fixed — two branches can each hold a clean
+  registry while their union is broken, which is exactly how both sessions
+  were handed 371. It has never blocked anything and it was caught by two
+  humans in under a minute; recorded, not built.
+
+**Related, recorded, not fixed: the gate measures a different artifact from
+the one being committed.** Three faces found the same day:
+
+1. The hook validates the WORKTREE; git commits the INDEX. A stale `git add`
+   from an interrupted attempt shipped a duplicate declaration past every
+   check, with no concurrency involved.
+2. The ratchet reads `HEAD`; `--amend` replaces `HEAD` (above).
+3. Declarations are scanned in one tree; numbers are claimed across refs.
+
+The practice that covers (1) is a PAIR and neither half suffices:
+`git commit -- <pathspec>` so a stale index cannot ship, AND
+`git status --porcelain` empty afterwards, because a file dirty on disk but
+outside the pathspec is validated by the hook and never committed — the green
+run then describes a tree absent from history. Both verified in throwaway
+repos.
+
+**Verification.**
+
+```
+node --test test/bug-373-commit-prose-is-not-allocation.test.js
+  before fix: tests 10, pass 1, fail 9
+  after fix:  tests 10, pass 10, fail 0
+node scripts/lint-bug-registry.js --undeclared-in-commits
+  6 numbers named: BUG-43, BUG-44, BUG-45, BUG-132, BUG-145, BUG-318
+```
+
+---
 ## BUG-371 — the commit gate named the failing FILE and threw away the failing ASSERTION, so a blocked commit taught nothing (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 8 new regression tests, 5 mutations, 0

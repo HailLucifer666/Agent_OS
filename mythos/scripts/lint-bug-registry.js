@@ -112,18 +112,28 @@ const ADJUDICATIONS = [
     number: 999,
     kind: 'not-a-bug',
     reason: 'fake `## BUG-999` heading inside a fixture string in test/triage-incidents.test.js, '
-      + 'used to exercise the triage parser. Never allocated to a defect. The other two files '
-      + 'are this script and its test, which cite the number to explain the exclusion.',
+      + 'used to exercise the triage parser. Never allocated to a defect. The other files in the '
+      + 'list are this script and two of its tests, which cite the number to explain the '
+      + 'exclusion rather than to claim it.',
     // The file list is narrow ON PURPOSE, and it caught its own author: staging
     // this script and its test made 999 appear in two new files, the condition
     // went stale, and the gate blocked the commit that introduced it — next-free
     // jumped to 1000, which is precisely the failure being prevented. A NEW file
     // mentioning BUG-999 should break this, because outside these three the most
     // likely explanation is that somebody has started using the number for real.
+    // Grew to four on 2026-08-27, and the mechanism worked exactly as the
+    // comment above promises. BUG-373's test cites BUG-999 to explain that
+    // markdown was the FIRST instance of the prose-is-not-allocation class;
+    // that file is a .js, so it counts as code by design (BUG-164 and BUG-364
+    // are real defects whose only trace is a test file, which is why test/ is
+    // not excluded). The gate fired, a human read it, and the adjudication is
+    // widened deliberately rather than the mention being reworded to slip past
+    // a scanner that is correctly designed to see it.
     stillApplies: (ctx) => ctx.onlyIn(999, [
       'mythos/test/triage-incidents.test.js',
       'mythos/scripts/lint-bug-registry.js',
       'mythos/test/lint-bug-registry.test.js',
+      'mythos/test/bug-373-commit-prose-is-not-allocation.test.js',
     ]),
   },
   {
@@ -155,7 +165,7 @@ const ADJUDICATIONS = [
  * Lower it whenever you write entries; the test fails if it drifts far above
  * reality, because a baseline that no longer bites is decoration.
  */
-const UNDECLARED_BASELINE = 136;
+const UNDECLARED_BASELINE = 130;
 
 function git(...args) {
   // The pre-commit hook exports GIT_DIR/GIT_INDEX_FILE, which would silently
@@ -313,12 +323,37 @@ function buildReport(sources) {
   // writing a paragraph that mentions an unfiled bug does not add to the
   // backlog, and a gate that blocks a documentation commit for doing so trains
   // people to stop writing documentation.
-  const undeclared = [...new Set([
-    ...src.inCommitsHead.keys(),
-    ...[...src.inSource.keys()].filter((n) => codeFilesFor(n).length > 0),
-  ])]
+  // BUG-373: CODE ONLY. A commit message is prose, and prose is not allocation
+  // — the same rule `isDoc` already applies to markdown, which this failed to
+  // apply to the other kind of documentation the scan reads.
+  //
+  // It bit on 2026-08-27. Two sessions were handed BUG-371 by --next inside one
+  // minute; the second renumbered to 372 by amending, its body still read
+  // "(BUG-371)", and 371 became in-use-and-undeclared in that tree. The ratchet
+  // went 136 -> 137 and blocked EVERY commit from that checkout, not only ones
+  // citing a number. Worse, `git commit --amend` runs the hook while HEAD is
+  // still the OLD commit, so the amend removing the citation was blocked by the
+  // citation it was removing: a gate that reads HEAD cannot be satisfied by
+  // rewriting HEAD.
+  //
+  // Measured cost before the change, not estimated: 130 undeclared numbers
+  // appear in code and exactly 6 appear only in commit messages. The objection
+  // — "~20 legacy bugs live only in commit messages and this is the only thing
+  // pointing at them" — was false; of the BUG-323..342 block that argument
+  // named, zero are commit-only. Those six are reported by name below, which is
+  // more actionable than the aggregate that hid them.
+  const undeclared = [...src.inSource.keys()]
+    .filter((n) => codeFilesFor(n).length > 0)
     .filter((n) => !notABug.has(n))
     .filter((n) => ctx.declaredTimes(n) === 0)
+    .sort((a, b) => a - b);
+
+  // Reported, never gated. HEAD-scoped like the ratchet so two people at the
+  // same commit see the same list regardless of what they have fetched.
+  const undeclaredInCommits = [...src.inCommitsHead.keys()]
+    .filter((n) => !notABug.has(n))
+    .filter((n) => ctx.declaredTimes(n) === 0)
+    .filter((n) => !undeclared.includes(n))
     .sort((a, b) => a - b);
 
   const gaps = [];
@@ -336,6 +371,7 @@ function buildReport(sources) {
     duplicates,
     knownCollisions,
     undeclared,
+    undeclaredInCommits,
     gaps,
     adjudicated: [...suppressed.values()].map((a) => ({
       number: a.number, kind: a.kind, reason: a.reason,
@@ -360,6 +396,26 @@ function main() {
     process.exit(exitCodeFor(report));
   }
 
+  // BUG-373. The numbers the ratchet deliberately stopped counting, NAMED
+  // rather than tallied. The objection to removing them from the gate was that
+  // the ratchet was the only thing pointing at them — it pointed at them as an
+  // aggregate nobody could act on, which is why they are all still undeclared.
+  // A list you can work through is a better instrument than a count that blocks
+  // an unrelated commit.
+  if (process.argv.includes('--undeclared-in-commits')) {
+    const list = report.undeclaredInCommits;
+    if (!list.length) {
+      console.log('lint-bug-registry: no bug number appears only in a commit message. '
+        + 'Every number cited on HEAD is either declared in BUGS.md or used in code.');
+      process.exit(0);
+    }
+    console.log(`lint-bug-registry: ${list.length} number(s) appear ONLY in commit messages on `
+      + 'HEAD — no BUGS.md entry, and nothing in the source cites them. Not gated: prose is not '
+      + 'allocation. Listed so they can be written up or retired deliberately.');
+    for (const n of list) console.log(`  BUG-${n}`);
+    process.exit(0);
+  }
+
   if (process.argv.includes('--next')) {
     console.log(String(report.nextFree));
     console.error('(from local refs only — run `git fetch` first if another machine may have '
@@ -374,6 +430,14 @@ function main() {
 
   for (const a of report.adjudicated) {
     console.log(`  adjudicated BUG-${a.number} (${a.kind}): ${a.reason}`);
+  }
+
+  if (report.undeclaredInCommits.length) {
+    // One line in the normal report, so the set cannot grow unnoticed the way
+    // it did while it was buried inside an aggregate. Never an exit code.
+    console.log(`\n${report.undeclaredInCommits.length} number(s) cited only in commit messages, `
+      + 'never gated (prose is not allocation — BUG-373). '
+      + 'List them: --undeclared-in-commits');
   }
 
   if (report.knownCollisions.length) {
