@@ -4744,6 +4744,10 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | A5a | Merge `origin/main` (BUG-353) | **DONE** | 6436/6436/0/0 on the merged tree; BUGS.md resolved as union + named drops | `f241084` |
 | A2 | BUG-370 — `build-capability-map.js`; the map stops being hand-edited | **DONE** | 73→91 nodes, 179/179 tools covered both ways, 5th status `unknown`; 19 assertions, 10 mutations; rendering verified in a browser | (this commit) |
 | D-2 | BUG-379 — the bind failure names the squatter. **Both named causes were false and the loop did not exist** | **DONE** | measured 65 events = 65 PROCESSES not one loop (healer outcomes: no-match 63, error 1); no config.json exists anywhere; found a 3rd defect nobody named (`target` tested `.length` on an object, so the port-naming branch was unreachable and would have thrown); 29 assertions, 17 mutations all caught, 4 survived a first pass | (this commit) |
+| D-3 | BUG-380 — dead provider lanes. **Two of three nodes needed no code** | **DONE** | cerebras is at position 0 of NO lane (so a healthy call never pays its 402) and the registry has no `cerebrasAlive` to de-rank on; `screen_look` re-measured 52 ok/11 fail with ALL 11 failures ≤2026-08-18 and 26 consecutive successes since. Real fix: the TTS chain discarded a skipped rung's reason twice, hiding a 15s kokoro stall. 9 assertions, 7 mutations | `c12b266` |
+| D-4 | BUG-381 — YouTube id extraction + typed open_web reasons | **DONE** | the extractor knew 4 URL shapes and missed 5, including `/live/` which is what a news livestream resolves to; 17 distinct failure strings (not 12) now carry one of four typed codes. 17 assertions, 8 mutations; Y1 restores the original regex as the red-first proof | `774e5c9` |
+| D-5 | BUG-382 — the five dark nodes, exercised on oracles | **DONE** | 22 tools, 17 pass / 5 dispositions / 0 FAIL. **No product defect** — and the harness accused the product three times before it was right, each an oracle bug of its own. dark 7→2 | `e74e789` |
+| D-6 | BUG-383 — a fabricated FACT is not a fabricated ACTION | **DONE** | **6 of 10 singles were already closed and the map was stale**; 3 need an operator; 1 real. New evidence-gated `external-fact` category, catch rate **6/9 asserted as a literal**, 3 misses pinned, 0 false positives. 13 assertions, 6 mutations | `01c58f4` |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5007,106 +5011,120 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position:** Wave A is complete and merged. **Track D-2 is DONE (BUG-379).**
-Track D-1 (BUG-378, the error-shape class) is DONE but sits in an OPEN PR — see
-the conflict note below. D-3 … D-6 remain and can be taken in any order.
-
-**Start state, verified 2026-08-27 (post-D-2):**
+**Position: TRACK D IS COMPLETE.** All six items (D-1 … D-6) are done and
+pushed. Track D was the first track that changes a capability rather than a
+gauge, and it is finished.
 
 ```
 main                       b04ec8e
-PR #37  (Track D-1)        fix/bug-378-effector-error-shape   OPEN, not merged
-PR for D-2                 fix/bug-379-aether-rebind-terminal
-suite                      6562 tests / 6562 pass / 0 fail / 0 skipped
+PR #37  Track D-1  BUG-378   fix/bug-378-effector-error-shape      OPEN
+PR #38  Track D-2  BUG-379   fix/bug-379-aether-rebind-terminal    OPEN
+PR #39  Track D-3..D-6       fix/track-d-remaining                 OPEN (stacked on #38)
+suite                      6605 tests / 6605 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
-file-size ratchet          main.js 1369 (ceiling 1373), healer.js 875 (ceiling 876)
-next free BUG number       380
+file-size ratchet          all files at or under their ceilings
+map                        91 nodes: 37 ok / 22 warn / 12 fail / 2 dark / 18 unknown
+next free BUG number       384
 ```
 
-> **⚠ DECISION FOR THE OPERATOR — two open PRs will conflict on the docs.**
-> D-1 and D-2 were branched independently off `main`, so both edit `BUGS.md`,
-> `index.html`, `README.md`, `ROADMAP.md` and this file. The code does not
-> overlap at all. Resolve by taking BOTH ledger rows and BOTH BUGS.md entries,
-> then re-running, in this order: `sync-test-count --write`, then
-> `build-capability-map --write`, then `build-index --write`. Merging D-1 first
-> is marginally simpler because its map-node edits are the smaller set.
+**Map movement across Track D** (from the campaign's founding measurement of
+28 ok / 25 warn / 13 fail / 7 dark / 18 unknown, as measured on this branch):
+**ok +9, warn −3, fail −1, dark −5.** The dark column is the real result: five
+nodes that had never been called once are now exercised against oracles.
 
-**THE LESSON THAT NOW HAS TWO INSTANCES, so read it before taking D-3.**
+### THE FINDING OF TRACK D, and it should shape whatever comes next
 
-Track D-1 and Track D-2 each named specific causes, and **in both cases the
-named cause was wrong while a real defect sat next to it**:
+**Every single Track D item named a cause, and in four of six the named cause
+was wrong.** This is no longer a coincidence:
 
-- **D-1** blamed three nodes on one error shape. Two of them did not have it —
-  `run_command`'s evidence was a pre-fix record from 2026-07-29 and
-  `list_folder` had never had the defect at all (3 ok / 2 fail, not 0 / 2).
+- **D-1** blamed three nodes on one error shape. Two did not have it —
+  `run_command`'s evidence was a pre-fix record, `list_folder` never had the
+  defect at all (3 ok / 2 fail, not 0 / 2).
 - **D-2** blamed a looping healer playbook and a `config.json` override.
-  Neither exists. The playbook ran ONCE ever; there is no `config.json` on any
-  path that would be read; and `.env` enables the proxy deliberately under a
-  different key than the one the work order quoted. The real third defect —
-  `target` testing `.length` on an object, making the port-naming branch
-  unreachable and its `.join()` a latent throw inside an error handler — is not
-  mentioned in the work order at all.
+  Neither exists. The playbook ran ONCE ever; there is no `config.json`. The
+  real defect — `target` testing `.length` on an object, making the
+  port-naming branch unreachable and its `.join()` a latent throw — was not
+  mentioned.
+- **D-3** said "every call pays their timeout". Cerebras is at position 0 of no
+  lane. The one live instance was somewhere else entirely: a 15s kokoro stall
+  nobody could see because the reason was discarded twice.
+- **D-6** listed ten singles. **Six were already closed** and the map was stale
+  about them, including one node still reading "BUG-292 in flight" for a bug
+  resolved on 2026-08-21.
 
-So: **run the item's own oracle FIRST, before writing anything.** D-2's work
-order supplied one ("boot with an orphaned listener on the port, get exactly N
-attempts and one honest anomaly, not a loop") and running it took ten minutes
-and refuted two of three claims. Where an item has no oracle, the vault does:
-date the rows the claim derives from, then count them.
+The cause is structural, not carelessness: **the map's per-node `ok`/`fail`
+counts and `ev` text are hand-carried readings**, while only
+`nodes`/`clusters`/`vitals` regenerate. A node row can be two months stale
+while the page around it says GENERATED today and every gate passes.
 
-**First action:** take **D-3 (dead provider lanes)**, **D-4 (YouTube id
-extraction)**, **D-5 (never exercised — needs a harness)** or **D-6 (the ten
-singles)** from the TRACK D WORK ORDER above. Nothing is blocked on ordering.
+**So, before working ANY node: re-derive its counts from the live vault and
+CHECK THE DATES ON THE ROWS.** If the evidence predates a fix already in the
+tree, the node is a documentation defect, not a code defect. And when an item
+ships its own oracle — D-2's did — **run it before writing anything.** D-2's
+took ten minutes and refuted two of three claims.
 
-**Carry forward, cheap and reusable:**
+### What is left, and none of it is Track D
 
-- `src/core/util/port-holder.js` — bounded "what holds this port?", injectable,
-  honest null with a reason. D-6's `rejected clients` item ("147 identical lines
-  that never name the client") is the same shape of defect and can reuse it.
-- `test/bug-379-...test.js`'s live oracle pattern: make the TEST be the squatter,
-  so the expected pid is known exactly rather than plausibly. Any "identify the
-  other process" item should copy it.
-- The three-route diff from D-1 (adapter / dispatcher / breaker remedy) and the
-  evasion probes from its review pass. Mutation alone cannot tell you a guard is
-  looking in the wrong PLACE.
+- **Track A** — three operator minutes (O1 `node mythos/scripts/google-auth.js`,
+  the OCR hotkey keypress). Turns two nodes green.
+- **Track B** — six nodes whose LABEL is stale rather than whose capability is
+  broken. Track D just demonstrated how common that is; this track is now
+  higher-value than it looked.
+- **Track C** — three dispositions (CAPTCHA refusal, `focus_window`'s exhausted
+  ladder, video call having no tool).
+- **Track E** — eight nodes needing a live microphone.
+- **Track F** — the 18 never-measured `unknown` nodes. `scripts/verify-dark-nodes.js`
+  from D-5 is the shape to copy: one script, an oracle per tool, and four
+  verdicts where a disposition can never be counted as a pass.
+
+**Still open from Track D, deliberately, each with its reason in the map:**
+`spotify_search` (needs a desktop with Spotify running), `Aether mesh` (needs a
+live boot with a squatted port), `browser automation` (the auto-launch wiring
+spawns a real browser and wants its own sitting), `cua-driver` (needs ≥5 boots),
+`ui_click` (needs a measured desktop run — 10 calls is too small to mean
+anything), and `fabrication` at 67%.
 
 ### Five things that will cost you an hour each if nobody tells you
 
-**1. The pre-commit hook runs FOUR gates** — full suite, `sync-test-count
---check`, `lint-bug-registry`, `build-capability-map --check` — plus
-`build-index --check`. Add or remove a registered tool and the commit is blocked
-until that tool is mapped to a node in `index.html`'s island.
+**1. The pre-commit hook runs FOUR gates** plus `build-index --check`. Add or
+remove a registered tool and the commit is blocked until that tool is mapped to
+a node in `index.html`'s island.
 
-**2. Ordering: `sync-test-count --write` BEFORE `build-capability-map --write`.**
-The map reads the suite figures out of ROADMAP.md. Hit again on 2026-08-27: the
-map printed `! vitals.tests: island says 6533, the code says 6562` and needed a
-second `--write` after the sync. And if BUGS.md changed, `build-index --write`
-too — a new entry makes `test/…the real index.html` fail until the register is
-regenerated, which looks like a regression and is not.
+**2. Ordering: `sync-test-count --write` BEFORE `build-capability-map --write`,**
+and `build-index --write` after any BUGS.md change. Hit repeatedly across Track
+D: a new BUGS.md entry makes `test/…the real index.html` fail until the register
+is regenerated, which reads as a regression and is not.
 
-**3. Run the suite with the overrides or it lies to you** — long-form `TEMP`/`TMP`
-plus free ports from `node scripts/pick-free-ports.js`. Without them a clean tree
-measures `fail=1 skipped=1` and `sync-test-count` will recommend recording that
-red run as the baseline. **Do not follow that recommendation.** `--write` records
-whatever it measures, including a one-test flake — re-run, and re-run the failing
-file in isolation, before believing a single red number.
+**3. Run the suite with long-form `TEMP`/`TMP` and free ports from
+`node scripts/pick-free-ports.js`,** or it measures `fail=1 skipped=1` on a clean
+tree and `sync-test-count --write` will record that red run as the baseline. It
+records whatever it measures, **including a one-test flake** — re-run, and re-run
+the failing file in isolation, before believing a single red number.
 
 **4. Commit with `git commit -- <pathspec>`, then demand an empty
-`git status --porcelain`.** Both halves, neither sufficient.
+`git status --porcelain`.** And if you edited a file AFTER `git add`, re-add it:
+the index holds the stale copy and the commit captures the index, not the tree.
 
-**5. `--next` is an observation, not a lock.** It reads **branch names** too, so
-naming a branch `fix/bug-NNN-…` claims NNN immediately. Write the BUGS.md entry
-early, and renumber with `git reset --soft HEAD~1`, never `--amend`.
+**5. `--next` reads BRANCH NAMES too,** so naming a branch `fix/bug-NNN-…`
+claims NNN immediately. Write the BUGS.md entry early. Renumber with
+`git reset --soft HEAD~1`, never `--amend`.
 
 **6. Do not edit a tracked file while the suite is running.** The anti-drift
-tests scan tracked files — BUGS.md, `index.html`, these plan documents — so an
-edit mid-run invalidates the run and reads as a regression.
+tests scan tracked files — BUGS.md, `index.html`, these plan documents.
 
 **7. The file-size ratchet will refuse your fix, and it is usually right.**
-`main.js` (1373) and `healer.js` (876) are pinned one-directional and the failure
-message says the baseline is a ceiling, not a suggestion. BUG-379 hit both;
-extracting the new code into `aether/bind-failure.js` and
-`immune/aether-rebind.js` made it testable without booting the app, which was a
-better outcome than the inline version. Do not raise the numbers.
+It refused three times across Track D (`main.js`, `healer.js`, `from-dashboard.js`
+at 1417/1418) and each refusal produced a better structure: the new code became
+`aether/bind-failure.js`, `immune/aether-rebind.js` and `util/youtube-id.js`, all
+callable from a test without booting anything. **Move the code; do not raise the
+number.**
+
+**8. Multi-line anchors do not match — the sources are CRLF.** Every
+search-and-replace script and every mutation harness in Track D hit this. A
+`\n` in a JS string is LF. Use single-line anchors, or split on `/\r?\n/` and
+rejoin with the file's own line ending. When a mutation harness reports TARGET
+ABSENT, that is it refusing to score a mutation that never applied — which is
+the harness working.
 ### Standing constraints
 
 - **Two machines and sometimes two sessions share this repo.** Branch, PR,
