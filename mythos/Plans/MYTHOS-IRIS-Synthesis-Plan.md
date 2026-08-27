@@ -4743,6 +4743,7 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | — | Pre-commit's own fallback ports were squatted, reading as 3 regressions | **DONE** | reproduced with netstat (pids 4296/10904); hook now asks the OS for free ports | `7f93dd5` |
 | A5a | Merge `origin/main` (BUG-353) | **DONE** | 6436/6436/0/0 on the merged tree; BUGS.md resolved as union + named drops | `f241084` |
 | A2 | BUG-370 — `build-capability-map.js`; the map stops being hand-edited | **DONE** | 73→91 nodes, 179/179 tools covered both ways, 5th status `unknown`; 19 assertions, 10 mutations; rendering verified in a browser | (this commit) |
+| D-1 | BUG-378 — the error-shape class assertion. **Two of its three nodes were stale data, not defects** | **DONE** | 7 of 12 failure shapes wrote an EMPTY audit reason for all 179/179 tools on HEAD; 28 of 142 pre-2026-08-13 fail rows reasonless vs 0 of 203 after; 23 assertions, 10 mutations all caught; map fail 13→11; `spotify_search` left red with its real mechanism named | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5006,60 +5007,103 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position:** Wave A is complete and merged. The instruments are honest; no map
-node has turned green yet, and that was the point. **Track D is the next work,
-and it is the first track that changes a capability rather than a gauge.**
+**Position:** Wave A is complete and merged. **Track D-1, the error-shape class,
+is DONE (BUG-378)** — the class assertion is shipped and two of D-1's three named
+nodes turned out not to have the defect at all. Track D items D-2 … D-6 remain,
+and any of them can be picked up in any order.
 
-**Start state, verified 2026-08-27:**
+**Start state, verified 2026-08-27 (post-D-1):**
 
 ```
-main                       744aecf   (zero open PRs)
-suite                      6520 tests / 6520 pass / 0 fail / 0 skipped
+main                       b04ec8e   (PR #36 open, unrelated: BUG-377)
+this work                  branch fix/bug-378-effector-error-shape -> PR
+suite                      6556 tests / 6556 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
 build-capability-map       --check clean
-map                        91 nodes: 28 ok / 25 warn / 13 fail / 7 dark / 18 unknown
-next free BUG number       376
+build-index                --check clean
+map                        91 nodes: 29 ok / 26 warn / 11 fail / 7 dark / 18 unknown
+next free BUG number       379
 ```
 
-**First action:** branch fresh from `744aecf` and take **D-1, the error-shape
-class** (above). It is the only item in Track D where the failures are
-currently invisible, so it is the only one where you cannot even read the bug
-until the fix lands. Everything else in Track D can be picked up in any order.
+**What D-1 actually found, because it changes how the rest of Track D should be
+read.** The map's per-node `ok`/`fail` counts are hand-carried readings from the
+operator's live vault, and **they can be months stale while presenting as
+current**. Measured against the real vault
+(`%APPDATA%/MYTHOS/vault/Audit`, 345 completed-fail rows):
+
+- `run_command`'s `[object Object]` was a **2026-07-29** record, already fixed by
+  P2-12 on 2026-08-13. The map was showing pre-fix data as a live defect.
+- `list_folder` was **not this defect class at all** — 3 ok / 2 fail, not 0 / 2,
+  its reason was always readable, and both failures are the sandbox correctly
+  refusing a path outside the allowed roots.
+- Only `spotify_search` stays red, and **not for the reason the work order
+  guessed**: it is the one Spotify verb that needs a working UIA tree inside
+  Spotify, not a shared dispatch shape.
+
+Negative control: 28 of 142 completed-fail rows before 2026-08-13 carried no
+actionable reason; **0 of 203 after it**. So before treating any other Track D
+node's evidence as current, **check the date on the rows it is derived from.**
+Two of the three nodes in the very first item were wrong, and the same risk
+applies to D-2 … D-6.
+
+**First action:** take any of **D-2 (one terminal condition), D-3 (dead provider
+lanes), D-4 (YouTube id extraction), D-5 (never exercised — needs a harness), or
+D-6 (the ten singles)** from the TRACK D WORK ORDER above. D-1 was sequenced
+first only because its failures were invisible until the fix landed; that is no
+longer true, so nothing is blocked on ordering now.
+
+**Carry forward from D-1, cheap and reusable:**
+
+- `test/effector-failure-reason-class.test.js` walks all 179 registered tools
+  through the real adapter, hub and dispatcher. If a Track D fix changes an
+  effector's failure shape, that file is where it will fail first — and Part A
+  pins `effectors/adapter.js` as the one door every tool failure leaves through.
+- The three-route diff (adapter `.result` / dispatch audit reason /
+  `hub.reasonOf` remedy) found the parity gap that reading any single route
+  missed. It is the cheapest check available whenever one fact is derived twice.
 
 ### Five things that will cost you an hour each if nobody tells you
 
-**1. The pre-commit hook runs FOUR gates, and one is new.** Full suite,
-`sync-test-count --check`, `lint-bug-registry`, and `build-capability-map
---check`. **Add or remove a registered tool and your commit is blocked until
-that tool is mapped to a node on the capability map.** One line in the island
-plus `--write`; the hook message says so.
+**1. The pre-commit hook runs FOUR gates.** Full suite, `sync-test-count
+--check`, `lint-bug-registry`, and `build-capability-map --check`, plus
+`build-index --check`. **Add or remove a registered tool and your commit is
+blocked until that tool is mapped to a node on the capability map.** One line in
+the island plus `--write`; the hook message says so.
 
 **2. Ordering: `sync-test-count --write` must run BEFORE
 `build-capability-map --write`.** The map reads the suite figures out of
 ROADMAP.md's SYNC block. Reverse them and the hook blocks you on a map that is
-one number behind.
+one number behind. Confirmed again on 2026-08-27: the map printed
+`! vitals.tests: island says 6533, the code says 6556` and needed a second
+`--write` after the sync.
 
 **3. Run the suite with the overrides or it lies to you.** Long-form `TEMP` and
-`TMP` (an 8.3 short path makes spawned servers abort with a libuv assertion and
-report only ECONNREFUSED), plus free ports from
-`node scripts/pick-free-ports.js`. Without them a clean tree measures
-`fail=1 skipped=1`, and `sync-test-count --check` will then recommend writing
-that red result in as the baseline. **Do not follow that recommendation.**
+`TMP`, plus free ports from `node scripts/pick-free-ports.js`. Without them a
+clean tree measures `fail=1 skipped=1`, and `sync-test-count --check` will then
+recommend writing that red result in as the baseline. **Do not follow that
+recommendation.** Hit twice on 2026-08-27 during D-1: once because a backgrounded
+command did not inherit the exported `TEMP` (`6556/6554/1/1` on a clean tree),
+and once because `--write` recorded a genuine one-test flake (`6556/6555/1/0`)
+that did not reproduce on a re-run. **`--write` records whatever it measures,
+including a flake — re-run before believing a single red number, and re-run the
+failing file in isolation to tell a flake from a regression.** `BUG-359`'s
+whatsapp-window-settle test was the flake; it passed 4/4 three times alone.
 
 **4. Commit with `git commit -- <pathspec>`, then demand an empty
-`git status --porcelain`.** Both halves, neither sufficient. Pathspec stops a
-stale index from shipping content the gates never tested; the porcelain check
-stops a file dirty on disk but outside the pathspec from being tested and then
-left out, which makes the green run describe a tree absent from history. Both
-happened on 2026-08-27.
+`git status --porcelain`.** Both halves, neither sufficient.
 
-**5. `--next` is an observation, not a lock.** It reads refs and the working
-tree at the instant asked, and it is correct — but two sessions were handed the
-same number inside one minute, because the window is between ASKING and
-WRITING. Write the BUGS.md entry early. Earlier commit wins a collision, and
-renumber by `git reset --soft HEAD~1` rather than `--amend`: the hook runs
-while HEAD is still the old commit, so an amend that removes a citation is
-blocked by the citation it is removing.
+**5. `--next` is an observation, not a lock.** Write the BUGS.md entry early.
+Note that `--next` reads **branch names too**, so naming a branch
+`fix/bug-NNN-...` claims NNN immediately — which is why `--next` said 379 during
+D-1 while the plan still said 378. Renumber by `git reset --soft HEAD~1` rather
+than `--amend`.
+
+**6. Editing a tracked file while the suite runs invalidates the run.** New on
+2026-08-27. Splicing the BUG-378 entry into BUGS.md mid-run made two ratchet
+tests fail with `131 undeclared in code, above baseline 130`; both passed
+immediately when re-run against the settled tree. The anti-drift tests scan
+tracked files — including BUGS.md, `index.html` and the plan documents — so
+finish the edits, then measure.
 
 ### Standing constraints
 
