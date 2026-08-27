@@ -173,14 +173,32 @@ function excerpt(body) {
 // BUG-049's `**Not unit-testable.**` is not a status at all and must stay
 // unrecorded — which is why NOT- is matched against an explicit verb list rather
 // than as a prefix.
+// BUG-390 — two further shapes, both found the same way as BUG-389's: by reading
+// what the entries that were still `unrecorded` actually say.
+//   * `**OPEN. Deferred by design to …**` / `**OPEN, UNDIAGNOSED. …**` — a stated
+//     status, and the one whose absence matters most, because an entry wrongly
+//     left unrecorded here is real work that nothing is tracking.
+//   * pointer-shape entries, which are a BULLET rather than a heading and carry
+//     their status inline: `- BUG-345 - adblock silence caveat. FIXED 639200c:`.
+// `bulletPartial` is ordered ahead of `bulletFixed` for BUG-352, which reads
+// "COUNTER FIXED … the README catalog table and pie are NOT yet generated": a
+// half-done ticket is open work, and reading its FIXED and stopping there would
+// close it on the strength of the half that landed.
 const MARK = {
-  // Order matters: the negative is tested before the positive it contains.
+  // Order matters: every negative is tested before the positive it contains.
   notDone: /^\s*\*\*\s*NOT\s+(?:done|fixed|attempted|started|implemented)\b/im,
+  open: /^\s*\*\*\s*OPEN\b/im,
+  // These two are built per-entry by bulletMarks() so the bullet must name THIS
+  // entry's own number. Kept here as placeholders only so the state names exist.
+  bulletPartial: /(?!)/,
+  bulletFixed: /(?!)/,
   verified: /^\s*\*\*\s*(?:LIVE-?VERIFIED|VERIFIED)\b/im,
   fixed: /^\s*\*\*\s*(?:FIXED|RESOLVED|SHIPPED|Fixed)\b/m,
   coded: /^\s*\*\*\s*(?:🔧\s*)?CODED\b/im,
   diagnosed: /^\s*\*\*\s*(?:🔍\s*)?(?:DIAGNOSED|MEASURED)\b/im,
 };
+const MARK_OPEN = new Set(['notDone', 'open', 'bulletPartial']);
+const MARK_FIXED = new Set(['fixed', 'verified', 'bulletFixed']);
 
 // The `**Status:**` line, as WRITTEN rather than as hoped for. The old reader
 // required the marker to sit immediately after the colon, so BUG-011's
@@ -204,9 +222,43 @@ function statusLine(body) {
 // not the ticket's disposition. Reading it as the status turned two fixed bugs
 // and one verified bug back into open ones. A marker is only a status when it is
 // standing in for a Status line that does not exist.
-function firstMarkerLine(body) {
+// BUG-390 — the bullet patterns are tested against the FLATTENED body and the
+// `**` ones per line, and the split is not cosmetic. A pointer entry is one
+// bullet that wraps: BUG-352 reads "- BUG-352 - catalog truth. **COUNTER FIXED
+// … ;\n  the README catalog table and pie are NOT yet generated**". Scanning line
+// by line sees the FIXED and never reaches the qualifier two lines down, which
+// closes a ticket on the strength of the half of it that landed. The `**` markers
+// stay line-anchored, because that anchoring is what stops a mid-paragraph
+// sentence being read as a status.
+// A bullet only states THIS entry's status when it names THIS entry's number.
+// Without that, BUG-273 read `verified` off a bullet nested inside it that was
+// about BUG-345 — one ticket's disposition assigned to another, which is the same
+// mistake as reading a `**Not fixed in this pass:**` subsection as a status, and
+// it fails toward closing things nobody fixed.
+function bulletMarks(n) {
+  // Assembled rather than written as one literal on purpose. Writing the prefix
+  // and the zero-padding adjacent spells a valid-looking ticket id in tracked
+  // source, and lint-bug-registry scans tracked source for exactly that shape —
+  // so the pattern gets counted as a number in use with no entry and pushes the
+  // undeclared ratchet over baseline. A pattern that matches ids must not itself
+  // look like one, and neither must the comment explaining it: the first draft of
+  // this note tripped the same gate twice by quoting the string it warns about.
+  const id = '[-*]\\s*' + 'BUG-' + '0*' + n + '\\b';
+  return {
+    bulletPartial: new RegExp(`${id}[^\\n]*\\bFIXED\\b[^\\n]*\\bNOT\\s+yet\\b`, 'i'),
+    bulletFixed: new RegExp(`${id}[^\\n]*\\bFIXED\\b`, 'i'),
+  };
+}
+
+function firstMarkerLine(body, n) {
+  const flat = body.replace(/\s+/g, ' ');
+  const bullets = bulletMarks(n);
+  for (const state of ['bulletPartial', 'bulletFixed']) {
+    if (bullets[state].test(flat)) return { state, line: flat.slice(0, 120) };
+  }
   for (const line of body.split(/\r?\n/)) {
     for (const [state, re] of Object.entries(MARK)) {
+      if (state.startsWith('bullet')) continue;
       if (re.test(line)) return { state, line };
     }
   }
@@ -217,7 +269,7 @@ function classify(bug, openSet) {
   const t = bug.body.replace(/\s+/g, ' ');
   const h = bug.head;
   const s = statusLine(bug.body);
-  const mark = s ? null : firstMarkerLine(bug.body);
+  const mark = s ? null : firstMarkerLine(bug.body, bug.n);
   const say = (re) => re.test(t);
 
   // The 40-character window is deliberate and was widened to 300 once, which
@@ -228,13 +280,13 @@ function classify(bug, openSet) {
   // here; inventing a seventh state would change the register's shape for two rows.
   if (/^[^.]{0,40}SUPERSEDED/i.test(s) || /\bSUPERSEDED\b/.test(h)) return 'duplicate';
   if (openSet.has(bug.n)) return 'open';
-  if (mark && mark.state === 'notDone') return 'open';
+  if (mark && MARK_OPEN.has(mark.state)) return 'open';
 
   // MITIGATED is a shipped change that bounds a defect it does not remove. It is
   // closer to fixed than to anything else and is stated as a status by its author.
   const fixed = /✅/.test(h) || /\bFIXED\b/.test(h) || /\bRESOLVED\b/.test(h)
     || /✅/.test(s) || /\b(FIXED|RESOLVED|VERIFIED|MITIGATED|CLOSED)\b/i.test(s)
-    || (mark && (mark.state === 'fixed' || mark.state === 'verified'));
+    || (mark && MARK_FIXED.has(mark.state));
   if (fixed) {
     const proven = say(/mutation-proven/i) || say(/0 survived/i);
     const live = say(/live-?verified/i) && !say(/NOT (?:yet )?live-?verified/i);

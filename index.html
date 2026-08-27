@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6740,
+      "value": 6751,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3193,7 +3193,7 @@
       {
         "n": 266,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "open",
         "title": "six skill names are hardcoded into prompts and are PHANTOM on a fresh clone",
         "detail": {},
         "excerpt": "**OPEN. Deferred by design to merged-order step 8, lane 8A.1/8A.2** — see `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md` \"Step 8\", which carries the full design, the wiring table and the fix. Numbered here so the id is reserved and cannot be reused by a concurrent session. `voice/voice-agent.js:275` (the SKILLS RULE paragraph), `voice/voice-agent.js:93` and `effectors/from-skills.js:37` name specific skills in prose the model reads every turn — `ui-ux-pro-max`, `frontend-ui-engineering`, `spec-driven-development`, `tdd-workflow`, `deep-research`, `code-review`. All six are `?`-optional in `skills.allowlist` and none is vendored, so they resolve only from a host CLI's `~/.claude/skills`. **Reproduced 2026-08-17** by running the real loader with `USERPROFILE`/`HOME` pointed at a non-existent directory and `MYTHOS_SKILLS_DIR` empty: 43 skills resolve, and all six prompt-named ones report PHAN…"
@@ -3201,7 +3201,7 @@
       {
         "n": 267,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "open",
         "title": "the Live/spoken path is told to call a tool it was never given",
         "detail": {},
         "excerpt": "**OPEN. Deferred by design to merged-order step 8, lane 8A.3.** Numbered here to reserve the id. `buildLiveSystemInstruction()` (`mythos/server/index.js`) injects `skillsLoader.catalogBlock()`, whose header is literally *\"SKILLS AVAILABLE (methodology + design guides — call use_skill with the name to load full guidance)\"* (`loader.js:392`). But `use_skill` sits in `VOICE_ALLOWLIST_EXEMPT` (`voice/live-tools.js:252`, rationale \"internal/debugging surface\") and Live's `functionDeclarations` are built from `DEFAULT_ALLOWLIST` only. So the **primary spoken surface** receives a catalogue of 43 skills plus an instruction to call a function that was never declared to it. `use_skill` is T0 (`leash/tiers.js:71`, read-only), so there is no safety argument for withholding it — only the tool-count argument, which is already outweighed by the tokens the catalogue itself spends. Fix is to promote it t…"
@@ -3209,7 +3209,7 @@
       {
         "n": 268,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "open",
         "title": "Ctrl+Alt+X (screen text capture / OCR) does nothing",
         "detail": {},
         "excerpt": "**OPEN, UNDIAGNOSED. Operator-reported 2026-08-17 from the first real Electron sitting, and explicitly DEPRIORITISED by the operator the same day** — \"not one of the most important features I'm looking to do a pass right now\", fix later. Recorded now so the observation is not lost with the session. **Observed, verbatim:** pressing `Ctrl+Alt+X` produces a popup/toast (the operator described it as looking like a clipboard notification from MYTHOS) and then **nothing further happens** — no captured text is returned, spoken, or surfaced anywhere. So the hotkey is registering and something in the chain is firing; what follows it is not. **Why this matters beyond the feature itself:** this is merged-order step 7's Slice 2/3 surface and it is fully green in the automated suite. It took a human at a real keyboard to find it — the same lesson as the Slice 5 boot crash that shipped behind 2598 pas…"
@@ -3249,7 +3249,7 @@
       {
         "n": 273,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "open",
         "title": "the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust",
         "detail": {
           "cause": "`unverified` carried two different epistemic states under one name: -"
@@ -3466,7 +3466,7 @@
       {
         "n": 345,
         "shape": "pointer",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "adblock silence caveat. FIXED 639200c: When browser_launch_debug starts",
         "detail": {},
         "excerpt": "adblock silence caveat. FIXED 639200c: When browser_launch_debug starts chrome/edge with extensionsLoaded [] (no Brave, no BROWSER_EXTENSIONS), append a spoken caveat (\"pages will show ads - ...\") to buildLaunchResult (src/core/effectors/from-browser.js ~985). Today the empty array is reported but never warned about; operator asked for ad-blocking three times in July-August with zero signal that nothing was blocking."
@@ -3498,7 +3498,7 @@
       {
         "n": 349,
         "shape": "pointer",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "see_and_click occluded-click refusal. FIXED 3ce6c8e:",
         "detail": {},
         "excerpt": "see_and_click occluded-click refusal. FIXED 3ce6c8e:"
@@ -3506,7 +3506,7 @@
       {
         "n": 350,
         "shape": "pointer",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "verifier retry-guidance mapping. FIXED 1adad59. Original: hard-fails cta/title-overlap killed most of the 11",
         "detail": {},
         "excerpt": "verifier retry-guidance mapping. FIXED 1adad59. Original: hard-fails cta/title-overlap killed most of the 11 failed builds (design/verify.js :167-169,:236-247). Keep rules HARD (operator decision pending D-C) but map rule names onto OUTPUT_CONTRACT clauses inside the retry prompt (build-runner.js :278-281); measured @media data shows upfront contracts work."
@@ -3522,7 +3522,7 @@
       {
         "n": 352,
         "shape": "pointer",
-        "state": "unrecorded",
+        "state": "open",
         "title": "catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);",
         "detail": {},
         "excerpt": "catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified); the README catalog table and pie are NOT yet generated — see below.**"
@@ -3870,18 +3870,29 @@
         "title": "the ticket register called 133 entries \"unrecorded\" while 96 of them stated a status it never looked for",
         "detail": {},
         "excerpt": "**Status:** ✅ FIXED 2026-08-28. 1 source file changed, 1 test file added (17 assertions), 10 mutations run and all 10 caught, source restored sha256-identical. **133 unrecorded → 36, with zero entries that already had a status changing state.** ### The defect `build-index.js` printed this on every run, and `index.html` published it: ``` build-index: 133 entries state no status a machine can read. ``` Its own header explained why: *\"only about a quarter state a status in a form a machine can read. The rest are a heading and prose.\"* **That sentence was measured against the reader, not against `BUGS.md`, and it is false.** Of the 133: | | count | |---|---| | opens with a **bold marker line** — `**FIXED.**`, `**Fixed** by \\\u003csha\\> | **88** | | has an ordinary `**Status:**` line the regexes missed | **8** | | genuinely states nothing | **36** | | pointer-only stubs with no entry | **4** | The…"
+      },
+      {
+        "n": 390,
+        "shape": "entry",
+        "state": "verified",
+        "title": "three deferred tickets were tracked as nothing, and one entry wore another entry's status",
+        "detail": {
+          "fix": "` section. -",
+          "symptom": "/",
+          "cause": "/"
+        }
       }
     ],
     "counts": {
-      "verified": 44,
-      "fixed": 135,
-      "open": 11,
+      "verified": 45,
+      "fixed": 138,
+      "open": 16,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
-      "unrecorded": 36
+      "unrecorded": 28
     },
-    "total": 238,
+    "total": 239,
     "openDeclared": [
       344,
       346,
