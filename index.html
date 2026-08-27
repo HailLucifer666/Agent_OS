@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6670,
+      "value": 6684,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -703,8 +703,8 @@
       "s": "dark",
       "tools": [],
       "kind": "subsystem",
-      "note": "Ctrl+Alt+X registers on every boot. No log line anywhere shows it ever firing.",
-      "ev": "main.log: \"OCR-grab hotkey registered: Control+Alt+X\" on every boot.\nBUG-268 open; instrumentation added 2026-08-20 16:39 and never exercised.",
+      "note": "Ctrl+Alt+X screen-text grab. Still dark 2026-08-28: nothing can press an OS-global hotkey but a person, and the wiring below it is already source-pinned.",
+      "ev": "TRIAGED 2026-08-28 (Track A, BUG-387), NOT closed, and deliberately not faked. The node has an empty tool list because the hotkey is not a tool: registerOcrGrabHotkey() in electron/main.js (fallbacks Control+Alt+X -> Control+Shift+X -> Control+Alt+S, MYTHOS_HOTKEY_OCR override, never steals focus) sends fork-IPC to server/index.js, which dispatches the already-registered screen_read_text effector through shared dispatchAction with channel:\"hotkey\" so it is audit-honest, then broadcasts ocr-result to the HUD. Every link in that chain except the keypress itself is pinned by test/electron-ocr-hotkey.test.js (9 tests, source-shape for the Electron half per the talk-hotkey precedent), and the effector it ends in is measured separately: screen_read_text is 21 ok / 1 fail. So what is unmeasured here is exactly one hop — whether Windows delivers the global accelerator to this process — and that needs a finger on a key at a real desktop. Stays DARK rather than being promoted on the strength of its neighbours: dark is the accurate claim (a measured zero of recorded calls), and a node turned green because the code around it looks right is the kind of rounding-up this campaign exists to remove. NEEDS THE OPERATOR: press Ctrl+Alt+X with MYTHOS running and confirm the caption appears.",
       "ok": 0,
       "f": 0
     },
@@ -1033,8 +1033,8 @@
       ],
       "ok": 112,
       "f": 97,
-      "note": "Hard down. The refresh token is expired or revoked. The error message is exemplary; following it reproduces the fault.",
-      "ev": "0 ok / 27 fail over the last three days.\n\"invalid_grant: Token has been expired or revoked. This is NOT a network problem and will not recover on its own. Run node scripts/google-auth.js.\"  BUG-291 in flight."
+      "note": "gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
+      "ev": "LIVE-VERIFIED 2026-08-28 (Track A, BUG-387) — the first time this node has been checked against the provider rather than against its own history. `node mythos/scripts/verify-google-grant.js` reports INVALID: the refresh token minted no access token and Gmail refused. The real effector agrees, which is the two-routes-one-answer cross-check: calling gmail_unread through the registered tool returns \"invalid_grant: Token has been expired or revoked.\" So this row is correct and stays red. THE CODE AROUND IT IS NOT AT FAULT, measured rather than assumed: from-gmail classifies invalid_grant as TERMINAL and its remedy text names the literal command plus the 7-day Testing-publishing-status trap; hub.js latches the terminal result per tool so the provider is not hammered — the 88 recorded failures fall into 60 bursts, nearly all of size ONE, i.e. one attempt per process rather than a retry storm; gmail-sensor raises health.anomaly with needsOperator:true; and explainer.js speaks the whole remedy aloud, verbatim, including `node scripts/google-auth.js`. Nine test files already cover that chain, two of them asserting the SPOKEN text contains the command. WHAT WAS ACTUALLY BROKEN was the one thing an operator would check: `doctor` reported \"OK Gmail / Calendar sensors — configured\" for three weeks while all of the above was failing, because it tests that three strings are PRESENT in .env and presence is not validity. Fixed under BUG-387: doctor now says validity is unchecked and names the verifier. A CORRECTION worth recording: from the episodic `summary` field it looked as though MYTHOS had announced this nine times over eight days and never said what to do — that was WRONG, `summary` truncates at ~100 characters and `detail.text` carries the full remedy. Only the 2026-08-18 utterance is genuinely deficient and it predates the BUG-273 C2 / BUG-278 fixes that repaired exactly it. NEEDS THE OPERATOR: run `node mythos/scripts/google-auth.js`, put the new GOOGLE_REFRESH_TOKEN in mythos/.env, then confirm with `node mythos/scripts/verify-google-grant.js` — which is the point of the new script, since before it there was no way to tell whether the three minutes had worked."
     },
     {
       "c": "comms",
@@ -3836,18 +3836,26 @@
         "title": "37 tools nobody had ever measured against an oracle, and a harness that accused the product six times before it was right",
         "detail": {},
         "excerpt": "**Status:** ✅ EXERCISED 2026-08-28. Closure-campaign **Track F**. New `scripts/verify-unknown-nodes.js` (the sibling of BUG-382's `verify-dark-nodes.js`), 10 assertions in `test/bug-386-unknown-node-harness.test.js`, **8 mutations of REAL PRODUCT CODE, 8 caught**, every touched file restored sha256-identical. ``` 21 pass · 7 n/a · 11 disp · 0 FAIL · exit 0 ``` **No product defect was found.** That is the correct answer for tools that were unmeasured rather than broken, and it is only worth anything because the harness is proven able to say otherwise — see the mutation section. ### Scope: two populations, and they support different claims | | nodes | tools | what was actually open | |---|---|---|---| | never called | 7 | 9 | does any of this run at all | | Track B's `warn` set | 11 | 28 | they demonstrably run in production; do they do what they SAY | The second population exists because…"
+      },
+      {
+        "n": 387,
+        "shape": "entry",
+        "state": "coded",
+        "title": "`doctor` reported the Google grant OK for three weeks while 88 calls failed on it",
+        "detail": {},
+        "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions, 9 mutations all caught. **This does NOT close Track A's two nodes.** They need three operator minutes and no session can supply them. What it removes is the reason those three minutes kept not happening. ### The defect, measured live on this machine ``` $ node mythos/scripts/doctor.js OK Gmail / Calendar sensors configured: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN ``` At that same moment, from the vault: **88 `invalid_grant` failures across 60 separate bursts between 2026-08-06 and 2026-08-26**, every one of them saying the refresh token is expired or revoked. The single check an operator runs to answer *\"is my Gmail set up?\"* was answering **yes** about the exact thing that was broken. **The class is an existence check standing…"
       }
     ],
     "counts": {
       "verified": 30,
       "fixed": 56,
       "open": 10,
-      "coded": 3,
+      "coded": 4,
       "diagnosed": 1,
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 234,
+    "total": 235,
     "openDeclared": [
       344,
       346,

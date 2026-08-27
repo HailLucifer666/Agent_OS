@@ -41,6 +41,112 @@ it is committed.
 
 ---
 
+## BUG-387 — `doctor` reported the Google grant OK for three weeks while 88 calls failed on it (🔧 CODED 2026-08-28)
+
+**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New
+`scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions,
+9 mutations all caught.
+
+**This does NOT close Track A's two nodes.** They need three operator minutes
+and no session can supply them. What it removes is the reason those three
+minutes kept not happening.
+
+### The defect, measured live on this machine
+
+```
+$ node mythos/scripts/doctor.js
+  OK    Gmail / Calendar sensors    configured: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
+```
+
+At that same moment, from the vault: **88 `invalid_grant` failures across 60
+separate bursts between 2026-08-06 and 2026-08-26**, every one of them saying
+the refresh token is expired or revoked. The single check an operator runs to
+answer *"is my Gmail set up?"* was answering **yes** about the exact thing that
+was broken.
+
+**The class is an existence check standing in for a correlation check.**
+`KEY_CHECKS` asks whether three strings are present in `.env`. Presence is not
+validity, and for an OAuth refresh token the two come apart permanently and
+silently: the string stays in the file forever after Google revokes it.
+
+### What was NOT wrong, and it is most of the system
+
+Measured before writing anything, because Track A is the one track in this
+campaign whose description turned out to be exactly right, and it would have
+been easy to invent work:
+
+- `from-gmail.js` classifies `invalid_grant` as terminal and its remedy text
+  names the literal command AND the 7-day "Testing publishing status" trap.
+- `hub.js` latches the terminal result per tool and returns the stored remedy
+  without touching the provider again. Verified from the vault: the 88 failures
+  fall into **60 bursts, nearly all of size 1** — one attempt per process, not a
+  retry storm.
+- `gmail-sensor.js` raises `health.anomaly` with `needsOperator: true`.
+- `explainer.js` short-circuits on `needsOperator` and **speaks the whole
+  remedy**, verbatim, including `node scripts/google-auth.js`.
+- Nine test files already cover that chain, two of them asserting the SPOKEN
+  text contains `google-auth.js`.
+- `google-auth.js`'s two historical Windows bugs (cmd.exe splitting the consent
+  URL at `&`; `console.error` + `process.exit` eating Google's real error) are
+  both already fixed.
+
+**A correction I have to record, because I nearly filed a ticket on it.** From
+the episodic `summary` field it looked as though MYTHOS had announced the fault
+nine times over eight days and never once said what to do — one utterance even
+reads *"I do not yet know the cause."* That was **wrong**: `summary` is
+truncated at ~100 characters and `detail.text` carries the complete remedy. Only
+the 2026-08-18 utterance is genuinely deficient, and it predates the BUG-273 C2
+and BUG-278 fixes that repaired exactly it. **Reading a truncated log field and
+accusing the product is the same mistake as a harness reporting a FAIL for its
+own bad arguments** — the third time this campaign has produced it.
+
+### The fix — a verifier, and a doctor row that stops overclaiming
+
+`doctor.js` could not host the check itself, and the file says why: it is
+forbidden from touching a key VALUE (AD-8, pinned by `setup-route.test.js`'s
+canary), and `main()` is synchronous. Sending the refresh token to Google needs
+the value. So the check lives in its own script and doctor points at it:
+
+```
+node mythos/scripts/verify-google-grant.js
+  VALID         a fresh access token came back (never printed)
+  INVALID       exit 1, and the remedy names the command
+  UNCONFIGURED  exit 2, one or more of the three values absent
+  UNREACHABLE   exit 3 — COULD NOT CHECK, which is not the same as broken
+```
+
+**It reuses `createGoogleAdapter().getProfile()` rather than re-implementing a
+token refresh.** That path already carries the bounded `HTTP_TIMEOUT_MS` (an
+`https.request` with no timeout waits forever against a host that accepts and
+then stalls) and the B5 fix that keeps Google's `error_description` instead of
+throwing away the actionable half. A second implementation would be a second
+place for those to be got wrong. The remedy string comes from
+`googleAuthFailureText` for the same reason: one door, both callers.
+
+**UNREACHABLE is a distinct exit code on purpose.** A verifier that cannot
+reach Google and says INVALID would send the operator through an OAuth consent
+flow to fix their wifi. "Could not look" is not "there is nothing there" — the
+most expensive repeated mistake in this repository.
+
+The doctor row now reads `present — validity not checked here` and names the
+verifier. Deliberately not a red row: the keys ARE configured, that check is
+doing its job correctly, and a report that goes red for an expected reason is a
+report people stop reading (the BUG-240 note in that same file).
+
+### Scope
+
+- **No secret is ever printed.** The verifier reports names and outcomes only,
+  and a test plants a canary refresh token and asserts it appears in no line of
+  output on any of the four paths.
+- **Nothing calls the verifier automatically.** It is a command the operator
+  runs, not another background poller — the system already announces this fault
+  out loud and adding a second nag is not the missing piece.
+- **doctor stays value-free and network-free.** The AD-8 invariant is untouched.
+- The two Track A nodes stay as they are: `gmail_unread` red until the token is
+  re-minted, `OCR hotkey` dark until somebody presses Ctrl+Alt+X.
+
+---
+
 ## BUG-386 — 37 tools nobody had ever measured against an oracle, and a harness that accused the product six times before it was right (✅ EXERCISED 2026-08-28)
 
 **Status:** ✅ EXERCISED 2026-08-28. Closure-campaign **Track F**. New

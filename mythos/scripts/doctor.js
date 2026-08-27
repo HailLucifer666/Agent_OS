@@ -219,12 +219,35 @@ const KEY_CHECKS = [
     fix: 'set GROQ_API_KEY in mythos/.env for server-side STT',
   },
   {
+    // BUG-387. PRESENCE IS NOT VALIDITY, and this row used to imply it was.
+    //
+    // Measured 2026-08-28: this printed `OK  configured: GOOGLE_CLIENT_ID,
+    // GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN` while the vault held 88
+    // invalid_grant failures across 60 separate bursts over three weeks, every
+    // one of them saying the refresh token was expired or revoked. The single
+    // check an operator runs to answer "is my Gmail set up?" was answering YES
+    // about the exact thing that was broken — an existence check standing in for
+    // a correlation check. For an OAuth refresh token the two come apart
+    // permanently and silently: Google revokes the grant, the string stays in
+    // the file forever.
+    //
+    // THE CHECK CANNOT LIVE HERE, for two reasons this file already states.
+    // evaluateKeyChecks handles key NAMES and is forbidden from touching a VALUE
+    // (AD-8; setup-route.test.js plants a canary to keep it that way), and
+    // asking Google requires sending the refresh token. And main() is
+    // synchronous, while that is a network round trip. So the row keeps doing
+    // the check it is good at and stops claiming the one it never made.
+    //
+    // Deliberately still not a red row: the keys ARE configured and that is what
+    // was asked. A report that goes red for an expected reason is a report
+    // people stop reading — the same reasoning as the kokoro row above.
     id: 'google-oauth',
     label: 'Gmail / Calendar sensors',
     required: false,
     allOf: ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REFRESH_TOKEN'],
-    why: 'the gmail and calendar sensors need a real OAuth grant, not an API key',
-    fix: 'node scripts/google-auth.js  (all three values land in mythos/.env)',
+    detailSuffix: ' — present, but validity NOT checked here: run `node scripts/verify-google-grant.js`',
+    why: 'the gmail and calendar sensors need a real OAuth grant, not an API key — and a revoked grant looks identical to a working one from here',
+    fix: 'node scripts/google-auth.js  (all three values land in mythos/.env). To find out whether the grant is actually alive: node scripts/verify-google-grant.js',
   },
   {
     id: 'auth-token',
@@ -543,8 +566,12 @@ function evaluateKeyChecks(storeNames) {
       required: check.required,
       ok,
       // Names of what IS configured. Safe by construction: names, never values.
+      // `detailSuffix` (BUG-387) lets a row qualify what "configured" means
+      // without leaving the names-only contract: it is a constant on the check,
+      // never derived from a value. Only appended on the OK arm — a row that is
+      // already reporting a gap does not need telling that the gap is unverified.
       detail: ok
-        ? `configured: ${present.join(', ')}`
+        ? `configured: ${present.join(', ')}${check.detailSuffix || ''}`
         : (check.allOf ? `missing: ${missing.join(', ')}` : `none of: ${names.join(', ')}`),
       why: check.why,
       fix: check.fix,

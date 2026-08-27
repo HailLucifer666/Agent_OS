@@ -4751,6 +4751,7 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | B | BUG-384 — the map hand-carried every per-node count, and **67% of them were wrong** | **DONE** | scoped as "six stale labels"; measured 43 of 91 nodes carrying a count, **29 disagreeing with the vault**, and **11** labels contradicted by their own evidence. Second finding, larger: `resolveVaultRoot()` returns the IN-REPO twin and reports `reachable:true` from it — that copy had never seen 21 tools, so a zero-claim gate reading it would fail OPEN. Counts now derive from every vault root, deduped by record id (1464 + 3183 rows, 1346 shared, union 3301). 32 assertions, 13 mutations all caught, 2 survived a first pass | (this commit) |
 | C | BUG-385 — three dispositions, and the CAPTCHA detector was inverted | **DONE** | the refusal policy was already right and already pinned; the DETECTOR flagged **6 of 6 ordinary pages** (developers.cloudflare.com, a "Performance and security by Cloudflare" footer, Google's Security Checkup) and MISSED the real challenge text, because two markers named a VENDOR and `includes()` is a substring test. Fixed mostly by removal: 0 FP on 7 controls, 0 FN on 9 challenge shapes. `focus_window`: ladder pinned at exactly 3 rungs, and the map's own note was wrong (3/2/1 classes, not 5/1). `video call`: no tool across all 179, and `phone_call` pinned voice-withheld. 30 assertions, 14 mutations all caught | (this commit) |
 | F | BUG-386 — 37 tools nobody had measured against an oracle | **DONE** | new `scripts/verify-unknown-nodes.js`: **21 pass / 7 n/a / 11 disp / 0 FAIL**. No product defect — and it means something because **8 mutations of REAL PRODUCT CODE were all caught**, 2 after a first pass exposed genuinely weak oracles. The harness accused the product **six times** before it was right, every one fail-open. ok 40→44, unknown 7→5. 10 assertions | (this commit) |
+| A | BUG-387 — `doctor` said the Google grant was OK for three weeks | **DONE (the code half)** | the two nodes still need the operator and no session can supply them. What was broken is the check they would run: `doctor` reported `OK ... configured` while the vault held **88 invalid_grant failures in 60 bursts**, because it tests that three strings are PRESENT and presence is not validity. New `scripts/verify-google-grant.js` (4 verdicts, UNREACHABLE ≠ INVALID, no secret ever printed) + a doctor row that stops overclaiming. Everything else in the chain was already correct and already tested — measured, not assumed. 14 assertions, 10 mutations all caught | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5014,9 +5015,9 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position: TRACKS D, B, C AND F ARE COMPLETE.** Only Track A (three operator
-minutes) and Track E (a live microphone) remain, and both need the operator
-rather than a session.
+**Position: EVERY TRACK A SESSION CAN DO IS DONE.** D, B, C, F and the code
+half of A are complete. What remains needs a person at the machine: three
+operator minutes (Track A) and a live microphone (Track E).
 
 ```
 main                       b04ec8e
@@ -5026,84 +5027,85 @@ PR #39  Track D-3..D-6       fix/track-d-remaining                 OPEN  (stacke
 PR #40  Track B    BUG-384   fix/bug-384-map-counts-from-vault     OPEN  (stacked on #39)
 PR #41  Track C    BUG-385   fix/bug-385-track-c-dispositions      OPEN  (stacked on #40)
 PR #42  Track F    BUG-386   fix/bug-386-verify-unknown-nodes      OPEN  (stacked on #41)
-suite                      6670 tests / 6670 pass / 0 fail / 0 skipped
+PR #43  Track A    BUG-387   fix/bug-387-doctor-verifies-the-grant OPEN  (stacked on #42)
+suite                      6684 tests / 6684 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
 map                        91 nodes: 44 ok / 31 warn / 9 fail / 2 dark / 5 unknown
-next free BUG number       387
+next free BUG number       388
 ```
 
-Merge order **#37 -> #38 -> #39 -> #40 -> #41 -> #42**. #37 and #38 both
+Merge order **#37 -> #38 -> #39 -> #40 -> #41 -> #42 -> #43**. #37 and #38 both
 branch from `main` and touch `index.html`, so they conflict on the island; the
-code does not overlap. Since BUG-384 every count regenerates from the vault, so
-only `s`, `note` and `ev` need care in a merge.
+code does not overlap, and since BUG-384 every count regenerates from the vault,
+so only `s`, `note` and `ev` need care in a merge.
 
-**Campaign movement, from the founding measurement of 28 ok / 25 warn / 13 fail
-/ 7 dark / 18 unknown to 44 / 31 / 9 / 2 / 5: ok +16, fail −4, dark −5,
-unknown −13.** The warn column grew on purpose — Track B moved eleven nodes
-there rather than to `ok`, because production call counts are not the
-acceptance contract, and Track F then promoted four of them on oracles.
+## THE THREE OPERATOR MINUTES, and now they are checkable
 
-### THE FINDING THAT SPANS ALL FOUR TRACKS
+```
+1.  node mythos/scripts/google-auth.js          (browser consent, ~2 min)
+    put the new GOOGLE_REFRESH_TOKEN in mythos/.env
+2.  node mythos/scripts/verify-google-grant.js  <- NEW: says whether step 1 worked
+3.  press Ctrl+Alt+X with MYTHOS running        (the OCR hotkey, ~10 sec)
+```
 
-Every track was scoped from a written description, and in every track the
-description was wrong in the same direction — it understated the problem and
-named the wrong cause.
+Step 2 did not exist before BUG-387, and its absence is the whole Track A
+story: **`doctor` reported `OK  Gmail / Calendar sensors — configured` for
+three weeks while the vault held 88 `invalid_grant` failures across 60
+bursts.** It tests that three strings are PRESENT in `.env`, and for an OAuth
+refresh token presence and validity come apart permanently and silently —
+Google revokes the grant, the string stays in the file forever. An existence
+check standing in for a correlation check, on the one command an operator runs
+to answer "is my Gmail set up?".
 
-| track | what it said | what measurement found |
-|---|---|---|
-| D | six items, each with a named cause | **four of six causes were wrong** |
-| B | "six nodes whose LABEL is stale" | **eleven labels**, and 29 of 43 counts wrong |
-| C | "three dispositions" | two were; the third hid an **inverted CAPTCHA detector** |
-| F | "the 18 never-measured nodes" | **37 tools**, of which the never-called half was only 9 |
+**If step 1 has to be repeated every few days, doing it again will not help.**
+An OAuth consent screen left in "Testing" publishing status issues refresh
+tokens that expire in 7 days. Publish the app first (Google Cloud Console ->
+APIs & Services -> OAuth consent screen -> Publish app), THEN re-authorise. The
+product already says this out loud; it is repeated here because it is the
+difference between three minutes once and three minutes weekly.
 
-**And the harness is now the most likely thing to be wrong, not the product.**
-Across Tracks D-5 and F, a verification script accused the product **nine
-times** and was wrong every time, always fail-open — three in BUG-382, six in
-BUG-386. What a harness cannot do, it reports as a product bug. The two shapes
-to watch for:
+### TRACK A IS THE ONE TRACK WHOSE DESCRIPTION WAS RIGHT
 
-- **A FAIL that is really a contract you misread.** `buildTools()` returns a
-  bare array from some files and `{TOOLS:[…]}` from others; `navigate` returns
-  `uiActions` rather than publishing; the OKF bundle lands in
-  `Knowledge/<name>/` and contains no "okf" in its path.
-- **An `n/a` that is really your own bad arguments, and this one is worse**,
-  because `n/a` looks humble so nobody re-reads it. Four tools were written off
-  as unavailable for calling them with `level` instead of `value`, `{type,body}`
-  instead of `{title,layout}`, and a lane that is not in `LANES`.
+Worth recording, because the other four were not. "Three operator minutes" was
+exactly true, and nearly everything around it was already correct — measured
+rather than assumed, in this order:
 
-**So: read the params off the tool DEFINITION, never off its name, and treat a
-FAIL as a hypothesis until you have read the code it accuses.**
+- `from-gmail` classifies `invalid_grant` as terminal; its remedy names the
+  literal command and the 7-day trap.
+- `hub.js` latches the terminal result per tool. The 88 failures fall into **60
+  bursts, nearly all of size one** — one attempt per process, not a retry storm.
+- `gmail-sensor` raises `health.anomaly` with `needsOperator: true`.
+- `explainer.js` short-circuits on it and SPEAKS the whole remedy verbatim.
+- Nine test files already cover that chain; two assert the spoken text contains
+  `google-auth.js`.
+- `google-auth.js`'s two historical Windows bugs are both already fixed.
 
-### Track F, and why its 0 FAIL is worth anything
+**So the honest Track A finding is that only the DIAGNOSTIC lied.** Everything
+that detects, classifies, announces and explains the fault was right; the thing
+the operator would run to check was the one thing that was wrong.
 
-A harness that has only ever reported pass is a description. `verify-unknown-
-nodes.js` was proven able to fail by mutating **real product code** eight ways
-— each making a tool return `ok` while doing nothing — and all eight were
-caught. **Two survived a first pass**, and both were real holes:
+### A correction I have to leave written down
 
-- `set_persona_level` asked only whether the levels object stringified to
-  something containing the number it set. A default already held that value,
-  so a tool that set nothing passed. *"Something in this blob looks like what I
-  asked for" is a coincidence detector, not a read-back.* It now reads the
-  named trait before and after, targeting a value it did not already hold.
-- `okf_export` counted files under `Knowledge/` instead of reading the concept
-  back, so skipping one write left a sibling behind and the count still passed.
+From the episodic `summary` field it looked as though MYTHOS had announced this
+fault nine times over eight days and never once said what to do — one utterance
+even reads *"I do not yet know the cause."* **That was wrong.** `summary`
+truncates at ~100 characters; `detail.text` carries the complete remedy
+including the command. Only the 2026-08-18 utterance is genuinely deficient,
+and it predates the BUG-273 C2 and BUG-278 fixes that repaired exactly it.
 
-The design rule worth carrying: **real subsystems, never stubs.** Each factory
-takes a narrow ctx slice, so it would have been easy to hand each a stub and go
-green having measured the stub. The harness builds the real modules the way
-`main.js` does, over an `fs-store` in a temp sandbox, and the oracle is the
-vault file read back off disk.
+That is the third instance in this campaign of **accusing the product from an
+artifact of how the evidence was displayed** — after a harness misreading a
+return contract, and a harness writing tools off for its own bad arguments.
+Read the full record, not the summary column, before filing anything.
 
 ### What is left, and none of it is code
 
-- **Track A** — three operator minutes: `node mythos/scripts/google-auth.js`,
-  and the OCR hotkey keypress. Turns two nodes green.
+- **Track A, the operator half** — the three minutes above. Turns `gmail_unread`
+  green and `OCR hotkey` off dark.
 - **Track E** — eight nodes needing a live microphone.
-- **The 5 remaining `unknown` nodes are all single dispositions** —
-  `daily_plan` (needs a live planner), `set_wallpaper`, `installer`,
-  `security_scan`, `compose_email`. Each is NOT RUN for a written reason, not
-  for lack of a harness; closing them needs the operator, not a session.
+- **The 5 remaining `unknown` nodes are single dispositions**: `daily_plan`,
+  `set_wallpaper`, `installer`, `security_scan`, `compose_email`. Each is NOT RUN
+  for a written reason, not for lack of a harness.
 - Still open from earlier tracks, each with its reason in the map:
   `spotify_search`, `Aether mesh`, `browser automation`, `cua-driver`,
   `ui_click`, and `fabrication` at 67%.
@@ -5118,39 +5120,40 @@ vault file read back off disk.
 **2. Ordering: `sync-test-count --write` BEFORE `build-capability-map --write`,**
 and `build-index --write` after any BUGS.md change.
 
-**3. Capture ONE TAP run** (`node --test --test-reporter=tap > file`) with
-long-form `TEMP`/`TMP` and ports from `pick-free-ports.js`, then pipe it into
-both `sync-test-count --write` and `--check` — it reads stdin, so the suite
-runs once instead of three times.
+**3. Capture ONE TAP run** and pipe it into both `sync-test-count --write` and
+`--check` — it reads stdin, so the suite runs once instead of three times. Use
+long-form `TEMP`/`TMP` and ports from `pick-free-ports.js`.
 
 **4. `git commit -m ... -- <pathspec>`, in that ORDER.** Everything after `--`
 is a pathspec. Then demand an empty `git status --porcelain`.
 
-**5. `--next` reads BRANCH NAMES too.** Write the BUGS.md entry early.
+**5. `--next` reads BRANCH NAMES too.** Write the BUGS.md entry early. And a
+BUG number cited in tracked source whose ENTRY lives on another branch pushes
+the undeclared ratchet over baseline — drop the citation, do not raise the
+number.
 
 **6. Do not edit a tracked file while the suite is running.**
 
 **7. The file-size ratchet will refuse your fix, and it is usually right.**
 Move the code; do not raise the number.
 
-**8. Tracked PowerShell must be pure ASCII** — an em dash in a COMMENT fails
-the suite. And `ps-automation.ps1` has MIXED line endings, so single-line
-anchors always, in edits and in mutation harnesses.
+**8. Tracked PowerShell must be pure ASCII**, and `ps-automation.ps1` has MIXED
+line endings. Single-line anchors always.
 
-**9. A COVERAGE GUARD SCOPED TO "WHATEVER IS CURRENTLY BROKEN" ERODES AS YOU
-FIX THINGS.** BUG-386's first version selected nodes that were `unknown` or
-Track-B-`warn`; four went green and the scope fell below the guard's own
-minimum, so it failed against a BETTER map. Anchor scope on a stable marker
-(the ticket id in the evidence), so a tool stays covered after its node turns
-green.
+**9. A coverage guard scoped to "whatever is currently broken" erodes as you
+fix things.** Anchor it on a stable marker.
 
-**10. THE MAP IS A CANVAS with no DOM element per node.** Searching the DOM
-reports all 91 missing and reads like a broken page. Drive it:
-`resize(); build(); place(); draw()`, then `getImageData` and count pixels
-against the palette in `:root`.
+**10. THE MAP IS A CANVAS with no DOM element per node.** Drive it:
+`resize(); build(); place(); draw()`, then `getImageData` and count pixels.
 
 **11. `node -e` in this shell eats backticks and backslashes**, and a stray
 `python - <<EOF` hangs on stdin for the full timeout. Write a script file.
+
+**12. RE-RUN THE CLEAN TESTS AFTER EDITING A TEST TO KILL A SURVIVING
+MUTATION.** A mutation harness reports whether the MUTANT fails; it says
+nothing about whether the clean tree still passes. A tightened assertion here
+was green in the mutation run and red in the full suite, because it asserted a
+code the product did not yet surface.
 ### Standing constraints
 
 - **Two machines and sometimes two sessions share this repo.** Branch, PR,
