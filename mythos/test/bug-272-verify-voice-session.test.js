@@ -755,7 +755,7 @@ describe('verify-voice-session: audio continuity (BUG-274 step 5/5b)', () => {
       // transcript, both working as designed: echo-filter.js keeps a reference for only
       // 3s after the last word, and the own-voice gate shuts the mic while MYTHOS
       // speaks. Every check came back no-reference — which READS as "no echo" and MEANS
-      // "could not have seen one". The bleed numbers are the oracle that is not gagged.
+      // "could not have seen one". BUG-388: the bleed numbers are gagged the same way.
       withLog([
         spoke(1, 'tts-chain'),
         JSON.stringify({
@@ -771,9 +771,9 @@ describe('verify-voice-session: audio continuity (BUG-274 step 5/5b)', () => {
       ], (file) => {
         const v = verdictOf(run([file]).stdout);
         assert.match(v, /NOT MEASURED/, v);
-        assert.match(v, /IS reaching the microphone/,
-          'bleed above the barge-in floor is the T4 answer, and the verdict must give it '
-          + 'rather than shrugging at the transcripts');
+        assert.match(v, /NOT attributable/,
+          "BUG-388 — this fixture's own 0.1193 is one of the peaks bleedPeak ratcheted to "
+          + "off the OPERATOR's voice, so it cannot answer T4 and must not claim to");
         assert.match(v, /0\.1193/, 'and must show the number it concluded from');
       });
     });

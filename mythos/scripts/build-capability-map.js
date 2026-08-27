@@ -53,6 +53,33 @@
  * absent; the header then renders it dim and prefixed "last read". It is never
  * overwritten with a confident zero.
  *
+ * PER-NODE COUNTS ARE DERIVED NOW, AND ONE LABEL RULE IS A GATE (BUG-384)
+ *
+ * The `ok`/`f` on each node used to be curated too, and that was a category
+ * error: they are not judgement, they are a count of rows in vault/Audit. On
+ * 2026-08-27, 43 nodes carried a hand-typed count and 29 of them (67%)
+ * disagreed with the vault — `goals` said 118/2 against a real 253/3. They are
+ * read from `vault-tool-counts.js` now; see that file for why it reads EVERY
+ * vault root and dedupes by record id rather than trusting `resolveVaultRoot()`.
+ *
+ * `--check` deliberately does NOT compare the counts. They move every time
+ * MYTHOS runs a tool, so a gate on them would block the first commit after
+ * every voice session — a gate that fires on correct content is a gate somebody
+ * switches off, which is the same reason node NAMES are not checked below.
+ *
+ * What IS gated is the one claim the data can falsify outright. The legend in
+ * index.html defines `dark` as "MEASURED as never exercised (a call count of
+ * zero was read)" and `unknown` as "nothing has been measured". Either label
+ * beside a non-zero call count is simply false, and that blocks --write.
+ *
+ * The tempting second rule — "labelled ok but its newest event is a failure",
+ * and its mirror — is NOT a gate, because the data says it would accuse correct
+ * labels. All three of its 2026-08-27 hits were the evidence contract working:
+ * `spotify_volume` failing honestly because Spotify was not running,
+ * `close_window` refusing a pid that no longer exists and naming the recovery,
+ * and `CAPTCHA wall`, whose `fail` is a deliberate refusal disposition rather
+ * than a defect. It prints as an advisory and fails nothing.
+ *
  * DELIBERATELY NOT CHECKED (Stage 3 §8)
  *
  * Node NAMES against deleted programs. A literal "the string Hermes must not
@@ -157,6 +184,74 @@ function vaultFacts(deps = {}) {
   const incidents = triage.parseIncidents(fs.readFileSync(ledger, 'utf8'));
   const untracked = triage.findUntracked(incidents, fs.readFileSync(path.join(REPO_ROOT, 'BUGS.md'), 'utf8'));
   return { reachable: true, root, incidents: incidents.length, untracked: untracked.length };
+}
+
+// ---------------------------------------------------------------------------
+// per-node call counts, and the one label claim the data can falsify
+
+function countFacts(deps = {}) {
+  if (deps.counts) return deps.counts;
+  const reader = deps.vaultCounts || require('./vault-tool-counts.js');
+  return reader.readToolCounts(deps);
+}
+
+/**
+ * Rewrite each node's ok/f from the audit log.
+ *
+ * WHEN THE VAULT CANNOT BE READ, EVERY NODE IS PASSED THROUGH UNTOUCHED — not
+ * zeroed, and not flagged either. That is not caution, it is the fix for a live
+ * defect this file already carries in `buildVitals`: the first version of the
+ * vault-derived vital stamped `stale: true` on a checkout that could not
+ * measure, which looked honest and made `--check` unsatisfiable for CI, every
+ * worktree and every fresh clone, because those checkouts wanted to ADD the
+ * flag that a vault-bearing machine had just removed. Passing the value through
+ * removes the whole class: no checkout can downgrade another's measurement, and
+ * the diff has nothing to disagree about.
+ */
+function applyCounts(nodes, counts, deps = {}) {
+  if (!counts.reachable) return nodes;
+  const helper = deps.vaultCounts || require('./vault-tool-counts.js');
+  return nodes.map((n) => {
+    const c = helper.countsForTools(counts.counts, n.tools);
+    return { ...n, ok: c.ok, f: c.fail };
+  });
+}
+
+// `dark` and `unknown` are the only two statuses that assert a fact about the
+// DATA rather than a judgement about the capability, so they are the only two
+// a call count can refute. Everything else is an advisory.
+const ZERO_CLAIM = {
+  dark: 'dark asserts a measured zero ("a call count of zero was read")',
+  unknown: 'unknown asserts that nothing has measured it',
+};
+
+function checkLabels(data, counts, deps = {}) {
+  const problems = [];
+  const advisories = [];
+  // "Could not look" is not "nothing is wrong". With no vault the rule cannot
+  // run at all, and it must stay silent rather than pass.
+  if (!counts.reachable) return { problems, advisories, ran: false };
+  const helper = deps.vaultCounts || require('./vault-tool-counts.js');
+
+  for (const n of data.nodes || []) {
+    const c = helper.countsForTools(counts.counts, n.tools);
+    const calls = c.ok + c.fail;
+    const claim = ZERO_CLAIM[n.s];
+    if (claim && calls > 0) {
+      problems.push(`node "${n.n}" is labelled ${n.s}, but the audit log holds ${calls} recorded `
+        + `call(s) for its tools (${c.ok} ok / ${c.fail} fail) — ${claim}, and that is now false. `
+        + 'Give it a status that matches its evidence.');
+      continue;
+    }
+    if (n.s === 'fail' && c.lastOk && c.lastOk > c.lastFail) {
+      advisories.push(`node "${n.n}" is labelled fail, but its newest recorded event is a SUCCESS `
+        + `(${c.ok}/${c.fail}). Worth a look — a deliberate refusal disposition is a legitimate reason.`);
+    } else if (n.s === 'ok' && c.lastFail && c.lastFail > c.lastOk) {
+      advisories.push(`node "${n.n}" is labelled ok, but its newest recorded event is a FAILURE `
+        + `(${c.ok}/${c.fail}). Worth a look — an honest failure is a legitimate reason.`);
+    }
+  }
+  return { problems, advisories, ran: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -317,25 +412,35 @@ function generate(deps = {}) {
     repo: deps.repo || repoFacts(deps),
     suite: deps.suite || suiteFacts(deps),
     vault: deps.vault || vaultFacts(deps),
+    counts: countFacts(deps),
   };
   const vitals = buildVitals(data.vitals, facts, deps);
+  const labels = checkLabels(data, facts.counts, deps);
   // Two kinds, and they are not interchangeable. A MAPPING problem is a claim
   // the code contradicts and only a human can resolve, so it blocks --write:
   // stamping a fresh date onto a map that is wrong is worse than leaving it
   // visibly old. A STALE VITAL is the ordinary condition --write exists to
   // clear, so it must not block it — an earlier draft conflated the two and
   // the generator could never bootstrap its own vitals.
-  const mapping = checkIsland(data, facts);
+  // A contradicted zero-claim is a MAPPING problem, not a stale one: only a
+  // human can decide what `unknown` becomes once something has measured it, so
+  // it must block --write exactly as an unregistered tool id does.
+  const mapping = [...checkIsland(data, facts), ...labels.problems];
   const stale = checkVitals(data, vitals);
   const problems = [...mapping, ...stale];
 
-  const next = { ...data, generated: today(deps), vitals };
+  const next = {
+    ...data,
+    generated: today(deps),
+    vitals,
+    nodes: applyCounts(data.nodes || [], facts.counts, deps),
+  };
   const json = JSON.stringify(next, null, 2).replace(/</g, '\\u003c');
   const eol = html.includes('\r\n') ? '\r\n' : '\n';
   const body = eol + json.split('\n').join(eol) + eol;
   const nextHtml = html.slice(0, bodyStart) + body + html.slice(close);
 
-  return { data, next, facts, vitals, problems, mapping, stale, html, nextHtml, changed: nextHtml !== html };
+  return { data, next, facts, vitals, problems, mapping, stale, labels, html, nextHtml, changed: nextHtml !== html };
 }
 
 function main(argv) {
@@ -350,13 +455,17 @@ function main(argv) {
     return 1;
   }
 
-  const { problems, mapping, facts, vitals, changed, nextHtml } = result;
+  const { problems, mapping, facts, vitals, changed, nextHtml, labels } = result;
 
   if (wantJson) {
     console.log(JSON.stringify({
       problems, vitals, changed,
       registered: facts.repo.registered.length,
       vaultReachable: facts.vault.reachable,
+      countsReachable: facts.counts.reachable,
+      countedRecords: facts.counts.records,
+      labelAdvisories: labels.advisories,
+      labelRuleRan: labels.ran,
     }, null, 2));
     return problems.length ? 1 : 0;
   }
@@ -378,7 +487,17 @@ function main(argv) {
   for (const n of result.data.nodes) byStatus[n.s] = (byStatus[n.s] || 0) + 1;
   console.log(`build-capability-map: ${STATUSES.map((s) => `${s} ${byStatus[s] || 0}`).join(' · ')}`);
 
+  if (facts.counts.reachable) {
+    console.log(`build-capability-map: node counts from ${facts.counts.roots.length} vault root(s), `
+      + `${facts.counts.records} completion(s), ${facts.counts.duplicates} duplicate row(s) skipped.`);
+  } else {
+    console.log(`build-capability-map: no audit log readable (${facts.counts.reason}). `
+      + 'Node counts keep their committed values and the zero-claim label rule DID NOT RUN — '
+      + 'that is "could not look", not "nothing is wrong".');
+  }
+
   for (const p of problems) console.log(`  ! ${p}`);
+  for (const a of labels.advisories) console.log(`  ~ ${a}`);
 
   if (write) {
     if (mapping.length) {
@@ -410,7 +529,8 @@ function main(argv) {
 
 module.exports = {
   parseIsland, repoFacts, suiteFacts, vaultFacts, buildVitals,
-  checkIsland, checkVitals, generate, main, STATUSES, ROADMAP_RE,
+  checkIsland, checkVitals, checkLabels, countFacts, applyCounts,
+  generate, main, STATUSES, ROADMAP_RE, ZERO_CLAIM,
 };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

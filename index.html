@@ -339,11 +339,11 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-08-27",
+  "generated": "2026-08-28",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6562,
+      "value": 6694,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -361,28 +361,28 @@
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-08-27"
+      "measuredAt": "2026-08-28"
     },
     "registered": {
       "value": 179,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-08-27"
+      "measuredAt": "2026-08-28"
     },
     "voiceReachable": {
       "value": 115,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-08-27"
+      "measuredAt": "2026-08-28"
     },
     "untriaged": {
       "value": 0,
       "label": "untriaged incidents",
       "tone": "ok",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-08-27",
+      "measuredAt": "2026-08-28",
       "stale": false
     }
   },
@@ -461,8 +461,8 @@
       "tools": [
         "think_deeply"
       ],
-      "ok": 49,
-      "f": 2,
+      "ok": 66,
+      "f": 7,
       "note": "Deep reasoning. Both 'failures' are the new rate-limit refusing correctly after it was reached ten times in one conversation.",
       "ev": "\"Deep reasoning was used 8s ago and is rate-limited for another 53s. Nothing is wrong. Answer this yourself now.\"  (BUG-287, shipped 2026-08-20 23:27, observed working in the final session)"
     },
@@ -472,8 +472,10 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Mistral and Google answer. Cerebras is out of credit and Gemini free tier hits its cap.",
-      "ev": "cerebras chat failed: 402 Payment required to access this resource.  x27\ngemini-tts failed: 429 quota exceeded, limit: 10/day"
+      "note": "Mistral and Google answer. Cerebras is out of credit but is never at a lane head, so a healthy call never pays for it. Warn is the quota caveat, not a defect.",
+      "ev": "MEASURED 2026-08-27 (BUG-380 / Track D-3), and the work order's framing corrected. Claim: \"both are still ranked, so every call pays their timeout\". Actually: cerebras sits at position 2-4 of every lane it appears in and at position 0 of NONE (voice@3 build@4 simple@4 reasoning@2 memory@2 text@2, absent from vision and embed), so its 402 is only reached after earlier rungs fail. The 402 itself is real -- 27 occurrences -- and unfixable without spend. The de-ranking D-3 asks for is ALSO impossible as specified: the registry exposes groqAlive/mistralAlive/openrouterAlive and NO cerebrasAlive, so there is no probe evidence to de-rank on. And it is unnecessary: B1 (2026-08-14) already made a per-attempt timeout feed the cooldown and added per-(provider,model) breakers with x2 backoff, and its own comment records REJECTING a hand re-rank because \"the breaker is self-correcting; the edit is not\". Caveat, named as the no-spend decision requires: google's free tier caps at 10/day and google heads four lanes, so there is a daily cliff onto mistral.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "cog",
@@ -482,7 +484,7 @@
       "tools": [
         "self_capabilities"
       ],
-      "ok": 17,
+      "ok": 21,
       "f": 0,
       "note": "Honest self-description. Reachable from voice and never failed.",
       "ev": "17 ok / 0 fail"
@@ -494,7 +496,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Detects anomalies and applies playbooks. No playbook ever looped -- the common historical outcome was no-match, which is a different problem.",
-      "ev": "EVIDENCE CORRECTED 2026-08-27 (BUG-379). The old line claimed aether-proxy-rebind repeated \"every few minutes\". Measured across the whole vault, the healer's outcomes for this anomaly kind are: no-match 63, error 1. The playbook ran ONCE, on 2026-08-26; the other 63 events predate its existence (added 2026-08-13, Wave 7) and so had no remediation at all. That no-match path is the expensive one -- immune/healer.js's own F8 note records it invoking the explainer's brain call plus a 7-day episodic scan -- which is why B3 added no-match storm damping. Still WARN, honestly: the subsystem works, but its most common recorded outcome for a real recurring anomaly was \"nothing to do\", and the rebind playbook still declares no verifyMs, so it can never emit heal-failed. BUG-379 gave that playbook a 3-attempt terminal condition as a guard against a future repeating source."
+      "ev": "EVIDENCE CORRECTED 2026-08-27 (BUG-379). The old line claimed aether-proxy-rebind repeated \"every few minutes\". Measured across the whole vault, the healer's outcomes for this anomaly kind are: no-match 63, error 1. The playbook ran ONCE, on 2026-08-26; the other 63 events predate its existence (added 2026-08-13, Wave 7) and so had no remediation at all. That no-match path is the expensive one -- immune/healer.js's own F8 note records it invoking the explainer's brain call plus a 7-day episodic scan -- which is why B3 added no-match storm damping. Still WARN, honestly: the subsystem works, but its most common recorded outcome for a real recurring anomaly was \"nothing to do\", and the rebind playbook still declares no verifyMs, so it can never emit heal-failed. BUG-379 gave that playbook a 3-attempt terminal condition as a guard against a future repeating source.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "cog",
@@ -503,16 +507,20 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Catches its own false claims and retracts them out loud. The retraction works; the false first claim is the defect.",
-      "ev": "\"My apologies. I said I sent the Gmail link, but it did not actually happen.\"\n\"I did NOT log that event. I mistakenly claimed that action had happened.\""
+      "ev": "\"My apologies. I said I sent the Gmail link, but it did not actually happen.\"\n\"I did NOT log that event. I mistakenly claimed that action had happened.\"",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "cog",
       "n": "fabrication",
-      "s": "fail",
+      "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Invented a model that does not exist and defended it when challenged. Filed, not started.",
-      "ev": "Claimed \"Claude Mythos 5\" leads the LiveBench coding board.  BUG-275 FILED, NOT STARTED\nAlso faked a 30-second timer count after timer_add failed."
+      "note": "REDUCED 2026-08-27 by BUG-383, not eliminated. claim-check.js gained an external-fact category; measured catch rate 6 of 9 on the labelled sample, and the 3 misses are pinned by test.",
+      "ev": "BUG-383 (2026-08-27, Track D-6). Every claim category that existed before caught a claim about what MYTHOS DID (\"I logged that\", \"I sent it\"). The recorded fabrication was a claim about WHAT IS TRUE IN THE WORLD — \"Claude Mythos 5 leads the LiveBench coding board\" — which contains no \"I did X\", so no tuning of the old regexes could ever have reached it. The new external-fact category is EVIDENCE-GATED HARD: its `re` is null, so it can fire ONLY when a fact-finding tool (web_search, get_weather, screen_look, document_search and 10 more) was attempted in the window and did not succeed. Without that gate a pattern this broad would flag ordinary conversation every turn. SCOPE, HONESTLY, as the work order demands: this REDUCES fabrication and does not eliminate it. The measured catch rate is 6 of 9 on the labelled sample (67%) and is ASSERTED AS A NUMBER in test/bug-383-external-fact-fabrication.test.js so the claim cannot drift from the code; the 3 known misses are plain narration with no ranking, quantity or citation shape (\"that library was deprecated last year\") and are pinned by their own assertion so the detector can never look as though it was complete. Zero false positives on the honest-sentence controls, which matters more than the catch rate: a noisy honesty alarm is one nobody reads. STAYS WARN because 67% is not closure. The second recorded instance -- a faked 30-second timer count -- had its parser cause fixed by BUG-289; the model reaching for a fact it does not have is the pattern, not the parser.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "mem",
@@ -521,7 +529,7 @@
       "tools": [
         "remember"
       ],
-      "ok": 48,
+      "ok": 51,
       "f": 0,
       "note": "Durable fact writes. Never failed once across 29 vault days.",
       "ev": "48 ok / 0 fail"
@@ -533,7 +541,7 @@
       "tools": [
         "recall_memory"
       ],
-      "ok": 45,
+      "ok": 57,
       "f": 0,
       "note": "Retrieval into the prompt. Never failed.",
       "ev": "45 ok / 0 fail"
@@ -548,8 +556,8 @@
         "note_search",
         "write_note"
       ],
-      "ok": 4,
-      "f": 0,
+      "ok": 11,
+      "f": 2,
       "note": "note_take and note_read against the Obsidian-style vault. Small sample, clean.",
       "ev": "note_take 3 ok / 0 fail, note_read 1 ok / 0 fail"
     },
@@ -584,20 +592,24 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Episodic, Audit and Incident ledgers all writing. This audit was built out of them.",
-      "ev": "29 audit days, 30 episodic days, 1322 conversation records over 08-19 and 08-20.\nNote: two vaults exist. The live one is %APPDATA%/MYTHOS/vault; mythos/vault in the repo is the stale twin."
+      "ev": "29 audit days, 30 episodic days, 1322 conversation records over 08-19 and 08-20.\nNote: two vaults exist. The live one is %APPDATA%/MYTHOS/vault; mythos/vault in the repo is the stale twin.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "mem",
       "n": "documents",
-      "s": "dark",
+      "s": "warn",
       "tools": [
         "document_ingest",
         "document_list",
         "document_search",
         "document_answer"
       ],
-      "note": "Semantic document search over an ingested corpus. There is no corpus and no call has ever been made.",
-      "ev": "vault/Documents is empty. document_ingest / document_list / document_search / document_answer:\nzero calls ever, and all four are withheld from the voice surface."
+      "note": "document_ingest, document_list, document_search, document_answer. EXERCISED 2026-08-27 end to end on a real corpus. WARN because search was verified with an offline embedder, so ranking quality is still unmeasured.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) against a REAL corpus — 6 files from mythos/docs and mythos/Plans, which the work order names as real and always present. document_ingest: 6 files ingested, 26 chunks embedded for one plan alone. document_list: listed the corpus. document_search: 10 hits for a term known to be in the corpus, so an empty result would have been a real failure rather than a badly-chosen query. document_answer is a DISPOSITION — it needs a brain lane, i.e. spend. WHY WARN AND NOT OK: the embed lane was replaced with a deterministic offline word-bag so the harness measures the TOOLS rather than the provider. That proves the chunker, store, vector index and search path work end to end, and says nothing about ranking quality with real embeddings; closing it fully needs one run with ollama or mistral-embed live. Also recorded: the harness reported document_search as broken twice before reading the real contract — providers/embeddings.embed(text) returns { provider, dim, vec }, and vector-index add()/search() silently return false/[] for anything else.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "mem",
@@ -609,7 +621,9 @@
         "incident_status"
       ],
       "note": "Logging is perfect. The backlog it produces is not being drained.",
-      "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN"
+      "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN",
+      "ok": 205,
+      "f": 0
     },
     {
       "c": "sense",
@@ -619,7 +633,7 @@
         "camera_look",
         "camera_on"
       ],
-      "ok": 33,
+      "ok": 45,
       "f": 3,
       "note": "The single best capability in the system. Identified ten objects in a row without a miss.",
       "ev": "12 ok / 0 fail on 08-20 (mouse, earbuds case, Goku, Vader, Grogu, Batmobile, Naruto, phone, spinner, CD)\nOperator, verbatim: \"the camera works flawless.\""
@@ -627,14 +641,14 @@
     {
       "c": "sense",
       "n": "screen_look",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "screen_look"
       ],
-      "ok": 49,
+      "ok": 52,
       "f": 11,
-      "note": "Vision over the screen. Correctly read a debugging session unprompted; times out when the vision lane is slow.",
-      "ev": "\"The vision model did not answer in time, so the screen was not read.\"\n\"Vision providers are offline - cannot describe the screen.\""
+      "note": "Vision over the screen. GREEN WITH CAVEAT: every recorded failure is historical and 26 consecutive calls have succeeded. The caveat is the free-tier daily cap.",
+      "ev": "RE-MEASURED 2026-08-27 (Track D-3) against the live vault: 52 ok / 11 fail, not 49/11 -- and ALL ELEVEN FAILURES FALL BETWEEN 2026-08-06 AND 2026-08-18. Newest failure 2026-08-18T11:38:48; newest success 2026-08-24T20:12:01. Since 2026-08-19 there have been 26 look calls (screen_look + camera_look) across five separate days with 26 ok and 0 fail. Cause of the historical failures and why they stopped: B1 (2026-08-14) fixed two things -- an attempt hitting its own per-attempt timeout now feeds the cooldown decision (it previously matched none of the 429/5xx/network arms), and per-(provider,model) breakers escalate with x2 backoff so an all-day outage is skipped for minutes rather than re-paid every few minutes. The vision lane head is now google/gemini-3.5-flash-lite with NIM demoted to position 3; the 8s-per-look precedent the work order cites was NIM at position 0. Caveat, per the no-spend decision: google free tier caps at 10/day, so a heavy day still falls through to mistral."
     },
     {
       "c": "sense",
@@ -679,7 +693,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Listens continuously and fires cleanly well above threshold.",
-      "ev": "detected at 0.9923 / 0.9881 / 0.9747 / 0.8082 against threshold 0.5, framesToFirstAudio 1"
+      "ev": "detected at 0.9923 / 0.9881 / 0.9747 / 0.8082 against threshold 0.5, framesToFirstAudio 1",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "sense",
@@ -687,8 +703,10 @@
       "s": "dark",
       "tools": [],
       "kind": "subsystem",
-      "note": "Ctrl+Alt+X registers on every boot. No log line anywhere shows it ever firing.",
-      "ev": "main.log: \"OCR-grab hotkey registered: Control+Alt+X\" on every boot.\nBUG-268 open; instrumentation added 2026-08-20 16:39 and never exercised."
+      "note": "Ctrl+Alt+X screen-text grab. Still dark 2026-08-28: nothing can press an OS-global hotkey but a person, and the wiring below it is already source-pinned.",
+      "ev": "TRIAGED 2026-08-28 (Track A, BUG-387), NOT closed, and deliberately not faked. The node has an empty tool list because the hotkey is not a tool: registerOcrGrabHotkey() in electron/main.js (fallbacks Control+Alt+X -> Control+Shift+X -> Control+Alt+S, MYTHOS_HOTKEY_OCR override, never steals focus) sends fork-IPC to server/index.js, which dispatches the already-registered screen_read_text effector through shared dispatchAction with channel:\"hotkey\" so it is audit-honest, then broadcasts ocr-result to the HUD. Every link in that chain except the keypress itself is pinned by test/electron-ocr-hotkey.test.js (9 tests, source-shape for the Electron half per the talk-hotkey precedent), and the effector it ends in is measured separately: screen_read_text is 21 ok / 1 fail. So what is unmeasured here is exactly one hop — whether Windows delivers the global accelerator to this process — and that needs a finger on a key at a real desktop. Stays DARK rather than being promoted on the strength of its neighbours: dark is the accurate claim (a measured zero of recorded calls), and a node turned green because the code around it looks right is the kind of rounding-up this campaign exists to remove. NEEDS THE OPERATOR: press Ctrl+Alt+X with MYTHOS running and confirm the caption appears.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -697,7 +715,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "The primary spoken path. Held a two-hour session with tool calls throughout.",
-      "ev": "VOICE_S2S_ENABLED=true. 367 voice-live actions and 502 conversation turns logged on 08-20 alone."
+      "ev": "VOICE_S2S_ENABLED=true. 367 voice-live actions and 502 conversation turns logged on 08-20 alone.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -705,8 +725,10 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Four engines in a failover chain. The first is rate-capped daily, so it usually speaks in the second or third voice.",
-      "ev": "chain: gemini,kokoro,edge,piper\ntts.failover from gemini-tts to edge-tts on 429 (free tier limit: 10/day)"
+      "note": "Four engines in a failover chain. Rung 2 (kokoro) has no weights and costs up to 15s once per process. That cost is now REPORTED; whether to install kokoro or drop it is an open operator decision.",
+      "ev": "MEASURED 2026-08-27 (BUG-380 / Track D-3). chain = gemini,kokoro,edge,piper. The existing evidence line already showed the real path: \"tts.failover from gemini-tts to edge-tts on 429 (limit 10/day)\" -- it fails over from gemini and lands on EDGE, skipping kokoro, which means kokoro was probed and declined. doctor.js predicts what that costs, from disk: \"no .onnx weights under models/kokoro -- the first fallback to kokoro will spend up to 15000ms downloading before falling through to edge\". Measured directly: an early draft of the BUG-380 test built the real chain by accident and paid 15,109ms per case, six cases. TWO CORRECTIONS to the work order: the cost is once per PROCESS, not per call (tts.js probes the chain once and keeps a sticky active provider; kokoro-tts.js bounds only the first cold load), so it is 15s of silence on the first daily failover rather than 15s a turn. WHAT WAS FIXED: the reason was discarded twice -- providers/tts.js had a bare catch{return false} and logged only WHICH rung was skipped, and kokoro-tts.js had another bare catch{return false} -- so a load timeout, a bad model id and a corrupt cache were one indistinguishable false and nothing recorded that 15 seconds had gone. tts.unavailable now carries reason and ms. STILL WARN: the 15s is still paid until the operator decides to install the weights or drop the rung from VOICE_TTS_CHAIN -- that is a decision, not a defect, and it is already listed as one of three open operator decisions.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -715,7 +737,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Alt+Space registers on every boot.",
-      "ev": "main.log: \"push-to-talk hotkey registered: Alt+Space\""
+      "ev": "main.log: \"push-to-talk hotkey registered: Alt+Space\"",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -724,7 +748,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Replies in Bengali and Hindi were good. Transcription of the operator was not.",
-      "ev": "Bengali speech came back as Korean and Portuguese fragments: \"코다\", \"É. Que tu cobrou, não, Jadavpur\""
+      "ev": "Bengali speech came back as Korean and Portuguese fragments: \"코다\", \"É. Que tu cobrou, não, Jadavpur\"",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -732,8 +758,10 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Interruption handling shipped and was accepted by ear, but self-interruption doubled in the acceptance run.",
-      "ev": "PENDING_HOLD_MS 350 -> 200, Stage 3 accepted by ear 2026-08-20. Decision still open."
+      "note": "Interruption handling shipped and was accepted by ear. Stays warn: it genuinely needs a live acoustic session. But the number the whole path was tuned against was measuring the operator, not the room.",
+      "ev": "MEASURED 2026-08-28 (BUG-388, Track E) from 731 voice.capture-suspend records across 20 sessions in mythos-server.log, and it corrects a premise this node and the plan were both carrying. bleedPeak is documented as \"loudest level seen while MYTHOS was provably speaking\" and is learned inside the 500ms protected window, on the written reasoning that \"the assistant's own onset is by construction the loudest thing present\". That is false: MYTHOS reaches the mic through the speakers and is then attenuated 15-20dB by AEC (probe-aec-routes.js measures the Gemini Live residual at 0.0069-0.0141) while the operator arrives direct, so whenever both are present the OPERATOR is the louder one. Of 31 upward moves of bleedPeak above 0.05, TWENTY-TWO landed on a value exactly equal to that hold's own peakRms -- the operator. Every session opens at 0.0043-0.0347 (the real room, agreeing with the probe) and then ratchets to 0.05-0.33 and never decays: 2026-08-24 read 0.1606 for 110 consecutive holds off one frame. The uncontaminated control is 2026-08-26, which ended at 0.0313 while the operator peaked at 0.1402. WHY IT MATTERED: this was diagnosed on 2026-08-19 and deferred because \"the learned floor is dormant, so consequence today is nil\" -- but a consumer existed. verify-voice-session.js called bleedPeak \"the ungagged oracle\" and concluded \"Echo cancellation is not removing it\", a hardware verdict drawn from the operator's own voice, and that conclusion is why an acoustic rework sits in the plan as \"the only fix that removes the trade\". FIXED: the protected window now decides once, at the transition out of IDLE, whether it may attribute anything to MYTHOS -- compared against the STATIC floor, never the learned one, so a poisoned peak cannot raise the bar for detecting the next contamination. The verifier reports the number and refuses the inference. NOT CLOSED: this changes no runtime behaviour (the learned floor is dormant either way) and closes no Track E node -- what it removes is a false reading that was steering the live session's agenda. An operator who starts speaking INSIDE the 500ms window is still learned from; that needs a per-frame source signal the client does not have. 10 assertions, 10 mutations all caught.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "desk",
@@ -742,7 +770,7 @@
       "tools": [
         "list_windows"
       ],
-      "ok": 88,
+      "ok": 98,
       "f": 1,
       "note": "Window enumeration. The recovery step every other desktop tool points at.",
       "ev": "88 ok / 1 fail"
@@ -754,7 +782,7 @@
       "tools": [
         "launch_app"
       ],
-      "ok": 76,
+      "ok": 78,
       "f": 13,
       "note": "Opens applications and resolves the real windowed process, not the activation stub.",
       "ev": "14 ok / 0 fail over the last three days"
@@ -766,10 +794,10 @@
       "tools": [
         "focus_window"
       ],
-      "ok": 30,
+      "ok": 31,
       "f": 6,
-      "note": "Five of six failures are stale PIDs it created itself, and it says so precisely. One is a genuine OS refusal.",
-      "ev": "\"Cannot find a process with the process identifier 18832. That pid no longer exists. Call list_windows again.\"\n\"blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore.\""
+      "note": "DISPOSITION CLOSED 2026-08-28, and it stays warn on purpose: the escalation ladder is exhausted, Windows refuses deliberately, and no fourth rung may be added. Every failure now names a recovery.",
+      "ev": "DISPOSITION 2026-08-28 (Track C-2, BUG-385). THE PREVIOUS NOTE HERE WAS WRONG ABOUT ITS OWN EVIDENCE. It read \"Five of six failures are stale PIDs it created itself. One is a genuine OS refusal.\" Re-derived from the union of both vault roots, the six failures are THREE classes, not two: 3 stale pid (\"Cannot focus PID 18832: ... That pid no longer exists, so nothing was focused. Call list_windows again\"), 2 no-main-window (\"Process 4420 has no main window.\"), 1 foreground-lock (\"...blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore\"). Two corrections: the count is 3/2/1, and \"stale PIDs it created itself\" is false for at least one — the model asked to focus PID 1, which focus_window never handed out. THE DISPOSITION: the ladder (thread-attach, then a foreground-lock-timeout override that is restored in a finally so it never leaks a machine-wide setting, then minimize/restore) is exhausted. Root CLAUDE.md records that the question of whether the denial reproduces in real voice-driven use was CLOSED on 2026-08-17 and the answer is yes; the alternatives are unreliable or user-hostile. A test now asserts the ladder has EXACTLY three rungs, that the refusal names all three, and that the saved timeout is restored inside a finally. ONE REAL GAP FIXED: of the three failure classes, no-main-window was the only one that told the caller nothing to do next, so the model retries the same pid. It now names list_windows, for the same reason the stale-pid failure does — list_windows enumerates WINDOWED processes, so a pid missing from it settles the question. STAYS WARN because it genuinely fails sometimes, for a reason nobody can fix; the failures are honest, not absent."
     },
     {
       "c": "desk",
@@ -807,10 +835,10 @@
         "drag",
         "scroll_at"
       ],
-      "ok": 5,
-      "f": 5,
-      "note": "The UIA ladder was widened from two rungs to five on 08-20 and has barely been exercised since.",
-      "ev": "5 ok / 5 fail all-time. cua_click 8 ok / 2 fail."
+      "ok": 16,
+      "f": 6,
+      "note": "OPEN after 2026-08-27 triage. Needs a MEASURED desktop run against a fixed target script, not a code change. 10 calls is too small to mean anything.",
+      "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and the work order says why: \"needs a MEASURED run against a fixed target script, not a code change. The ladder went 2 rungs to 5 on 08-20 and 10 calls is too small to mean anything.\" Measured: 5 ok / 5 fail across 4 distinct failure reasons, newest failure 2026-08-01 — nearly a month old, and 10 calls total. A 50% rate over 10 samples has a confidence interval wide enough to contain almost anything, so both \"it is broken\" and \"it is fine\" are unsupported. Any code change here would be tuning against noise. Needs the operator at a desktop with a fixed target script; the harness in scripts/verify-dark-nodes.js deliberately does not attempt it, because clicking real windows is not something a test run should do unattended."
     },
     {
       "c": "desk",
@@ -819,8 +847,8 @@
       "tools": [
         "close_window"
       ],
-      "ok": 26,
-      "f": 1,
+      "ok": 27,
+      "f": 2,
       "note": "Closes windows including hosted dialogs after the 08-20 fix.",
       "ev": "26 ok / 1 fail. The one failure names the confirmation prompt holding it open."
     },
@@ -833,8 +861,8 @@
         "move_window",
         "show_desktop"
       ],
-      "ok": 14,
-      "f": 0,
+      "ok": 18,
+      "f": 1,
       "note": "Tiling and restore. Never failed.",
       "ev": "14 ok / 0 fail"
     },
@@ -845,7 +873,7 @@
       "tools": [
         "open_folder"
       ],
-      "ok": 13,
+      "ok": 15,
       "f": 8,
       "note": "Opens folders. Rejects a file path instead of revealing the file - fixed 08-20, not live-verified.",
       "ev": "\"That is a file, not a folder: ...capabilities.txt. Use open_artifact for files.\"\nBUG-283/284 fixed 2026-08-20 21:16 -- NOT live-verified."
@@ -853,12 +881,14 @@
     {
       "c": "desk",
       "n": "open a file",
-      "s": "fail",
+      "s": "ok",
       "tools": [
         "open_file"
       ],
-      "note": "There is no working path to launch a specific file. The operator hit this twice in one session.",
-      "ev": "\"System constraints prevent launching specific files, even with Explorer open.\"\nLogged as an open incident: File Explorer adapter can open folders but cannot launch a file."
+      "note": "open_file, sandboxed with an execute-extension denylist and a findWindowByTitle read-back. CLOSED 2026-08-27: the node claimed no working path existed; one has since 2026-08-21.",
+      "ev": "DISPOSITION 2026-08-27 (Track B, BUG-384), and the plan already said so: its corrections section records \"B5 ('no effector can open a file') is STALE — open_file exists in from-computer.js with a resolveSandboxed() guard, an execute-extension denylist, an honest failure when the desktop shell is absent, and a findWindowByTitle read-back oracle. It was written 2026-08-21, AFTER the operator sessions the plan cites.\" The map had not caught up. Audit evidence, both rows from 2026-08-21: the one failure is \"File not found: ...\\Desktop\\Parmesan garlic bread recipe.txt\", an honest not-found for a file that does not exist, and the one success carries unverified:true with the caveat \"whether the associated application actually rendered it\" — which is the evidence contract working, not a defect. A capability with one honest refusal and one honest success is not a `fail`.",
+      "ok": 1,
+      "f": 1
     },
     {
       "c": "desk",
@@ -867,7 +897,7 @@
       "tools": [
         "list_folder"
       ],
-      "ok": 0,
+      "ok": 6,
       "f": 2,
       "note": "Directory listing. Failed both times and is withheld from voice.",
       "ev": "0 ok / 2 fail, and withheld from the live tool declaration."
@@ -887,7 +917,7 @@
     {
       "c": "desk",
       "n": "file ops",
-      "s": "dark",
+      "s": "ok",
       "tools": [
         "create_folder",
         "move_file",
@@ -898,8 +928,10 @@
         "read_file",
         "write_file"
       ],
-      "note": "create_folder, move_file, copy_file, rename_file, delete_file, search_files. All present in code, none reachable by voice.",
-      "ev": "All six are in the withheld-74 list. create_folder has exactly 1 all-time call."
+      "note": "create_folder, move_file, copy_file, rename_file, delete_file, read_file, list_folder, open_folder. EXERCISED 2026-08-27: 7 of 8 verified against the real filesystem.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) by scripts/verify-dark-nodes.js --group=fileops, in a real temp sandbox, with the FILESYSTEM as the oracle rather than each tool's own ok flag: create_folder (directory exists on disk), copy_file (copy present with identical bytes), rename_file (old name gone, new name present), move_file (file at destination), read_file (returned the real bytes), list_folder (listed the sandbox), delete_file (file removed from disk) — 7 pass, 0 fail. open_folder is a DISPOSITION: it needs a desktop shell, and running it would pop a real Explorer window on the operator's screen rather than measure anything. This node was dark because nobody had ever called these tools, not because they were broken.",
+      "ok": 14,
+      "f": 6
     },
     {
       "c": "web",
@@ -908,8 +940,8 @@
       "tools": [
         "web_search"
       ],
-      "ok": 117,
-      "f": 10,
+      "ok": 151,
+      "f": 13,
       "note": "Still warn on main, but for a different reason than in this audit. It is no longer 'only Wikipedia': exa-mcp answers again, and a second keyless provider plus an escalating per-provider cooldown are now merged to main. The remaining risk is quota, not deadness - two free tiers of ~150 and ~100 calls a day, both vendor claims since neither endpoint publishes a rate-limit header.",
       "ev": "Measured 2026-08-26 through the shipping module: exa-mcp median 1634ms, you-mcp median 2621ms, 3 of 3 queries each answered. ddg-html is alive again too - 4 of 5 queries in ~1s, and its miss failed in 73ms rather than a 10s timeout - so it is intermittent, not dead as recorded here. Fix is MERGED to main as of 2026-08-26 (PR #26, merge 2c0a4e9). (BUG-361, BUG-365)"
     },
@@ -920,19 +952,21 @@
       "tools": [
         "open_web"
       ],
-      "ok": 131,
-      "f": 19,
-      "note": "Renders search, weather, flight and YouTube cards in the dashboard. Twelve distinct failure strings.",
-      "ev": "7 successful YouTube embeds including \"CNN News Central 8/20/26\".\n\"Found results but could not extract a YouTube video ID.\"\n\"open_web requires a type. Use one of: youtube|weather|search|flights|image|web.\""
+      "ok": 135,
+      "f": 25,
+      "note": "Renders search, weather, flight and YouTube cards. 17 distinct failure strings, now all typed with a machine-readable code. Five YouTube URL shapes were unreadable and now parse.",
+      "ev": "RE-MEASURED 2026-08-27 (BUG-381 / Track D-4) against the live vault: 135 ok / 25 fail, not 131/19 -- the map was stale AND under-counted the failures. 17 distinct failure strings, not twelve. Grouped by real cause: 9 correct refusals of a malformed call (no url / no type / no query), 10 where upstream genuinely returned nothing, 3 \"could not extract a YouTube video ID\", 3 provider fetch failures. So D-4's named cause is the SMALLEST of the four, but it was real: the extractor regex knew four YouTube URL shapes and missed five. Measured -- MISS on youtube.com/live/ID (a livestream, and the failing queries included \"CNN live news\", \"CNN news dashboard\" and \"today's news\"), MISS on watch?app=desktop&v=ID and watch?feature=share&v=ID (v had to be the FIRST query param, which a share sheet and a mobile redirect both break), MISS on youtube-nocookie.com/embed/ and on the legacy /v/ path. All five now read, extracted to util/youtube-id.js with a host guard so an unrelated URL containing an 11-char path segment cannot yield a fake id. Second half of D-4 also done: all 22 failure sites in the open_web handler now carry a typed `code` (bad-request / no-results / unplayable-results / provider-error, one per measured cause group) beside the unchanged prose, so a caller can finally branch. STILL WARN, not green: the extractor is unit-verified over the real URL shapes but no live search has been driven through it, and 84% (135/160) is not a green number even when most of the remainder is correct refusal."
     },
     {
       "c": "web",
       "n": "hand-off to browser",
-      "s": "warn",
+      "s": "ok",
       "tools": [],
       "kind": "subsystem",
-      "note": "It genuinely opens the link in your real browser every time - and then tells you it cannot confirm. The complaint is a missing confirmation, not a broken feature.",
-      "ev": "main.log: open-external -> {\"opened\":true,\"reason\":null}  x14\nThe \"denied external open\" line that follows is a second-window guard, not the failure.\nIt lands in Brave (the OS default) when Chrome was asked for."
+      "note": "Opens a link in the real browser. CLOSED 2026-08-27 as already-done: both of D-6's asks were shipped by BUG-273 B2.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), verified in source rather than assumed. D-6 asked for two things: \"add the read-back confirmation, and say it landed in the OS default rather than the browser that was named\". Both already exist — from-dashboard.js:406 returns confirmedStep: \"your default browser was handed \u003curl> and accepted it\", which IS the read-back and which names the OS default explicitly. BUG-273 B2 split the two halves: the hand-off IS confirmed (openExternal resolving means the OS took the URL), so it sits in confirmedStep where the voice layer may say it aloud, while `reason` narrows to the one genuinely unknown thing — whether the page rendered. The node's own note already said the complaint was \"a missing confirmation, not a broken feature\"; the confirmation is there.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "web",
@@ -960,10 +994,10 @@
         "browser_launch_debug",
         "browser_switch"
       ],
-      "ok": 57,
-      "f": 13,
-      "note": "Chrome DevTools control. Boots to standby every time and only comes up when a debug browser is launched on demand.",
-      "ev": "browser-automation.standby: \"CDP not connected\"  on every boot\n41x \"UNAVAILABLE on this machine - browser_navigate (no debuggable browser is attached)\"\nbrowser_navigate 2 ok / 0 fail in the final session; browser_launch_debug 15 ok / 1 fail."
+      "ok": 139,
+      "f": 33,
+      "note": "OPEN after 2026-08-27 triage. browser_launch_debug works (15 ok / 1 fail) but nothing auto-launches it on first need. The wiring is the work, and it is not done.",
+      "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and said plainly rather than left ambiguous. D-6: \"wire the EXISTING browser_launch_debug (15/1) to auto-launch on first need. Do not build a launcher.\" Measured: browser_launch_debug 15 ok / 1 fail, newest failure 2026-08-05 — the tool itself is sound. What is missing is the wiring, so a browser_* call on a cold machine still reports the debug port unreachable instead of starting Chrome once and retrying. Deliberately not attempted in this pass: the change spawns a real browser process on first use, which is a live-behaviour change to a T3 surface that wants its own verification sitting (a harness cannot prove \"launched once, then the retry succeeded\" without actually launching). Left open with the mechanism named rather than half-wired."
     },
     {
       "c": "web",
@@ -972,7 +1006,7 @@
       "tools": [
         "web_fetch"
       ],
-      "ok": 6,
+      "ok": 8,
       "f": 0,
       "note": "Fetches and reads a page. Small sample, clean, and the SSRF guard was hardened on 08-20.",
       "ev": "6 ok / 0 fail"
@@ -980,12 +1014,14 @@
     {
       "c": "web",
       "n": "CAPTCHA wall",
-      "s": "fail",
+      "s": "ok",
       "tools": [
         "browser_check_captcha"
       ],
-      "note": "Google serves a CAPTCHA to the automated browser, which ends the run. It correctly refuses to solve it.",
-      "ev": "screen text read back: \"google.com/sorry/index?continue=...\"\nsee_and_click could not find \"I am not a robot\" and did not pretend to."
+      "note": "browser_check_captcha. DISPOSITION CLOSED 2026-08-28: refusing is the correct behaviour and was already right. The DETECTOR was wrong in both directions and is fixed.",
+      "ev": "DISPOSITION 2026-08-28 (Track C-1, BUG-385). The node was labelled fail, and that described an EPISODE — a Google CAPTCHA ending a browsing run — not a broken capability. The tool works: 1 recorded call, 1 ok, 0 fail, and it deliberately returns ok even when blocked, with the code saying why: \"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\". The handover wording, the tier and a source assertion that no solver service is ever added were all already pinned by browser-obstacles.test.js. That is a complete disposition and it predates this ticket. WHAT WAS NOT RIGHT was what counts as a challenge. CAPTCHA_MARKERS carried bare `cloudflare` and bare `security check`, and looksLikeCaptcha is fed the aria tree PLUS page.url(). Measured against the real function: 6 of 6 ordinary pages flagged — developers.cloudflare.com, a footer reading \"Performance and security by Cloudflare\", a news article about a Cloudflare outage, cloudflarestatus.com, Google account Security Checkup, and a bank help page saying \"we run a security check on every login\". The same run MISSED \"Verifying you are human\" (the marker was \"verify you are human\" and includes() is a substring test), \"Checking your browser before accessing\", the cdn-cgi/challenge-platform path, and \"Press and hold to confirm you are a human\". So the two broad markers did the OPPOSITE of their job: they fired on the brand name, which is on a large fraction of the web, and missed the challenge. This was not cosmetic — browser_snapshot runs the same matcher on EVERY snapshot and attaches \"Do NOT try to solve or bypass it — ask the operator to complete it in the browser window\", so on any Cloudflare-fronted page the model stopped browsing to ask for a challenge that was not there. FIXED mostly by removal: a vendor name is not a marker. Now 0 false positives on 7 ordinary controls and 0 false negatives on 9 challenge shapes, 7 mutations all caught. The safety boundary did not move and could not have: \"never solve or bypass\" is structural (no solver exists, a source assertion keeps it so), and detection quality sits above that boundary.",
+      "ok": 1,
+      "f": 0
     },
     {
       "c": "comms",
@@ -995,10 +1031,10 @@
         "gmail_unread",
         "gmail_read"
       ],
-      "ok": 98,
-      "f": 72,
-      "note": "Hard down. The refresh token is expired or revoked. The error message is exemplary; following it reproduces the fault.",
-      "ev": "0 ok / 27 fail over the last three days.\n\"invalid_grant: Token has been expired or revoked. This is NOT a network problem and will not recover on its own. Run node scripts/google-auth.js.\"  BUG-291 in flight."
+      "ok": 112,
+      "f": 97,
+      "note": "gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
+      "ev": "LIVE-VERIFIED 2026-08-28 (Track A, BUG-387) — the first time this node has been checked against the provider rather than against its own history. `node mythos/scripts/verify-google-grant.js` reports INVALID: the refresh token minted no access token and Gmail refused. The real effector agrees, which is the two-routes-one-answer cross-check: calling gmail_unread through the registered tool returns \"invalid_grant: Token has been expired or revoked.\" So this row is correct and stays red. THE CODE AROUND IT IS NOT AT FAULT, measured rather than assumed: from-gmail classifies invalid_grant as TERMINAL and its remedy text names the literal command plus the 7-day Testing-publishing-status trap; hub.js latches the terminal result per tool so the provider is not hammered — the 88 recorded failures fall into 60 bursts, nearly all of size ONE, i.e. one attempt per process rather than a retry storm; gmail-sensor raises health.anomaly with needsOperator:true; and explainer.js speaks the whole remedy aloud, verbatim, including `node scripts/google-auth.js`. Nine test files already cover that chain, two of them asserting the SPOKEN text contains the command. WHAT WAS ACTUALLY BROKEN was the one thing an operator would check: `doctor` reported \"OK Gmail / Calendar sensors — configured\" for three weeks while all of the above was failing, because it tests that three strings are PRESENT in .env and presence is not validity. Fixed under BUG-387: doctor now says validity is unchecked and names the verifier. A CORRECTION worth recording: from the episodic `summary` field it looked as though MYTHOS had announced this nine times over eight days and never said what to do — that was WRONG, `summary` truncates at ~100 characters and `detail.text` carries the full remedy. Only the 2026-08-18 utterance is genuinely deficient and it predates the BUG-273 C2 / BUG-278 fixes that repaired exactly it. NEEDS THE OPERATOR: run `node mythos/scripts/google-auth.js`, put the new GOOGLE_REFRESH_TOKEN in mythos/.env, then confirm with `node mythos/scripts/verify-google-grant.js` — which is the point of the new script, since before it there was no way to tell whether the three minutes had worked."
     },
     {
       "c": "comms",
@@ -1021,23 +1057,23 @@
         "whatsapp_send"
       ],
       "ok": 16,
-      "f": 24,
+      "f": 27,
       "note": "Opens the right chat, then cannot identify the window to type into. The message is not sent, and it says so.",
       "ev": "0 ok / 4 fail over the last three days.\n\"WhatsApp opened the chat with mom (+91...), but I could not identify its window, so I cannot type into it safely. The message is NOT sent.\""
     },
     {
       "c": "comms",
       "n": "whatsapp_contacts",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "whatsapp_contacts",
         "whatsapp_contact_save",
         "whatsapp_contact_delete"
       ],
-      "ok": 28,
-      "f": 0,
-      "note": "Reads the contact list every time. Near-miss name matching fails.",
-      "ev": "28 ok / 0 fail -- but: \"Mousumi Paul\" is not in my contact list. Known contacts: alex, Moushumi, mom, dad, Mausumi Paul."
+      "ok": 37,
+      "f": 1,
+      "note": "Resolves a contact name to a number. CLOSED 2026-08-27: 29 ok / 0 fail, and the never-auto-send-to-a-fuzzy-match property already holds by construction.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6). Measured: 29 ok / 0 fail — it has NEVER failed, so D-6's ask (\"normalise case/diacritics/spacing, suggest top candidate with confirm. NEVER auto-send to a fuzzy match\") is a hardening request against a perfect record rather than a bug report. The safety half already holds and is deliberate: from-whatsapp.js resolves near-misses with levenshtein and produces a fuzzyNote — \"closest match to X is saved contact Y\" — which is a NOTE handed back for confirmation, never a send. The code says so explicitly, contrasting itself with semantic.forget()'s fuzzy pass \"which DELETES on a single candidate\". Normalising diacritics further would be an improvement to a tool with no recorded failure, which is not what this campaign is for."
     },
     {
       "c": "comms",
@@ -1057,8 +1093,10 @@
       "s": "dark",
       "tools": [],
       "kind": "subsystem",
-      "note": "No tool exists. It said so plainly rather than faking it.",
-      "ev": "\"Even with context within the app, I still cannot start a video call.\"  Filed as a proposed goal."
+      "note": "No tool exists, and nothing may quietly stand in for one. DISPOSITION CLOSED 2026-08-28: verified across all 179 registered tools, and the nearest substitute is pinned as voice-withheld.",
+      "ev": "DISPOSITION 2026-08-28 (Track C-3, BUG-385). Nothing to fix, and verified rather than assumed. Across all 179 registered tools nothing matches /video|facetime|meet|zoom/ at all; the only call-shaped verbs are phone_call (from-android.js, a VOICE call over the Android node), cua_bring_to_front, mcp_call_tool and recall_memory, none of which is a video call. Stays dark, which is the accurate claim: the node has an empty tool list, so a call count of zero is a measured fact rather than an absence of measurement. THE PART WORTH PINNING IS THE SUBSTITUTION RISK, not the absence. A model denied a tool does not always decline — it reaches for the nearest one, and on a \"call someone\" request phone_call is the nearest thing there is. It is WITHHELD from the voice surface (absent from DEFAULT_ALLOWLIST), so on the surface where the request was actually recorded it is unreachable, which is why the recorded answer was the honest \"Even with context within the app, I still cannot start a video call\" rather than a voice call presented as a video one. A test asserts both halves, so promoting phone_call to voice later has to argue with this assertion first.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "media",
@@ -1070,7 +1108,7 @@
         "spotify_next",
         "spotify_previous"
       ],
-      "ok": 77,
+      "ok": 106,
       "f": 5,
       "note": "Plays a named track by driving the desktop app. Once resumed the wrong song and corrected itself when challenged.",
       "ev": "77 ok / 5 fail. \"Confirming Come Down by The Kid LAROI is now playing.\""
@@ -1083,7 +1121,7 @@
         "spotify_volume"
       ],
       "ok": 52,
-      "f": 1,
+      "f": 3,
       "note": "Per-app volume. Worked first try on request.",
       "ev": "52 ok / 1 fail"
     },
@@ -1094,7 +1132,7 @@
       "tools": [
         "spotify_status"
       ],
-      "ok": 41,
+      "ok": 42,
       "f": 0,
       "note": "The playback oracle. Never failed.",
       "ev": "41 ok / 0 fail. spotify_play_pause 26 ok / 0 fail."
@@ -1124,8 +1162,8 @@
         "get_app_volume",
         "set_app_mute"
       ],
-      "ok": 105,
-      "f": 0,
+      "ok": 189,
+      "f": 1,
       "note": "set_volume, get_volume and media_key. Not one failure in 154 calls.",
       "ev": "set_volume 68/0, get_volume 37/0, media_key 49/0, media_status 28/1"
     },
@@ -1135,20 +1173,22 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Plays inside the dashboard when the video ID resolves. It often does not.",
-      "ev": "7 successful media-window opens; 54 calls hit the handler with a non-media type."
+      "note": "Plays inside the dashboard when the video ID resolves. The reason it often did not was one regex missing five URL shapes, including the /live/ path news streams use.",
+      "ev": "CAUSE IDENTIFIED AND FIXED 2026-08-27 (BUG-381 / Track D-4). \"It often does not [resolve]\" was true and the reason was one regex: the video-id extractor recognised watch?v=, youtu.be/, /embed/ and /shorts/ and MISSED /live/, /v/, youtube-nocookie.com/embed/, and any watch URL where v= was not the first query parameter. A news livestream is served from /live/, which is why news queries in particular failed to embed. Extraction now lives in util/youtube-id.js, reads all nine shapes, and refuses to invent an id for a non-YouTube host. The other half of the old evidence line -- \"54 calls hit the handler with a non-media type\" -- is NOT a defect: those are open_web calls for search/weather/flights/web cards, which never had a video to embed. STILL WARN pending one live embed of a /live/ URL; nothing here is verified against a running dashboard.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
       "n": "build_project",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "build_project"
       ],
       "ok": 5,
       "f": 0,
-      "note": "Produces real artifacts - twelve HTML pages, landing pages, a playable Tetris. Both of the last two runs failed acceptance.",
-      "ev": "buildFailed: \"missing required design element: dark.theme (spec mentions it but not found in deliverable)\"\nsecond run: status needs-work with 3 review issues.  Last build activity: 2026-08-15."
+      "note": "Produces real artifacts. CLOSED 2026-08-27: the builder has never failed. Both red runs failed ACCEPTANCE, which is the verifier's verdict, not the builder's.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), and D-6 was right to warn \"never failed — the last two runs failed ACCEPTANCE. Check the verifier rules before calling the builder wrong.\" Measured across the whole vault: build_project 5 completed, 5 ok, 0 fail (2026-08-02 x4, 2026-08-11 x1). The node's evidence quotes buildFailed: \"missing required design element: dark.theme (spec mentions it but not found in deliverable)\" and a second run at status needs-work with 3 review issues — both are the ACCEPTANCE verifier declining a deliverable, which is the verifier doing its job. Attributing that to the builder is the mis-read D-6 warned about. Any remaining question is about the verifier's rules, which is a different node."
     },
     {
       "c": "build",
@@ -1158,7 +1198,9 @@
         "dsh_task"
       ],
       "note": "The only build-content engine, and it is online. No fallback by design - a build with no engine fails loudly.",
-      "ev": "hermes-agent.online, mode cli, slots 1"
+      "ev": "hermes-agent.online, mode cli, slots 1",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
@@ -1168,7 +1210,7 @@
         "start_project",
         "project_status"
       ],
-      "ok": 13,
+      "ok": 31,
       "f": 0,
       "note": "Project scaffolding. Never failed, always gated behind a tier-3 confirmation.",
       "ev": "13 ok / 0 fail"
@@ -1180,44 +1222,50 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Reads the deliverable against the spec and refuses it. It caught a page that only went dark via prefers-color-scheme.",
-      "ev": "\"[review] The page does not default to a dark theme; it only switches via prefers-color-scheme, contrary to the mandatory dark-themed requirement\""
+      "ev": "\"[review] The page does not default to a dark theme; it only switches via prefers-color-scheme, contrary to the mandatory dark-themed requirement\"",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
       "n": "code search",
-      "s": "dark",
+      "s": "warn",
       "tools": [
         "index_project",
         "search_code",
         "revise_project"
       ],
-      "note": "index_project, search_code, revise_project. Zero calls ever, all withheld from voice.",
-      "ev": "Never exercised. In the withheld-74 list."
+      "note": "index_project, search_code, revise_project. EXERCISED 2026-08-27, including the BUG-368 oracle. WARN for the same offline-embedder caveat as documents.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5), and the oracle is the one the work order demands rather than \"it returned ok\". BUG-368 is why: an earlier index run put 94% of its budget into .venv and indexed none of MYTHOS's own source WHILE REPORTING SUCCESS. So index_project is judged on two things — the result must contain no .venv/node_modules content, and search_code must find a symbol that exists only in MYTHOS's own source. Both hold: index_project indexed src/core with no dependency-tree content in the result, and search_code found createEffectorHub inside src/core. revise_project is a DISPOSITION — it routes to the build engine and would write real project files, which a read-only harness must not do. WARN not OK: same offline-embedder caveat as documents — the pipeline is proved, the ranking is not.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
       "n": "generators",
-      "s": "dark",
+      "s": "ok",
       "tools": [
         "generate_pdf",
         "generate_deck",
         "generate_spreadsheet",
         "generate_image"
       ],
-      "note": "generate_pdf, generate_deck, generate_spreadsheet, generate_image. Zero calls ever, all withheld from voice.",
-      "ev": "Never exercised. In the withheld-74 list."
+      "note": "generate_pdf, generate_deck, generate_spreadsheet, generate_image. EXERCISED 2026-08-27: 3 of 4 verified by magic bytes; image gen is a disposition, not a green.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) with ARTIFACT oracles, never the return value — a generator that returns ok:true has proved nothing. generate_pdf: a real PDF, %PDF- magic bytes, 16385 bytes, degraded:false (Chrome resolved here; the documented HTML degradation would have been reported as n/a, not as a pass). generate_spreadsheet: 6460 bytes, PK local-file header AND xl/workbook.xml inside the ZIP. generate_deck: 45407 bytes, PK header AND ppt/presentation.xml. generate_image is a DISPOSITION — it needs a keyed image lane and there is no free one under the no-spend decision, so it closes as a recorded non-change and never as a green. Worth recording: the harness first reported all three generators as FAILING because it read `.path` off the result when the field is `savedTo` — a harness bug that looks exactly like a product bug, which is why every verdict names the oracle it used.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
       "n": "use_skill",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "use_skill"
       ],
-      "ok": 5,
+      "ok": 20,
       "f": 2,
-      "note": "Loads a skill playbook on demand. Fails when the named skill is not resolvable on this machine.",
-      "ev": "\"Skill 'ui-ux-pro-max' not found. Available skills: taste-frontend, ponytail, karpathy-guidelines, caveman\""
+      "note": "Loads a skill playbook on demand. CLOSED 2026-08-27 as a disposition: the two failures are a month old, the loader was fixed, and the message was always honest.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), and D-6 predicted this outcome: \"if they are genuinely absent the message is already honest and this is a disposition\". Measured: 20 ok / 2 fail, and BOTH failures are 2026-07-27. One is a correct refusal (\"A skill name is required\"). The other — \"Skill 'ui-ux-pro-max' not found. Available skills: taste-frontend, ponytail, karpathy-guidelines, caveman\" — is honest by construction: it names what IS resolvable, which is exactly what a caller needs. The underlying cause was a loader searching one root, since fixed with multi-root plus MYTHOS_SKILLS_DIR. Zero failures in the month since."
     },
     {
       "c": "cog",
@@ -1230,15 +1278,15 @@
         "toggle_goal",
         "delete_goal"
       ],
-      "ok": 118,
-      "f": 2,
+      "ok": 258,
+      "f": 3,
       "note": "Read, create, propose and toggle all work at the data layer. The HUD panel did not reflect a toggle it did not make itself - fixed after the last session, unproven.",
       "ev": "list_goals 60/0, propose_goal 37/1, create_goal 8/0, rest.goals.toggle 13/0\nBUG-290 fixed 2026-08-21 01:00 -- NOT live-verified."
     },
     {
       "c": "cog",
       "n": "reminders",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "reminder_add",
         "reminder_list",
@@ -1246,23 +1294,23 @@
         "reminder_approve_action",
         "calendar_upcoming"
       ],
-      "ok": 49,
+      "ok": 67,
       "f": 2,
-      "note": "Listing is flawless. Adding fails on natural sub-minute phrasing.",
-      "ev": "reminder_list 45/0.  reminder_add: \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM.\""
+      "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
     },
     {
       "c": "cog",
       "n": "timer_add",
-      "s": "fail",
+      "s": "ok",
       "tools": [
         "timer_add",
         "timer_cancel"
       ],
-      "ok": 0,
+      "ok": 2,
       "f": 2,
-      "note": "A 30-second timer was rejected, and it then invented a manual count and announced time was up.",
-      "ev": "0 ok / 2 fail. Logged as a hallucination on the operator's instruction.\nBUG-289 fixed 2026-08-21 00:58 -- NOT live-verified."
+      "note": "timer_add, timer_cancel. CLOSED 2026-08-27: BUG-289 added the seconds unit on 2026-08-21; both recorded failures predate it and both successes postdate it.",
+      "ev": "DISPOSITION 2026-08-27 (Track B, BUG-384), dated rather than counted. The node read fail 0/2 — and the 0 was wrong as well as the label. Audit rows, in order: FAIL 2026-08-13T10:45Z and FAIL 2026-08-20T13:45Z, both carrying the pre-fix message \"Could not parse that time. Try ISO date, 'in 20 minutes', 'tomorrow 9am', or 'HH:MM'\" — which does not mention seconds, because seconds were impossible. BUG-289 shipped 2026-08-21 and added a seconds unit plus a fractional count. Then OK 2026-08-21T08:47Z and OK 2026-08-23T01:37Z. Every failure is before the fix and every success is after it, which is what a fixed parser looks like. Same finding as the `reminders` node in Track D-6: one parser family, one fix, two stale nodes."
     },
     {
       "c": "dev",
@@ -1271,7 +1319,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "The PowerShell automation child. Online on every boot; it is the transport under every desktop verb.",
-      "ev": "\"pc-child online\" on every boot"
+      "ev": "\"pc-child online\" on every boot",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "dev",
@@ -1283,8 +1333,10 @@
         "cua_get_window_state",
         "cua_click"
       ],
-      "note": "INTERMITTENT, newly observed 2026-08-26. Two live boots minutes apart on the same commit: one OFFLINE on a startup handshake that timed out with the child printing nothing at all, the next ONLINE. Not a regression and not healthy either - a startup race nothing reports, because it degrades gracefully so nothing downstream breaks. Undiagnosed.",
-      "ev": "Boot A: \"cua-driver: OFFLINE (cua-driver startup handshake timed out. The child printed nothing to stderr.)\" Boot B, same commit: \"cua-driver: ONLINE\". Silent stderr is the whole difficulty. Recorded as warn rather than fail because one run is not a mechanism - the first draft of this very node said REGRESSED off boot A alone."
+      "note": "OPEN after 2026-08-27 triage. Needs >=5 real boots before anything is touched; a harness cannot supply them.",
+      "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED. D-6 is explicit about why: \"Add a first-line ready handshake with a timestamp; sample >=5 boots before touching the timeout — one run is not a mechanism.\" That instruction is the blocker. The observation is two live boots minutes apart on the same commit, one OFFLINE on a startup handshake that timed out and one fine, which is a sample of two and cannot distinguish a race from a slow machine. Changing the timeout on that evidence would be exactly the \"one run is not a mechanism\" mistake the work order warns against. Needs the operator to boot the driver >=5 times; then the handshake timestamp is worth adding, because it would say WHERE the time went.",
+      "ok": 53,
+      "f": 9
     },
     {
       "c": "dev",
@@ -1307,7 +1359,9 @@
         "phone_file_push"
       ],
       "note": "FIXED since this audit. adb WAS installed all along - the adapter just looked for it on PATH while the installer put it project-local, and doctor.js resolved it the other way and reported 'No gaps'. The adapter now shares the installer's resolver. No handset is currently attached, so the verbs are reachable but unproven end-to-end.",
-      "ev": "Measured 2026-08-26: findInstalledAdb() -> \"\u003crepo>\\Android Platform Tools\\platform-tools\\adb.exe\", spawn OK, \"Android Debug Bridge version 1.0.41\". Live manifest: \"android-child: ONLINE\". \"adb devices\" returns an empty list - no device plugged in. (BUG-360 (b))"
+      "ev": "Measured 2026-08-26: findInstalledAdb() -> \"\u003crepo>\\Android Platform Tools\\platform-tools\\adb.exe\", spawn OK, \"Android Debug Bridge version 1.0.41\". Live manifest: \"android-child: ONLINE\". \"adb devices\" returns an empty list - no device plugged in. (BUG-360 (b))",
+      "ok": 4,
+      "f": 0
     },
     {
       "c": "dev",
@@ -1316,67 +1370,79 @@
       "tools": [],
       "kind": "subsystem",
       "note": "The proxy could not bind its port. NOT a loop and NOT a config override -- both of those were wrong. The failure is now diagnosable; closing it needs one live boot.",
-      "ev": "EVIDENCE REWRITTEN 2026-08-27 (BUG-379); the previous two sentences were both false. (1) \"the healer retried it in a loop\" -- it did not: the playbook ran ONCE ever (2026-08-26), 63 of the 65 events reached the healer as no-match because aether-proxy-rebind did not exist until 2026-08-13, and the work order's own oracle (real orphaned listener, real bus/diagnostician/healer, 38s against a 15s cooldown) measured 1 anomaly + 1 attempt, no loop. The anomaly comes from a whenReady().then() rejection arm, which runs once per process -- the 65 records were 65 PROCESSES. (2) \".env says AETHER_ENABLED=false, config.json overrides it\" -- no config.json exists on any path that would be read; mythos/.env:347 sets AETHER_PROXY_ENABLED=true deliberately under its own Voice Nodes heading, and AETHER_ENABLED (line 337) gates a different subsystem entirely (main.js:1213). What WAS broken: nothing named the process holding the port, and `target` could never name the port either because ports() returns an object and main.js tested `.length` on it -- an unreachable branch whose .join() would have thrown inside the error handler. Both fixed. Port 4480 is free as of 2026-08-27, so the collision itself may be historical. STAYS RED because nothing here makes the proxy bind when another process holds the port -- that is correct behaviour -- and no live boot has yet heard the new sentence."
+      "ev": "EVIDENCE REWRITTEN 2026-08-27 (BUG-379); the previous two sentences were both false. (1) \"the healer retried it in a loop\" -- it did not: the playbook ran ONCE ever (2026-08-26), 63 of the 65 events reached the healer as no-match because aether-proxy-rebind did not exist until 2026-08-13, and the work order's own oracle (real orphaned listener, real bus/diagnostician/healer, 38s against a 15s cooldown) measured 1 anomaly + 1 attempt, no loop. The anomaly comes from a whenReady().then() rejection arm, which runs once per process -- the 65 records were 65 PROCESSES. (2) \".env says AETHER_ENABLED=false, config.json overrides it\" -- no config.json exists on any path that would be read; mythos/.env:347 sets AETHER_PROXY_ENABLED=true deliberately under its own Voice Nodes heading, and AETHER_ENABLED (line 337) gates a different subsystem entirely (main.js:1213). What WAS broken: nothing named the process holding the port, and `target` could never name the port either because ports() returns an object and main.js tested `.length` on it -- an unreachable branch whose .join() would have thrown inside the error handler. Both fixed. Port 4480 is free as of 2026-08-27, so the collision itself may be historical. STAYS RED because nothing here makes the proxy bind when another process holds the port -- that is correct behaviour -- and no live boot has yet heard the new sentence.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "dev",
       "n": "MCP bridge",
-      "s": "dark",
+      "s": "warn",
       "tools": [
         "mcp_list_servers",
         "mcp_list_tools",
         "mcp_call_tool"
       ],
-      "note": "mcp_list_servers, mcp_list_tools, mcp_call_tool. Zero calls in the entire history, all withheld from voice.",
-      "ev": "Never exercised. Only mythos/mcp/server.js exists."
+      "note": "mcp_list_servers, mcp_list_tools, mcp_call_tool. EXERCISED 2026-08-27. WARN because MCP is disabled here, so the tools answered honestly about an empty config rather than against a live server.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5). mcp_list_servers answered truthfully about the real configuration — enabled:false, servers:[], plus a hint naming MCP_SERVERS in mythos/.env — which is a pass for honesty, and the honest answer for an unconfigured bridge is an empty list. mcp_list_tools REFUSED an unknown server with a reason rather than returning silently empty, which is the behaviour that matters. mcp_call_tool is a DISPOSITION and the work order says why: it is T3 and goalId-gated by the leash, and that refusal without a goal is CORRECT SECURITY POSTURE, not a gap — a harness that manufactured a goal to get past it would be measuring the wrong thing. WARN not OK: with MCP_SERVERS unset, nothing here exercised a real stdio server. Closing it needs one configured MCP server, which is an operator action and not a defect.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "dev",
       "n": "rejected clients",
-      "s": "warn",
+      "s": "ok",
       "tools": [],
       "kind": "subsystem",
-      "note": "A client is retrying forever against a server correctly refusing it, and 147 identical lines never name which client.",
-      "ev": "ws-upgrade-rejected x147, every one carrying the same reason: \"bad or missing token\".  BUG-292 in flight."
+      "note": "CLOSED 2026-08-27: BUG-292 added the fingerprint and BUG-298 named the client. Both resolved 2026-08-21; the node still said \"in flight\".",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6). D-6 asked to \"add a fingerprint, then hunt it; a stale token on the phone node is the leading suspect\". Both halves are already done and the node's \"BUG-292 in flight\" was stale. BUG-292 (RESOLVED 2026-08-21) was the logging half — deliberately a logging commit first, because verifyClient was NOT to be loosened: MYTHOS_AUTH_TOKEN is mandatory for the phone node and is known to kill the HUD socket when set. BUG-298 (RESOLVED 2026-08-21) is the second half and NAMES the client: it was the HUD, not the phone node, hammering a server correctly refusing it — 147 rejections between 15:23:04.462Z and 15:44:33.465Z, i.e. 1289s / 147 = one every ~8.8s. The fingerprint turned out not to be needed; the live log carried the arithmetic.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "HUD navigation",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "navigate",
         "close_panel"
       ],
-      "note": "Moves the dashboard between panels on the model's own initiative.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "navigate, close_panel. navigate verified 2026-08-28 including its URL refusal; close_panel needs a connected dashboard.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. navigate passes TWO oracles. First, it does not publish — it returns uiActions, which the server relays to the HUD — so the oracle is that the resolved route comes back in a well-formed action, and the mutation that dropped the uiActions was caught. (The first version of the harness waited for a bus event and recorded a FAIL against correct code: the fourth time in this campaign a harness accused the product of its own mistaken model.) Second, a closed set is only closed if it REFUSES: BUG-273 A1 records this router once taking a URL, moving the view and reporting having launched a browser, so the harness asserts that navigate(\"https://example.com/thing\") still fails by name. The mutation that let a URL through was caught. close_panel is n/a — it awaits a real count back from a connected dashboard, and there is none here, which it says plainly.",
+      "ok": 51,
+      "f": 2
     },
     {
       "c": "hud",
       "n": "artifacts",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "open_artifact",
         "delete_artifact"
       ],
-      "note": "Opens and removes the files MYTHOS itself produced into the vault.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "open_artifact verified 2026-08-28 on the case that matters — it refuses an id that does not exist. delete_artifact is a disposition.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. For a read tool nobody has called, the interesting case is the MISS, not the hit: a tool that invents an answer for an id that does not exist is worse than one that has never run. So the oracle is an honest refusal, and open_artifact gives one (\"An artifact path or jobId is required\"). delete_artifact is NOT RUN — destructive by definition, and a harness has nothing it may safely delete. The node keeps its 14/3 production record; what this adds is that the read half declines correctly rather than fabricating.",
+      "ok": 14,
+      "f": 3
     },
     {
       "c": "hud",
       "n": "pipeline",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "pipeline_status",
         "pipeline_advance",
         "pipeline_execute"
       ],
-      "note": "The staged execution surface behind the dashboard pipeline panel.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "pipeline_status verified 2026-08-28. pipeline_advance had nothing to advance; pipeline_execute is a disposition.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Built on the real createPipelineEffector({fs, classifier}) over a sandbox vault. pipeline_status passes. pipeline_advance is n/a and honestly so — with an empty sandbox there is no card to advance, and it says \"No pipeline card matching ... found\" rather than inventing a success; verifying the advance path properly needs a seeded pipeline and is worth doing when someone seeds one. pipeline_execute is NOT RUN: T3, and it executes a real pipeline stage rather than describing one. So this node is one of three verbs closed, and stays warn.",
+      "ok": 65,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "kanban",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "kanban_status",
         "kanban_add_card",
@@ -1384,19 +1450,23 @@
         "kanban_assemble",
         "kanban_build_card"
       ],
-      "note": "Board state the operator and the model both write to.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "kanban_status/add_card/move_card verified 2026-08-28 against the board file on disk. assemble and build_card are dispositions — they drive the build engine.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. The three non-build verbs are verified against the REAL createKanbanEffector({fs, bus}) over a sandbox vault, and the oracle is the board FILE re-read off disk — add_card must put the card in it, move_card must change the stored lane. The mutation that made add_card report success while never persisting the board was caught. Two contract details the harness had to read rather than guess: LANES is a closed set (backlog|building|review|done), and move_card takes {query, lane} rather than an id. kanban_assemble and kanban_build_card are NOT RUN and say why: both drive the build engine (dsh), which is a real install, a real model call and minutes of wall clock, so a harness running them would be measuring the engine rather than the tool — and root CLAUDE.md rules that there is no fallback engine to fake it with.",
+      "ok": 9,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "widgets",
-      "s": "unknown",
+      "s": "ok",
       "tools": [
         "manage_widget",
         "spawn_widget"
       ],
-      "note": "Spawns and manages HUD widgets.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "spawn_widget, manage_widget. GREEN 2026-08-28: verified on the REAL bus — the oracle is the payload a HUD would render from, not the return value.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Both tools do their work by publishing, so the return value is written before anything is delivered anywhere and is worthless as evidence. The harness subscribes to a real bus and asserts the event carries the title and layout the HUD renders from — asserting the event COUNT would pass on any event at all, which is how the first version accepted a run it should have questioned. spawn_widget emits on ui.open-web (the HUD floating-card channel it shares with the cards open_web spawns) and manage_widget on ui.widget-command. The mutation that returned ok while never reaching the bus was caught. Note the catalogue is closed: manage_widget only accepts known widget names, which is why the harness drives it with `clock` rather than the widget it had just spawned. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
+      "ok": 1,
+      "f": 0
     },
     {
       "c": "hud",
@@ -1406,85 +1476,101 @@
         "daily_plan"
       ],
       "note": "The day-planning surface.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "status readouts",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "read_status",
         "read_system_specs",
         "system_status",
         "job_status"
       ],
-      "note": "Self-inspection: what is running, on what hardware, and how far along.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "read_status, read_system_specs, system_status, job_status. 2 of 4 verified 2026-08-28: read_status and job_status reach through to the build engine, which a harness cannot supply.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. read_system_specs PASSES on a real oracle: its answer must agree with node's own os.cpus()/platform. That is the point of the tool — BUG-273 records that it exists so the model reads real numbers instead of screenshotting a dashboard to read them off it — so \"it returned something\" would have been the wrong check. system_status also passes (2.2 KB of real payload). read_status and job_status are n/a, not failing: both call buildRunner.listJobs(), and createBuildRunner requires the build engine or a brain lane, neither of which a harness may conjure under the no-spend decision. With it absent they report a failure rather than throwing, which is the honest degradation. Worth recording so nobody re-derives it: the first version of the harness passed buildRunner:null and wrote the resulting message up as a product problem — main.js constructs buildRunner unconditionally and a brain always exists, so null never reaches these in production.",
+      "ok": 183,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "ask_agent",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "ask_agent"
       ],
-      "note": "Delegation to a sub-agent.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "NOT RUN 2026-08-28 — it spends, and the no-spend decision is the operator's.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. ask_agent is a recorded disposition in the harness rather than a gap in it: running it costs a model call, and the campaign's second operator decision is BYO-free lanes with no paid spend. The node keeps its 3/0 production record. Closing it needs either a free lane or the operator's say-so, and both are decisions rather than code.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "cog",
       "n": "persona",
-      "s": "unknown",
+      "s": "ok",
       "tools": [
         "persona_status",
         "set_persona_level"
       ],
-      "note": "Reads and sets the persona level.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "persona_status, set_persona_level. GREEN 2026-08-28: verified through the REAL identity module, and read back through a different door than the setter.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Built on the real createIdentity({bus, config, fs, identityStore}) over a sandbox vault rather than a stub — a stubbed identity would have gone green and measured the stub. The oracle reads the named trait from identity.getPersonaLevels() BEFORE and AFTER, targeting a value the trait did not already hold, so \"no change\" cannot pass. That precision was not free: the first version asked only whether the levels object stringified to something containing the number, a mutation that set nothing SURVIVED it because a default already held that value, and the oracle had to be rewritten. \"Something in this blob looks like what I asked for\" is a coincidence detector, not a read-back. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
+      "ok": 27,
+      "f": 2
     },
     {
       "c": "cog",
       "n": "missions",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "run_mission",
         "mission_status"
       ],
-      "note": "The multi-step mission orchestrator.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "mission_status is n/a — the real orchestrator needs the build engine and a brain. run_mission is a disposition (spend).",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Neither tool is verified, and the reason is recorded rather than papered over. createOrchestrator requires buildRunner, agentActions, kanban, bus, fs AND a brain lane; stubbing those would measure the stubs, which is the failure mode this harness is built to avoid. The first version passed orchestrator:null, mission_status dereferenced it, and the throw was recorded as a FAIL AGAINST THE PRODUCT — it is not one: src/main.js constructs the orchestrator unconditionally one line above registerFromMission, so null never reaches it in production. The missing null guard is real but unreachable, and the effector adapter's catch would name the throw anyway. Recorded as an observation, not a bug.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "mem",
       "n": "OKF exchange",
-      "s": "unknown",
+      "s": "ok",
       "tools": [
         "okf_export",
         "okf_list",
         "okf_import"
       ],
-      "note": "Import and export of knowledge in the open exchange format.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "okf_export, okf_list, okf_import. GREEN 2026-08-28: a closed round trip — import reads back the concept export wrote to disk.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Was `unknown` at 0/0 — no call had ever been read for it. The oracle is a ROUND TRIP against a real fs-store vault in a temp sandbox, not three independent ok:true answers: export writes vault/Knowledge/harness-probe/, the harness reads the BYTES of the concept file and the bundle index off disk, okf_list must name the artefact that is actually there, and okf_import must return the concept export wrote. Two calls that each succeed prove nothing about the format they are supposed to share. The mutation that made export report success while skipping a write was caught — though only after the oracle was strengthened from \"some file exists under Knowledge/\" to \"the concept is in the bytes\", because the weaker form let a sibling file cover for the missing one. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "sense",
       "n": "ambient_awareness",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "ambient_awareness"
       ],
-      "note": "Background sampling of what is on screen.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Screen awareness on/off/status. Leaves `unknown` 2026-08-28: its status action is verified, but on/off need a real screen sensor this machine does not have.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Was `unknown` at 0/0. Only `action:\"status\"` was run, deliberately — `on` and `off` start and stop a real screen sensor. The oracle is that status reports its actual state AND says why when disabled, which it does: {\"enabled\":false,\"running\":false,\"hint\":\"Ambient screen awareness is disabled (SCREEN_AWARENESS_ENABLED=false or pc-child unavailable)\"}. The mutation that made status answer with a bare ok, saying nothing about whether it was enabled, was caught. STAYS WARN rather than going green because one of three actions is verified and the other two need hardware — calling that closed would be the kind of rounding-up this campaign exists to remove.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "desk",
       "n": "clipboard",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "clipboard_read",
         "clipboard_write"
       ],
-      "note": "Reads and writes the system clipboard.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "clipboard_read is n/a here (pc-child offline); clipboard_write is a deliberate disposition — it would overwrite the operator's clipboard.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. clipboard_read returned \"PC automation is OFFLINE. Cannot execute commands.\" — an honest unavailability, not a failure, and the harness records it as n/a. Worth noting for whoever runs this with pc-child up: the oracle deliberately reports only the LENGTH of what it read and never the content, because a verification harness that prints the operator's clipboard into a log is a data leak wearing a test's clothes. clipboard_write is NOT RUN at all: it overwrites whatever the operator has copied, which is the same class as the wakeword test that moved real model files aside and lost them (root CLAUDE.md). A save-and-restore would usually work and would lose the clipboard if the harness died in between.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "desk",
@@ -1494,19 +1580,23 @@
         "set_wallpaper"
       ],
       "note": "Changes the desktop wallpaper.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "web",
       "n": "local info",
-      "s": "unknown",
+      "s": "ok",
       "tools": [
         "get_time",
         "get_weather",
         "get_directions"
       ],
-      "note": "Time, weather and directions — keyless lookups with their own providers.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "get_time, get_weather, get_directions. GREEN 2026-08-28: all three exercised against oracles, and get_time is checked against this process's own clock.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. This node reached the acceptance contract, so it is the strongest of the four promotions. get_time is not merely \"ok:true\": the answer must carry THIS process's current year, and passing timezone:\"Asia/Tokyo\" must actually change it — a tool returning a plausible date is precisely what a self-report cannot rule out, and the mutation that returned a fixed 1999 date was caught. get_weather and get_directions answered over their free lanes (346 and 143 bytes); their CONTENT is not verified against a second source and the harness says so rather than implying it did. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
+      "ok": 152,
+      "f": 4
     },
     {
       "c": "build",
@@ -1516,7 +1606,9 @@
         "install_from_github"
       ],
       "note": "Installs a project from GitHub. Danger-tier and withheld from voice.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
@@ -1526,7 +1618,9 @@
         "security_scan"
       ],
       "note": "Static security scan of a project. Danger-tier and withheld from voice.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "comms",
@@ -1536,7 +1630,9 @@
         "compose_email"
       ],
       "note": "Composes an email for review rather than sending one.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     }
   ],
   "register": {
@@ -3677,18 +3773,97 @@
           "fix": "Two new focused modules plus three edits: -",
           "verification": "``` node --test test/bug-379-aether-bind-names-the-holder.test.js before the fix (stub reproducing today's behaviour): 15 tests, 3 pass, 12 fail after the fix : 29 tests, 29 pass, 0 fail node --test test/bug-379-... test/aether-proxy-rebind-playbook.test.js test/file-size-ratchet.test.js 36 tests, 36 pass, 0 fail (includes the existing test my first draft broke) live oracle, the squatter being THIS process so the expected pid is exact: findPortHolder(port).pid === process.pid -> pass heal detail contains \"held by pid \u003cprocess.pid>\" -> pass 4th attempt -> terminal:true, \"...stays OFFLINE...\" -> pass and it stays terminal on the 5th -> pass file-size ratchet: main.js 1369 (ceiling 1373), healer.js 875 (ceiling 876) mutations: 17 run across port-holder.js, aether-rebind.js and bind-failure.js, 17 caught, all three restored sha256-identical. Four survived a first pass and each was a real hol…"
         }
+      },
+      {
+        "n": 380,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a TTS rung that declined said which, never why, so 15 seconds of silence a day was invisible",
+        "detail": {
+          "fix": "`providers/tts.js` — `probe()` returns `{ok, reason, ms}` instead of a boolean, consulting an optional `unavailableReason()` hook and keeping the thrown message when `isAvailable()` throws; `tts.unavailable` now logs `reason` and `ms`. `providers/kokoro-tts.js` — records the decline text (including on the sticky already-failed path, which `loadModel()`'s own `.catch()` can set without `isAvailable()` ever seeing the error) and exposes it. `isAvailable(): boolean` remains every provider's contract; the hook is additive, and a provider that does not implement it still gets its thrown message and its timing. Also added: an optional `providers` injection seam on `createTtsChain`, same reasoning as `routes/config.js`'s injectable `wakewordModelsDir`. Without it a test naming real rungs probes the",
+          "verification": "``` node --test test/bug-380-tts-chain-says-why-a-rung-was-skipped.test.js before the fix : 6 tests, 0 pass, 6 fail after the fix : 9 tests, 9 pass, 0 fail mutations: 7 run across providers/tts.js and providers/kokoro-tts.js, 7 caught, both files restored sha256-identical. Three needed repair on a first pass: T1/T3 the harness reported TARGET ABSENT — the anchors used LF while the sources are CRLF, which is the harness correctly refusing to score a mutation that never applied K1 SURVIVED: every other case uses injected fake rungs, so kokoro's OWN reason was untested, and the first replacement assertion was ALSO vacuous — it matched the string `lastUnavailableReason =`, which survives `lastUnavailableReason = null`, i.e. survives the defect ```"
+        }
+      },
+      {
+        "n": 381,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the YouTube id extractor knew four URL shapes and missed five, including the /live/ path news streams use",
+        "detail": {
+          "fix": "Extraction moves to `src/core/util/youtube-id.js` and reads all nine shapes. It carries a",
+          "verification": "``` node --test test/bug-381-youtube-id-and-typed-open-web-reasons.test.js before the fix : 11 tests, 9 pass, 2 fail (\"22 of 22 open_web failures carry no typed code\") after the fix : 17 tests, 17 pass, 0 fail file-size ratchet: from-dashboard.js 1418 (ceiling 1418) — at, never over mutations: 8 run across both files, 8 caught, both restored sha256-identical. Y1 restores the ORIGINAL four-shape regex -> 3 fail. That is the red-first proof for the extractor: the \"five shapes that were being missed\" assertion goes red against exactly the code that shipped before. Y2 host guard dropped -> the fake-id test catches it Y3 /live/ arm dropped -> the livestream shape catches it Y4 query-anywhere v= dropped -> the share-link shapes catch it C3 one failure loses its code -> the all-22-typed walk catches it ```"
+        }
+      },
+      {
+        "n": 382,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "five dark nodes, 22 tools, zero recorded calls: a harness that judges on oracles, and three times it accused the product of its own bugs",
+        "detail": {
+          "verification": "``` node scripts/verify-dark-nodes.js 17 pass · 5 disp · 0 FAIL · exit 0 node --test test/bug-382-dark-node-harness.test.js 10 tests, 10 pass, 0 fail ``` The gate test asserts the"
+        }
+      },
+      {
+        "n": 383,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a fabricated FACT is not a fabricated ACTION, and nothing was looking at the first kind",
+        "detail": {
+          "fix": "A new `external-fact` category, and the design is the safety property: -",
+          "verification": "``` node --test test/bug-383-external-fact-fabrication.test.js 13 tests, 13 pass node --test test/claim-check-categories.test.js 6 tests, 6 pass all claim-check consumers 149 tests, 149 pass mutations: 6 run, 6 caught, source restored sha256-identical: F1 the category is UNGATED (re gets a pattern) -> 2 fail F2 a successful lookup no longer backs the claim -> 1 fail F3 web_search dropped from gateTools -> 6 fail F4 the ranking alternative removed -> 3 fail F5 gateTools ignored (falls back to empty tools) -> 5 fail F6 the shape requirement relaxed to match anything -> 4 fail (this one is caught by the FALSE-POSITIVE controls, which is the right way round: relaxing the shape is the change that would make the alarm useless, and it is the controls that notice) ``` Three mutations first reported TARGET ABSENT because their anchors used `\\n` while `claim-check.js` is CRLF — the harness correct…"
+        }
+      },
+      {
+        "n": 384,
+        "shape": "entry",
+        "state": "coded",
+        "title": "every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong",
+        "detail": {},
+        "excerpt": "**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped as \"six nodes whose LABEL is stale rather than whose capability is broken\". Measured against the live vault before writing anything, per the Track D finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43 (67%) disagree with the vault.** Eleven labels are contradicted by their own evidence. The six was itself a stale reading. ### Root cause — the map generates its frame and hand-carries its contents `build-capability-map.js` regenerates `vitals`, the tool-coverage cross-check and the `generated` stamp. It preserves each node's `s`, `ok`, `f`, `note` and `ev` as curated human text. That split is right for `note` and `ev` — a human decides what a node MEANS — and wrong for `ok`/`f`, which are not judgement at all. They are a count of rows in `vault/Audit/*.jsonl`, and nothing was counting…"
+      },
+      {
+        "n": 385,
+        "shape": "entry",
+        "state": "coded",
+        "title": "the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text",
+        "detail": {},
+        "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped as *\"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder, video call having no tool)\"*. All three are recorded. Two of them turned up a real defect on the way, and the CAPTCHA one is the serious entry here. ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions. The disposition itself needed nothing: `browser_check_captcha` already returns `ok` with `blocked: \"captcha\"` and a comment saying *\"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\"*, `browser-obstacles.test.js` already pins the handover wording, and a source-shape assertion already fails if anyone adds a solver service. That is a complete disposition and it was complete before this ticket. **What was not right is what counts as a challenge.** `CA…"
+      },
+      {
+        "n": 386,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "37 tools nobody had ever measured against an oracle, and a harness that accused the product six times before it was right",
+        "detail": {},
+        "excerpt": "**Status:** ✅ EXERCISED 2026-08-28. Closure-campaign **Track F**. New `scripts/verify-unknown-nodes.js` (the sibling of BUG-382's `verify-dark-nodes.js`), 10 assertions in `test/bug-386-unknown-node-harness.test.js`, **8 mutations of REAL PRODUCT CODE, 8 caught**, every touched file restored sha256-identical. ``` 21 pass · 7 n/a · 11 disp · 0 FAIL · exit 0 ``` **No product defect was found.** That is the correct answer for tools that were unmeasured rather than broken, and it is only worth anything because the harness is proven able to say otherwise — see the mutation section. ### Scope: two populations, and they support different claims | | nodes | tools | what was actually open | |---|---|---|---| | never called | 7 | 9 | does any of this run at all | | Track B's `warn` set | 11 | 28 | they demonstrably run in production; do they do what they SAY | The second population exists because…"
+      },
+      {
+        "n": 387,
+        "shape": "entry",
+        "state": "coded",
+        "title": "`doctor` reported the Google grant OK for three weeks while 88 calls failed on it",
+        "detail": {},
+        "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions, 9 mutations all caught. **This does NOT close Track A's two nodes.** They need three operator minutes and no session can supply them. What it removes is the reason those three minutes kept not happening. ### The defect, measured live on this machine ``` $ node mythos/scripts/doctor.js OK Gmail / Calendar sensors configured: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN ``` At that same moment, from the vault: **88 `invalid_grant` failures across 60 separate bursts between 2026-08-06 and 2026-08-26**, every one of them saying the refresh token is expired or revoked. The single check an operator runs to answer *\"is my Gmail set up?\"* was answering **yes** about the exact thing that was broken. **The class is an existence check standing…"
+      },
+      {
+        "n": 388,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the barge-in floor learned the OPERATOR'S voice and called it the room, and a verifier turned that into a verdict on the echo canceller",
+        "detail": {},
+        "excerpt": "**Status:** ✅ FIXED 2026-08-28. Closure-campaign **Track E**, and the part of it that never needed a microphone. 10 assertions, 10 mutations all caught. **Track E was written up as \"eight nodes needing a live microphone\".** That framing is what kept this closed: the whole voice cluster was treated as unreachable from a session, so nobody read the number the cluster is reasoned from. It is wrong, and it is wrong in a way that is provable from a log file and a deterministic unit test. ### The defect `barge-in-policy.js` keeps `bleedPeak`, documented as *\"loudest level seen while MYTHOS was provably speaking\"*. It is learned inside the 500 ms **protected window** that opens when the assistant starts talking, on this stated reasoning: > the assistant's own onset is by construction the loudest thing present That sentence was written as reasoning and never checked, and it is false. MYTHOS's vo…"
       }
     ],
     "counts": {
-      "verified": 27,
-      "fixed": 54,
+      "verified": 31,
+      "fixed": 56,
       "open": 10,
-      "coded": 1,
+      "coded": 4,
       "diagnosed": 1,
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 227,
+    "total": 236,
     "openDeclared": [
       344,
       346,

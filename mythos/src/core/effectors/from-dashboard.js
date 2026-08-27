@@ -21,6 +21,7 @@
 
 const { effectorFromTool } = require('./adapter');
 const { reasonText } = require('../util/reason-text');
+const { youtubeVideoId, OPEN_WEB_CODES } = require('../util/youtube-id');
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
 const { vaultRelativePath, vaultUrl, vaultAgeHours } = require('./vault-url');
@@ -40,9 +41,9 @@ const { web_fetch: sharedWebFetch } = require('./web-fetch');
 function ok(result, uiActions) {
   return uiActions ? { ok: true, result, uiActions } : { ok: true, result };
 }
-function fail(reason) {
-  return { ok: false, result: reason };
-}
+// BUG-381: optional TYPED code beside the prose (which is unchanged, and is what
+// the voice layer speaks). Codes and the measurement behind them: util/youtube-id.js.
+function fail(reason, code) { return code ? { ok: false, result: reason, code: code } : { ok: false, result: reason }; }
 
 // ---- browser-intent disambiguation (2026-08-14 session, cluster A1) ----
 //
@@ -347,10 +348,10 @@ function buildTools(ctx) {
       var ALLOWED_TYPES = ['youtube', 'weather', 'search', 'flights', 'image', 'web'];
       var t = String(type || '').trim().toLowerCase();
       if (!t) {
-        return fail('open_web requires a type. Use one of: ' + ALLOWED_TYPES.join('|') + '. To open or control the real browser, use browser_navigate or browser_tabs instead — open_web only renders content inside the MYTHOS dashboard.');
+        return fail('open_web requires a type. Use one of: ' + ALLOWED_TYPES.join('|') + '. To open or control the real browser, use browser_navigate or browser_tabs instead — open_web only renders content inside the MYTHOS dashboard.', OPEN_WEB_CODES.BAD_REQUEST);
       }
       if (ALLOWED_TYPES.indexOf(t) === -1) {
-        return fail('open_web type must be one of ' + ALLOWED_TYPES.join('|') + ' (got "' + t + '"). To open or control the real browser, use browser_navigate or browser_tabs instead.');
+        return fail('open_web type must be one of ' + ALLOWED_TYPES.join('|') + ' (got "' + t + '"). To open or control the real browser, use browser_navigate or browser_tabs instead.', OPEN_WEB_CODES.BAD_REQUEST);
       }
       var q = String(query || '').trim();
 
@@ -367,7 +368,7 @@ function buildTools(ctx) {
       if (browser) {
         var bRaw = String(url || q || '').trim();
         if (!bRaw || !looksLikeUrlOrDomain(bRaw)) {
-          return fail('open_web with browser:true needs a url (or a query that IS one) — a search result list or a weather card cannot open in the real browser. Pass url:"https://…" with browser:true.');
+          return fail('open_web with browser:true needs a url (or a query that IS one) — a search result list or a weather card cannot open in the real browser. Pass url:"https://…" with browser:true.', OPEN_WEB_CODES.BAD_REQUEST);
         }
         var bUrl = URL_SHAPED.test(bRaw) ? (/^www\./i.test(bRaw) ? 'https://' + bRaw : bRaw) : 'https://' + bRaw;
         // BUG-272 T2: this used to return widgetType:'newtab' + unverified, and
@@ -386,7 +387,7 @@ function buildTools(ctx) {
           if (!handoff || !handoff.opened) {
             return fail('could not open ' + bUrl + ' in your browser: '
               + ((handoff && handoff.reason) || 'no reason given')
-              + '. Use browser_navigate to drive a browser directly, or open it yourself.');
+              + '. Use browser_navigate to drive a browser directly, or open it yourself.', OPEN_WEB_CODES.PROVIDER_ERROR);
           }
           // Handed to the OS, which is not the same as "the operator saw the
           // page" — openExternal resolves on ACCEPTANCE, not on render. Reporting
@@ -406,12 +407,12 @@ function buildTools(ctx) {
         }
         return fail('open_web with browser:true needs the MYTHOS desktop shell to reach your real '
           + 'browser, and it is not running (this looks like a plain server/browser session). '
-          + 'Use browser_navigate instead, or open ' + bUrl + ' yourself.');
+          + 'Use browser_navigate instead, or open ' + bUrl + ' yourself.', OPEN_WEB_CODES.BAD_REQUEST);
       }
 
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
       if (t === 'youtube') {
-        if (!q) return fail('A search query is required for YouTube.');
+        if (!q) return fail('A search query is required for YouTube.', OPEN_WEB_CODES.BAD_REQUEST);
         // maxResults 6 (was 3): most YouTube videos have embedding DISABLED by
         // the uploader, so we need several candidates to find one that will
         // actually play in the iframe.
@@ -423,16 +424,16 @@ function buildTools(ctx) {
           // branch just called it (line above), so pointing there is a loop.
           return fail('No YouTube videos found for "' + q + '" — the search chain returned no '
             + 'youtube.com results. If the operator wanted to LISTEN to music rather than watch a '
-            + 'video, use spotify_play instead; open_web only resolves a video to embed on the HUD.');
+            + 'video, use spotify_play instead; open_web only resolves a video to embed on the HUD.', OPEN_WEB_CODES.NO_RESULTS);
         }
         // Collect ALL candidate video IDs (in result order), not just the first.
         var candidates = [];
         for (var i = 0; i < ytRes.result.results.length; i++) {
           var r = ytRes.result.results[i];
-          var idM = String(r.url).match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
-          if (idM) candidates.push({ id: idM[1], title: r.title || (title || q) });
+          var vid = youtubeVideoId(r.url);   // BUG-381: five URL shapes were unreadable
+          if (vid) candidates.push({ id: vid, title: r.title || (title || q) }, OPEN_WEB_CODES.UNPLAYABLE);
         }
-        if (!candidates.length) return fail('Found results but could not extract a YouTube video ID — the hits were not watch pages. Try a more specific title, or use spotify_play if the operator wanted to listen rather than watch.');
+        if (!candidates.length) return fail('Found results but could not extract a YouTube video ID — the hits were not watch pages. Try a more specific title, or use spotify_play if the operator wanted to listen rather than watch.', OPEN_WEB_CODES.UNPLAYABLE);
 
         // Check YOUTUBE_MODE config: 'newtab' opens in the external browser
         // (operator's own ad blocker); 'electron' (default) and the legacy
@@ -478,7 +479,7 @@ function buildTools(ctx) {
       // WEATHER — geocode location, return the Open-Meteo URL for client-side fetch
       if (t === 'weather') {
         var loc = String(location || query || '').trim();
-        if (!loc) return fail('A location is required for weather.');
+        if (!loc) return fail('A location is required for weather.', OPEN_WEB_CODES.BAD_REQUEST);
         try {
           // Helper: try a single geocode attempt, return the result or null if no results found
           async function tryGeocode(searchLoc) {
@@ -501,7 +502,7 @@ function buildTools(ctx) {
           }
 
           // If network error on first attempt, fail immediately (don't retry on network failures)
-          if (attempt1.error === 'network') return fail(attempt1.msg);
+          if (attempt1.error === 'network') return fail(attempt1.msg, OPEN_WEB_CODES.PROVIDER_ERROR);
 
           // If zero results on first attempt, try stripping to just the city name (before first comma)
           if (attempt1.error === 'noresults' && loc.includes(',')) {
@@ -514,17 +515,17 @@ function buildTools(ctx) {
               return openWebResult({ widgetType: 'weather', weatherUrl: weatherUrl2, title: 'Weather: ' + hit2.name, location: hit2.name });
             }
             // If second attempt also has a network error, fail with that
-            if (attempt2.error === 'network') return fail(attempt2.msg);
+            if (attempt2.error === 'network') return fail(attempt2.msg, OPEN_WEB_CODES.PROVIDER_ERROR);
           }
 
           // Both attempts returned zero results, or there was no comma to retry on
-          return fail('No PLACE matched "' + loc + '" — open_web resolves places and media, not weather. Use get_weather for conditions and forecasts; it takes the place name on its own, without the words "current weather" attached.');
-        } catch (e) { return fail('Weather lookup failed: ' + e.message); }
+          return fail('No PLACE matched "' + loc + '" — open_web resolves places and media, not weather. Use get_weather for conditions and forecasts; it takes the place name on its own, without the words "current weather" attached.', OPEN_WEB_CODES.NO_RESULTS);
+        } catch (e) { return fail('Weather lookup failed: ' + e.message, OPEN_WEB_CODES.PROVIDER_ERROR); }
       }
 
       // FLIGHTS — search for flight info, return cards + Google Flights deep-link
       if (t === 'flights') {
-        if (!q) return fail('A flight query is required (e.g., "New York to Tokyo").');
+        if (!q) return fail('A flight query is required (e.g., "New York to Tokyo").', OPEN_WEB_CODES.BAD_REQUEST);
         var flightRes = await web_search({ query: 'flights ' + q, maxResults: 5, bus: ctx.bus });
         var cards = (flightRes.ok && flightRes.result && flightRes.result.results) ? flightRes.result.results.map(function(r) {
           return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 200) };
@@ -535,7 +536,7 @@ function buildTools(ctx) {
 
       // IMAGE — search for images, return URLs
       if (t === 'image') {
-        if (!q) return fail('An image query is required.');
+        if (!q) return fail('An image query is required.', OPEN_WEB_CODES.BAD_REQUEST);
         var imgRes = await web_search({ query: q, maxResults: 6, bus: ctx.bus });
         var imgCards = (imgRes.ok && imgRes.result && imgRes.result.results) ? imgRes.result.results.map(function(r) {
           return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 150) };
@@ -554,15 +555,15 @@ function buildTools(ctx) {
         // 'web' type is guarded: youtube/weather/search/flights/image all take a
         // bare query legitimately and are handled above.
         if (!url && looksLikeUrlOrDomain(q)) {
-          return fail(browserIntentRemedy('open_web renders a card inside the MYTHOS dashboard, and for type:"web" it needs url:, not query:', q));
+          return fail(browserIntentRemedy('open_web renders a card inside the MYTHOS dashboard, and for type:"web" it needs url:, not query:', q), OPEN_WEB_CODES.BAD_REQUEST);
         }
         // BUG-273 D2: was a bare "A URL is required for web embedding." — the exact
         // string the A1 note above says a refusal must never be. See
         // webTypeNeedsUrlRemedy for why prose and a domain get different remedies.
-        if (!url) return fail(webTypeNeedsUrlRemedy(q));
+        if (!url) return fail(webTypeNeedsUrlRemedy(q), OPEN_WEB_CODES.BAD_REQUEST);
         var parsed = null;
-        try { parsed = new URL(url); } catch (_) { return fail('Invalid URL: ' + url); }
-        if (parsed.protocol !== 'https:') return fail('Only https: URLs can be embedded (security).');
+        try { parsed = new URL(url); } catch (_) { return fail('Invalid URL: ' + url, OPEN_WEB_CODES.BAD_REQUEST); }
+        if (parsed.protocol !== 'https:') return fail('Only https: URLs can be embedded (security).', OPEN_WEB_CODES.BAD_REQUEST);
         var host = parsed.hostname.toLowerCase();
         if (host === 'news.google.com' || host === 'www.news.google.com') {
           return openWebResult({ widgetType: 'news', title: title || 'Google News' });
@@ -578,10 +579,10 @@ function buildTools(ctx) {
       }
 
       // SEARCH (default) — return search result cards
-      if (!q) return fail('A search query is required.');
+      if (!q) return fail('A search query is required.', OPEN_WEB_CODES.BAD_REQUEST);
       var searchRes = await web_search({ query: q, maxResults: 6, bus: ctx.bus });
       if (!searchRes.ok || !searchRes.result || !searchRes.result.results || !searchRes.result.results.length) {
-        return fail('No results found for "' + q + '" — every search provider in the chain came back empty. This branch already ran web_search, so calling web_search will not help; say the search found nothing rather than answering from memory.');
+        return fail('No results found for "' + q + '" — every search provider in the chain came back empty. This branch already ran web_search, so calling web_search will not help; say the search found nothing rather than answering from memory.', OPEN_WEB_CODES.NO_RESULTS);
       }
       var searchCards = searchRes.result.results.map(function(r) {
         return { title: r.title, url: r.url, snippet: (r.snippet || '').slice(0, 200) };
@@ -590,7 +591,7 @@ function buildTools(ctx) {
 
       // Unreachable: the ALLOWED_TYPES guard at the top rejects all other types.
     } catch (err) {
-      return fail('open_web failed: ' + err.message);
+      return fail('open_web failed: ' + err.message, OPEN_WEB_CODES.PROVIDER_ERROR);
     }
   }
 
