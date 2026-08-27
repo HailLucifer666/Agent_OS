@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6684,
+      "value": 6694,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -758,8 +758,8 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Interruption handling shipped and was accepted by ear, but self-interruption doubled in the acceptance run.",
-      "ev": "PENDING_HOLD_MS 350 -> 200, Stage 3 accepted by ear 2026-08-20. Decision still open.",
+      "note": "Interruption handling shipped and was accepted by ear. Stays warn: it genuinely needs a live acoustic session. But the number the whole path was tuned against was measuring the operator, not the room.",
+      "ev": "MEASURED 2026-08-28 (BUG-388, Track E) from 731 voice.capture-suspend records across 20 sessions in mythos-server.log, and it corrects a premise this node and the plan were both carrying. bleedPeak is documented as \"loudest level seen while MYTHOS was provably speaking\" and is learned inside the 500ms protected window, on the written reasoning that \"the assistant's own onset is by construction the loudest thing present\". That is false: MYTHOS reaches the mic through the speakers and is then attenuated 15-20dB by AEC (probe-aec-routes.js measures the Gemini Live residual at 0.0069-0.0141) while the operator arrives direct, so whenever both are present the OPERATOR is the louder one. Of 31 upward moves of bleedPeak above 0.05, TWENTY-TWO landed on a value exactly equal to that hold's own peakRms -- the operator. Every session opens at 0.0043-0.0347 (the real room, agreeing with the probe) and then ratchets to 0.05-0.33 and never decays: 2026-08-24 read 0.1606 for 110 consecutive holds off one frame. The uncontaminated control is 2026-08-26, which ended at 0.0313 while the operator peaked at 0.1402. WHY IT MATTERED: this was diagnosed on 2026-08-19 and deferred because \"the learned floor is dormant, so consequence today is nil\" -- but a consumer existed. verify-voice-session.js called bleedPeak \"the ungagged oracle\" and concluded \"Echo cancellation is not removing it\", a hardware verdict drawn from the operator's own voice, and that conclusion is why an acoustic rework sits in the plan as \"the only fix that removes the trade\". FIXED: the protected window now decides once, at the transition out of IDLE, whether it may attribute anything to MYTHOS -- compared against the STATIC floor, never the learned one, so a poisoned peak cannot raise the bar for detecting the next contamination. The verifier reports the number and refuses the inference. NOT CLOSED: this changes no runtime behaviour (the learned floor is dormant either way) and closes no Track E node -- what it removes is a false reading that was steering the live session's agenda. An operator who starts speaking INSIDE the 500ms window is still learned from; that needs a per-frame source signal the client does not have. 10 assertions, 10 mutations all caught.",
       "ok": 0,
       "f": 0
     },
@@ -3844,10 +3844,18 @@
         "title": "`doctor` reported the Google grant OK for three weeks while 88 calls failed on it",
         "detail": {},
         "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions, 9 mutations all caught. **This does NOT close Track A's two nodes.** They need three operator minutes and no session can supply them. What it removes is the reason those three minutes kept not happening. ### The defect, measured live on this machine ``` $ node mythos/scripts/doctor.js OK Gmail / Calendar sensors configured: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN ``` At that same moment, from the vault: **88 `invalid_grant` failures across 60 separate bursts between 2026-08-06 and 2026-08-26**, every one of them saying the refresh token is expired or revoked. The single check an operator runs to answer *\"is my Gmail set up?\"* was answering **yes** about the exact thing that was broken. **The class is an existence check standing…"
+      },
+      {
+        "n": 388,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the barge-in floor learned the OPERATOR'S voice and called it the room, and a verifier turned that into a verdict on the echo canceller",
+        "detail": {},
+        "excerpt": "**Status:** ✅ FIXED 2026-08-28. Closure-campaign **Track E**, and the part of it that never needed a microphone. 10 assertions, 10 mutations all caught. **Track E was written up as \"eight nodes needing a live microphone\".** That framing is what kept this closed: the whole voice cluster was treated as unreachable from a session, so nobody read the number the cluster is reasoned from. It is wrong, and it is wrong in a way that is provable from a log file and a deterministic unit test. ### The defect `barge-in-policy.js` keeps `bleedPeak`, documented as *\"loudest level seen while MYTHOS was provably speaking\"*. It is learned inside the 500 ms **protected window** that opens when the assistant starts talking, on this stated reasoning: > the assistant's own onset is by construction the loudest thing present That sentence was written as reasoning and never checked, and it is false. MYTHOS's vo…"
       }
     ],
     "counts": {
-      "verified": 30,
+      "verified": 31,
       "fixed": 56,
       "open": 10,
       "coded": 4,
@@ -3855,7 +3863,7 @@
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 235,
+    "total": 236,
     "openDeclared": [
       344,
       346,

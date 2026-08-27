@@ -267,6 +267,13 @@ export function createBargeInPolicy(opts) {
   let pendingFrames = 0;
   let bleedPeak = 0;       // loudest level seen while MYTHOS was provably speaking
   let lastFloor = initialFloor;
+  // BUG-388: the level of the last frame heard while MYTHOS was SILENT. This is the
+  // only evidence the client has about who was already talking when the assistant
+  // opened its mouth, and it is what decides whether the protected window below is
+  // allowed to attribute anything to MYTHOS at all.
+  let lastIdleRms = 0;
+  let windowAttributable = true;
+  let bleedWindowsSkipped = 0;
 
   // What this room WOULD have earned: bleed observed during assistant speech,
   // clamped below by the pre-existing eager tier (so it is never a sensitivity
@@ -293,6 +300,18 @@ export function createBargeInPolicy(opts) {
     // chunk cannot silently re-protect and make MYTHOS uninterruptible for as
     // long as it keeps talking — which would be V2 rebuilt on purpose.
     if (state !== STATES.IDLE) return state;
+    // BUG-388 — WHETHER THIS WINDOW MAY TEACH THE FLOOR ANYTHING, decided here and
+    // once, on the last thing heard before MYTHOS started. If the operator was
+    // already above the floor, every frame of the coming window is theirs as much
+    // as MYTHOS's and nothing downstream can separate them.
+    //
+    // Compared against `initialFloor` and DELIBERATELY NOT against bleedFloor():
+    // bleedFloor() is the learned value, so a peak that has already been poisoned
+    // would raise the bar for calling the next window contaminated. Poison must not
+    // be allowed to protect itself. The static floor is a fixed, measured constant
+    // (see INITIAL_BLEED_FLOOR) and cannot drift with the thing it is judging.
+    windowAttributable = lastIdleRms <= initialFloor;
+    if (!windowAttributable) bleedWindowsSkipped += 1;
     state = STATES.PROTECTED;
     speakingSince = now();
     pendingSince = 0;
@@ -319,6 +338,10 @@ export function createBargeInPolicy(opts) {
     const t = now();
 
     if (state === STATES.IDLE) {
+      // BUG-388: recorded, not acted on. MYTHOS is silent, so whatever this level
+      // is, it is not bleed — which is exactly what makes it usable as the test of
+      // whether the NEXT protected window can attribute its frames to MYTHOS.
+      lastIdleRms = rms;
       return decision(false, 'not-speaking');
     }
 
@@ -340,8 +363,32 @@ export function createBargeInPolicy(opts) {
     // louder than at its onset, the floor under-measures it. Under-measuring
     // costs a PENDING that has to decay, which the sustain test already handles;
     // over-measuring costs a deaf assistant, which nothing recovers.
+    // BUG-388 — AND THE ASSUMPTION ABOVE IS FALSE, MEASURED. "the assistant's own
+    // onset is by construction the loudest thing present" was written as reasoning,
+    // never checked, and 20 live sessions in mythos-server.log disprove it: across
+    // 31 upward moves of bleedPeak above 0.05, TWENTY-TWO landed on a value exactly
+    // equal to that hold's own peakRms -- the loudest mic frame of the hold, i.e.
+    // the operator. It is not a coincidence that it can be: MYTHOS's voice reaches
+    // the mic through the speakers and is then attenuated 15-20dB by AEC (measured,
+    // scripts/probe-aec-routes.js), while the operator's arrives direct. Whenever
+    // both are present the operator is by construction the LOUDER one, which is the
+    // exact opposite of what this window assumed.
+    //
+    // Every session in that log opens between 0.0043 and 0.0347 -- the real room,
+    // agreeing with the acoustic probe -- and then ratchets to 0.10-0.33 the first
+    // time the operator speaks into a protected window. bleedPeak is a running max
+    // that never decays, so ONE such frame poisons the whole process: 2026-08-24
+    // read 0.1606 for 110 consecutive holds off a single frame. The uncontaminated
+    // control is 2026-08-26, which ended at 0.0313 while the operator peaked 0.1402.
+    //
+    // Diagnosed 2026-08-19 and deliberately deferred then, on the grounds that the
+    // learned floor is dormant so "consequence today is nil". That premise was
+    // wrong, and finding the consumer is what reopened this: verify-voice-session.js
+    // called bleedPeak "the ungagged oracle" and concluded from it that "echo
+    // cancellation is not removing it" -- a hardware verdict, from the operator's
+    // own voice. See BUG-388.
     const inProtectedWindow = state === STATES.PROTECTED && t - speakingSince < protectedMs;
-    if (inProtectedWindow && rms > bleedPeak) bleedPeak = rms;
+    if (inProtectedWindow && windowAttributable && rms > bleedPeak) bleedPeak = rms;
 
     if (state === STATES.PROTECTED) {
       if (inProtectedWindow) return decision(false, 'protected-window');
@@ -488,7 +535,14 @@ export function createBargeInPolicy(opts) {
   }
 
   // Session teardown, where the room genuinely may have changed.
-  function forgetRoom() { bleedPeak = 0; lastFloor = initialFloor; }
+  function forgetRoom() {
+    bleedPeak = 0;
+    lastFloor = initialFloor;
+    // BUG-388: the refusal count is a property of the session too, not of the room.
+    bleedWindowsSkipped = 0;
+    windowAttributable = true;
+    lastIdleRms = 0;
+  }
 
   return {
     observe,
@@ -502,6 +556,15 @@ export function createBargeInPolicy(opts) {
     forgetRoom,
     state: () => state,
     bleedPeak: () => bleedPeak,
+    // BUG-388 — Q2, DOES THIS HIDE EVIDENCE? It would have. Refusing to learn is
+    // indistinguishable, in bleedPeak alone, from a room that simply never bled,
+    // and "the floor learned nothing" is a very different fact from "the room is
+    // quiet". These two say which happened. Not added to the suspend log line only
+    // because s2s-bridge.js sits exactly on its file-size ratchet ceiling; the fix
+    // does not need them, because bleedPeak is now trustworthy by construction
+    // rather than needing a caveat field travelling beside it.
+    bleedWindowsSkipped: () => bleedWindowsSkipped,
+    bleedAttributable: () => windowAttributable,
   };
 }
 
