@@ -41,6 +41,113 @@ it is committed.
 
 ---
 
+## BUG-371 — the commit gate named the failing FILE and threw away the failing ASSERTION, so a blocked commit taught nothing (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 8 new regression tests, 5 mutations, 0
+survived. Verified end-to-end against the real TAP of the run that exposed it,
+not only against the fixture.
+
+**Found by two sessions on the same day, independently.** One had its commit
+blocked and had to `sed` into raw TAP by line number to recover the numbers.
+The other took a single unreproducible red in a 6460-test run and could
+conclude nothing at all from it, because the assertion text was already gone by
+the time it was printed.
+
+**The gate had already learned this lesson once, and half-learned it.** It used
+to print `tail -40` of raw TAP — the last few PASSING tests plus the summary —
+so a blocked commit gave you a number and nothing else. Cause 3 of
+`precommit-hook-environment.test.js` fixed that by grepping for `not ok`.
+
+**The anchor was the bug.** Node's TAP nests subtests under their describe
+block and INDENTS them, so `^not ok` matches only the top-level roll-up. On the
+real failure that started this:
+
+```
+=== what the gate printed ===
+not ok 1252 - lint-bug-registry — the numbers it reports
+
+=== what was four levels down, indented, and discarded ===
+    not ok 1 - next-free skips the fixture, and is not 1000
+      error: |-
+        the real maximum in use
+        369 !== 367
+```
+
+The discarded half is the entire diagnosis. `369 !== 367` says *stale constant*
+at a glance; without it the obvious next move is to go hunting for a bug in the
+linter, which is the wrong file.
+
+**Why no test caught it.** The cause-3 test asserts that the hook SOURCE
+contains the string `not ok`. That is true of the broken anchor too, so it
+passed throughout — a shape guard that cannot distinguish a working filter from
+a broken one. The same vacuous-guard shape recorded elsewhere in this file.
+
+**Fix.** `.githooks/pre-commit`. Both patterns anchored `^[[:space:]]*` rather
+than `^`, and an `awk` that carries each failure's `error:` body with it,
+bounded at 80 lines. The `-qE` guard that decides whether to report at all
+carries the same anchor deliberately: if it ever disagrees with the filter, a
+run whose only failures are nested reports "the suite died without a summary"
+and falls back to `tail -40` — the exact output this block exists to replace.
+
+Measured on the real TAP, before and after:
+
+```
+before: 1 line   — the describe-block name, which names the file and no more
+after:  6 lines  — the nested assertion, its message, and 369 !== 367
+```
+
+**The test runs the hook, it does not restate it.** The pipeline is sliced from
+between `REPORT-FILTER:START` / `REPORT-FILTER:END` sentinels in the hook and
+executed with `out` supplied through the environment. A copy of the command in
+the test would be a test of the copy.
+
+**Two defects in the test, caught during its own development, both recorded in
+the file because both generalise:**
+
+1. The first extractor grepped for one line containing both `grep -E` and
+   `not ok`. Fixing the defect made the pipeline three lines, the extractor
+   silently matched nothing, and every assertion would have passed vacuously.
+   Test 1 exists to watch for exactly that and caught it on the first run.
+2. The first `runFilter` stripped the `printf ... |` prefix and fed the fixture
+   on stdin. The strip silently failed to match, so every command ran against
+   an empty `$out` and three assertions went red for a reason unrelated to the
+   defect. Running the real line cannot half-work.
+
+**Attack pass (Stage 3):**
+
+- *Does this hide evidence?* That was the whole defect. The fix is entirely
+  about surfacing evidence the gate was already holding.
+- *What else matches this?* The `error:` body is now printed whenever it
+  appears, independently of which `not ok` preceded it. Mutation P1 confirmed
+  this: reverting the anchor drops the assertion lines but the numbers still
+  print. Slightly odd output under a broken anchor, never silent — the correct
+  trade for a diagnostic.
+- *What is standing next to it?* The `-qE` guard, which would have drifted out
+  of step. Asserted.
+- *Is the output still bounded?* Yes — `head -80`, raised from 40 because each
+  failure now costs several lines. An unbounded dump of a 6000-test suite is
+  how this block came to print `tail -40` originally.
+- *Deliberate non-change:* the else-branch `tail -40` fallback stays. A suite
+  that dies without a summary emits no `not ok` at all, and an empty failure
+  list there would be worse than the tail.
+
+**Verification.**
+
+```
+node --test test/bug-371-hook-hides-nested-failures.test.js
+  before fix: tests 6, pass 4, fail 2
+  after fix:  tests 8, pass 8, fail 0
+mutations: 5 applied, 5 caught, 0 survived; hook restored sha256-identical
+end-to-end: the real suite369 TAP through the shipped filter, 1 line -> 6
+```
+
+**Not closed by this.** The unreproducible `verify-lib-attach` red that
+prompted it is still unexplained: 22/22 in isolation, 36 concurrent runs by a
+second session with zero failures, and four clean full suites. One occurrence,
+no assertion text, nothing to work with. What this fixes is that the NEXT one
+will carry its evidence.
+
+---
 ## BUG-370 — the capability map was hand-typed, so the surface the closure campaign is measured against could not be wrong out loud (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 19 new regression tests, 10 mutations, 0

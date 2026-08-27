@@ -96,9 +96,51 @@ if [ "$fails" -gt 0 ]; then
   # PASSING tests plus the summary counts — a blocked commit told you a number
   # and nothing else, so the first move was always to re-run the suite by hand
   # just to find out what broke.
-  if printf '%s' "$out" | grep -qE '^not ok'; then
+  # BUG-371: both patterns are anchored `^[[:space:]]*`, not `^`. Node's TAP
+  # NESTS subtests under their describe block and indents them, so a bare `^`
+  # matched only the top-level roll-up:
+  #
+  #     not ok 1264 - lint-bug-registry — the numbers it reports
+  #
+  # while the line that says what actually broke sat four levels down, with the
+  # numbers that identify it one level deeper still:
+  #
+  #         not ok 1 - next-free skips the fixture, and is not 1000
+  #           error: |-
+  #             368 !== 367
+  #
+  # A blocked commit therefore named the FILE and nothing else. Two sessions hit
+  # that on 2026-08-27: one had to sed into raw TAP by line number to recover
+  # `368 !== 367` — without which the obvious next move is to hunt for a bug in
+  # the linter rather than find a stale constant in its test — and the other
+  # could conclude nothing at all from a single unreproducible red because the
+  # assertion text was already gone.
+  #
+  # The `-qE` guard carries the same anchor deliberately. If it ever disagrees
+  # with the filter below, a run whose only failures are nested reports "the
+  # suite died without a summary" and falls back to `tail -40` — the exact
+  # output this reporting block was written to replace.
+  if printf '%s' "$out" | grep -qE '^[[:space:]]*not ok'; then
     echo "pre-commit: failing tests —"
-    printf '%s\n' "$out" | grep -E '^not ok' | head -40
+    # The awk carries each failure's `error:` body with it. A test name alone
+    # cannot distinguish a stale expectation from a real regression; the values
+    # are the diagnosis. Bounded at 80 lines rather than 40 because each failure
+    # now costs several — still bounded, because an unbounded dump of a
+    # 6000-test suite is how this block came to print `tail -40` in the first
+    # place.
+    # REPORT-FILTER:START — sliced and executed verbatim by
+    # mythos/test/bug-371-hook-hides-nested-failures.test.js, which supplies
+    # `out` through the environment. Keep the sentinels: a test that restates
+    # this pipeline instead of running it is a test of the restatement.
+    printf '%s\n' "$out" \
+      | awk '
+          /^[[:space:]]*not ok/            { print; inerr = 0; next }
+          /^[[:space:]]*error:/            { print; inerr = 1; next }
+          inerr && /^[[:space:]]*(code|stack|failureType|duration_ms|location|expected|actual|operator|\.\.\.|---)/ { inerr = 0; next }
+          inerr                            { print }
+        ' \
+      | head -80
+    # REPORT-FILTER:END
   else
     # A suite that dies without a summary emits no 'not ok' at all (exit 127,
     # fork exhaustion, a crash in a helper). Showing an empty list there would be
