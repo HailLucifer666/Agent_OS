@@ -41,6 +41,121 @@ it is committed.
 
 ---
 
+## BUG-370 — the capability map was hand-typed, so the surface the closure campaign is measured against could not be wrong out loud (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 19 new regression tests, 10 mutations, 0
+survived. Rendering verified in a real browser, not inferred from the source.
+
+**Why this is filed as a defect and not just campaign work.** The map is the
+acceptance surface: "everything green" means green on that map. It was 73
+hand-typed nodes, and hand-typed numbers in this repository have gone stale
+four separate times with a script eventually written to stop each one. This
+was the last big one left.
+
+**What was measured wrong, on 2026-08-27, before anything was changed.**
+
+| claim on the map | reality |
+|---|---|
+| 6333 tests | 6436 at the time, 6441 now |
+| 74 withheld from voice | 64 |
+| a node named `Hermes engine` | Hermes-Agent was deleted in the W6 swap on 2026-08-22 |
+| `open a file` — "no working path", status fail | `open_file` has existed in `from-computer.js` since 2026-08-21, with a sandbox guard and a read-back oracle |
+| 179 registered | correct, and the only header number that was |
+
+**And the one that mattered most.** The map named 144 of 179 registered
+tools. Thirty-five had no node at all: every widget, persona, mission,
+pipeline, kanban, OKF, installer, clipboard, security-scan, HUD-navigation,
+artifact and local-info verb. A tool with no node cannot be shown broken,
+working or dark — it is invisible, and on a map invisible reads as fine. The
+campaign would have declared "everything green" over a fifth of the tool
+surface it had never looked at.
+
+**Also corrected: the campaign plan's own figures were wrong.** The plan
+opens "44 capability nodes — 9 fail, 19 warn, 8 dark, ~18 ok". Measured, the
+map held **73 nodes — 28 ok, 25 warn, 13 fail, 7 dark**. Every number in that
+sentence was wrong, including the total. Corrected in the plan in the same
+change.
+
+**Fix.**
+
+`MYTHOS-CAPABILITY-MAP.html` now carries a
+`<script type="application/json" id="map-data">` island; the renderer reads
+`CORE`/`CLUSTERS`/`NODES` out of it and the header renders every number from
+it. No number in the header markup is typed by hand, and a test fails if one
+reappears.
+
+New `mythos/scripts/build-capability-map.js` (`--check` / `--write` /
+`--json`), wired into the pre-commit hook. It reads only the repository — the
+registered tool list, live-tools' allowlist, and the suite numbers
+`sync-test-count.js` already committed to ROADMAP.md — so it costs about a
+second, runs on a worktree and would run on CI. It deliberately does NOT
+measure the suite itself: two generators measuring the same thing are two
+numbers that can disagree.
+
+The node-to-tool mapping is names only and is checked in **both** directions,
+the shape that caught README drift in BUG-352: a tool named by a node but not
+registered fails, and a registered tool named by no node fails. The second
+direction is the one that would have caught `open_file` on the day it landed.
+
+**A fifth status, `unknown`, distinct from `dark`.** The 18 newly-mapped
+nodes are not dark. `dark` asserts a measured fact — a call count of zero was
+read from the vault. Nothing has measured these, and colouring them dark
+would launder "I did not look" into "there is nothing there". They render in
+their own colour, labelled *not yet measured*.
+
+**The vault is not always reachable, and the generator must not pretend.**
+Per-tool call counts and the incident backlog live in the operator's live
+vault. A worktree and a CI runner cannot see it — measured here,
+`resolveVaultRoot()` falls back to the stale in-repo twin and reports **zero**
+incidents. Writing that zero turns "I could not look" into "there is nothing
+wrong", which is the most expensive mistake this repository keeps making. So
+a vault-derived vital is preserved with its own stamp, flagged stale, and
+rendered dim as `last read 2026-08-26`. It is never overwritten with a
+confident zero, and it is exempt from `--check` — a gate that can only pass
+on one desktop is a gate that gets switched off.
+
+**Attack pass (Stage 3), recorded in the script's header and next to each
+check:**
+
+- *What else matches this?* A prose check ("the string Hermes must not
+  appear") was considered and deliberately NOT added: it would fire on an
+  honest historical note, and a gate that fires on correct content gets
+  switched off. The structural check — the node's tools must exist — is what
+  ships. The name was fixed by hand.
+- *Does this hide evidence?* The stale-vault path is the danger, and it is
+  handled above: preserved and flagged, never zeroed.
+- *Who reads this?* The map is the campaign's acceptance surface and now the
+  pre-commit hook. Rendering was verified in a browser — 91 nodes, five
+  legend chips, the panel opening on an `unknown` node — because a green
+  suite has never been able to tell this repository that a page renders.
+- *What is standing next to it?* The first draft wrote the resolved vault
+  path into `staleReason`, which would have committed the operator's
+  directory layout into a tracked file. AD-7 violation, caught before commit;
+  a test now asserts the map holds no absolute path.
+- *Is this constant correct?* The suite figures are read from ROADMAP.md
+  rather than re-measured, and a missing block throws instead of defaulting.
+- *Deliberate non-changes:* the prose name check (above); per-node ok/fail
+  counts stay curated, because only the live vault can refresh them.
+
+**Verification.**
+
+```
+node --test test/bug-370-capability-map-generated.test.js   19 tests, 19 pass, 0 fail
+node scripts/build-capability-map.js --check                exit 0
+  91 nodes, 179 registered, 115 reachable by voice, 64 withheld
+  (42 curated with a recorded reason, 22 danger-tier)
+  ok 28 · warn 25 · fail 13 · dark 7 · unknown 18
+mutations: 10 applied, 10 caught, 0 survived (7 in the script, 3 in the map data)
+browser: header renders "generated 2026-08-27 / 179 registered / 115 reachable
+  by voice / 91 nodes"; untriaged renders dim, "last read 2026-08-26"
+```
+
+**Not closed by this.** No map node turned green. This change makes the
+instrument honest; it does not fix a single capability. The 13 fail and 7
+dark nodes are still fail and dark, and there are now 18 more that nobody has
+measured at all.
+
+---
 ## BUG-369 — a `tolerant` sync slot was skipped by `--write` as well as `--check`, so the README tests badge froze 297 behind (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 5 new regression tests, 5 mutations, 0 survived.

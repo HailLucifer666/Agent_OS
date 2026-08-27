@@ -9,7 +9,7 @@
     --bg:#04060a; --bg2:#070b11; --grid:rgba(55,224,208,.05);
     --ink:#dce7f0; --dim:#68798b; --dimmer:#3a4650;
     --accent:#37e0d0; --accent-soft:rgba(55,224,208,.16);
-    --ok:#3ddc97; --warn:#f2b23c; --fail:#ff5a61; --dark:#4a5763;
+    --ok:#3ddc97; --warn:#f2b23c; --fail:#ff5a61; --dark:#4a5763; --unknown:#8a7cf0;
     --panel:rgba(8,13,19,.86); --line:rgba(120,150,170,.14);
     --mono:"JetBrains Mono","Cascadia Code",ui-monospace,SFMono-Regular,Consolas,monospace;
     --sans:"Segoe UI Variable Display","Segoe UI",Inter,system-ui,sans-serif;
@@ -58,6 +58,8 @@
   .vital .n{font-family:var(--mono);font-size:19px;letter-spacing:-.02em;line-height:1.15}
   .vital .l{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-top:3px}
   .vital.ok .n{color:var(--ok)} .vital.fail .n{color:var(--fail)} .vital.warn .n{color:var(--warn)}
+  .vital.unknown .n{color:var(--unknown)} .vital.dim .n{color:var(--dim)}
+  .vital .stamp{font-family:var(--mono);font-size:8px;letter-spacing:.1em;color:var(--dim);opacity:.7;margin-top:2px}
 
   /* ---- legend / filters ---- */
   .legend{
@@ -77,6 +79,7 @@
   .chip.s-warn .dot{background:var(--warn);color:var(--warn)}
   .chip.s-fail .dot{background:var(--fail);color:var(--fail)}
   .chip.s-dark .dot{background:var(--dark);color:var(--dark)}
+  .chip.s-unknown .dot{background:var(--unknown);color:var(--unknown)}
 
   .hint{
     position:fixed;z-index:4;right:26px;bottom:24px;font-family:var(--mono);font-size:9.5px;
@@ -157,14 +160,9 @@
 <header>
   <div class="brand">
     <h1>MY<b>THOS</b> &middot; CAPABILITY MAP</h1>
-    <div class="sub">audit <i>2026&#8209;08&#8209;21</i> &middot; refreshed <i>08&#8209;26</i> &nbsp;/&nbsp; 179 registered &nbsp;/&nbsp; 115 exercised</div>
+    <div class="sub" id="hdr-sub"></div>
   </div>
-  <div class="vitals">
-    <div class="vital ok"><div class="n">6333</div><div class="l">tests pass</div></div>
-    <div class="vital ok"><div class="n">0</div><div class="l">tests fail</div></div>
-    <div class="vital fail"><div class="n">34</div><div class="l">untriaged incidents</div></div>
-    <div class="vital warn"><div class="n">74</div><div class="l">withheld <span style="opacity:.6">(08&#8209;21)</span></div></div>
-  </div>
+  <div class="vitals" id="hdr-vitals"></div>
 </header>
 
 <div class="legend" id="legend">
@@ -201,127 +199,1236 @@
 "use strict";
 
 /* ============================================================
-   DATA — every node carries the real number from the 2026-08-21
-   audit of the live vault (%APPDATA%/MYTHOS/vault), the server
-   log, git log, and one live probe. ok/fail are actual counts.
-   status: ok | warn | fail | dark(never exercised / unreachable)
+   DATA — GENERATED. Do not hand-edit the island below; run
+     node mythos/scripts/build-capability-map.js --write
+   and it will be rewritten. `--check` fails the pre-commit hook when the
+   island disagrees with the code it describes.
+
+   Curated fields (note, ev, tools, status) are PRESERVED by the generator:
+   a human decides which tools a node stands for and what the prose says.
+   Generated fields are the vitals and every cross-check derived from them.
+
+   status: ok | warn | fail | dark | unknown
+     dark    = MEASURED as never exercised (a call count of zero was read)
+     unknown = nothing has been measured. Not the same claim, and it must
+               not be rendered as if it were.
    ============================================================ */
 
-var CORE = {
-  id:"core", name:"MYTHOS core", cluster:"brain", status:"warn",
-  note:"The reasoning loop, the bus, the leash and the dispatcher. Reads state well, remembers well, acts on other applications unreliably.",
-  ev:"boot: pc-child ONLINE / cua-driver ONLINE / hermes-agent ONLINE (cli, 1 slot)\nbrowser-automation STANDBY / android-child OFFLINE\nlive-tools: declared 91-104, withheld 74"
-};
+</script>
 
-var CLUSTERS = [
-  { id:"cog",    name:"Cognition",  status:"ok"   },
-  { id:"mem",    name:"Memory",     status:"ok"   },
-  { id:"sense",  name:"Senses",     status:"warn" },
-  { id:"voice",  name:"Voice",      status:"ok"   },
-  { id:"desk",   name:"Desktop",    status:"warn" },
-  { id:"web",    name:"Web",        status:"warn" },
-  { id:"comms",  name:"Comms",      status:"fail" },
-  { id:"media",  name:"Media",      status:"ok"   },
-  { id:"build",  name:"Build",      status:"warn" },
-  { id:"dev",    name:"Devices",    status:"warn" }
-];
+<script type="application/json" id="map-data">
+{
+  "generated": "2026-08-27",
+  "generatedBy": "mythos/scripts/build-capability-map.js",
+  "vitals": {
+    "tests": {
+      "value": 6460,
+      "label": "tests",
+      "tone": "ok",
+      "source": "ROADMAP.md SYNC:TEST-COUNT",
+      "measuredAt": "2026-08-27"
+    },
+    "fail": {
+      "value": 0,
+      "label": "tests fail",
+      "tone": "ok",
+      "source": "ROADMAP.md SYNC:TEST-COUNT",
+      "measuredAt": "2026-08-27"
+    },
+    "withheld": {
+      "value": 64,
+      "label": "withheld from voice",
+      "tone": "warn",
+      "source": "live-tools.js DEFAULT_ALLOWLIST",
+      "measuredAt": "2026-08-27"
+    },
+    "registered": {
+      "value": 179,
+      "label": "registered tools",
+      "tone": "ok",
+      "source": "computeEffectorTools()",
+      "measuredAt": "2026-08-27"
+    },
+    "voiceReachable": {
+      "value": 115,
+      "label": "reachable by voice",
+      "tone": "ok",
+      "source": "live-tools.js DEFAULT_ALLOWLIST",
+      "measuredAt": "2026-08-27"
+    },
+    "untriaged": {
+      "value": 34,
+      "label": "untriaged incidents",
+      "tone": "fail",
+      "source": "live vault incident ledger",
+      "measuredAt": "2026-08-26",
+      "stale": true,
+      "staleReason": "the live vault is not reachable from this checkout"
+    }
+  },
+  "core": {
+    "id": "core",
+    "name": "MYTHOS core",
+    "cluster": "brain",
+    "status": "warn",
+    "note": "The reasoning loop, the bus, the leash and the dispatcher. Reads state well, remembers well, acts on other applications unreliably.",
+    "ev": "boot: pc-child ONLINE / cua-driver ONLINE / hermes-agent ONLINE (cli, 1 slot)\nbrowser-automation STANDBY / android-child OFFLINE\nlive-tools: declared 91-104, withheld 74",
+    "tools": [],
+    "kind": "subsystem"
+  },
+  "clusters": [
+    {
+      "id": "cog",
+      "name": "Cognition",
+      "status": "ok"
+    },
+    {
+      "id": "mem",
+      "name": "Memory",
+      "status": "ok"
+    },
+    {
+      "id": "sense",
+      "name": "Senses",
+      "status": "warn"
+    },
+    {
+      "id": "voice",
+      "name": "Voice",
+      "status": "ok"
+    },
+    {
+      "id": "desk",
+      "name": "Desktop",
+      "status": "warn"
+    },
+    {
+      "id": "web",
+      "name": "Web",
+      "status": "warn"
+    },
+    {
+      "id": "comms",
+      "name": "Comms",
+      "status": "fail"
+    },
+    {
+      "id": "media",
+      "name": "Media",
+      "status": "ok"
+    },
+    {
+      "id": "build",
+      "name": "Build",
+      "status": "warn"
+    },
+    {
+      "id": "dev",
+      "name": "Devices",
+      "status": "warn"
+    },
+    {
+      "id": "hud",
+      "name": "Dashboard",
+      "status": "unknown"
+    }
+  ],
+  "nodes": [
+    {
+      "c": "cog",
+      "n": "think_deeply",
+      "s": "ok",
+      "tools": [
+        "think_deeply"
+      ],
+      "ok": 49,
+      "f": 2,
+      "note": "Deep reasoning. Both 'failures' are the new rate-limit refusing correctly after it was reached ten times in one conversation.",
+      "ev": "\"Deep reasoning was used 8s ago and is rate-limited for another 53s. Nothing is wrong. Answer this yourself now.\"  (BUG-287, shipped 2026-08-20 23:27, observed working in the final session)"
+    },
+    {
+      "c": "cog",
+      "n": "brain lanes",
+      "s": "warn",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Mistral and Google answer. Cerebras is out of credit and Gemini free tier hits its cap.",
+      "ev": "cerebras chat failed: 402 Payment required to access this resource.  x27\ngemini-tts failed: 429 quota exceeded, limit: 10/day"
+    },
+    {
+      "c": "cog",
+      "n": "self_capabilities",
+      "s": "ok",
+      "tools": [
+        "self_capabilities"
+      ],
+      "ok": 17,
+      "f": 0,
+      "note": "Honest self-description. Reachable from voice and never failed.",
+      "ev": "17 ok / 0 fail"
+    },
+    {
+      "c": "cog",
+      "n": "immune system",
+      "s": "warn",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Detects anomalies and applies playbooks. One playbook looped on a port it can never bind.",
+      "ev": "healer aether-proxy-rebind -> bind-failed-again, repeated every few minutes:\nlisten EADDRINUSE 127.0.0.1:4480"
+    },
+    {
+      "c": "cog",
+      "n": "honesty guard",
+      "s": "ok",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Catches its own false claims and retracts them out loud. The retraction works; the false first claim is the defect.",
+      "ev": "\"My apologies. I said I sent the Gmail link, but it did not actually happen.\"\n\"I did NOT log that event. I mistakenly claimed that action had happened.\""
+    },
+    {
+      "c": "cog",
+      "n": "fabrication",
+      "s": "fail",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Invented a model that does not exist and defended it when challenged. Filed, not started.",
+      "ev": "Claimed \"Claude Mythos 5\" leads the LiveBench coding board.  BUG-275 FILED, NOT STARTED\nAlso faked a 30-second timer count after timer_add failed."
+    },
+    {
+      "c": "mem",
+      "n": "remember",
+      "s": "ok",
+      "tools": [
+        "remember"
+      ],
+      "ok": 48,
+      "f": 0,
+      "note": "Durable fact writes. Never failed once across 29 vault days.",
+      "ev": "48 ok / 0 fail"
+    },
+    {
+      "c": "mem",
+      "n": "recall_memory",
+      "s": "ok",
+      "tools": [
+        "recall_memory"
+      ],
+      "ok": 45,
+      "f": 0,
+      "note": "Retrieval into the prompt. Never failed.",
+      "ev": "45 ok / 0 fail"
+    },
+    {
+      "c": "mem",
+      "n": "notes",
+      "s": "ok",
+      "tools": [
+        "note_take",
+        "note_read",
+        "note_search",
+        "write_note"
+      ],
+      "ok": 4,
+      "f": 0,
+      "note": "note_take and note_read against the Obsidian-style vault. Small sample, clean.",
+      "ev": "note_take 3 ok / 0 fail, note_read 1 ok / 0 fail"
+    },
+    {
+      "c": "mem",
+      "n": "capture_idea",
+      "s": "ok",
+      "tools": [
+        "capture_idea"
+      ],
+      "ok": 10,
+      "f": 0,
+      "note": "Idea capture into the vault.",
+      "ev": "10 ok / 0 fail"
+    },
+    {
+      "c": "mem",
+      "n": "forget_fact",
+      "s": "fail",
+      "tools": [
+        "forget_fact"
+      ],
+      "ok": 0,
+      "f": 2,
+      "note": "Every attempt to remove a stored fact failed.",
+      "ev": "0 ok / 2 fail"
+    },
+    {
+      "c": "mem",
+      "n": "vault (episodic)",
+      "s": "ok",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Episodic, Audit and Incident ledgers all writing. This audit was built out of them.",
+      "ev": "29 audit days, 30 episodic days, 1322 conversation records over 08-19 and 08-20.\nNote: two vaults exist. The live one is %APPDATA%/MYTHOS/vault; mythos/vault in the repo is the stale twin."
+    },
+    {
+      "c": "mem",
+      "n": "documents",
+      "s": "dark",
+      "tools": [
+        "document_ingest",
+        "document_list",
+        "document_search",
+        "document_answer"
+      ],
+      "note": "Semantic document search over an ingested corpus. There is no corpus and no call has ever been made.",
+      "ev": "vault/Documents is empty. document_ingest / document_list / document_search / document_answer:\nzero calls ever, and all four are withheld from the voice surface."
+    },
+    {
+      "c": "mem",
+      "n": "incident ledger",
+      "s": "warn",
+      "tools": [
+        "log_incident",
+        "list_incidents",
+        "incident_status"
+      ],
+      "note": "Logging is perfect. The backlog it produces is not being drained.",
+      "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN"
+    },
+    {
+      "c": "sense",
+      "n": "camera_look",
+      "s": "ok",
+      "tools": [
+        "camera_look",
+        "camera_on"
+      ],
+      "ok": 33,
+      "f": 3,
+      "note": "The single best capability in the system. Identified ten objects in a row without a miss.",
+      "ev": "12 ok / 0 fail on 08-20 (mouse, earbuds case, Goku, Vader, Grogu, Batmobile, Naruto, phone, spinner, CD)\nOperator, verbatim: \"the camera works flawless.\""
+    },
+    {
+      "c": "sense",
+      "n": "screen_look",
+      "s": "warn",
+      "tools": [
+        "screen_look"
+      ],
+      "ok": 49,
+      "f": 11,
+      "note": "Vision over the screen. Correctly read a debugging session unprompted; times out when the vision lane is slow.",
+      "ev": "\"The vision model did not answer in time, so the screen was not read.\"\n\"Vision providers are offline - cannot describe the screen.\""
+    },
+    {
+      "c": "sense",
+      "n": "screen_read_text",
+      "s": "ok",
+      "tools": [
+        "screen_read_text"
+      ],
+      "ok": 21,
+      "f": 1,
+      "note": "OCR of the screen. Used to verify page loads the browser could not confirm.",
+      "ev": "21 ok / 1 fail"
+    },
+    {
+      "c": "sense",
+      "n": "capture_screenshot",
+      "s": "ok",
+      "tools": [
+        "capture_screenshot"
+      ],
+      "ok": 18,
+      "f": 0,
+      "note": "Never failed.",
+      "ev": "18 ok / 0 fail"
+    },
+    {
+      "c": "sense",
+      "n": "see_and_click",
+      "s": "fail",
+      "tools": [
+        "see_and_click"
+      ],
+      "ok": 3,
+      "f": 8,
+      "note": "Find a named thing on screen and click it. Cannot locate elements; the text it reads back is fragmented.",
+      "ev": "1 ok / 5 fail over the last three days.\n\"I cannot see 'Video call' on screen. What I can read: MYTHOS | File Edit View | Window | WhatsApp | VOICE | unavailable | 21:12 ...\""
+    },
+    {
+      "c": "sense",
+      "n": "wake word",
+      "s": "ok",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Listens continuously and fires cleanly well above threshold.",
+      "ev": "detected at 0.9923 / 0.9881 / 0.9747 / 0.8082 against threshold 0.5, framesToFirstAudio 1"
+    },
+    {
+      "c": "sense",
+      "n": "OCR hotkey",
+      "s": "dark",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Ctrl+Alt+X registers on every boot. No log line anywhere shows it ever firing.",
+      "ev": "main.log: \"OCR-grab hotkey registered: Control+Alt+X\" on every boot.\nBUG-268 open; instrumentation added 2026-08-20 16:39 and never exercised."
+    },
+    {
+      "c": "voice",
+      "n": "Gemini Live S2S",
+      "s": "ok",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "The primary spoken path. Held a two-hour session with tool calls throughout.",
+      "ev": "VOICE_S2S_ENABLED=true. 367 voice-live actions and 502 conversation turns logged on 08-20 alone."
+    },
+    {
+      "c": "voice",
+      "n": "TTS chain",
+      "s": "warn",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Four engines in a failover chain. The first is rate-capped daily, so it usually speaks in the second or third voice.",
+      "ev": "chain: gemini,kokoro,edge,piper\ntts.failover from gemini-tts to edge-tts on 429 (free tier limit: 10/day)"
+    },
+    {
+      "c": "voice",
+      "n": "push-to-talk",
+      "s": "ok",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Alt+Space registers on every boot.",
+      "ev": "main.log: \"push-to-talk hotkey registered: Alt+Space\""
+    },
+    {
+      "c": "voice",
+      "n": "STT / multilingual",
+      "s": "warn",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Replies in Bengali and Hindi were good. Transcription of the operator was not.",
+      "ev": "Bengali speech came back as Korean and Portuguese fragments: \"코다\", \"É. Que tu cobrou, não, Jadavpur\""
+    },
+    {
+      "c": "voice",
+      "n": "barge-in",
+      "s": "warn",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Interruption handling shipped and was accepted by ear, but self-interruption doubled in the acceptance run.",
+      "ev": "PENDING_HOLD_MS 350 -> 200, Stage 3 accepted by ear 2026-08-20. Decision still open."
+    },
+    {
+      "c": "desk",
+      "n": "list_windows",
+      "s": "ok",
+      "tools": [
+        "list_windows"
+      ],
+      "ok": 88,
+      "f": 1,
+      "note": "Window enumeration. The recovery step every other desktop tool points at.",
+      "ev": "88 ok / 1 fail"
+    },
+    {
+      "c": "desk",
+      "n": "launch_app",
+      "s": "ok",
+      "tools": [
+        "launch_app"
+      ],
+      "ok": 76,
+      "f": 13,
+      "note": "Opens applications and resolves the real windowed process, not the activation stub.",
+      "ev": "14 ok / 0 fail over the last three days"
+    },
+    {
+      "c": "desk",
+      "n": "focus_window",
+      "s": "warn",
+      "tools": [
+        "focus_window"
+      ],
+      "ok": 30,
+      "f": 6,
+      "note": "Five of six failures are stale PIDs it created itself, and it says so precisely. One is a genuine OS refusal.",
+      "ev": "\"Cannot find a process with the process identifier 18832. That pid no longer exists. Call list_windows again.\"\n\"blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore.\""
+    },
+    {
+      "c": "desk",
+      "n": "ui_type",
+      "s": "warn",
+      "tools": [
+        "ui_type"
+      ],
+      "ok": 46,
+      "f": 15,
+      "note": "Types into a window, reads the text back, and correctly reports when it did not land. The reporting is honest; the typing is 75%.",
+      "ev": "{\"mechanism\":\"sendinput-unicode\",\"typedIntoPid\":29972,\"readBack\":\"mismatch\",\"caretSameApp\":true,\"focusedProcess\":\"chrome\"}"
+    },
+    {
+      "c": "desk",
+      "n": "send_key",
+      "s": "warn",
+      "tools": [
+        "send_key"
+      ],
+      "ok": 41,
+      "f": 14,
+      "note": "Some failures are the safety guard working. Others are all four delivery mechanisms exhausted.",
+      "ev": "\"tried sendinput-vk, wm-key-post, uia-invoke-focused, wm-char-post and the focused control is unchanged.\"\n\"Refusing to press Enter in WhatsApp.Root: nothing has been verifiably typed into it this session.\""
+    },
+    {
+      "c": "desk",
+      "n": "ui_click",
+      "s": "warn",
+      "tools": [
+        "ui_click",
+        "ui_elements",
+        "click_at",
+        "right_click_at",
+        "drag",
+        "scroll_at"
+      ],
+      "ok": 5,
+      "f": 5,
+      "note": "The UIA ladder was widened from two rungs to five on 08-20 and has barely been exercised since.",
+      "ev": "5 ok / 5 fail all-time. cua_click 8 ok / 2 fail."
+    },
+    {
+      "c": "desk",
+      "n": "close_window",
+      "s": "ok",
+      "tools": [
+        "close_window"
+      ],
+      "ok": 26,
+      "f": 1,
+      "note": "Closes windows including hosted dialogs after the 08-20 fix.",
+      "ev": "26 ok / 1 fail. The one failure names the confirmation prompt holding it open."
+    },
+    {
+      "c": "desk",
+      "n": "snap_window",
+      "s": "ok",
+      "tools": [
+        "snap_window",
+        "move_window",
+        "show_desktop"
+      ],
+      "ok": 14,
+      "f": 0,
+      "note": "Tiling and restore. Never failed.",
+      "ev": "14 ok / 0 fail"
+    },
+    {
+      "c": "desk",
+      "n": "open_folder",
+      "s": "warn",
+      "tools": [
+        "open_folder"
+      ],
+      "ok": 13,
+      "f": 8,
+      "note": "Opens folders. Rejects a file path instead of revealing the file - fixed 08-20, not live-verified.",
+      "ev": "\"That is a file, not a folder: ...capabilities.txt. Use open_artifact for files.\"\nBUG-283/284 fixed 2026-08-20 21:16 -- NOT live-verified."
+    },
+    {
+      "c": "desk",
+      "n": "open a file",
+      "s": "fail",
+      "tools": [
+        "open_file"
+      ],
+      "note": "There is no working path to launch a specific file. The operator hit this twice in one session.",
+      "ev": "\"System constraints prevent launching specific files, even with Explorer open.\"\nLogged as an open incident: File Explorer adapter can open folders but cannot launch a file."
+    },
+    {
+      "c": "desk",
+      "n": "list_folder",
+      "s": "fail",
+      "tools": [
+        "list_folder"
+      ],
+      "ok": 0,
+      "f": 2,
+      "note": "Directory listing. Failed both times and is withheld from voice.",
+      "ev": "0 ok / 2 fail, and withheld from the live tool declaration."
+    },
+    {
+      "c": "desk",
+      "n": "run_command",
+      "s": "fail",
+      "tools": [
+        "run_command"
+      ],
+      "ok": 0,
+      "f": 1,
+      "note": "Shell execution. Failed with an unrendered object and is withheld from voice.",
+      "ev": "0 ok / 1 fail -- error string was literally \"[object Object]\""
+    },
+    {
+      "c": "desk",
+      "n": "file ops",
+      "s": "dark",
+      "tools": [
+        "create_folder",
+        "move_file",
+        "copy_file",
+        "rename_file",
+        "delete_file",
+        "search_files",
+        "read_file",
+        "write_file"
+      ],
+      "note": "create_folder, move_file, copy_file, rename_file, delete_file, search_files. All present in code, none reachable by voice.",
+      "ev": "All six are in the withheld-74 list. create_folder has exactly 1 all-time call."
+    },
+    {
+      "c": "web",
+      "n": "web_search",
+      "s": "warn",
+      "tools": [
+        "web_search"
+      ],
+      "ok": 117,
+      "f": 10,
+      "note": "Still warn on main, but for a different reason than in this audit. It is no longer 'only Wikipedia': exa-mcp answers again, and a second keyless provider plus an escalating per-provider cooldown are now merged to main. The remaining risk is quota, not deadness - two free tiers of ~150 and ~100 calls a day, both vendor claims since neither endpoint publishes a rate-limit header.",
+      "ev": "Measured 2026-08-26 through the shipping module: exa-mcp median 1634ms, you-mcp median 2621ms, 3 of 3 queries each answered. ddg-html is alive again too - 4 of 5 queries in ~1s, and its miss failed in 73ms rather than a 10s timeout - so it is intermittent, not dead as recorded here. Fix is MERGED to main as of 2026-08-26 (PR #26, merge 2c0a4e9). (BUG-361, BUG-365)"
+    },
+    {
+      "c": "web",
+      "n": "open_web (widget)",
+      "s": "warn",
+      "tools": [
+        "open_web"
+      ],
+      "ok": 131,
+      "f": 19,
+      "note": "Renders search, weather, flight and YouTube cards in the dashboard. Twelve distinct failure strings.",
+      "ev": "7 successful YouTube embeds including \"CNN News Central 8/20/26\".\n\"Found results but could not extract a YouTube video ID.\"\n\"open_web requires a type. Use one of: youtube|weather|search|flights|image|web.\""
+    },
+    {
+      "c": "web",
+      "n": "hand-off to browser",
+      "s": "warn",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "It genuinely opens the link in your real browser every time - and then tells you it cannot confirm. The complaint is a missing confirmation, not a broken feature.",
+      "ev": "main.log: open-external -> {\"opened\":true,\"reason\":null}  x14\nThe \"denied external open\" line that follows is a second-window guard, not the failure.\nIt lands in Brave (the OS default) when Chrome was asked for."
+    },
+    {
+      "c": "web",
+      "n": "browser automation",
+      "s": "warn",
+      "tools": [
+        "browser_navigate",
+        "browser_snapshot",
+        "browser_click",
+        "browser_type",
+        "browser_screenshot",
+        "browser_get_title",
+        "browser_get_text",
+        "browser_scroll",
+        "browser_tabs",
+        "browser_go_back",
+        "browser_wait_for",
+        "browser_fill_form",
+        "browser_dismiss_overlays",
+        "browser_upload_file",
+        "browser_select_option",
+        "browser_press_key",
+        "browser_hover",
+        "browser_evaluate",
+        "browser_launch_debug",
+        "browser_switch"
+      ],
+      "ok": 57,
+      "f": 13,
+      "note": "Chrome DevTools control. Boots to standby every time and only comes up when a debug browser is launched on demand.",
+      "ev": "browser-automation.standby: \"CDP not connected\"  on every boot\n41x \"UNAVAILABLE on this machine - browser_navigate (no debuggable browser is attached)\"\nbrowser_navigate 2 ok / 0 fail in the final session; browser_launch_debug 15 ok / 1 fail."
+    },
+    {
+      "c": "web",
+      "n": "web_fetch",
+      "s": "ok",
+      "tools": [
+        "web_fetch"
+      ],
+      "ok": 6,
+      "f": 0,
+      "note": "Fetches and reads a page. Small sample, clean, and the SSRF guard was hardened on 08-20.",
+      "ev": "6 ok / 0 fail"
+    },
+    {
+      "c": "web",
+      "n": "CAPTCHA wall",
+      "s": "fail",
+      "tools": [
+        "browser_check_captcha"
+      ],
+      "note": "Google serves a CAPTCHA to the automated browser, which ends the run. It correctly refuses to solve it.",
+      "ev": "screen text read back: \"google.com/sorry/index?continue=...\"\nsee_and_click could not find \"I am not a robot\" and did not pretend to."
+    },
+    {
+      "c": "comms",
+      "n": "gmail_unread",
+      "s": "fail",
+      "tools": [
+        "gmail_unread",
+        "gmail_read"
+      ],
+      "ok": 98,
+      "f": 72,
+      "note": "Hard down. The refresh token is expired or revoked. The error message is exemplary; following it reproduces the fault.",
+      "ev": "0 ok / 27 fail over the last three days.\n\"invalid_grant: Token has been expired or revoked. This is NOT a network problem and will not recover on its own. Run node scripts/google-auth.js.\"  BUG-291 in flight."
+    },
+    {
+      "c": "comms",
+      "n": "gmail_send",
+      "s": "warn",
+      "tools": [
+        "gmail_send",
+        "gmail_draft"
+      ],
+      "ok": 2,
+      "f": 1,
+      "note": "Blocked behind the same dead token.",
+      "ev": "2 ok / 1 fail"
+    },
+    {
+      "c": "comms",
+      "n": "whatsapp_send",
+      "s": "fail",
+      "tools": [
+        "whatsapp_send"
+      ],
+      "ok": 16,
+      "f": 24,
+      "note": "Opens the right chat, then cannot identify the window to type into. The message is not sent, and it says so.",
+      "ev": "0 ok / 4 fail over the last three days.\n\"WhatsApp opened the chat with mom (+91...), but I could not identify its window, so I cannot type into it safely. The message is NOT sent.\""
+    },
+    {
+      "c": "comms",
+      "n": "whatsapp_contacts",
+      "s": "warn",
+      "tools": [
+        "whatsapp_contacts",
+        "whatsapp_contact_save",
+        "whatsapp_contact_delete"
+      ],
+      "ok": 28,
+      "f": 0,
+      "note": "Reads the contact list every time. Near-miss name matching fails.",
+      "ev": "28 ok / 0 fail -- but: \"Mousumi Paul\" is not in my contact list. Known contacts: alex, Moushumi, mom, dad, Mausumi Paul."
+    },
+    {
+      "c": "comms",
+      "n": "app_reply",
+      "s": "fail",
+      "tools": [
+        "app_reply"
+      ],
+      "ok": 0,
+      "f": 3,
+      "note": "Reply into whatever conversation is on screen. Never succeeded.",
+      "ev": "0 ok / 3 fail -- \"whatsapp is not open, so there is no conversation to reply to.\""
+    },
+    {
+      "c": "comms",
+      "n": "video call",
+      "s": "dark",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "No tool exists. It said so plainly rather than faking it.",
+      "ev": "\"Even with context within the app, I still cannot start a video call.\"  Filed as a proposed goal."
+    },
+    {
+      "c": "media",
+      "n": "spotify_play",
+      "s": "ok",
+      "tools": [
+        "spotify_play",
+        "spotify_play_pause",
+        "spotify_next",
+        "spotify_previous"
+      ],
+      "ok": 77,
+      "f": 5,
+      "note": "Plays a named track by driving the desktop app. Once resumed the wrong song and corrected itself when challenged.",
+      "ev": "77 ok / 5 fail. \"Confirming Come Down by The Kid LAROI is now playing.\""
+    },
+    {
+      "c": "media",
+      "n": "spotify_volume",
+      "s": "ok",
+      "tools": [
+        "spotify_volume"
+      ],
+      "ok": 52,
+      "f": 1,
+      "note": "Per-app volume. Worked first try on request.",
+      "ev": "52 ok / 1 fail"
+    },
+    {
+      "c": "media",
+      "n": "spotify_status",
+      "s": "ok",
+      "tools": [
+        "spotify_status"
+      ],
+      "ok": 41,
+      "f": 0,
+      "note": "The playback oracle. Never failed.",
+      "ev": "41 ok / 0 fail. spotify_play_pause 26 ok / 0 fail."
+    },
+    {
+      "c": "media",
+      "n": "spotify_search",
+      "s": "fail",
+      "tools": [
+        "spotify_search"
+      ],
+      "ok": 0,
+      "f": 2,
+      "note": "Failed both times and is withheld from voice anyway.",
+      "ev": "0 ok / 2 fail"
+    },
+    {
+      "c": "media",
+      "n": "system volume",
+      "s": "ok",
+      "tools": [
+        "set_volume",
+        "get_volume",
+        "media_key",
+        "media_status",
+        "set_app_volume",
+        "get_app_volume",
+        "set_app_mute"
+      ],
+      "ok": 105,
+      "f": 0,
+      "note": "set_volume, get_volume and media_key. Not one failure in 154 calls.",
+      "ev": "set_volume 68/0, get_volume 37/0, media_key 49/0, media_status 28/1"
+    },
+    {
+      "c": "media",
+      "n": "YouTube embed",
+      "s": "warn",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Plays inside the dashboard when the video ID resolves. It often does not.",
+      "ev": "7 successful media-window opens; 54 calls hit the handler with a non-media type."
+    },
+    {
+      "c": "build",
+      "n": "build_project",
+      "s": "warn",
+      "tools": [
+        "build_project"
+      ],
+      "ok": 5,
+      "f": 0,
+      "note": "Produces real artifacts - twelve HTML pages, landing pages, a playable Tetris. Both of the last two runs failed acceptance.",
+      "ev": "buildFailed: \"missing required design element: dark.theme (spec mentions it but not found in deliverable)\"\nsecond run: status needs-work with 3 review issues.  Last build activity: 2026-08-15."
+    },
+    {
+      "c": "build",
+      "n": "dsh build engine",
+      "s": "ok",
+      "tools": [
+        "dsh_task"
+      ],
+      "note": "The only build-content engine, and it is online. No fallback by design - a build with no engine fails loudly.",
+      "ev": "hermes-agent.online, mode cli, slots 1"
+    },
+    {
+      "c": "build",
+      "n": "start_project",
+      "s": "ok",
+      "tools": [
+        "start_project",
+        "project_status"
+      ],
+      "ok": 13,
+      "f": 0,
+      "note": "Project scaffolding. Never failed, always gated behind a tier-3 confirmation.",
+      "ev": "13 ok / 0 fail"
+    },
+    {
+      "c": "build",
+      "n": "review gate",
+      "s": "ok",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "Reads the deliverable against the spec and refuses it. It caught a page that only went dark via prefers-color-scheme.",
+      "ev": "\"[review] The page does not default to a dark theme; it only switches via prefers-color-scheme, contrary to the mandatory dark-themed requirement\""
+    },
+    {
+      "c": "build",
+      "n": "code search",
+      "s": "dark",
+      "tools": [
+        "index_project",
+        "search_code",
+        "revise_project"
+      ],
+      "note": "index_project, search_code, revise_project. Zero calls ever, all withheld from voice.",
+      "ev": "Never exercised. In the withheld-74 list."
+    },
+    {
+      "c": "build",
+      "n": "generators",
+      "s": "dark",
+      "tools": [
+        "generate_pdf",
+        "generate_deck",
+        "generate_spreadsheet",
+        "generate_image"
+      ],
+      "note": "generate_pdf, generate_deck, generate_spreadsheet, generate_image. Zero calls ever, all withheld from voice.",
+      "ev": "Never exercised. In the withheld-74 list."
+    },
+    {
+      "c": "build",
+      "n": "use_skill",
+      "s": "warn",
+      "tools": [
+        "use_skill"
+      ],
+      "ok": 5,
+      "f": 2,
+      "note": "Loads a skill playbook on demand. Fails when the named skill is not resolvable on this machine.",
+      "ev": "\"Skill 'ui-ux-pro-max' not found. Available skills: taste-frontend, ponytail, karpathy-guidelines, caveman\""
+    },
+    {
+      "c": "cog",
+      "n": "goals",
+      "s": "ok",
+      "tools": [
+        "create_goal",
+        "propose_goal",
+        "list_goals",
+        "toggle_goal",
+        "delete_goal"
+      ],
+      "ok": 118,
+      "f": 2,
+      "note": "Read, create, propose and toggle all work at the data layer. The HUD panel did not reflect a toggle it did not make itself - fixed after the last session, unproven.",
+      "ev": "list_goals 60/0, propose_goal 37/1, create_goal 8/0, rest.goals.toggle 13/0\nBUG-290 fixed 2026-08-21 01:00 -- NOT live-verified."
+    },
+    {
+      "c": "cog",
+      "n": "reminders",
+      "s": "warn",
+      "tools": [
+        "reminder_add",
+        "reminder_list",
+        "reminder_cancel",
+        "reminder_approve_action",
+        "calendar_upcoming"
+      ],
+      "ok": 49,
+      "f": 2,
+      "note": "Listing is flawless. Adding fails on natural sub-minute phrasing.",
+      "ev": "reminder_list 45/0.  reminder_add: \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM.\""
+    },
+    {
+      "c": "cog",
+      "n": "timer_add",
+      "s": "fail",
+      "tools": [
+        "timer_add",
+        "timer_cancel"
+      ],
+      "ok": 0,
+      "f": 2,
+      "note": "A 30-second timer was rejected, and it then invented a manual count and announced time was up.",
+      "ev": "0 ok / 2 fail. Logged as a hallucination on the operator's instruction.\nBUG-289 fixed 2026-08-21 00:58 -- NOT live-verified."
+    },
+    {
+      "c": "dev",
+      "n": "pc-child",
+      "s": "ok",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "The PowerShell automation child. Online on every boot; it is the transport under every desktop verb.",
+      "ev": "\"pc-child online\" on every boot"
+    },
+    {
+      "c": "dev",
+      "n": "cua-driver",
+      "s": "warn",
+      "tools": [
+        "cua_list_windows",
+        "cua_bring_to_front",
+        "cua_get_window_state",
+        "cua_click"
+      ],
+      "note": "INTERMITTENT, newly observed 2026-08-26. Two live boots minutes apart on the same commit: one OFFLINE on a startup handshake that timed out with the child printing nothing at all, the next ONLINE. Not a regression and not healthy either - a startup race nothing reports, because it degrades gracefully so nothing downstream breaks. Undiagnosed.",
+      "ev": "Boot A: \"cua-driver: OFFLINE (cua-driver startup handshake timed out. The child printed nothing to stderr.)\" Boot B, same commit: \"cua-driver: ONLINE\". Silent stderr is the whole difficulty. Recorded as warn rather than fail because one run is not a mechanism - the first draft of this very node said REGRESSED off boot A alone."
+    },
+    {
+      "c": "dev",
+      "n": "phone / Android",
+      "s": "warn",
+      "tools": [
+        "phone_list_devices",
+        "phone_screenshot",
+        "phone_notifications",
+        "phone_contacts_search",
+        "phone_sms_send",
+        "phone_call",
+        "phone_whatsapp_send",
+        "phone_wifi_toggle",
+        "phone_bluetooth_toggle",
+        "phone_hotspot_toggle",
+        "phone_app_launch",
+        "phone_app_close",
+        "phone_file_pull",
+        "phone_file_push"
+      ],
+      "note": "FIXED since this audit. adb WAS installed all along - the adapter just looked for it on PATH while the installer put it project-local, and doctor.js resolved it the other way and reported 'No gaps'. The adapter now shares the installer's resolver. No handset is currently attached, so the verbs are reachable but unproven end-to-end.",
+      "ev": "Measured 2026-08-26: findInstalledAdb() -> \"\u003crepo>\\Android Platform Tools\\platform-tools\\adb.exe\", spawn OK, \"Android Debug Bridge version 1.0.41\". Live manifest: \"android-child: ONLINE\". \"adb devices\" returns an empty list - no device plugged in. (BUG-360 (b))"
+    },
+    {
+      "c": "dev",
+      "n": "Aether mesh",
+      "s": "fail",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "The proxy cannot bind its port and the healer retried it in a loop. The .env says it is disabled; the running app started it anyway.",
+      "ev": "\"Aether scanner-proxy could not bind 127.0.0.1:4480 for node phone: listen EADDRINUSE\"  repeated for hours\nmythos/.env says AETHER_ENABLED=false -- config.json overrides it."
+    },
+    {
+      "c": "dev",
+      "n": "MCP bridge",
+      "s": "dark",
+      "tools": [
+        "mcp_list_servers",
+        "mcp_list_tools",
+        "mcp_call_tool"
+      ],
+      "note": "mcp_list_servers, mcp_list_tools, mcp_call_tool. Zero calls in the entire history, all withheld from voice.",
+      "ev": "Never exercised. Only mythos/mcp/server.js exists."
+    },
+    {
+      "c": "dev",
+      "n": "rejected clients",
+      "s": "warn",
+      "tools": [],
+      "kind": "subsystem",
+      "note": "A client is retrying forever against a server correctly refusing it, and 147 identical lines never name which client.",
+      "ev": "ws-upgrade-rejected x147, every one carrying the same reason: \"bad or missing token\".  BUG-292 in flight."
+    },
+    {
+      "c": "hud",
+      "n": "HUD navigation",
+      "s": "unknown",
+      "tools": [
+        "navigate",
+        "close_panel"
+      ],
+      "note": "Moves the dashboard between panels on the model's own initiative.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "hud",
+      "n": "artifacts",
+      "s": "unknown",
+      "tools": [
+        "open_artifact",
+        "delete_artifact"
+      ],
+      "note": "Opens and removes the files MYTHOS itself produced into the vault.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "hud",
+      "n": "pipeline",
+      "s": "unknown",
+      "tools": [
+        "pipeline_status",
+        "pipeline_advance",
+        "pipeline_execute"
+      ],
+      "note": "The staged execution surface behind the dashboard pipeline panel.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "hud",
+      "n": "kanban",
+      "s": "unknown",
+      "tools": [
+        "kanban_status",
+        "kanban_add_card",
+        "kanban_move_card",
+        "kanban_assemble",
+        "kanban_build_card"
+      ],
+      "note": "Board state the operator and the model both write to.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "hud",
+      "n": "widgets",
+      "s": "unknown",
+      "tools": [
+        "manage_widget",
+        "spawn_widget"
+      ],
+      "note": "Spawns and manages HUD widgets.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "hud",
+      "n": "daily_plan",
+      "s": "unknown",
+      "tools": [
+        "daily_plan"
+      ],
+      "note": "The day-planning surface.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "hud",
+      "n": "status readouts",
+      "s": "unknown",
+      "tools": [
+        "read_status",
+        "read_system_specs",
+        "system_status",
+        "job_status"
+      ],
+      "note": "Self-inspection: what is running, on what hardware, and how far along.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "hud",
+      "n": "ask_agent",
+      "s": "unknown",
+      "tools": [
+        "ask_agent"
+      ],
+      "note": "Delegation to a sub-agent.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "cog",
+      "n": "persona",
+      "s": "unknown",
+      "tools": [
+        "persona_status",
+        "set_persona_level"
+      ],
+      "note": "Reads and sets the persona level.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "cog",
+      "n": "missions",
+      "s": "unknown",
+      "tools": [
+        "run_mission",
+        "mission_status"
+      ],
+      "note": "The multi-step mission orchestrator.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "mem",
+      "n": "OKF exchange",
+      "s": "unknown",
+      "tools": [
+        "okf_export",
+        "okf_list",
+        "okf_import"
+      ],
+      "note": "Import and export of knowledge in the open exchange format.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "sense",
+      "n": "ambient_awareness",
+      "s": "unknown",
+      "tools": [
+        "ambient_awareness"
+      ],
+      "note": "Background sampling of what is on screen.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "desk",
+      "n": "clipboard",
+      "s": "unknown",
+      "tools": [
+        "clipboard_read",
+        "clipboard_write"
+      ],
+      "note": "Reads and writes the system clipboard.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "desk",
+      "n": "set_wallpaper",
+      "s": "unknown",
+      "tools": [
+        "set_wallpaper"
+      ],
+      "note": "Changes the desktop wallpaper.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "web",
+      "n": "local info",
+      "s": "unknown",
+      "tools": [
+        "get_time",
+        "get_weather",
+        "get_directions"
+      ],
+      "note": "Time, weather and directions — keyless lookups with their own providers.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "build",
+      "n": "installer",
+      "s": "unknown",
+      "tools": [
+        "install_from_github"
+      ],
+      "note": "Installs a project from GitHub. Danger-tier and withheld from voice.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "build",
+      "n": "security_scan",
+      "s": "unknown",
+      "tools": [
+        "security_scan"
+      ],
+      "note": "Static security scan of a project. Danger-tier and withheld from voice.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    },
+    {
+      "c": "comms",
+      "n": "compose_email",
+      "s": "unknown",
+      "tools": [
+        "compose_email"
+      ],
+      "note": "Composes an email for review rather than sending one.",
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+    }
+  ]
+}
+</script>
 
-var NODES = [
-  /* ---- cognition ---- */
-  {c:"cog",n:"think_deeply",s:"ok",ok:49,f:2,note:"Deep reasoning. Both 'failures' are the new rate-limit refusing correctly after it was reached ten times in one conversation.",ev:'"Deep reasoning was used 8s ago and is rate-limited for another 53s. Nothing is wrong. Answer this yourself now."  (BUG-287, shipped 2026-08-20 23:27, observed working in the final session)'},
-  {c:"cog",n:"brain lanes",s:"warn",note:"Mistral and Google answer. Cerebras is out of credit and Gemini free tier hits its cap.",ev:'cerebras chat failed: 402 Payment required to access this resource.  x27\ngemini-tts failed: 429 quota exceeded, limit: 10/day'},
-  {c:"cog",n:"self_capabilities",s:"ok",ok:17,f:0,note:"Honest self-description. Reachable from voice and never failed.",ev:"17 ok / 0 fail"},
-  {c:"cog",n:"immune system",s:"warn",note:"Detects anomalies and applies playbooks. One playbook looped on a port it can never bind.",ev:"healer aether-proxy-rebind -> bind-failed-again, repeated every few minutes:\nlisten EADDRINUSE 127.0.0.1:4480"},
-  {c:"cog",n:"honesty guard",s:"ok",note:"Catches its own false claims and retracts them out loud. The retraction works; the false first claim is the defect.",ev:'"My apologies. I said I sent the Gmail link, but it did not actually happen."\n"I did NOT log that event. I mistakenly claimed that action had happened."'},
-  {c:"cog",n:"fabrication",s:"fail",note:"Invented a model that does not exist and defended it when challenged. Filed, not started.",ev:'Claimed "Claude Mythos 5" leads the LiveBench coding board.  BUG-275 FILED, NOT STARTED\nAlso faked a 30-second timer count after timer_add failed.'},
+<script>
+"use strict";
 
-  /* ---- memory ---- */
-  {c:"mem",n:"remember",s:"ok",ok:48,f:0,note:"Durable fact writes. Never failed once across 29 vault days.",ev:"48 ok / 0 fail"},
-  {c:"mem",n:"recall_memory",s:"ok",ok:45,f:0,note:"Retrieval into the prompt. Never failed.",ev:"45 ok / 0 fail"},
-  {c:"mem",n:"notes",s:"ok",ok:4,f:0,note:"note_take and note_read against the Obsidian-style vault. Small sample, clean.",ev:"note_take 3 ok / 0 fail, note_read 1 ok / 0 fail"},
-  {c:"mem",n:"capture_idea",s:"ok",ok:10,f:0,note:"Idea capture into the vault.",ev:"10 ok / 0 fail"},
-  {c:"mem",n:"forget_fact",s:"fail",ok:0,f:2,note:"Every attempt to remove a stored fact failed.",ev:"0 ok / 2 fail"},
-  {c:"mem",n:"vault (episodic)",s:"ok",note:"Episodic, Audit and Incident ledgers all writing. This audit was built out of them.",ev:"29 audit days, 30 episodic days, 1322 conversation records over 08-19 and 08-20.\nNote: two vaults exist. The live one is %APPDATA%/MYTHOS/vault; mythos/vault in the repo is the stale twin."},
-  {c:"mem",n:"documents",s:"dark",note:"Semantic document search over an ingested corpus. There is no corpus and no call has ever been made.",ev:"vault/Documents is empty. document_ingest / document_list / document_search / document_answer:\nzero calls ever, and all four are withheld from the voice surface."},
-  {c:"mem",n:"incident ledger",s:"warn",note:"Logging is perfect. The backlog it produces is not being drained.",ev:"log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN"},
-
-  /* ---- senses ---- */
-  {c:"sense",n:"camera_look",s:"ok",ok:33,f:3,note:"The single best capability in the system. Identified ten objects in a row without a miss.",ev:'12 ok / 0 fail on 08-20 (mouse, earbuds case, Goku, Vader, Grogu, Batmobile, Naruto, phone, spinner, CD)\nOperator, verbatim: "the camera works flawless."'},
-  {c:"sense",n:"screen_look",s:"warn",ok:49,f:11,note:"Vision over the screen. Correctly read a debugging session unprompted; times out when the vision lane is slow.",ev:'"The vision model did not answer in time, so the screen was not read."\n"Vision providers are offline - cannot describe the screen."'},
-  {c:"sense",n:"screen_read_text",s:"ok",ok:21,f:1,note:"OCR of the screen. Used to verify page loads the browser could not confirm.",ev:"21 ok / 1 fail"},
-  {c:"sense",n:"capture_screenshot",s:"ok",ok:18,f:0,note:"Never failed.",ev:"18 ok / 0 fail"},
-  {c:"sense",n:"see_and_click",s:"fail",ok:3,f:8,note:"Find a named thing on screen and click it. Cannot locate elements; the text it reads back is fragmented.",ev:'1 ok / 5 fail over the last three days.\n"I cannot see \'Video call\' on screen. What I can read: MYTHOS | File Edit View | Window | WhatsApp | VOICE | unavailable | 21:12 ..."'},
-  {c:"sense",n:"wake word",s:"ok",note:"Listens continuously and fires cleanly well above threshold.",ev:"detected at 0.9923 / 0.9881 / 0.9747 / 0.8082 against threshold 0.5, framesToFirstAudio 1"},
-  {c:"sense",n:"OCR hotkey",s:"dark",note:"Ctrl+Alt+X registers on every boot. No log line anywhere shows it ever firing.",ev:'main.log: "OCR-grab hotkey registered: Control+Alt+X" on every boot.\nBUG-268 open; instrumentation added 2026-08-20 16:39 and never exercised.'},
-
-  /* ---- voice ---- */
-  {c:"voice",n:"Gemini Live S2S",s:"ok",note:"The primary spoken path. Held a two-hour session with tool calls throughout.",ev:"VOICE_S2S_ENABLED=true. 367 voice-live actions and 502 conversation turns logged on 08-20 alone."},
-  {c:"voice",n:"TTS chain",s:"warn",note:"Four engines in a failover chain. The first is rate-capped daily, so it usually speaks in the second or third voice.",ev:"chain: gemini,kokoro,edge,piper\ntts.failover from gemini-tts to edge-tts on 429 (free tier limit: 10/day)"},
-  {c:"voice",n:"push-to-talk",s:"ok",note:"Alt+Space registers on every boot.",ev:'main.log: "push-to-talk hotkey registered: Alt+Space"'},
-  {c:"voice",n:"STT / multilingual",s:"warn",note:"Replies in Bengali and Hindi were good. Transcription of the operator was not.",ev:'Bengali speech came back as Korean and Portuguese fragments: "코다", "É. Que tu cobrou, não, Jadavpur"'},
-  {c:"voice",n:"barge-in",s:"warn",note:"Interruption handling shipped and was accepted by ear, but self-interruption doubled in the acceptance run.",ev:"PENDING_HOLD_MS 350 -> 200, Stage 3 accepted by ear 2026-08-20. Decision still open."},
-
-  /* ---- desktop ---- */
-  {c:"desk",n:"list_windows",s:"ok",ok:88,f:1,note:"Window enumeration. The recovery step every other desktop tool points at.",ev:"88 ok / 1 fail"},
-  {c:"desk",n:"launch_app",s:"ok",ok:76,f:13,note:"Opens applications and resolves the real windowed process, not the activation stub.",ev:"14 ok / 0 fail over the last three days"},
-  {c:"desk",n:"focus_window",s:"warn",ok:30,f:6,note:"Five of six failures are stale PIDs it created itself, and it says so precisely. One is a genuine OS refusal.",ev:'"Cannot find a process with the process identifier 18832. That pid no longer exists. Call list_windows again."\n"blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore."'},
-  {c:"desk",n:"ui_type",s:"warn",ok:46,f:15,note:"Types into a window, reads the text back, and correctly reports when it did not land. The reporting is honest; the typing is 75%.",ev:'{"mechanism":"sendinput-unicode","typedIntoPid":29972,"readBack":"mismatch","caretSameApp":true,"focusedProcess":"chrome"}'},
-  {c:"desk",n:"send_key",s:"warn",ok:41,f:14,note:"Some failures are the safety guard working. Others are all four delivery mechanisms exhausted.",ev:'"tried sendinput-vk, wm-key-post, uia-invoke-focused, wm-char-post and the focused control is unchanged."\n"Refusing to press Enter in WhatsApp.Root: nothing has been verifiably typed into it this session."'},
-  {c:"desk",n:"ui_click",s:"warn",ok:5,f:5,note:"The UIA ladder was widened from two rungs to five on 08-20 and has barely been exercised since.",ev:"5 ok / 5 fail all-time. cua_click 8 ok / 2 fail."},
-  {c:"desk",n:"close_window",s:"ok",ok:26,f:1,note:"Closes windows including hosted dialogs after the 08-20 fix.",ev:"26 ok / 1 fail. The one failure names the confirmation prompt holding it open."},
-  {c:"desk",n:"snap_window",s:"ok",ok:14,f:0,note:"Tiling and restore. Never failed.",ev:"14 ok / 0 fail"},
-  {c:"desk",n:"open_folder",s:"warn",ok:13,f:8,note:"Opens folders. Rejects a file path instead of revealing the file - fixed 08-20, not live-verified.",ev:'"That is a file, not a folder: ...capabilities.txt. Use open_artifact for files."\nBUG-283/284 fixed 2026-08-20 21:16 -- NOT live-verified.'},
-  {c:"desk",n:"open a file",s:"fail",note:"There is no working path to launch a specific file. The operator hit this twice in one session.",ev:'"System constraints prevent launching specific files, even with Explorer open."\nLogged as an open incident: File Explorer adapter can open folders but cannot launch a file.'},
-  {c:"desk",n:"list_folder",s:"fail",ok:0,f:2,note:"Directory listing. Failed both times and is withheld from voice.",ev:"0 ok / 2 fail, and withheld from the live tool declaration."},
-  {c:"desk",n:"run_command",s:"fail",ok:0,f:1,note:"Shell execution. Failed with an unrendered object and is withheld from voice.",ev:'0 ok / 1 fail -- error string was literally "[object Object]"'},
-  {c:"desk",n:"file ops",s:"dark",note:"create_folder, move_file, copy_file, rename_file, delete_file, search_files. All present in code, none reachable by voice.",ev:"All six are in the withheld-74 list. create_folder has exactly 1 all-time call."},
-
-  /* ---- web ---- */
-  {c:"web",n:"web_search",s:"warn",ok:117,f:10,note:"Still warn on main, but for a different reason than in this audit. It is no longer 'only Wikipedia': exa-mcp answers again, and a second keyless provider plus an escalating per-provider cooldown are now merged to main. The remaining risk is quota, not deadness - two free tiers of ~150 and ~100 calls a day, both vendor claims since neither endpoint publishes a rate-limit header.",ev:'Measured 2026-08-26 through the shipping module: exa-mcp median 1634ms, you-mcp median 2621ms, 3 of 3 queries each answered. ddg-html is alive again too - 4 of 5 queries in ~1s, and its miss failed in 73ms rather than a 10s timeout - so it is intermittent, not dead as recorded here. Fix is MERGED to main as of 2026-08-26 (PR #26, merge 2c0a4e9). (BUG-361, BUG-365)'},
-  {c:"web",n:"open_web (widget)",s:"warn",ok:131,f:19,note:"Renders search, weather, flight and YouTube cards in the dashboard. Twelve distinct failure strings.",ev:'7 successful YouTube embeds including "CNN News Central 8/20/26".\n"Found results but could not extract a YouTube video ID."\n"open_web requires a type. Use one of: youtube|weather|search|flights|image|web."'},
-  {c:"web",n:"hand-off to browser",s:"warn",note:"It genuinely opens the link in your real browser every time - and then tells you it cannot confirm. The complaint is a missing confirmation, not a broken feature.",ev:'main.log: open-external -> {"opened":true,"reason":null}  x14\nThe "denied external open" line that follows is a second-window guard, not the failure.\nIt lands in Brave (the OS default) when Chrome was asked for.'},
-  {c:"web",n:"browser automation",s:"warn",ok:57,f:13,note:"Chrome DevTools control. Boots to standby every time and only comes up when a debug browser is launched on demand.",ev:'browser-automation.standby: "CDP not connected"  on every boot\n41x "UNAVAILABLE on this machine - browser_navigate (no debuggable browser is attached)"\nbrowser_navigate 2 ok / 0 fail in the final session; browser_launch_debug 15 ok / 1 fail.'},
-  {c:"web",n:"web_fetch",s:"ok",ok:6,f:0,note:"Fetches and reads a page. Small sample, clean, and the SSRF guard was hardened on 08-20.",ev:"6 ok / 0 fail"},
-  {c:"web",n:"CAPTCHA wall",s:"fail",note:"Google serves a CAPTCHA to the automated browser, which ends the run. It correctly refuses to solve it.",ev:'screen text read back: "google.com/sorry/index?continue=..."\nsee_and_click could not find "I am not a robot" and did not pretend to.'},
-
-  /* ---- comms ---- */
-  {c:"comms",n:"gmail_unread",s:"fail",ok:98,f:72,note:"Hard down. The refresh token is expired or revoked. The error message is exemplary; following it reproduces the fault.",ev:"0 ok / 27 fail over the last three days.\n\"invalid_grant: Token has been expired or revoked. This is NOT a network problem and will not recover on its own. Run node scripts/google-auth.js.\"  BUG-291 in flight."},
-  {c:"comms",n:"gmail_send",s:"warn",ok:2,f:1,note:"Blocked behind the same dead token.",ev:"2 ok / 1 fail"},
-  {c:"comms",n:"whatsapp_send",s:"fail",ok:16,f:24,note:"Opens the right chat, then cannot identify the window to type into. The message is not sent, and it says so.",ev:'0 ok / 4 fail over the last three days.\n"WhatsApp opened the chat with mom (+91...), but I could not identify its window, so I cannot type into it safely. The message is NOT sent."'},
-  {c:"comms",n:"whatsapp_contacts",s:"warn",ok:28,f:0,note:"Reads the contact list every time. Near-miss name matching fails.",ev:'28 ok / 0 fail -- but: "Mousumi Paul" is not in my contact list. Known contacts: alex, Moushumi, mom, dad, Mausumi Paul.'},
-  {c:"comms",n:"app_reply",s:"fail",ok:0,f:3,note:"Reply into whatever conversation is on screen. Never succeeded.",ev:'0 ok / 3 fail -- "whatsapp is not open, so there is no conversation to reply to."'},
-  {c:"comms",n:"video call",s:"dark",note:"No tool exists. It said so plainly rather than faking it.",ev:'"Even with context within the app, I still cannot start a video call."  Filed as a proposed goal.'},
-
-  /* ---- media ---- */
-  {c:"media",n:"spotify_play",s:"ok",ok:77,f:5,note:"Plays a named track by driving the desktop app. Once resumed the wrong song and corrected itself when challenged.",ev:'77 ok / 5 fail. "Confirming Come Down by The Kid LAROI is now playing."'},
-  {c:"media",n:"spotify_volume",s:"ok",ok:52,f:1,note:"Per-app volume. Worked first try on request.",ev:"52 ok / 1 fail"},
-  {c:"media",n:"spotify_status",s:"ok",ok:41,f:0,note:"The playback oracle. Never failed.",ev:"41 ok / 0 fail. spotify_play_pause 26 ok / 0 fail."},
-  {c:"media",n:"spotify_search",s:"fail",ok:0,f:2,note:"Failed both times and is withheld from voice anyway.",ev:"0 ok / 2 fail"},
-  {c:"media",n:"system volume",s:"ok",ok:105,f:0,note:"set_volume, get_volume and media_key. Not one failure in 154 calls.",ev:"set_volume 68/0, get_volume 37/0, media_key 49/0, media_status 28/1"},
-  {c:"media",n:"YouTube embed",s:"warn",note:"Plays inside the dashboard when the video ID resolves. It often does not.",ev:'7 successful media-window opens; 54 calls hit the handler with a non-media type.'},
-
-  /* ---- build ---- */
-  {c:"build",n:"build_project",s:"warn",ok:5,f:0,note:"Produces real artifacts - twelve HTML pages, landing pages, a playable Tetris. Both of the last two runs failed acceptance.",ev:'buildFailed: "missing required design element: dark.theme (spec mentions it but not found in deliverable)"\nsecond run: status needs-work with 3 review issues.  Last build activity: 2026-08-15.'},
-  {c:"build",n:"Hermes engine",s:"ok",note:"The only build-content engine, and it is online. No fallback by design - a build with no engine fails loudly.",ev:'hermes-agent.online, mode cli, slots 1'},
-  {c:"build",n:"start_project",s:"ok",ok:13,f:0,note:"Project scaffolding. Never failed, always gated behind a tier-3 confirmation.",ev:"13 ok / 0 fail"},
-  {c:"build",n:"review gate",s:"ok",note:"Reads the deliverable against the spec and refuses it. It caught a page that only went dark via prefers-color-scheme.",ev:'"[review] The page does not default to a dark theme; it only switches via prefers-color-scheme, contrary to the mandatory dark-themed requirement"'},
-  {c:"build",n:"code search",s:"dark",note:"index_project, search_code, revise_project. Zero calls ever, all withheld from voice.",ev:"Never exercised. In the withheld-74 list."},
-  {c:"build",n:"generators",s:"dark",note:"generate_pdf, generate_deck, generate_spreadsheet, generate_image. Zero calls ever, all withheld from voice.",ev:"Never exercised. In the withheld-74 list."},
-  {c:"build",n:"use_skill",s:"warn",ok:5,f:2,note:"Loads a skill playbook on demand. Fails when the named skill is not resolvable on this machine.",ev:'"Skill \'ui-ux-pro-max\' not found. Available skills: taste-frontend, ponytail, karpathy-guidelines, caveman"'},
-
-  /* ---- goals / time (attached to core via cognition) ---- */
-  {c:"cog",n:"goals",s:"ok",ok:118,f:2,note:"Read, create, propose and toggle all work at the data layer. The HUD panel did not reflect a toggle it did not make itself - fixed after the last session, unproven.",ev:"list_goals 60/0, propose_goal 37/1, create_goal 8/0, rest.goals.toggle 13/0\nBUG-290 fixed 2026-08-21 01:00 -- NOT live-verified."},
-  {c:"cog",n:"reminders",s:"warn",ok:49,f:2,note:"Listing is flawless. Adding fails on natural sub-minute phrasing.",ev:'reminder_list 45/0.  reminder_add: "Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM."'},
-  {c:"cog",n:"timer_add",s:"fail",ok:0,f:2,note:"A 30-second timer was rejected, and it then invented a manual count and announced time was up.",ev:'0 ok / 2 fail. Logged as a hallucination on the operator\'s instruction.\nBUG-289 fixed 2026-08-21 00:58 -- NOT live-verified.'},
-
-  /* ---- devices ---- */
-  {c:"dev",n:"pc-child",s:"ok",note:"The PowerShell automation child. Online on every boot; it is the transport under every desktop verb.",ev:'"pc-child online" on every boot'},
-  {c:"dev",n:"cua-driver",s:"warn",note:"INTERMITTENT, newly observed 2026-08-26. Two live boots minutes apart on the same commit: one OFFLINE on a startup handshake that timed out with the child printing nothing at all, the next ONLINE. Not a regression and not healthy either - a startup race nothing reports, because it degrades gracefully so nothing downstream breaks. Undiagnosed.",ev:'Boot A: "cua-driver: OFFLINE (cua-driver startup handshake timed out. The child printed nothing to stderr.)" Boot B, same commit: "cua-driver: ONLINE". Silent stderr is the whole difficulty. Recorded as warn rather than fail because one run is not a mechanism - the first draft of this very node said REGRESSED off boot A alone.'},
-  {c:"dev",n:"phone / Android",s:"warn",note:"FIXED since this audit. adb WAS installed all along - the adapter just looked for it on PATH while the installer put it project-local, and doctor.js resolved it the other way and reported 'No gaps'. The adapter now shares the installer's resolver. No handset is currently attached, so the verbs are reachable but unproven end-to-end.",ev:'Measured 2026-08-26: findInstalledAdb() -> "<repo>\\Android Platform Tools\\platform-tools\\adb.exe", spawn OK, "Android Debug Bridge version 1.0.41". Live manifest: "android-child: ONLINE". "adb devices" returns an empty list - no device plugged in. (BUG-360 (b))'},
-  {c:"dev",n:"Aether mesh",s:"fail",note:"The proxy cannot bind its port and the healer retried it in a loop. The .env says it is disabled; the running app started it anyway.",ev:'"Aether scanner-proxy could not bind 127.0.0.1:4480 for node phone: listen EADDRINUSE"  repeated for hours\nmythos/.env says AETHER_ENABLED=false -- config.json overrides it.'},
-  {c:"dev",n:"MCP bridge",s:"dark",note:"mcp_list_servers, mcp_list_tools, mcp_call_tool. Zero calls in the entire history, all withheld from voice.",ev:"Never exercised. Only mythos/mcp/server.js exists."},
-  {c:"dev",n:"rejected clients",s:"warn",note:"A client is retrying forever against a server correctly refusing it, and 147 identical lines never name which client.",ev:'ws-upgrade-rejected x147, every one carrying the same reason: "bad or missing token".  BUG-292 in flight.'}
-];
+var DATA = JSON.parse(document.getElementById("map-data").textContent);
+var CORE = DATA.core;
+var CLUSTERS = DATA.clusters;
+var NODES = DATA.nodes;
 
 /* ============================================================
    LAYOUT + RENDER
@@ -331,7 +1438,10 @@ var C = {
   ok:  {stroke:"#3ddc97", glow:"rgba(61,220,151,",  label:"verified end to end"},
   warn:{stroke:"#f2b23c", glow:"rgba(242,178,60,",  label:"works, with caveats"},
   fail:{stroke:"#ff5a61", glow:"rgba(255,90,97,",   label:"broken"},
-  dark:{stroke:"#4a5763", glow:"rgba(74,87,99,",    label:"never exercised"}
+  dark:{stroke:"#4a5763", glow:"rgba(74,87,99,",    label:"never exercised"},
+  /* unknown is NOT dark. Dark is a measured zero; unknown is the absence of
+     a measurement, and colouring them alike would launder one into the other. */
+  unknown:{stroke:"#8a7cf0", glow:"rgba(138,124,240,", label:"not yet measured"}
 };
 var ACCENT = "#37e0d0";
 
@@ -344,7 +1454,7 @@ var W = 0, H = 0;
 var nodes = [], edges = [];
 var hover = null, selected = null;
 var t0 = performance.now();
-var filter = {ok:true, warn:true, fail:true, dark:true};
+var filter = {ok:true, warn:true, fail:true, dark:true, unknown:true};
 var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 function build(){
@@ -380,7 +1490,7 @@ function build(){
       var a = hub.a + (frac - 0.5) * spread;
       var d = hub.dist + 118 + (j % 3) * 46;
       var leaf = {
-        id:cid+"-"+j, label:n.n, s:n.s, r:n.s==="dark"?5.5:7, tier:2,
+        id:cid+"-"+j, label:n.n, s:n.s, r:(n.s==="dark"||n.s==="unknown")?5.5:7, tier:2,
         a:a, dist:d,
         data:{cluster:hub.label, name:n.n, status:n.s, ok:n.ok, f:n.f, note:n.note, ev:n.ev}
       };
@@ -391,7 +1501,7 @@ function build(){
 
   edges.forEach(function(e){
     e.parts = [];
-    var count = e.s==="dark" ? 0 : (e.s==="fail" ? 1 : (e.trunk ? 3 : 2));
+    var count = (e.s==="dark"||e.s==="unknown") ? 0 : (e.s==="fail" ? 1 : (e.trunk ? 3 : 2));
     for(var i=0;i<count;i++) e.parts.push(Math.random());
   });
 }
@@ -657,9 +1767,9 @@ cv.addEventListener("wheel", function(e){
 /* ---- legend ---- */
 (function(){
   var host = document.getElementById("legend");
-  var counts = {ok:0,warn:0,fail:0,dark:0};
+  var counts = {ok:0,warn:0,fail:0,dark:0,unknown:0};
   NODES.forEach(function(n){ counts[n.s]++; });
-  ["ok","warn","fail","dark"].forEach(function(s){
+  ["ok","warn","fail","dark","unknown"].forEach(function(s){
     var b = document.createElement("button");
     b.className = "chip s-"+s;
     b.setAttribute("aria-pressed","true");
@@ -674,6 +1784,36 @@ cv.addEventListener("wheel", function(e){
 })();
 
 window.addEventListener("resize", function(){ resize(); });
+/* The header is rendered from the island, so no number in it can be typed
+   by hand. Each vital carries the stamp of WHEN and WHERE it was measured:
+   the suite and tool counts come from the repository and are always current,
+   while the incident backlog can only be read from the live vault, which a
+   worktree and a CI runner cannot see. A vital nobody could measure renders
+   dim with its last known stamp rather than as a confident zero. */
+(function(){
+  var sub = document.getElementById("hdr-sub");
+  var v = DATA.vitals || {};
+  sub.textContent = "generated " + (DATA.generated || "\u2014")
+    + "  /  " + (v.registered ? v.registered.value : "?") + " registered"
+    + "  /  " + (v.voiceReachable ? v.voiceReachable.value : "?") + " reachable by voice"
+    + "  /  " + NODES.length + " nodes";
+  var host = document.getElementById("hdr-vitals");
+  ["tests","fail","untriaged","withheld"].forEach(function(k){
+    var d = v[k]; if(!d) return;
+    var el = document.createElement("div");
+    el.className = "vital " + (d.stale ? "dim" : (d.tone || ""));
+    var n = document.createElement("div"); n.className = "n"; n.textContent = d.value;
+    var l = document.createElement("div"); l.className = "l"; l.textContent = d.label;
+    el.appendChild(n); el.appendChild(l);
+    if(d.measuredAt){
+      var s = document.createElement("div"); s.className = "stamp";
+      s.textContent = (d.stale ? "last read " : "") + d.measuredAt;
+      el.appendChild(s);
+    }
+    host.appendChild(el);
+  });
+})();
+
 build(); place(); resize();
 /* one more measure after first layout, for hosts that report 0 on first paint */
 requestAnimationFrame(function(){ resize(); });

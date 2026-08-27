@@ -128,4 +128,17 @@ if ! node scripts/lint-bug-registry.js; then
   echo "            adjudicate with a reason in scripts/lint-bug-registry.js."
   exit 1
 fi
+
+# The capability map must keep describing the code it claims to describe. This
+# reads only the repository (the registered tool list, live-tools' allowlist and
+# the committed suite numbers) — it does NOT run the suite and does NOT need the
+# operator's live vault, so it costs about a second and is satisfiable on a
+# worktree and on a CI runner. The vault-derived vital is exempt from the check
+# for exactly that reason; see the script's header.
+if ! node scripts/build-capability-map.js --check; then
+  echo "pre-commit: BLOCKED — the capability map disagrees with the code. A tool was added or"
+  echo "            removed and no node covers it, or a node names a tool that no longer exists."
+  echo "            Map the tool to a node, then: node mythos/scripts/build-capability-map.js --write"
+  exit 1
+fi
 exit 0
