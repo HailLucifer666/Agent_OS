@@ -41,6 +41,114 @@ it is committed.
 
 ---
 
+## BUG-383 — a fabricated FACT is not a fabricated ACTION, and nothing was looking at the first kind (✅ REDUCED 2026-08-27, mutation-proven — 6/9 measured, not eliminated)
+
+**Status:** ✅ REDUCED 2026-08-27. 1 file changed, 13 new assertions, 6 mutations
+run and all 6 caught, source restored sha256-identical. Track D-6's `fabrication`
+item (BUG-275's mechanism). **Deliberately not marked FIXED:** the measured catch
+rate is 6 of 9 and the entry says so.
+
+### Root cause — the detector had no category for this shape of lie
+
+Every claim category in `claim-check.js` catches a claim about **what MYTHOS
+did**: "I logged that", "I sent it", "I searched". The recorded fabrication was a
+claim about **what is true in the world**:
+
+> "Claimed *Claude Mythos 5* leads the LiveBench coding board."
+
+There is no "I did X" in that sentence. The file's own header explains that
+first-person prefixes are **mandatory, not optional**, and lists six false
+positives that proves — so no amount of tuning the existing regexes could ever
+have reached this. It needed a new category, not a wider one.
+
+**Fix.** A new `external-fact` category, and the design is the safety property:
+
+- **`re` is null.** The category has *only* the evidence-gated tier, so it can
+  fire **only** when a fact-finding tool (`web_search`, `get_weather`,
+  `screen_look`, `document_search` and 10 more) was attempted in the window and
+  did **not** succeed. Without that gate a pattern this broad would flag ordinary
+  conversation every turn — "the meeting is at four".
+- **A successful lookup BACKS the claim.** This is the F1b lesson already
+  recorded in the `searching` category: a detector that makes the assistant
+  retract a true statement is worse than no detector, because it also trains the
+  operator to distrust correct answers.
+- **Assertion SHAPES, not topics** — a ranking or superlative, a citation, a bare
+  quantity with a unit, or "the current X is Y". Plain narration is not matched,
+  which is the honest limit below.
+
+**The one-tool-one-category invariant was PRESERVED, not weakened.**
+`test/claim-check-categories.test.js` enforces that no tool is claimed by two
+categories, and that invariant is right — it keeps ownership unambiguous for the
+categories that flag an action. This category is cross-cutting: it watches the
+same fact-finding tools `searching` owns, for a completely different claim. So it
+declares them under a new **`gateTools`** field and leaves `tools` empty. Dropping
+`web_search` to satisfy the invariant would have removed the very tool behind the
+recorded incident.
+
+### SCOPE, HONESTLY — the measured rate, asserted as a number
+
+The work order demands it: *"this reduces fabrication, it does not eliminate it,
+and the disposition records the measured catch rate over ≥3 samples."*
+
+```
+labelled fabrications      9
+caught                     6      -> 67%
+knowingly missed           3
+false positives            0      (on the honest-sentence controls)
+```
+
+**6 of 9 is asserted as a literal in the test**, so the number here cannot drift
+from the code. The three misses are **pinned by their own assertion** — plain
+narration with no ranking, quantity or citation shape ("that library was
+deprecated last year", "the meeting moved to Thursday") — specifically so the
+detector can never *look* as though it were complete. Zero false positives matters
+more than the catch rate: this module's header says it favours misses over false
+positives everywhere, because a noisy honesty alarm is one nobody reads.
+
+**Verification.**
+
+```
+node --test test/bug-383-external-fact-fabrication.test.js   13 tests, 13 pass
+node --test test/claim-check-categories.test.js               6 tests,  6 pass
+all claim-check consumers                                  149 tests, 149 pass
+
+mutations: 6 run, 6 caught, source restored sha256-identical:
+  F1 the category is UNGATED (re gets a pattern)      -> 2 fail
+  F2 a successful lookup no longer backs the claim    -> 1 fail
+  F3 web_search dropped from gateTools                -> 6 fail
+  F4 the ranking alternative removed                  -> 3 fail
+  F5 gateTools ignored (falls back to empty tools)    -> 5 fail
+  F6 the shape requirement relaxed to match anything  -> 4 fail
+     (this one is caught by the FALSE-POSITIVE controls, which is the right
+      way round: relaxing the shape is the change that would make the alarm
+      useless, and it is the controls that notice)
+```
+
+Three mutations first reported TARGET ABSENT because their anchors used `\n`
+while `claim-check.js` is CRLF — the harness correctly refusing to score a
+mutation that never applied.
+
+---
+
+### Track D-6's other nine singles, triaged 2026-08-27
+
+Measured before assuming any needed work. **Six were already closed** and the map
+was stale about them; **three genuinely need an operator.**
+
+| node | verdict |
+|---|---|
+| `hand-off to browser` | **already done.** Both of D-6's asks shipped in BUG-273 B2 — `from-dashboard.js:406` returns `confirmedStep: "your default browser was handed <url> and accepted it"`, which is the read-back *and* names the OS default. → `ok` |
+| `reminders` | **already done.** BUG-289 (2026-08-21) added the seconds unit and fractional counts. Newest reminder/timer failure in the vault: **2026-08-20**, the day before. Zero since. → `ok` |
+| `use_skill` | **disposition, as D-6 predicted.** 20 ok / 2 fail, both **2026-07-27**; one is a correct refusal, the other names what *is* resolvable, which is honest by construction. Loader since fixed with multi-root + `MYTHOS_SKILLS_DIR`. → `ok` |
+| `build_project` | **the work order was right.** 5 completed, **5 ok, 0 fail** — the builder has never failed. Both red runs are the ACCEPTANCE verifier declining a deliverable, which is the verifier working. → `ok` |
+| `rejected clients` | **already closed, and the node said "in flight".** BUG-292 (fingerprint) and BUG-298 (the client) both RESOLVED 2026-08-21. It was the **HUD**, not the phone node: 147 rejections over 1289s = one every ~8.8s. → `ok` |
+| `whatsapp_contacts` | **29 ok / 0 fail — never failed.** The never-auto-send-to-a-fuzzy-match property already holds and is deliberate: `levenshtein` produces a `fuzzyNote` handed back for confirmation, and the code contrasts itself with `semantic.forget()`'s pass "which DELETES on a single candidate". → `ok` |
+| `browser automation` | **OPEN, not fixed.** `browser_launch_debug` is sound (15 ok / 1 fail) but nothing auto-launches it. Deliberately not attempted: the wiring spawns a real browser on first use, a live-behaviour change to a T3 surface that needs its own verification sitting. |
+| `cua-driver` | **OPEN, blocked by its own instruction** — "sample ≥5 boots before touching the timeout". The evidence is two boots. Changing the timeout on that would be the exact mistake the work order warns against. |
+| `ui_click` | **OPEN, needs a measured desktop run.** 5 ok / 5 fail over **10 calls**, newest failure 2026-08-01. A 50% rate over 10 samples supports neither "broken" nor "fine"; any code change would be tuning against noise. |
+
+---
+
 ## BUG-382 — five dark nodes, 22 tools, zero recorded calls: a harness that judges on oracles, and three times it accused the product of its own bugs (✅ EXERCISED 2026-08-27)
 
 **Status:** ✅ EXERCISED 2026-08-27. 1 new script, 1 new test file (10

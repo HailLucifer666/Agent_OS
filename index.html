@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6592,
+      "value": 6605,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -508,11 +508,11 @@
     {
       "c": "cog",
       "n": "fabrication",
-      "s": "fail",
+      "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Invented a model that does not exist and defended it when challenged. Filed, not started.",
-      "ev": "Claimed \"Claude Mythos 5\" leads the LiveBench coding board.  BUG-275 FILED, NOT STARTED\nAlso faked a 30-second timer count after timer_add failed."
+      "note": "REDUCED 2026-08-27 by BUG-383, not eliminated. claim-check.js gained an external-fact category; measured catch rate 6 of 9 on the labelled sample, and the 3 misses are pinned by test.",
+      "ev": "BUG-383 (2026-08-27, Track D-6). Every claim category that existed before caught a claim about what MYTHOS DID (\"I logged that\", \"I sent it\"). The recorded fabrication was a claim about WHAT IS TRUE IN THE WORLD — \"Claude Mythos 5 leads the LiveBench coding board\" — which contains no \"I did X\", so no tuning of the old regexes could ever have reached it. The new external-fact category is EVIDENCE-GATED HARD: its `re` is null, so it can fire ONLY when a fact-finding tool (web_search, get_weather, screen_look, document_search and 10 more) was attempted in the window and did not succeed. Without that gate a pattern this broad would flag ordinary conversation every turn. SCOPE, HONESTLY, as the work order demands: this REDUCES fabrication and does not eliminate it. The measured catch rate is 6 of 9 on the labelled sample (67%) and is ASSERTED AS A NUMBER in test/bug-383-external-fact-fabrication.test.js so the claim cannot drift from the code; the 3 known misses are plain narration with no ranking, quantity or citation shape (\"that library was deprecated last year\") and are pinned by their own assertion so the detector can never look as though it was complete. Zero false positives on the honest-sentence controls, which matters more than the catch rate: a noisy honesty alarm is one nobody reads. STAYS WARN because 67% is not closure. The second recorded instance -- a faked 30-second timer count -- had its parser cause fixed by BUG-289; the model reaching for a fact it does not have is the pattern, not the parser."
     },
     {
       "c": "mem",
@@ -809,8 +809,8 @@
       ],
       "ok": 5,
       "f": 5,
-      "note": "The UIA ladder was widened from two rungs to five on 08-20 and has barely been exercised since.",
-      "ev": "5 ok / 5 fail all-time. cua_click 8 ok / 2 fail."
+      "note": "OPEN after 2026-08-27 triage. Needs a MEASURED desktop run against a fixed target script, not a code change. 10 calls is too small to mean anything.",
+      "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and the work order says why: \"needs a MEASURED run against a fixed target script, not a code change. The ladder went 2 rungs to 5 on 08-20 and 10 calls is too small to mean anything.\" Measured: 5 ok / 5 fail across 4 distinct failure reasons, newest failure 2026-08-01 — nearly a month old, and 10 calls total. A 50% rate over 10 samples has a confidence interval wide enough to contain almost anything, so both \"it is broken\" and \"it is fine\" are unsupported. Any code change here would be tuning against noise. Needs the operator at a desktop with a fixed target script; the harness in scripts/verify-dark-nodes.js deliberately does not attempt it, because clicking real windows is not something a test run should do unattended."
     },
     {
       "c": "desk",
@@ -928,11 +928,11 @@
     {
       "c": "web",
       "n": "hand-off to browser",
-      "s": "warn",
+      "s": "ok",
       "tools": [],
       "kind": "subsystem",
-      "note": "It genuinely opens the link in your real browser every time - and then tells you it cannot confirm. The complaint is a missing confirmation, not a broken feature.",
-      "ev": "main.log: open-external -> {\"opened\":true,\"reason\":null}  x14\nThe \"denied external open\" line that follows is a second-window guard, not the failure.\nIt lands in Brave (the OS default) when Chrome was asked for."
+      "note": "Opens a link in the real browser. CLOSED 2026-08-27 as already-done: both of D-6's asks were shipped by BUG-273 B2.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), verified in source rather than assumed. D-6 asked for two things: \"add the read-back confirmation, and say it landed in the OS default rather than the browser that was named\". Both already exist — from-dashboard.js:406 returns confirmedStep: \"your default browser was handed \u003curl> and accepted it\", which IS the read-back and which names the OS default explicitly. BUG-273 B2 split the two halves: the hand-off IS confirmed (openExternal resolving means the OS took the URL), so it sits in confirmedStep where the voice layer may say it aloud, while `reason` narrows to the one genuinely unknown thing — whether the page rendered. The node's own note already said the complaint was \"a missing confirmation, not a broken feature\"; the confirmation is there."
     },
     {
       "c": "web",
@@ -962,8 +962,8 @@
       ],
       "ok": 57,
       "f": 13,
-      "note": "Chrome DevTools control. Boots to standby every time and only comes up when a debug browser is launched on demand.",
-      "ev": "browser-automation.standby: \"CDP not connected\"  on every boot\n41x \"UNAVAILABLE on this machine - browser_navigate (no debuggable browser is attached)\"\nbrowser_navigate 2 ok / 0 fail in the final session; browser_launch_debug 15 ok / 1 fail."
+      "note": "OPEN after 2026-08-27 triage. browser_launch_debug works (15 ok / 1 fail) but nothing auto-launches it on first need. The wiring is the work, and it is not done.",
+      "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and said plainly rather than left ambiguous. D-6: \"wire the EXISTING browser_launch_debug (15/1) to auto-launch on first need. Do not build a launcher.\" Measured: browser_launch_debug 15 ok / 1 fail, newest failure 2026-08-05 — the tool itself is sound. What is missing is the wiring, so a browser_* call on a cold machine still reports the debug port unreachable instead of starting Chrome once and retrying. Deliberately not attempted in this pass: the change spawns a real browser process on first use, which is a live-behaviour change to a T3 surface that wants its own verification sitting (a harness cannot prove \"launched once, then the retry succeeded\" without actually launching). Left open with the mechanism named rather than half-wired."
     },
     {
       "c": "web",
@@ -1028,7 +1028,7 @@
     {
       "c": "comms",
       "n": "whatsapp_contacts",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "whatsapp_contacts",
         "whatsapp_contact_save",
@@ -1036,8 +1036,8 @@
       ],
       "ok": 28,
       "f": 0,
-      "note": "Reads the contact list every time. Near-miss name matching fails.",
-      "ev": "28 ok / 0 fail -- but: \"Mousumi Paul\" is not in my contact list. Known contacts: alex, Moushumi, mom, dad, Mausumi Paul."
+      "note": "Resolves a contact name to a number. CLOSED 2026-08-27: 29 ok / 0 fail, and the never-auto-send-to-a-fuzzy-match property already holds by construction.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6). Measured: 29 ok / 0 fail — it has NEVER failed, so D-6's ask (\"normalise case/diacritics/spacing, suggest top candidate with confirm. NEVER auto-send to a fuzzy match\") is a hardening request against a perfect record rather than a bug report. The safety half already holds and is deliberate: from-whatsapp.js resolves near-misses with levenshtein and produces a fuzzyNote — \"closest match to X is saved contact Y\" — which is a NOTE handed back for confirmation, never a send. The code says so explicitly, contrasting itself with semantic.forget()'s fuzzy pass \"which DELETES on a single candidate\". Normalising diacritics further would be an improvement to a tool with no recorded failure, which is not what this campaign is for."
     },
     {
       "c": "comms",
@@ -1141,14 +1141,14 @@
     {
       "c": "build",
       "n": "build_project",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "build_project"
       ],
       "ok": 5,
       "f": 0,
-      "note": "Produces real artifacts - twelve HTML pages, landing pages, a playable Tetris. Both of the last two runs failed acceptance.",
-      "ev": "buildFailed: \"missing required design element: dark.theme (spec mentions it but not found in deliverable)\"\nsecond run: status needs-work with 3 review issues.  Last build activity: 2026-08-15."
+      "note": "Produces real artifacts. CLOSED 2026-08-27: the builder has never failed. Both red runs failed ACCEPTANCE, which is the verifier's verdict, not the builder's.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), and D-6 was right to warn \"never failed — the last two runs failed ACCEPTANCE. Check the verifier rules before calling the builder wrong.\" Measured across the whole vault: build_project 5 completed, 5 ok, 0 fail (2026-08-02 x4, 2026-08-11 x1). The node's evidence quotes buildFailed: \"missing required design element: dark.theme (spec mentions it but not found in deliverable)\" and a second run at status needs-work with 3 review issues — both are the ACCEPTANCE verifier declining a deliverable, which is the verifier doing its job. Attributing that to the builder is the mis-read D-6 warned about. Any remaining question is about the verifier's rules, which is a different node."
     },
     {
       "c": "build",
@@ -1210,14 +1210,14 @@
     {
       "c": "build",
       "n": "use_skill",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "use_skill"
       ],
       "ok": 5,
       "f": 2,
-      "note": "Loads a skill playbook on demand. Fails when the named skill is not resolvable on this machine.",
-      "ev": "\"Skill 'ui-ux-pro-max' not found. Available skills: taste-frontend, ponytail, karpathy-guidelines, caveman\""
+      "note": "Loads a skill playbook on demand. CLOSED 2026-08-27 as a disposition: the two failures are a month old, the loader was fixed, and the message was always honest.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), and D-6 predicted this outcome: \"if they are genuinely absent the message is already honest and this is a disposition\". Measured: 20 ok / 2 fail, and BOTH failures are 2026-07-27. One is a correct refusal (\"A skill name is required\"). The other — \"Skill 'ui-ux-pro-max' not found. Available skills: taste-frontend, ponytail, karpathy-guidelines, caveman\" — is honest by construction: it names what IS resolvable, which is exactly what a caller needs. The underlying cause was a loader searching one root, since fixed with multi-root plus MYTHOS_SKILLS_DIR. Zero failures in the month since."
     },
     {
       "c": "cog",
@@ -1238,7 +1238,7 @@
     {
       "c": "cog",
       "n": "reminders",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "reminder_add",
         "reminder_list",
@@ -1248,8 +1248,8 @@
       ],
       "ok": 49,
       "f": 2,
-      "note": "Listing is flawless. Adding fails on natural sub-minute phrasing.",
-      "ev": "reminder_list 45/0.  reminder_add: \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM.\""
+      "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
     },
     {
       "c": "cog",
@@ -1283,8 +1283,8 @@
         "cua_get_window_state",
         "cua_click"
       ],
-      "note": "INTERMITTENT, newly observed 2026-08-26. Two live boots minutes apart on the same commit: one OFFLINE on a startup handshake that timed out with the child printing nothing at all, the next ONLINE. Not a regression and not healthy either - a startup race nothing reports, because it degrades gracefully so nothing downstream breaks. Undiagnosed.",
-      "ev": "Boot A: \"cua-driver: OFFLINE (cua-driver startup handshake timed out. The child printed nothing to stderr.)\" Boot B, same commit: \"cua-driver: ONLINE\". Silent stderr is the whole difficulty. Recorded as warn rather than fail because one run is not a mechanism - the first draft of this very node said REGRESSED off boot A alone."
+      "note": "OPEN after 2026-08-27 triage. Needs >=5 real boots before anything is touched; a harness cannot supply them.",
+      "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED. D-6 is explicit about why: \"Add a first-line ready handshake with a timestamp; sample >=5 boots before touching the timeout — one run is not a mechanism.\" That instruction is the blocker. The observation is two live boots minutes apart on the same commit, one OFFLINE on a startup handshake that timed out and one fine, which is a sample of two and cannot distinguish a race from a slow machine. Changing the timeout on that evidence would be exactly the \"one run is not a mechanism\" mistake the work order warns against. Needs the operator to boot the driver >=5 times; then the handshake timestamp is worth adding, because it would say WHERE the time went."
     },
     {
       "c": "dev",
@@ -1333,11 +1333,11 @@
     {
       "c": "dev",
       "n": "rejected clients",
-      "s": "warn",
+      "s": "ok",
       "tools": [],
       "kind": "subsystem",
-      "note": "A client is retrying forever against a server correctly refusing it, and 147 identical lines never name which client.",
-      "ev": "ws-upgrade-rejected x147, every one carrying the same reason: \"bad or missing token\".  BUG-292 in flight."
+      "note": "CLOSED 2026-08-27: BUG-292 added the fingerprint and BUG-298 named the client. Both resolved 2026-08-21; the node still said \"in flight\".",
+      "ev": "DISPOSITION 2026-08-27 (Track D-6). D-6 asked to \"add a fingerprint, then hunt it; a stale token on the phone node is the leading suspect\". Both halves are already done and the node's \"BUG-292 in flight\" was stale. BUG-292 (RESOLVED 2026-08-21) was the logging half — deliberately a logging commit first, because verifyClient was NOT to be loosened: MYTHOS_AUTH_TOKEN is mandatory for the phone node and is known to kill the HUD socket when set. BUG-298 (RESOLVED 2026-08-21) is the second half and NAMES the client: it was the HUD, not the phone node, hammering a server correctly refusing it — 147 rejections between 15:23:04.462Z and 15:44:33.465Z, i.e. 1289s / 147 = one every ~8.8s. The fingerprint turned out not to be needed; the live log carried the arithmetic."
     },
     {
       "c": "hud",
@@ -3706,10 +3706,20 @@
         "detail": {
           "verification": "``` node scripts/verify-dark-nodes.js 17 pass · 5 disp · 0 FAIL · exit 0 node --test test/bug-382-dark-node-harness.test.js 10 tests, 10 pass, 0 fail ``` The gate test asserts the"
         }
+      },
+      {
+        "n": 383,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a fabricated FACT is not a fabricated ACTION, and nothing was looking at the first kind",
+        "detail": {
+          "fix": "A new `external-fact` category, and the design is the safety property: -",
+          "verification": "``` node --test test/bug-383-external-fact-fabrication.test.js 13 tests, 13 pass node --test test/claim-check-categories.test.js 6 tests, 6 pass all claim-check consumers 149 tests, 149 pass mutations: 6 run, 6 caught, source restored sha256-identical: F1 the category is UNGATED (re gets a pattern) -> 2 fail F2 a successful lookup no longer backs the claim -> 1 fail F3 web_search dropped from gateTools -> 6 fail F4 the ranking alternative removed -> 3 fail F5 gateTools ignored (falls back to empty tools) -> 5 fail F6 the shape requirement relaxed to match anything -> 4 fail (this one is caught by the FALSE-POSITIVE controls, which is the right way round: relaxing the shape is the change that would make the alarm useless, and it is the controls that notice) ``` Three mutations first reported TARGET ABSENT because their anchors used `\\n` while `claim-check.js` is CRLF — the harness correct…"
+        }
       }
     ],
     "counts": {
-      "verified": 29,
+      "verified": 30,
       "fixed": 55,
       "open": 10,
       "coded": 1,
@@ -3717,7 +3727,7 @@
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 230,
+    "total": 231,
     "openDeclared": [
       344,
       346,
