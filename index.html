@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6562,
+      "value": 6571,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -472,8 +472,8 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Mistral and Google answer. Cerebras is out of credit and Gemini free tier hits its cap.",
-      "ev": "cerebras chat failed: 402 Payment required to access this resource.  x27\ngemini-tts failed: 429 quota exceeded, limit: 10/day"
+      "note": "Mistral and Google answer. Cerebras is out of credit but is never at a lane head, so a healthy call never pays for it. Warn is the quota caveat, not a defect.",
+      "ev": "MEASURED 2026-08-27 (BUG-380 / Track D-3), and the work order's framing corrected. Claim: \"both are still ranked, so every call pays their timeout\". Actually: cerebras sits at position 2-4 of every lane it appears in and at position 0 of NONE (voice@3 build@4 simple@4 reasoning@2 memory@2 text@2, absent from vision and embed), so its 402 is only reached after earlier rungs fail. The 402 itself is real -- 27 occurrences -- and unfixable without spend. The de-ranking D-3 asks for is ALSO impossible as specified: the registry exposes groqAlive/mistralAlive/openrouterAlive and NO cerebrasAlive, so there is no probe evidence to de-rank on. And it is unnecessary: B1 (2026-08-14) already made a per-attempt timeout feed the cooldown and added per-(provider,model) breakers with x2 backoff, and its own comment records REJECTING a hand re-rank because \"the breaker is self-correcting; the edit is not\". Caveat, named as the no-spend decision requires: google's free tier caps at 10/day and google heads four lanes, so there is a daily cliff onto mistral."
     },
     {
       "c": "cog",
@@ -627,14 +627,14 @@
     {
       "c": "sense",
       "n": "screen_look",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "screen_look"
       ],
-      "ok": 49,
+      "ok": 52,
       "f": 11,
-      "note": "Vision over the screen. Correctly read a debugging session unprompted; times out when the vision lane is slow.",
-      "ev": "\"The vision model did not answer in time, so the screen was not read.\"\n\"Vision providers are offline - cannot describe the screen.\""
+      "note": "Vision over the screen. GREEN WITH CAVEAT: every recorded failure is historical and 26 consecutive calls have succeeded. The caveat is the free-tier daily cap.",
+      "ev": "RE-MEASURED 2026-08-27 (Track D-3) against the live vault: 52 ok / 11 fail, not 49/11 -- and ALL ELEVEN FAILURES FALL BETWEEN 2026-08-06 AND 2026-08-18. Newest failure 2026-08-18T11:38:48; newest success 2026-08-24T20:12:01. Since 2026-08-19 there have been 26 look calls (screen_look + camera_look) across five separate days with 26 ok and 0 fail. Cause of the historical failures and why they stopped: B1 (2026-08-14) fixed two things -- an attempt hitting its own per-attempt timeout now feeds the cooldown decision (it previously matched none of the 429/5xx/network arms), and per-(provider,model) breakers escalate with x2 backoff so an all-day outage is skipped for minutes rather than re-paid every few minutes. The vision lane head is now google/gemini-3.5-flash-lite with NIM demoted to position 3; the 8s-per-look precedent the work order cites was NIM at position 0. Caveat, per the no-spend decision: google free tier caps at 10/day, so a heavy day still falls through to mistral."
     },
     {
       "c": "sense",
@@ -705,8 +705,8 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Four engines in a failover chain. The first is rate-capped daily, so it usually speaks in the second or third voice.",
-      "ev": "chain: gemini,kokoro,edge,piper\ntts.failover from gemini-tts to edge-tts on 429 (free tier limit: 10/day)"
+      "note": "Four engines in a failover chain. Rung 2 (kokoro) has no weights and costs up to 15s once per process. That cost is now REPORTED; whether to install kokoro or drop it is an open operator decision.",
+      "ev": "MEASURED 2026-08-27 (BUG-380 / Track D-3). chain = gemini,kokoro,edge,piper. The existing evidence line already showed the real path: \"tts.failover from gemini-tts to edge-tts on 429 (limit 10/day)\" -- it fails over from gemini and lands on EDGE, skipping kokoro, which means kokoro was probed and declined. doctor.js predicts what that costs, from disk: \"no .onnx weights under models/kokoro -- the first fallback to kokoro will spend up to 15000ms downloading before falling through to edge\". Measured directly: an early draft of the BUG-380 test built the real chain by accident and paid 15,109ms per case, six cases. TWO CORRECTIONS to the work order: the cost is once per PROCESS, not per call (tts.js probes the chain once and keeps a sticky active provider; kokoro-tts.js bounds only the first cold load), so it is 15s of silence on the first daily failover rather than 15s a turn. WHAT WAS FIXED: the reason was discarded twice -- providers/tts.js had a bare catch{return false} and logged only WHICH rung was skipped, and kokoro-tts.js had another bare catch{return false} -- so a load timeout, a bad model id and a corrupt cache were one indistinguishable false and nothing recorded that 15 seconds had gone. tts.unavailable now carries reason and ms. STILL WARN: the 15s is still paid until the operator decides to install the weights or drop the rung from VOICE_TTS_CHAIN -- that is a decision, not a defect, and it is already listed as one of three open operator decisions."
     },
     {
       "c": "voice",
@@ -3677,10 +3677,20 @@
           "fix": "Two new focused modules plus three edits: -",
           "verification": "``` node --test test/bug-379-aether-bind-names-the-holder.test.js before the fix (stub reproducing today's behaviour): 15 tests, 3 pass, 12 fail after the fix : 29 tests, 29 pass, 0 fail node --test test/bug-379-... test/aether-proxy-rebind-playbook.test.js test/file-size-ratchet.test.js 36 tests, 36 pass, 0 fail (includes the existing test my first draft broke) live oracle, the squatter being THIS process so the expected pid is exact: findPortHolder(port).pid === process.pid -> pass heal detail contains \"held by pid \u003cprocess.pid>\" -> pass 4th attempt -> terminal:true, \"...stays OFFLINE...\" -> pass and it stays terminal on the 5th -> pass file-size ratchet: main.js 1369 (ceiling 1373), healer.js 875 (ceiling 876) mutations: 17 run across port-holder.js, aether-rebind.js and bind-failure.js, 17 caught, all three restored sha256-identical. Four survived a first pass and each was a real hol…"
         }
+      },
+      {
+        "n": 380,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a TTS rung that declined said which, never why, so 15 seconds of silence a day was invisible",
+        "detail": {
+          "fix": "`providers/tts.js` — `probe()` returns `{ok, reason, ms}` instead of a boolean, consulting an optional `unavailableReason()` hook and keeping the thrown message when `isAvailable()` throws; `tts.unavailable` now logs `reason` and `ms`. `providers/kokoro-tts.js` — records the decline text (including on the sticky already-failed path, which `loadModel()`'s own `.catch()` can set without `isAvailable()` ever seeing the error) and exposes it. `isAvailable(): boolean` remains every provider's contract; the hook is additive, and a provider that does not implement it still gets its thrown message and its timing. Also added: an optional `providers` injection seam on `createTtsChain`, same reasoning as `routes/config.js`'s injectable `wakewordModelsDir`. Without it a test naming real rungs probes the",
+          "verification": "``` node --test test/bug-380-tts-chain-says-why-a-rung-was-skipped.test.js before the fix : 6 tests, 0 pass, 6 fail after the fix : 9 tests, 9 pass, 0 fail mutations: 7 run across providers/tts.js and providers/kokoro-tts.js, 7 caught, both files restored sha256-identical. Three needed repair on a first pass: T1/T3 the harness reported TARGET ABSENT — the anchors used LF while the sources are CRLF, which is the harness correctly refusing to score a mutation that never applied K1 SURVIVED: every other case uses injected fake rungs, so kokoro's OWN reason was untested, and the first replacement assertion was ALSO vacuous — it matched the string `lastUnavailableReason =`, which survives `lastUnavailableReason = null`, i.e. survives the defect ```"
+        }
       }
     ],
     "counts": {
-      "verified": 27,
+      "verified": 28,
       "fixed": 54,
       "open": 10,
       "coded": 1,
@@ -3688,7 +3698,7 @@
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 227,
+    "total": 228,
     "openDeclared": [
       344,
       346,

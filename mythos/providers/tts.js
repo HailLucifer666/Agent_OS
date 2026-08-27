@@ -83,16 +83,63 @@ function voiceFor(provider, config) {
 // synthesize() returns { audio, mime, provider } rather than a bare Buffer, because
 // the engines emit different containers (edge=MP3, gemini/piper=WAV) and the client
 // needs the mime PER CHUNK to decode it.
-function createTtsChain({ config, logger } = {}) {
-  const chain = parseChain(config);
+// BUG-380: `providers` is an optional injection seam, and it exists for the
+// reason routes/config.js's `wakewordModelsDir` does — a test that has to name
+// real rungs to reach this code ends up probing the REAL kokoro provider, which
+// on a machine with no weights pays LOAD_TIMEOUT_MS. Measured while writing this:
+// 15,109ms per test case. Production passes nothing and still gets parseChain().
+function createTtsChain({ config, logger, providers } = {}) {
+  const chain = Array.isArray(providers) && providers.length ? providers.slice() : parseChain(config);
   const log = logger || { info() {}, warn() {} };
   let active = null;          // resolved provider
   let resolving = null;       // in-flight resolve(), so concurrent turns share one probe
 
   function nameOf(p) { return (p && p.name) || 'unknown'; }
 
+  // BUG-380: WHY A RUNG DECLINED, AND WHAT IT COST TO FIND OUT.
+  //
+  // This was `try { return await provider.isAvailable(); } catch { return false; }`
+  // — a bare catch that made a load timeout, a bad model id and a corrupt cache
+  // one indistinguishable `false`. The caller then logged only WHICH rung was
+  // skipped, so nothing anywhere recorded that fifteen seconds had just gone into
+  // a stalled Hugging Face download. doctor.js can predict that cost from disk
+  // ("the first fallback to kokoro will spend up to 15000ms"); the runtime paid it
+  // and said nothing. Two routes that disagreed, and the silent one was the one
+  // the operator actually hears.
+  //
+  // Returns a record rather than a boolean because the boolean was the bug.
+  // `isAvailable(): boolean` stays every provider's contract — the optional
+  // `unavailableReason()` hook is additive, and a provider that does not
+  // implement it still gets its thrown message and its timing, which is strictly
+  // more than before.
   async function probe(provider) {
-    try { return await provider.isAvailable(); } catch { return false; }
+    const started = Date.now();
+    try {
+      const ok = await provider.isAvailable();
+      if (ok) return { ok: true, ms: Date.now() - started };
+      let reason = null;
+      try {
+        if (typeof provider.unavailableReason === 'function') reason = provider.unavailableReason();
+      } catch (_) {
+        reason = null;   // a reason lookup must never be what fails the probe
+      }
+      return {
+        ok: false,
+        ms: Date.now() - started,
+        reason: (typeof reason === 'string' && reason.trim())
+          ? reason.trim()
+          : nameOf(provider) + ' reported itself unavailable and gave no reason',
+      };
+    } catch (err) {
+      // The message that used to be thrown away. For kokoro this is literally
+      // "kokoro model load timed out after 15000ms", i.e. the whole diagnosis.
+      const text = (err && err.message) || String(err || '');
+      return {
+        ok: false,
+        ms: Date.now() - started,
+        reason: text.trim() || (nameOf(provider) + ' threw a non-Error while probing'),
+      };
+    }
   }
 
   // Pick the first available provider and REMEMBER it.
@@ -101,12 +148,13 @@ function createTtsChain({ config, logger } = {}) {
     if (resolving) return resolving;
     resolving = (async () => {
       for (const p of chain) {
-        if (await probe(p)) {
+        const r = await probe(p);
+        if (r.ok) {
           active = p;
-          log.info('tts.resolved', { provider: nameOf(p), chain: chain.map(nameOf).join(',') });
+          log.info('tts.resolved', { provider: nameOf(p), ms: r.ms, chain: chain.map(nameOf).join(',') });
           return p;
         }
-        log.info('tts.unavailable', { provider: nameOf(p) });
+        log.info('tts.unavailable', { provider: nameOf(p), reason: r.reason, ms: r.ms });
       }
       active = null;
       log.warn('tts.none-available', { chain: chain.map(nameOf).join(',') });

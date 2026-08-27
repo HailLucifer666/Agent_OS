@@ -41,6 +41,129 @@ it is committed.
 
 ---
 
+## BUG-380 — a TTS rung that declined said which, never why, so 15 seconds of silence a day was invisible (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 2 files edited, 9 assertions, 7 mutations run
+and all 7 caught, both files restored sha256-identical. Track D-3. **Two of
+D-3's three nodes turned out to need no code at all** — that measurement is
+half this entry.
+
+### What D-3 claimed, and what the evidence said
+
+| claim | verdict |
+|---|---|
+| "Cerebras returns 402 … both are still ranked, so **every call pays their timeout**" | **FALSE as stated.** Cerebras sits at position 2–4 of every lane it appears in and position 0 of **none** (voice@3 build@4 simple@4 reasoning@2 memory@2 text@2; absent from vision and embed). A healthy call never reaches it. The 402 is real — 27 occurrences — and unfixable without spend. |
+| "**De-rank on probe evidence**" | **Impossible as specified, and unnecessary.** The registry exposes `groqAlive`/`mistralAlive`/`openrouterAlive` and **no `cerebrasAlive`** — there is no probe evidence for cerebras to de-rank on. And B1 (2026-08-14) already made a per-attempt timeout feed the cooldown and added per-(provider,model) breakers with x2 backoff; its own comment records **rejecting** a hand re-rank because "the breaker is self-correcting; the edit is not". |
+| "8s per look burned on a dead provider" | **HISTORICAL, and it stopped.** See `screen_look` below. |
+| "add a per-attempt timeout matching the chain cooldown" | **Already exists** — `CHAIN_ATTEMPT_TIMEOUT_MS`, default 30000, per-call overridable. |
+
+**`screen_look`, re-measured against the live vault: 52 ok / 11 fail, not 49/11 —
+and all eleven failures fall between 2026-08-06 and 2026-08-18.** Newest failure
+`2026-08-18T11:38:48`; newest success `2026-08-24T20:12:01`. **Since 2026-08-19
+there have been 26 look calls across five separate days: 26 ok, 0 fail.** B1's
+two fixes are why. Vision's head is now `google/gemini-3.5-flash-lite` with NIM
+demoted to position 3 — the 8s precedent was NIM at position 0.
+
+### The one live defect, and it is in the voice path
+
+Found by running the repo's own `doctor.js`, which says it in its own words:
+
+```
+gap  Kokoro model (TTS chain rung)  no .onnx weights under models/kokoro — the
+     first fallback to kokoro will spend up to 15000ms downloading before
+     falling through to edge
+     why: kokoro is a member of VOICE_TTS_CHAIN, so its absence is paid for at
+          runtime rather than reported here
+```
+
+`VOICE_TTS_CHAIN` is `gemini,kokoro,edge,piper`. The `TTS chain` node's own
+existing evidence already showed the live path — `tts.failover from gemini-tts to
+**edge-tts** on 429 (limit 10/day)` — landing on edge and therefore *skipping*
+kokoro, i.e. having probed and paid for it. Google's free tier caps at 10/day and
+google heads four lanes, so this failover happens **daily**.
+
+**Two corrections to the framing, from reading the code rather than the ticket:**
+the cost is once per **process**, not per call (`tts.js`: "resolve() probes the
+configured chain ONCE", sticky `active`; `kokoro-tts.js`: LOAD_TIMEOUT_MS "bounds
+only the FIRST probe of a cold load"). So it is 15 seconds of silence on the
+first daily failover, not 15 seconds a turn.
+
+**Mechanism — the reason was discarded twice on the way out:**
+
+```js
+// providers/tts.js
+async function probe(p) { try { return await p.isAvailable(); } catch { return false; } }
+log.info('tts.unavailable', { provider: nameOf(p) });    // which, never why
+
+// providers/kokoro-tts.js
+async function isAvailable() { ... catch { return false; } }   // reason gone again
+```
+
+So a bounded load timeout, a bad model id and a corrupt cache were one
+indistinguishable `false`, and nothing anywhere recorded that fifteen seconds had
+gone into a stalled Hugging Face download. `doctor.js` could predict the cost from
+disk; the runtime paid it and said nothing — **two routes deriving the same fact,
+and the silent one was the one the operator actually hears.**
+
+**Fix.** `providers/tts.js` — `probe()` returns `{ok, reason, ms}` instead of a
+boolean, consulting an optional `unavailableReason()` hook and keeping the thrown
+message when `isAvailable()` throws; `tts.unavailable` now logs `reason` and `ms`.
+`providers/kokoro-tts.js` — records the decline text (including on the sticky
+already-failed path, which `loadModel()`'s own `.catch()` can set without
+`isAvailable()` ever seeing the error) and exposes it. `isAvailable(): boolean`
+remains every provider's contract; the hook is additive, and a provider that does
+not implement it still gets its thrown message and its timing.
+
+Also added: an optional `providers` injection seam on `createTtsChain`, same
+reasoning as `routes/config.js`'s injectable `wakewordModelsDir`. Without it a
+test naming real rungs probes the **real** kokoro provider — measured at
+**15,109 ms per case, six cases**, when an early draft did exactly that. That
+accident is also the live proof the cost is real.
+
+**Attack pass (Stage 3):**
+
+- *Does this hide evidence?* The opposite — it is the entire point. Nothing is
+  overwritten: the provider name still logs, and `reason`/`ms` are added beside it.
+- *Is this a defect or a decision?* Split deliberately. The **invisibility** is a
+  defect and is fixed. **Whether to install kokoro weights or drop the rung** is a
+  decision, already listed as one of three open operator decisions, and is
+  untouched — the node stays `warn` because the 15s is still paid until that call
+  is made. Making the cost legible is what turns it into an informed decision.
+- *What else matches this?* Every other chain rung inherits the same reporting for
+  free, and none of them is worse off than before.
+- *Class:* the same "a failure path that discards its reason" family as the
+  previous two tickets, this time on the most user-visible surface in the product.
+- *Deliberate non-changes:* the chain order, the download policy, and every
+  provider's boolean `isAvailable()` contract.
+
+**Verification.**
+
+```
+node --test test/bug-380-tts-chain-says-why-a-rung-was-skipped.test.js
+  before the fix : 6 tests, 0 pass, 6 fail
+  after  the fix : 9 tests, 9 pass, 0 fail
+
+mutations: 7 run across providers/tts.js and providers/kokoro-tts.js, 7 caught,
+both files restored sha256-identical. Three needed repair on a first pass:
+  T1/T3 the harness reported TARGET ABSENT — the anchors used LF while the
+        sources are CRLF, which is the harness correctly refusing to score a
+        mutation that never applied
+  K1    SURVIVED: every other case uses injected fake rungs, so kokoro's OWN
+        reason was untested, and the first replacement assertion was ALSO
+        vacuous — it matched the string `lastUnavailableReason =`, which
+        survives `lastUnavailableReason = null`, i.e. survives the defect
+```
+
+**What this does NOT close.** The 15s is still paid until the operator installs
+kokoro's weights or drops the rung — a decision, not a defect. Nothing here is
+verified against a booted MYTHOS; the tests drive the real chain code with
+injected rungs, and the 15,109 ms figure comes from an accidental real probe
+rather than a scripted one. `brain lanes` stays `warn`: cerebras's 402 is real and
+needs spend, and google's 10/day cap is a genuine daily cliff — both named as the
+no-spend decision requires.
+
+---
+
 ## BUG-379 — 65 bind failures named the port three times and the squatter zero times, and the retry loop the work order described did not exist (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 2 new modules, 3 files edited, 29 assertions,

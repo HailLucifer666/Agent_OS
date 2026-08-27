@@ -72,15 +72,51 @@ async function loadModel() {
   return modelPromise;
 }
 
+// BUG-380: the text of the last decline, so the chain can say WHY this rung was
+// skipped. `isAvailable()` stays boolean — that is every provider's contract and
+// changing it would touch every caller — and this is an additive optional hook
+// the chain asks for only after a false.
+//
+// It matters most for exactly the state this machine is in: no weights on disk,
+// so the first probe spends up to LOAD_TIMEOUT_MS on a download nobody asked
+// for, and before this the operator got fifteen seconds of silence and a log line
+// that said only "kokoro". doctor.js could already predict the cost from disk;
+// the runtime paid it and reported nothing.
+let lastUnavailableReason = null;
+
+function unavailableReason() {
+  return lastUnavailableReason;
+}
+
 async function isAvailable() {
-  if (modelFailed) return false;
+  // Sticky: still false, but now it says so rather than looking like a fresh
+  // decline every time. loadModel()'s own `.catch()` can set modelFailed without
+  // this function ever seeing the error, so a reason is supplied here too —
+  // otherwise the second and later probes would report "gave no reason" for a
+  // failure whose cause was known on the first.
+  if (modelFailed) {
+    if (!lastUnavailableReason) {
+      lastUnavailableReason = 'a previous kokoro model load failed in this process '
+        + '(sticky; not retried per call) — weights dir: ' + modelCacheDir();
+    }
+    return false;
+  }
   try {
     await withTimeout(loadModel(), LOAD_TIMEOUT_MS);
+    lastUnavailableReason = null;
     return true;
-  } catch {
+  } catch (err) {
     // Either the load itself failed (sticky — modelFailed is now true) or the
     // bound timeout tripped on a slow/stalled download. Report unavailable
     // for THIS probe only; the in-flight load is untouched.
+    //
+    // The message is KEPT now instead of dropped. It distinguishes the three
+    // cases a bare `false` made identical: a bounded timeout on a cold download,
+    // a genuine load failure (bad model id, corrupt cache), and a sticky
+    // already-failed state.
+    const text = (err && err.message) || String(err || '');
+    lastUnavailableReason = (text.trim() || 'kokoro declined to load and gave no reason')
+      + ' (weights dir: ' + modelCacheDir() + ')';
     return false;
   }
 }
@@ -130,6 +166,7 @@ module.exports = {
   name: 'kokoro-tts',
   mime: 'audio/wav',
   isAvailable,
+  unavailableReason,
   listVoices,
   synthesize,
   modelCacheDir,
