@@ -41,6 +41,80 @@ it is committed.
 
 ---
 
+## BUG-376 — the capability-map gate blocked every commit from any checkout without the live vault (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 1 test rewritten, 1 added, mutation-proven.
+Self-inflicted by BUG-370 the day before, and found by running the generator
+on a machine that could actually reach the vault.
+
+**Symptom.** `node scripts/build-capability-map.js --check` exited **1** from a
+worktree with **zero real problems** — `mapping problems: 0`, `stale-vital
+problems: 0`. The pre-commit hook runs that check, so it blocked every commit
+from that checkout regardless of what the commit contained.
+
+**Mechanism.** BUG-370 made the vault-derived `untriaged` vital preserve its
+last reading when the live vault is unreachable, and stamp `stale: true` on it.
+That is honest when the previous value was itself written by a vault-less
+machine — which was true for the first day, so the committed island and every
+local run agreed and nothing showed.
+
+Then a machine WITH the vault wrote a fresh reading (`value: 0, stale: false`).
+From that moment every other checkout wanted to add the flag back:
+
+```
+committed  : {"value":0,...,"measuredAt":"2026-08-27","stale":false}
+would write : {"value":0,...,"measuredAt":"2026-08-27","stale":true,
+               "staleReason":"the live vault is not reachable from this checkout"}
+```
+
+The value, the label and the stamp all matched. Only the annotation differed —
+and the island comparison is a whole-object diff, so `--check` called it stale.
+
+**The hole was in the seam between two of my own guards.** `checkVitals()`
+deliberately exempts the vault vital, precisely so a gate cannot depend on
+having the vault. But the separate `changed` comparison that decides "the
+island is stale — run --write" does NOT use `checkVitals`; it diffs the
+serialised island. One guard exempted the field and the other did not, so the
+exemption was worth nothing. Both were written in the same change, an hour
+apart.
+
+**Fix.** `mythos/scripts/build-capability-map.js`. A machine that cannot
+measure does not get to rewrite the field — not even to annotate it. The
+preserved entry passes through **verbatim**. The value and its `measuredAt`
+stamp are the honest signal on their own: the reader can see how old the
+reading is without a flag, and no checkout can downgrade another checkout's
+measurement. With nothing added, the diff has nothing to disagree about and
+the whole class disappears rather than being special-cased.
+
+**Attack pass (Stage 3):**
+
+- *What else matches this?* Any future vault-derived vital would inherit the
+  same rule by using the same branch. `checkVitals`'s exemption list is the
+  one place that still needs updating by hand if one is added — noted rather
+  than defended, since there is exactly one today.
+- *Does this hide evidence?* It removes an annotation. The `measuredAt` date
+  remains and is the stronger signal — a flag says "someone could not look",
+  a date says how long ago someone could.
+- *Who reads this?* The pre-commit hook on every commit, from every checkout.
+  That is why a gate that can only pass on one desktop is worse than no gate.
+- *Class:* this is the fourth member of the family recorded under BUG-373 —
+  **a gate that measures a different artifact from the one it is judging.**
+  Here the two artifacts were "the fields I said I would check" and "the bytes
+  I actually diffed".
+- *Deliberate non-change:* `--write` still refreshes the vital on a machine
+  that CAN see the vault. Only the vault-less path is passive.
+
+**Verification.**
+
+```
+before: build-capability-map --check -> exit 1 from a vault-less worktree
+after : build-capability-map --check -> exit 0, "the map matches the code. OK."
+node --test test/bug-370-capability-map-generated.test.js  20 tests, 20 pass, 0 fail
+mutation: re-adding `stale: true` -> caught by both new assertions by name;
+          script restored sha256-identical
+```
+
+---
 ## BUG-375 — a withheld phone tool blamed a missing handset when adb itself was unreachable (✅ FIXED 2026-08-27)
 
 **Status:** ✅ FIXED 2026-08-27. 9 regression tests, 6 mutations, none survived.
