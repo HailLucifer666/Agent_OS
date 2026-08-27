@@ -527,6 +527,240 @@ deadline; that is a property of the machine under load, not a defect, and the
 fix makes the outcome identical either way instead of pretending the race is
 gone.
 
+## BUG-372 — `doctor.js` read the kokoro VOICE ID and called it a model, so a dead TTS rung reported "No gaps" (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27 — the REPORT half. Whether kokoro should be
+installed or dropped from the default chain is an operator decision and is
+untouched. 6 regression tests, 6 mutations, none survived.
+
+**NUMBERING NOTE, because the audit plan is misleading here.** The 2026-08-26
+plan files this defect under "BUG-240 — the kokoro TTS rung is dead". BUG-240 is
+already taken by a different, **fixed** defect: `@huggingface/transformers`
+being unreachable from `app.asar` through ESM `import()`, closed 2026-08-15.
+Same engine, different mechanism, different file, different fix. Reusing 240
+would have created a third real collision in BUGS.md, so this took a new number (372 — see the collision note below).
+Anyone reading the plan's BUG-240 reference should read this entry instead.
+
+**And it is 372, not 371, by 42 seconds — `--next` IS NOT A LOCK.** A concurrent
+session took the number 371 for an unrelated defect (the pre-commit hook naming a
+failing test file and discarding its assertion text), committing at 13:09:56;
+this work landed at 13:10:38. `lint-bug-registry.js --next` had answered **371 to
+both of us, and it was right both times**. Earlier commit wins, so this renumbered.
+
+**THE WINDOW IS BETWEEN ASKING AND WRITING**, which is narrower than it first
+looks and rules out the obvious fixes. It is not a fetch problem: for most of the
+window the number existed only in the other session's intent, on no ref anywhere.
+And it is not a reading-uncommitted-work problem — `--next` ALREADY reads
+uncommitted working-tree headings. Measured both directions 2026-08-27: appending
+an uncommitted `## BUG-390` heading moved `--next` from 373 to 391, and removing it
+moved it back. An entry claiming that as the gap would send the next person to
+build something that already exists, which is why it is recorded here as measured
+rather than as reasoned.
+
+**The real gap is that the gate's duplicate check has never been cross-branch.**
+It compares declarations within ONE working tree, so two branches can each hold a
+perfectly clean registry while their union is broken — which is exactly what
+happened, and why nothing failed until a human noticed. The gate did not
+malfunction; its scope simply stopped at the tree, and nothing said so. Verified
+feasible by the other session: `git show <ref>:BUGS.md` across every local
+and remote ref, parsing `^## BUG-(\d+)`, resolves today and correctly reports that
+this branch declares 368 while another tree does not; four refs carry no BUGS.md
+and need a try/catch. Not built here — it is that script's owner's call, and a new
+gate feature is a scope change rather than a loose end.
+
+Renumbered by AMENDING rather than by a follow-up commit, deliberately: the linter
+counts numbers cited in commit MESSAGES as in use, so a follow-up would have left
+371 permanently claimed by two unrelated defects — which is precisely what BUG-280
+and BUG-360 already are, and what the paragraph above claims this entry avoided.
+
+**Symptom.** `node scripts/doctor.js` ended with *"No gaps. Every tracked key,
+model and binary is present."* on a machine where `mythos/models/` contains only
+`piper` and `whisper`, while `VOICE_TTS_CHAIN` was
+`gemini,kokoro,edge,piper`.
+
+**Mechanism.** The voice section printed the kokoro **voice id** (`af_heart`) and
+nothing ever asked about the kokoro **model**. A voice id is a string in `.env`:
+it is present whether or not any weights exist, so it can never be a gap.
+Reading it as evidence of an installed engine is the same half-truth that made
+this report print `OK  Android platform-tools (adb)` and "No gaps" through the
+whole of BUG-360 while all 14 `phone_*` tools were dead.
+
+**THE COST IS NOT ZERO, and the plan got this wrong.** The plan says "Rung 2
+resolves unavailable on every fallback", which reads as free. It is not.
+`isAvailable()` calls `KokoroTTS.from_pretrained()`, so **the probe IS the
+download**: on a cold machine the first fallback to rung 2 races an ~80MB+
+HuggingFace fetch against `LOAD_TIMEOUT_MS` (15s) before falling through to
+edge. Measured 2026-08-27 against a deliberately bogus model id, so nothing
+large was fetched: the probe took **4,066ms** to fail — a live network
+round-trip — and the result is sticky for the process (second call 0ms). So a
+missing kokoro model costs up to 15s of silence on the first fallback of each
+process, once, and is free thereafter.
+
+Also measured, and it removes the plan's assumed cause: `kokoro-js` and
+`@huggingface/transformers` **are** installed and declared in `package.json`.
+The rung is not dead for want of a dependency. `models/kokoro` is a download
+cache, not a shipped asset.
+
+**Fix.** A `kokoro` row in `assetChecks()` that is a gap only when kokoro is
+actually in the chain — a machine that has dropped the rung has nothing wrong
+with it, and a report that is red for an expected reason is a report people stop
+reading. Three things about it are deliberate:
+
+- **It asks the provider where to look.** `providers/kokoro-tts.js` now exports
+  `modelCacheDir(env)`, the one place that decision is made, and doctor calls
+  it. Recomputing the path in doctor would be BUG-360 with a different noun:
+  green about a directory nothing loads from. Pinned by test — the mutation that
+  hardcodes the path in doctor is caught by name.
+- **It searches for weights, not for a directory.** `@huggingface/transformers`
+  writes to `<cacheDir>/models--<org>--<repo>/…`, so a top-level listing misses a
+  complete model, and a bare `existsSync()` goes green on an **aborted** download
+  — precisely the state a 15s probe timeout leaves behind. Both directions are
+  pinned.
+- **It does NOT route through `src/core/setup/model-paths.js`**, though that is
+  the shared model resolver and wakeword/`piper-child` use it. It searches extra
+  roots, so adopting it would change which weights the provider LOADS — a
+  behaviour change to a live voice path, which is a different decision from
+  making the report honest. Recorded as a choice rather than left as an oversight.
+
+The hint names two remedies that both work (drop the rung, or let the first
+fallback populate the cache) and names no script. BUG-360's hint pointed at an
+`--install` that unpacked into an already-populated directory while the runtime
+resolved elsewhere, so following it looped forever; a test now fails if this hint
+names a `scripts/*.js` that does not exist.
+
+**What this does NOT fix.** kokoro still resolves unavailable on this machine,
+and the first fallback still pays for it. `doctor.js` reports that honestly now;
+it does not change it. The wider question the plan raised — every capability
+doctor reports resolving through the same helper the runtime consumer uses — is
+enforced here for kokoro and for adb, and is **not** enforced globally.
+
+**Files:** `mythos/scripts/doctor.js` (575 → 658),
+`mythos/providers/kokoro-tts.js` (114 → 137).
+**Test:** `mythos/test/bug-372-doctor-kokoro-model.test.js` (6 tests).
+
+---
+
+## BUG-368 — `index_project` indexed a Python virtualenv instead of MYTHOS, and reported success (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27. Shares BUG-362's root cause and its test file; 13 tests, 10 mutations, none survived.
+
+Found while fixing BUG-362, by checking the sibling tool before inventing a
+skip-list policy — the house-convention question turned out to be the bug.
+
+**Measured on the MAIN CHECKOUT** (the location matters — see the worktree note
+in BUG-362), walking `mythos/`:
+
+| | before | after |
+|---|---|---|
+| files indexed | 2,000 (cap hit) | 1,381 (complete) |
+| `truncated` | true | **false** |
+| from `.venv` | **1,879 (94%)** | 0 |
+| from `src/` | **0** | 202 |
+| from `test/` | **0** | 660 |
+| `from-pc.js` indexed | **no** | yes |
+
+So `search_code` over this project was searching a Python virtualenv and had
+indexed **none** of MYTHOS's own source. It reported `ok: true` throughout.
+
+**Mechanism.** `from-code-search.js` had a `SKIP_DIRS` list and `search_files`
+had none — two sibling file walkers, two sets of rules, neither aware of the
+other. `.venv` was on neither. `from-code-search`'s budget is 2,000 **matched
+files** and `mythos/.venv/Lib/site-packages` is full of `.py`, which `CODE_EXT`
+accepts, so the virtualenv filled the budget before the walk reached `src/`.
+
+**Fix.** The list moved to `src/core/effectors/file-walk.js` and both walkers
+share it; `.venv`, `venv` and `__pycache__` were added. `env` was deliberately
+NOT added — unlike the others it is a plausible name for a real source
+directory, and a skip-list that swallows project content fails in the direction
+nobody checks.
+
+**Correction to my own first measurement.** I initially reported "8 files from
+`src/`". That was wrong: the counter tested for `\src\` while relative paths
+*begin* with `src\`, so the 8 were `.venv` paths containing a `src` component.
+The true before-figure is **zero**.
+
+**What this does NOT fix.** `index_project` still reports success on a
+2,000-file truncation without saying what it dropped — it asks "did indexing
+complete", never "did it index the right thing". That is the same
+delivery-versus-correctness shape as BUG-362 and is not addressed here.
+
+---
+
+## BUG-362 — `search_files` spent its whole scan budget inside dependency trees and reported "found nothing" instead of "gave up" (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27. 13 regression tests, 10 mutations, none survived.
+
+**THE REMEDY THIS TICKET PROPOSED DOES NOT WORK**, which is the most useful
+thing in this entry. The original diagnosis suggested skipping
+`node_modules`/`.git` "the way any file search is expected to". Measured against
+the real effector on the main checkout:
+
+| pattern | depth-first (before) | + skip node_modules/.git | breadth-first |
+|---|---|---|---|
+| `package.json` | 0 | **0** | 50 |
+| `ROADMAP.md` | 0 | **0** | 1 |
+| `from-pc.js` | 0 | **0** | 1 |
+| `doctor.js` | 0 | **0** | 1 |
+| `lanes.default.js` | 0 | **0** | 1 |
+
+The skip-list changes nothing, because `.venv` is 5,202 entries within depth 6
+and exhausts the 5,000-entry budget on its own, before `node_modules` is
+reached. The ticket also understated the blast radius: it reported
+`package.json`, but **every** file in the project returned zero.
+
+**BREADTH-FIRST IS THE CORRECTNESS MECHANISM; THE SKIP-LIST IS AN
+OPTIMISATION.** Confusing the two is how this comes back. Breadth-first tests
+every entry at the current depth before ANY recursion, so a shallow match cannot
+be starved by a deep sibling whatever that sibling is called — a property, not a
+list anyone has to keep current. The skip-list only improves result *quality*
+(`package.json` goes from 50 dependency hits to 1). Both are stated as such in
+`file-walk.js`, so nobody adds a directory believing it fixes a starvation bug.
+
+**Honest truncation.** `entries: [], truncated: true, ok: true` said nothing was
+found AND that the search stopped early, and was indistinguishable from an
+honest miss. A walk that gave up having found nothing now returns `ok: false`
+naming the budget and the recovery. An honest miss still returns `ok: true`
+with `truncated: false`, and the two are pinned apart by test. This is the same
+remedy shape as BUG-365's `authoritative:false`: you cannot strengthen a
+delivery check into a correctness check — carry the uncertainty where the caller
+can see it.
+
+**NONE OF THIS REPRODUCES IN A GIT WORKTREE, and a fix verified there is not
+verified.** `setup-worktree.js` links `.venv` as a junction, and a Dirent for a
+junction reports `isDirectory() === false` — so a worktree charges ONE entry for
+it and never recurses. The budget survives, both bugs vanish, and a fix passes
+for a reason unrelated to the fix. Every figure above is main-checkout, and the
+regression tests build their own fixture tree rather than walking this repo, so
+they cannot inherit the answer from whichever checkout runs them.
+
+**A sandbox question asked and answered NO.** `from-code-search.js` skips
+symlinks explicitly and `search_files` never did, so the obvious worry was a
+junction planted inside an allowed root walking out of it. Probed with a real
+junction: **contained**, before the fix as well as after. The reason is
+incidental — a Dirent reports `isDirectory() === false` for a junction, so it is
+never descended into. Nothing said "do not follow links"; it merely happened.
+Changing `entry.isDirectory()` to `statSync(full).isDirectory()` reads like a
+robustness improvement and would open a real escape, so the containment is now
+pinned by a junction test and a comment instead of resting on an accident.
+
+**A mutation "survived" and it was the harness, not the tests.** The first
+attempt to mutate breadth-first back to depth-first swapped `next.push` for
+`frontier.push` — which on an index-walked array is still a queue, so it
+preserved breadth-first order and proved nothing. Re-run as a true immediate
+recursion, it is caught by three tests. A SURVIVED result is a claim about your
+harness before it is a claim about your tests.
+
+**What this does NOT fix.** A search whose *matches* legitimately exceed 50 is
+still truncated with `ok: true`; shallowest-first ordering makes that far more
+useful than it was, but it is a cap, not an answer. And `search_files` still
+cannot report WHICH subtree it gave up in, only that it did.
+
+**Files:** `mythos/src/core/effectors/file-walk.js` (new),
+`from-computer.js` (997 → 992), `from-code-search.js`.
+**Test:** `mythos/test/bug-362-search-files-starved-by-deps.test.js` (13 tests).
+
+---
+
 ## BUG-353 — the implicit ui_type/ui_click target was process-wide and never expired, so an app MYTHOS opened for its own reasons silently became the thing you dictated into (✅ FIXED 2026-08-27)
 
 **Status:** ✅ FIXED 2026-08-27. 17 regression tests, 17 mutations run, none survived.
@@ -1059,39 +1293,6 @@ delta (4.2s → 2.2s) is the part this fix owns.
 Tests: `test/provider-cooldown.test.js` (10), `test/bug-361-search-stops-paying-
 for-dead-providers.test.js` (7). Both mutation-proved — 3 mutations each, every
 one caught by the intended assertion.
-
-## BUG-362 — `search_files` spends its whole scan budget inside `node_modules` and reports "found nothing" instead of "gave up" (🔍 DIAGNOSED 2026-08-26, NOT fixed)
-
-Found by the new packaged-app sweep (`scripts/verify-packaged.js`), which is the first harness
-able to invoke a named tool against a running MYTHOS — so this is also evidence the sweep works.
-
-**The symptom.** Against the real server, `search_files {root:'.', pattern:'package.json'}` returns
-`{entries: [], truncated: true}` — zero results, from a directory that plainly contains
-`package.json`. The same call with `pattern:'*.json'` returns files normally. Zero results *and*
-`truncated: true` together are incoherent: nothing was found, yet the search claims it stopped early.
-
-**The mechanism**, from `src/core/effectors/from-computer.js:556`. `walk()` is DEPTH-FIRST and
-charges every examined entry against one global `MAX_SEARCH_SCAN = 5000` budget. For each entry in
-a directory it tests the name, and if that entry is a directory it recurses **immediately** —
-fully — before moving to the next sibling. So in `mythos/` the walk descends into the early
-subdirectories, `node_modules` among them, and a tree with hundreds of thousands of entries
-exhausts a 5,000-entry budget long before the loop ever reaches `package.json` in the root
-listing. The root's own file is never tested at all. `*.json` only succeeded by luck: it matched
-`issue.json` early, while the budget still had room.
-
-**Why it matters more than it looks.** The failure is silent and directional — it hides SHALLOW
-matches, which are the ones a person searching a project root actually wants, while returning
-whatever happened to be found deep in a dependency tree. And it surfaces as `ok: true`, so every
-caller reads it as an authoritative empty result. `truncated` is the only tell, and nothing in the
-tool's own description tells a reader to check it.
-
-**Not fixed here** — unrelated to the adb work this branch carries. Two directions when someone
-takes it: walk breadth-first so every entry at the current depth is tested before any recursion
-(shallow matches then cannot be starved by a deep sibling), and/or skip `node_modules`/`.git` the
-way any file search is expected to. Either way `truncated: true` with zero entries should not be
-reported as a plain success.
-
----
 
 ## BUG-360 (b) — adb resolution. adb was installed in two places and resolved from neither, so all 14 `phone_*` tools were withheld from the model as if they did not exist (✅ FIXED 2026-08-26, live-verified)
 

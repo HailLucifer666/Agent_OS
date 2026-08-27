@@ -205,3 +205,4 @@ nodes/.kotlin/
 # package.json host that keeps npm from installing it into the repo root.
 # Pulled on demand, never committed.
 /open-websearch/
+mythos/.tmp-file-walk-test/
