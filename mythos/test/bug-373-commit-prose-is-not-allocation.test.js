@@ -76,6 +76,42 @@ describe('BUG-373 — prose in a commit message is not an allocation', () => {
     assert.strictEqual(report.nextFree, 372);
   });
 
+  test('the generated register quotes bug numbers without allocating them', () => {
+    // Sixth firing of this class, 2026-08-27. `index.html` is the generated
+    // ticket register: it QUOTES entries out of BUGS.md, so every number it
+    // displays was counted as a fresh allocation in code. The register of the
+    // backlog was raising the backlog count by existing — adding the
+    // ticket-detail panel took undeclared 130 -> 137 with no work filed.
+    //
+    // It is documentation by the same test markdown passes: a view OF the
+    // registry, not a consumer of it.
+    const report = lint.buildReport({
+      declaredTimes: new Map(),
+      mentionedInBugs: new Set(),
+      inCommits: new Map(),
+      inCommitsHead: new Map(),
+      inSource: new Map([[402, new Set(['index.html'])]]),
+    });
+    assert.deepStrictEqual(report.undeclared, [],
+      'a number displayed by the generated register is being shown, not claimed');
+    assert.strictEqual(report.max, 402,
+      'but it still raises the maximum — the safe direction, same as markdown');
+  });
+
+  test('a number in some OTHER html file does still count as code', () => {
+    // The exemption is for the one generated register, not for HTML in general.
+    // A hand-written page citing a bug number is using it like any other source.
+    const report = lint.buildReport({
+      declaredTimes: new Map(),
+      mentionedInBugs: new Set(),
+      inCommits: new Map(),
+      inCommitsHead: new Map(),
+      inSource: new Map([[403, new Set(['mythos/ui/public/dashboard.html'])]]),
+    });
+    assert.deepStrictEqual(report.undeclared, [403],
+      'widening this to every .html would quietly stop the gate seeing a whole file type');
+  });
+
   test('a number used in CODE with no entry still blocks — that is the real backlog', () => {
     const report = lint.buildReport({
       declaredTimes: new Map(),

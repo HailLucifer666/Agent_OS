@@ -274,7 +274,19 @@ function buildReport(sources) {
   // where it gets discussed. Note the asymmetry, which is deliberate: markdown
   // still counts toward the MAXIMUM, because over-reporting the maximum can
   // only make the next free number larger, and that is the safe direction.
-  const isDoc = (file) => /\.mdx?$/i.test(file);
+  // `index.html` joined the documentation side on 2026-08-27, and the reason is
+  // worth stating because the alternative is circular. That file is the
+  // generated ticket register: it QUOTES entries out of BUGS.md, so every bug
+  // number it displays was being counted as a fresh allocation in code. The
+  // register of the backlog was raising the backlog count, by existing. Adding
+  // the ticket-detail panel took the undeclared count 130 -> 137 with no new
+  // work filed at all.
+  //
+  // It is documentation by the same test markdown passes: it is a view OF the
+  // registry, not a consumer of it. Numbers there are discussed, never claimed.
+  // Sixth time this class has fired — the fix belongs at the rule, and this is
+  // the rule.
+  const isDoc = (file) => /\.mdx?$/i.test(file) || /(^|\/)index\.html$/i.test(file.replace(/\\/g, '/'));
   const codeFilesFor = (n) => [...(src.inSource.get(n) || [])]
     .map((f) => f.replace(/\\/g, '/'))
     .filter((f) => !isDoc(f));

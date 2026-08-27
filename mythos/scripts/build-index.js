@@ -88,6 +88,59 @@ function blockAt(text, at) {
 
 const clean = (s) => String(s || '').replace(/^[\s—:-]+/, '').trim();
 
+/**
+ * Pull the structured half of an entry out so a reader can open a ticket and
+ * see what it IS, without opening a 1 MB markdown file.
+ *
+ * The labels are measured, not invented. Across BUGS.md: symptom 64, status 55,
+ * root cause 38, severity 36, fix 34, regression test 21, verification 15,
+ * mechanism 9. 185 of 219 entries carry at least one, and the 34 that carry
+ * none fall back to a plain excerpt rather than rendering blank.
+ *
+ * Every section is CAPPED. The median entry is 2.3 KB but the largest is 141 KB;
+ * embedding whole bodies would push a 123 KB page past 1 MB and make the file
+ * hostile to open. A capped excerpt with a pointer to the real entry is the
+ * honest trade — this view is for triage, BUGS.md remains the source.
+ */
+const SECTION_MAP = [
+  ['symptom', ['symptom', 'complaint', 'what was measured wrong', 'how it bit']],
+  ['cause', ['root cause', 'mechanism', 'cause', 'why this happened']],
+  ['fix', ['fix', 'the fix', 'fix applied', 'fix needed', 'what shipped']],
+  ['verification', ['verification', 'regression test', 'tests', 'test', 'verification note']],
+  ['limits', ['what this does not fix', 'not closed by this', 'deliberate non-change',
+    'deliberate non-changes', 'not done', 'residual']],
+  ['files', ['files']],
+];
+const SECTION_CAP = 900;
+
+function sections(body) {
+  // Index every bold label with its offset, then slice each to the next one.
+  const marks = [...body.matchAll(/\*\*([^*\n]{2,60}?)[.:]?\*\*/g)]
+    .map((m) => ({ label: m[1].trim().toLowerCase(), at: m.index, len: m[0].length }));
+  const out = {};
+  marks.forEach((m, i) => {
+    const key = SECTION_MAP.find(([, names]) => names.includes(m.label));
+    if (!key) return;
+    if (out[key[0]]) return; // first occurrence wins
+    const end = i + 1 < marks.length ? marks[i + 1].at : body.length;
+    const text = body.slice(m.at + m.len, end).replace(/\s+/g, ' ').replace(/^[\s—:-]+/, '').trim();
+    if (text) out[key[0]] = text.length > SECTION_CAP ? text.slice(0, SECTION_CAP).trim() + '…' : text;
+  });
+  return out;
+}
+
+function excerpt(body) {
+  // Fallback for the 34 entries with no recognised section: the prose after the
+  // heading, capped. Better than an empty panel, and it says where to read more.
+  const afterHeading = body
+    .replace(/^#{1,6}[^\n\r]*\r?\n/, '')          // drop a heading line
+    .replace(/^[-*]\s*BUG-\d+\s*[-—:]?\s*/, '');  // drop a bullet's own id prefix
+  // The panel already shows BUG-nnn as the title; repeating it in the body is
+  // noise on exactly the entries that have the least to show.
+  const t = afterHeading.replace(/\s+/g, ' ').trim();
+  return t.length > SECTION_CAP ? t.slice(0, SECTION_CAP).trim() + '…' : t;
+}
+
 function classify(bug, openSet) {
   const t = bug.body.replace(/\s+/g, ' ');
   const h = bug.head;
@@ -140,14 +193,21 @@ function buildRegister(deps = {}) {
   if (!section) throw new Error('build-index: BUGS.md has no "## OPEN WORK filed" section — '
     + 'refusing to publish a register whose open set would be empty by accident.');
 
-  const bugs = parseBugs(text).map((b) => ({
-    n: b.n,
-    shape: b.shape,
-    state: classify(b, openSet),
-    title: b.shape === 'entry'
-      ? b.head.replace(/\s*\((?:✅|🔧|🔍)[^)]*\)\s*$/, '').trim()
-      : clean(b.body.split(/\r?\n/)[0].replace(/^[-*]\s*BUG-\d+\s*[-—:]?\s*/, '')),
-  }));
+  const bugs = parseBugs(text).map((b) => {
+    const sec = sections(b.body);
+    const row = {
+      n: b.n,
+      shape: b.shape,
+      state: classify(b, openSet),
+      title: b.shape === 'entry'
+        ? b.head.replace(/\s*\((?:✅|🔧|🔍)[^)]*\)\s*$/, '').trim()
+        : clean(b.body.split(/\r?\n/)[0].replace(/^[-*]\s*BUG-\d+\s*[-—:]?\s*/, '')),
+      detail: sec,
+    };
+    // An entry with no recognised section still opens to something readable.
+    if (!Object.keys(sec).length) row.excerpt = excerpt(b.body);
+    return row;
+  });
 
   const counts = {};
   for (const s of STATES) counts[s] = bugs.filter((b) => b.state === s).length;
