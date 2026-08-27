@@ -32,7 +32,7 @@ const build = require('../scripts/build-capability-map.js');
 const sync = require('../scripts/sync-test-count.js');
 const liveTools = require('../src/core/voice/live-tools.js');
 
-const MAP = path.join(__dirname, '..', '..', 'MYTHOS-CAPABILITY-MAP.html');
+const MAP = path.join(__dirname, '..', '..', 'index.html');
 
 const FACTS = { repo: { registered: ['alpha', 'beta'] } };
 const island = (nodes, clusters = [{ id: 'x', name: 'X' }]) => ({ clusters, nodes });

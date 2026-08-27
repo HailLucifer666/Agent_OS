@@ -177,6 +177,16 @@ fi
 # operator's live vault, so it costs about a second and is satisfiable on a
 # worktree and on a CI runner. The vault-derived vital is exempt from the check
 # for exactly that reason; see the script's header.
+# The ticket register in the same file, generated from BUGS.md. Separate gate
+# from the map above because a different generator owns it: the map owns nodes
+# and vitals, this owns the register. Both splice their own key into one island
+# and preserve the rest, so the order they run in does not matter.
+if ! node scripts/build-index.js --check; then
+  echo "pre-commit: BLOCKED — the ticket register in index.html disagrees with BUGS.md."
+  echo "            Run: node mythos/scripts/build-index.js --write"
+  exit 1
+fi
+
 if ! node scripts/build-capability-map.js --check; then
   echo "pre-commit: BLOCKED — the capability map disagrees with the code. A tool was added or"
   echo "            removed and no node covers it, or a node names a tool that no longer exists."
