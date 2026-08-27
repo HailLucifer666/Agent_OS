@@ -339,11 +339,11 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-08-27",
+  "generated": "2026-08-28",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6605,
+      "value": 6635,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -361,28 +361,28 @@
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-08-27"
+      "measuredAt": "2026-08-28"
     },
     "registered": {
       "value": 179,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-08-27"
+      "measuredAt": "2026-08-28"
     },
     "voiceReachable": {
       "value": 115,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-08-27"
+      "measuredAt": "2026-08-28"
     },
     "untriaged": {
       "value": 0,
       "label": "untriaged incidents",
       "tone": "ok",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-08-27",
+      "measuredAt": "2026-08-28",
       "stale": false
     }
   },
@@ -461,8 +461,8 @@
       "tools": [
         "think_deeply"
       ],
-      "ok": 49,
-      "f": 2,
+      "ok": 66,
+      "f": 7,
       "note": "Deep reasoning. Both 'failures' are the new rate-limit refusing correctly after it was reached ten times in one conversation.",
       "ev": "\"Deep reasoning was used 8s ago and is rate-limited for another 53s. Nothing is wrong. Answer this yourself now.\"  (BUG-287, shipped 2026-08-20 23:27, observed working in the final session)"
     },
@@ -473,7 +473,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Mistral and Google answer. Cerebras is out of credit but is never at a lane head, so a healthy call never pays for it. Warn is the quota caveat, not a defect.",
-      "ev": "MEASURED 2026-08-27 (BUG-380 / Track D-3), and the work order's framing corrected. Claim: \"both are still ranked, so every call pays their timeout\". Actually: cerebras sits at position 2-4 of every lane it appears in and at position 0 of NONE (voice@3 build@4 simple@4 reasoning@2 memory@2 text@2, absent from vision and embed), so its 402 is only reached after earlier rungs fail. The 402 itself is real -- 27 occurrences -- and unfixable without spend. The de-ranking D-3 asks for is ALSO impossible as specified: the registry exposes groqAlive/mistralAlive/openrouterAlive and NO cerebrasAlive, so there is no probe evidence to de-rank on. And it is unnecessary: B1 (2026-08-14) already made a per-attempt timeout feed the cooldown and added per-(provider,model) breakers with x2 backoff, and its own comment records REJECTING a hand re-rank because \"the breaker is self-correcting; the edit is not\". Caveat, named as the no-spend decision requires: google's free tier caps at 10/day and google heads four lanes, so there is a daily cliff onto mistral."
+      "ev": "MEASURED 2026-08-27 (BUG-380 / Track D-3), and the work order's framing corrected. Claim: \"both are still ranked, so every call pays their timeout\". Actually: cerebras sits at position 2-4 of every lane it appears in and at position 0 of NONE (voice@3 build@4 simple@4 reasoning@2 memory@2 text@2, absent from vision and embed), so its 402 is only reached after earlier rungs fail. The 402 itself is real -- 27 occurrences -- and unfixable without spend. The de-ranking D-3 asks for is ALSO impossible as specified: the registry exposes groqAlive/mistralAlive/openrouterAlive and NO cerebrasAlive, so there is no probe evidence to de-rank on. And it is unnecessary: B1 (2026-08-14) already made a per-attempt timeout feed the cooldown and added per-(provider,model) breakers with x2 backoff, and its own comment records REJECTING a hand re-rank because \"the breaker is self-correcting; the edit is not\". Caveat, named as the no-spend decision requires: google's free tier caps at 10/day and google heads four lanes, so there is a daily cliff onto mistral.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "cog",
@@ -482,7 +484,7 @@
       "tools": [
         "self_capabilities"
       ],
-      "ok": 17,
+      "ok": 21,
       "f": 0,
       "note": "Honest self-description. Reachable from voice and never failed.",
       "ev": "17 ok / 0 fail"
@@ -494,7 +496,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Detects anomalies and applies playbooks. No playbook ever looped -- the common historical outcome was no-match, which is a different problem.",
-      "ev": "EVIDENCE CORRECTED 2026-08-27 (BUG-379). The old line claimed aether-proxy-rebind repeated \"every few minutes\". Measured across the whole vault, the healer's outcomes for this anomaly kind are: no-match 63, error 1. The playbook ran ONCE, on 2026-08-26; the other 63 events predate its existence (added 2026-08-13, Wave 7) and so had no remediation at all. That no-match path is the expensive one -- immune/healer.js's own F8 note records it invoking the explainer's brain call plus a 7-day episodic scan -- which is why B3 added no-match storm damping. Still WARN, honestly: the subsystem works, but its most common recorded outcome for a real recurring anomaly was \"nothing to do\", and the rebind playbook still declares no verifyMs, so it can never emit heal-failed. BUG-379 gave that playbook a 3-attempt terminal condition as a guard against a future repeating source."
+      "ev": "EVIDENCE CORRECTED 2026-08-27 (BUG-379). The old line claimed aether-proxy-rebind repeated \"every few minutes\". Measured across the whole vault, the healer's outcomes for this anomaly kind are: no-match 63, error 1. The playbook ran ONCE, on 2026-08-26; the other 63 events predate its existence (added 2026-08-13, Wave 7) and so had no remediation at all. That no-match path is the expensive one -- immune/healer.js's own F8 note records it invoking the explainer's brain call plus a 7-day episodic scan -- which is why B3 added no-match storm damping. Still WARN, honestly: the subsystem works, but its most common recorded outcome for a real recurring anomaly was \"nothing to do\", and the rebind playbook still declares no verifyMs, so it can never emit heal-failed. BUG-379 gave that playbook a 3-attempt terminal condition as a guard against a future repeating source.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "cog",
@@ -503,7 +507,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Catches its own false claims and retracts them out loud. The retraction works; the false first claim is the defect.",
-      "ev": "\"My apologies. I said I sent the Gmail link, but it did not actually happen.\"\n\"I did NOT log that event. I mistakenly claimed that action had happened.\""
+      "ev": "\"My apologies. I said I sent the Gmail link, but it did not actually happen.\"\n\"I did NOT log that event. I mistakenly claimed that action had happened.\"",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "cog",
@@ -512,7 +518,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "REDUCED 2026-08-27 by BUG-383, not eliminated. claim-check.js gained an external-fact category; measured catch rate 6 of 9 on the labelled sample, and the 3 misses are pinned by test.",
-      "ev": "BUG-383 (2026-08-27, Track D-6). Every claim category that existed before caught a claim about what MYTHOS DID (\"I logged that\", \"I sent it\"). The recorded fabrication was a claim about WHAT IS TRUE IN THE WORLD — \"Claude Mythos 5 leads the LiveBench coding board\" — which contains no \"I did X\", so no tuning of the old regexes could ever have reached it. The new external-fact category is EVIDENCE-GATED HARD: its `re` is null, so it can fire ONLY when a fact-finding tool (web_search, get_weather, screen_look, document_search and 10 more) was attempted in the window and did not succeed. Without that gate a pattern this broad would flag ordinary conversation every turn. SCOPE, HONESTLY, as the work order demands: this REDUCES fabrication and does not eliminate it. The measured catch rate is 6 of 9 on the labelled sample (67%) and is ASSERTED AS A NUMBER in test/bug-383-external-fact-fabrication.test.js so the claim cannot drift from the code; the 3 known misses are plain narration with no ranking, quantity or citation shape (\"that library was deprecated last year\") and are pinned by their own assertion so the detector can never look as though it was complete. Zero false positives on the honest-sentence controls, which matters more than the catch rate: a noisy honesty alarm is one nobody reads. STAYS WARN because 67% is not closure. The second recorded instance -- a faked 30-second timer count -- had its parser cause fixed by BUG-289; the model reaching for a fact it does not have is the pattern, not the parser."
+      "ev": "BUG-383 (2026-08-27, Track D-6). Every claim category that existed before caught a claim about what MYTHOS DID (\"I logged that\", \"I sent it\"). The recorded fabrication was a claim about WHAT IS TRUE IN THE WORLD — \"Claude Mythos 5 leads the LiveBench coding board\" — which contains no \"I did X\", so no tuning of the old regexes could ever have reached it. The new external-fact category is EVIDENCE-GATED HARD: its `re` is null, so it can fire ONLY when a fact-finding tool (web_search, get_weather, screen_look, document_search and 10 more) was attempted in the window and did not succeed. Without that gate a pattern this broad would flag ordinary conversation every turn. SCOPE, HONESTLY, as the work order demands: this REDUCES fabrication and does not eliminate it. The measured catch rate is 6 of 9 on the labelled sample (67%) and is ASSERTED AS A NUMBER in test/bug-383-external-fact-fabrication.test.js so the claim cannot drift from the code; the 3 known misses are plain narration with no ranking, quantity or citation shape (\"that library was deprecated last year\") and are pinned by their own assertion so the detector can never look as though it was complete. Zero false positives on the honest-sentence controls, which matters more than the catch rate: a noisy honesty alarm is one nobody reads. STAYS WARN because 67% is not closure. The second recorded instance -- a faked 30-second timer count -- had its parser cause fixed by BUG-289; the model reaching for a fact it does not have is the pattern, not the parser.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "mem",
@@ -521,7 +529,7 @@
       "tools": [
         "remember"
       ],
-      "ok": 48,
+      "ok": 51,
       "f": 0,
       "note": "Durable fact writes. Never failed once across 29 vault days.",
       "ev": "48 ok / 0 fail"
@@ -533,7 +541,7 @@
       "tools": [
         "recall_memory"
       ],
-      "ok": 45,
+      "ok": 57,
       "f": 0,
       "note": "Retrieval into the prompt. Never failed.",
       "ev": "45 ok / 0 fail"
@@ -548,8 +556,8 @@
         "note_search",
         "write_note"
       ],
-      "ok": 4,
-      "f": 0,
+      "ok": 11,
+      "f": 2,
       "note": "note_take and note_read against the Obsidian-style vault. Small sample, clean.",
       "ev": "note_take 3 ok / 0 fail, note_read 1 ok / 0 fail"
     },
@@ -584,7 +592,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Episodic, Audit and Incident ledgers all writing. This audit was built out of them.",
-      "ev": "29 audit days, 30 episodic days, 1322 conversation records over 08-19 and 08-20.\nNote: two vaults exist. The live one is %APPDATA%/MYTHOS/vault; mythos/vault in the repo is the stale twin."
+      "ev": "29 audit days, 30 episodic days, 1322 conversation records over 08-19 and 08-20.\nNote: two vaults exist. The live one is %APPDATA%/MYTHOS/vault; mythos/vault in the repo is the stale twin.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "mem",
@@ -597,7 +607,9 @@
         "document_answer"
       ],
       "note": "document_ingest, document_list, document_search, document_answer. EXERCISED 2026-08-27 end to end on a real corpus. WARN because search was verified with an offline embedder, so ranking quality is still unmeasured.",
-      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) against a REAL corpus — 6 files from mythos/docs and mythos/Plans, which the work order names as real and always present. document_ingest: 6 files ingested, 26 chunks embedded for one plan alone. document_list: listed the corpus. document_search: 10 hits for a term known to be in the corpus, so an empty result would have been a real failure rather than a badly-chosen query. document_answer is a DISPOSITION — it needs a brain lane, i.e. spend. WHY WARN AND NOT OK: the embed lane was replaced with a deterministic offline word-bag so the harness measures the TOOLS rather than the provider. That proves the chunker, store, vector index and search path work end to end, and says nothing about ranking quality with real embeddings; closing it fully needs one run with ollama or mistral-embed live. Also recorded: the harness reported document_search as broken twice before reading the real contract — providers/embeddings.embed(text) returns { provider, dim, vec }, and vector-index add()/search() silently return false/[] for anything else."
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) against a REAL corpus — 6 files from mythos/docs and mythos/Plans, which the work order names as real and always present. document_ingest: 6 files ingested, 26 chunks embedded for one plan alone. document_list: listed the corpus. document_search: 10 hits for a term known to be in the corpus, so an empty result would have been a real failure rather than a badly-chosen query. document_answer is a DISPOSITION — it needs a brain lane, i.e. spend. WHY WARN AND NOT OK: the embed lane was replaced with a deterministic offline word-bag so the harness measures the TOOLS rather than the provider. That proves the chunker, store, vector index and search path work end to end, and says nothing about ranking quality with real embeddings; closing it fully needs one run with ollama or mistral-embed live. Also recorded: the harness reported document_search as broken twice before reading the real contract — providers/embeddings.embed(text) returns { provider, dim, vec }, and vector-index add()/search() silently return false/[] for anything else.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "mem",
@@ -609,7 +621,9 @@
         "incident_status"
       ],
       "note": "Logging is perfect. The backlog it produces is not being drained.",
-      "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN"
+      "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN",
+      "ok": 205,
+      "f": 0
     },
     {
       "c": "sense",
@@ -619,7 +633,7 @@
         "camera_look",
         "camera_on"
       ],
-      "ok": 33,
+      "ok": 45,
       "f": 3,
       "note": "The single best capability in the system. Identified ten objects in a row without a miss.",
       "ev": "12 ok / 0 fail on 08-20 (mouse, earbuds case, Goku, Vader, Grogu, Batmobile, Naruto, phone, spinner, CD)\nOperator, verbatim: \"the camera works flawless.\""
@@ -679,7 +693,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Listens continuously and fires cleanly well above threshold.",
-      "ev": "detected at 0.9923 / 0.9881 / 0.9747 / 0.8082 against threshold 0.5, framesToFirstAudio 1"
+      "ev": "detected at 0.9923 / 0.9881 / 0.9747 / 0.8082 against threshold 0.5, framesToFirstAudio 1",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "sense",
@@ -688,7 +704,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Ctrl+Alt+X registers on every boot. No log line anywhere shows it ever firing.",
-      "ev": "main.log: \"OCR-grab hotkey registered: Control+Alt+X\" on every boot.\nBUG-268 open; instrumentation added 2026-08-20 16:39 and never exercised."
+      "ev": "main.log: \"OCR-grab hotkey registered: Control+Alt+X\" on every boot.\nBUG-268 open; instrumentation added 2026-08-20 16:39 and never exercised.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -697,7 +715,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "The primary spoken path. Held a two-hour session with tool calls throughout.",
-      "ev": "VOICE_S2S_ENABLED=true. 367 voice-live actions and 502 conversation turns logged on 08-20 alone."
+      "ev": "VOICE_S2S_ENABLED=true. 367 voice-live actions and 502 conversation turns logged on 08-20 alone.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -706,7 +726,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Four engines in a failover chain. Rung 2 (kokoro) has no weights and costs up to 15s once per process. That cost is now REPORTED; whether to install kokoro or drop it is an open operator decision.",
-      "ev": "MEASURED 2026-08-27 (BUG-380 / Track D-3). chain = gemini,kokoro,edge,piper. The existing evidence line already showed the real path: \"tts.failover from gemini-tts to edge-tts on 429 (limit 10/day)\" -- it fails over from gemini and lands on EDGE, skipping kokoro, which means kokoro was probed and declined. doctor.js predicts what that costs, from disk: \"no .onnx weights under models/kokoro -- the first fallback to kokoro will spend up to 15000ms downloading before falling through to edge\". Measured directly: an early draft of the BUG-380 test built the real chain by accident and paid 15,109ms per case, six cases. TWO CORRECTIONS to the work order: the cost is once per PROCESS, not per call (tts.js probes the chain once and keeps a sticky active provider; kokoro-tts.js bounds only the first cold load), so it is 15s of silence on the first daily failover rather than 15s a turn. WHAT WAS FIXED: the reason was discarded twice -- providers/tts.js had a bare catch{return false} and logged only WHICH rung was skipped, and kokoro-tts.js had another bare catch{return false} -- so a load timeout, a bad model id and a corrupt cache were one indistinguishable false and nothing recorded that 15 seconds had gone. tts.unavailable now carries reason and ms. STILL WARN: the 15s is still paid until the operator decides to install the weights or drop the rung from VOICE_TTS_CHAIN -- that is a decision, not a defect, and it is already listed as one of three open operator decisions."
+      "ev": "MEASURED 2026-08-27 (BUG-380 / Track D-3). chain = gemini,kokoro,edge,piper. The existing evidence line already showed the real path: \"tts.failover from gemini-tts to edge-tts on 429 (limit 10/day)\" -- it fails over from gemini and lands on EDGE, skipping kokoro, which means kokoro was probed and declined. doctor.js predicts what that costs, from disk: \"no .onnx weights under models/kokoro -- the first fallback to kokoro will spend up to 15000ms downloading before falling through to edge\". Measured directly: an early draft of the BUG-380 test built the real chain by accident and paid 15,109ms per case, six cases. TWO CORRECTIONS to the work order: the cost is once per PROCESS, not per call (tts.js probes the chain once and keeps a sticky active provider; kokoro-tts.js bounds only the first cold load), so it is 15s of silence on the first daily failover rather than 15s a turn. WHAT WAS FIXED: the reason was discarded twice -- providers/tts.js had a bare catch{return false} and logged only WHICH rung was skipped, and kokoro-tts.js had another bare catch{return false} -- so a load timeout, a bad model id and a corrupt cache were one indistinguishable false and nothing recorded that 15 seconds had gone. tts.unavailable now carries reason and ms. STILL WARN: the 15s is still paid until the operator decides to install the weights or drop the rung from VOICE_TTS_CHAIN -- that is a decision, not a defect, and it is already listed as one of three open operator decisions.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -715,7 +737,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Alt+Space registers on every boot.",
-      "ev": "main.log: \"push-to-talk hotkey registered: Alt+Space\""
+      "ev": "main.log: \"push-to-talk hotkey registered: Alt+Space\"",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -724,7 +748,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Replies in Bengali and Hindi were good. Transcription of the operator was not.",
-      "ev": "Bengali speech came back as Korean and Portuguese fragments: \"코다\", \"É. Que tu cobrou, não, Jadavpur\""
+      "ev": "Bengali speech came back as Korean and Portuguese fragments: \"코다\", \"É. Que tu cobrou, não, Jadavpur\"",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "voice",
@@ -733,7 +759,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Interruption handling shipped and was accepted by ear, but self-interruption doubled in the acceptance run.",
-      "ev": "PENDING_HOLD_MS 350 -> 200, Stage 3 accepted by ear 2026-08-20. Decision still open."
+      "ev": "PENDING_HOLD_MS 350 -> 200, Stage 3 accepted by ear 2026-08-20. Decision still open.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "desk",
@@ -742,7 +770,7 @@
       "tools": [
         "list_windows"
       ],
-      "ok": 88,
+      "ok": 98,
       "f": 1,
       "note": "Window enumeration. The recovery step every other desktop tool points at.",
       "ev": "88 ok / 1 fail"
@@ -754,7 +782,7 @@
       "tools": [
         "launch_app"
       ],
-      "ok": 76,
+      "ok": 78,
       "f": 13,
       "note": "Opens applications and resolves the real windowed process, not the activation stub.",
       "ev": "14 ok / 0 fail over the last three days"
@@ -766,7 +794,7 @@
       "tools": [
         "focus_window"
       ],
-      "ok": 30,
+      "ok": 31,
       "f": 6,
       "note": "Five of six failures are stale PIDs it created itself, and it says so precisely. One is a genuine OS refusal.",
       "ev": "\"Cannot find a process with the process identifier 18832. That pid no longer exists. Call list_windows again.\"\n\"blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore.\""
@@ -807,8 +835,8 @@
         "drag",
         "scroll_at"
       ],
-      "ok": 5,
-      "f": 5,
+      "ok": 16,
+      "f": 6,
       "note": "OPEN after 2026-08-27 triage. Needs a MEASURED desktop run against a fixed target script, not a code change. 10 calls is too small to mean anything.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and the work order says why: \"needs a MEASURED run against a fixed target script, not a code change. The ladder went 2 rungs to 5 on 08-20 and 10 calls is too small to mean anything.\" Measured: 5 ok / 5 fail across 4 distinct failure reasons, newest failure 2026-08-01 — nearly a month old, and 10 calls total. A 50% rate over 10 samples has a confidence interval wide enough to contain almost anything, so both \"it is broken\" and \"it is fine\" are unsupported. Any code change here would be tuning against noise. Needs the operator at a desktop with a fixed target script; the harness in scripts/verify-dark-nodes.js deliberately does not attempt it, because clicking real windows is not something a test run should do unattended."
     },
@@ -819,8 +847,8 @@
       "tools": [
         "close_window"
       ],
-      "ok": 26,
-      "f": 1,
+      "ok": 27,
+      "f": 2,
       "note": "Closes windows including hosted dialogs after the 08-20 fix.",
       "ev": "26 ok / 1 fail. The one failure names the confirmation prompt holding it open."
     },
@@ -833,8 +861,8 @@
         "move_window",
         "show_desktop"
       ],
-      "ok": 14,
-      "f": 0,
+      "ok": 18,
+      "f": 1,
       "note": "Tiling and restore. Never failed.",
       "ev": "14 ok / 0 fail"
     },
@@ -845,7 +873,7 @@
       "tools": [
         "open_folder"
       ],
-      "ok": 13,
+      "ok": 15,
       "f": 8,
       "note": "Opens folders. Rejects a file path instead of revealing the file - fixed 08-20, not live-verified.",
       "ev": "\"That is a file, not a folder: ...capabilities.txt. Use open_artifact for files.\"\nBUG-283/284 fixed 2026-08-20 21:16 -- NOT live-verified."
@@ -853,12 +881,14 @@
     {
       "c": "desk",
       "n": "open a file",
-      "s": "fail",
+      "s": "ok",
       "tools": [
         "open_file"
       ],
-      "note": "There is no working path to launch a specific file. The operator hit this twice in one session.",
-      "ev": "\"System constraints prevent launching specific files, even with Explorer open.\"\nLogged as an open incident: File Explorer adapter can open folders but cannot launch a file."
+      "note": "open_file, sandboxed with an execute-extension denylist and a findWindowByTitle read-back. CLOSED 2026-08-27: the node claimed no working path existed; one has since 2026-08-21.",
+      "ev": "DISPOSITION 2026-08-27 (Track B, BUG-384), and the plan already said so: its corrections section records \"B5 ('no effector can open a file') is STALE — open_file exists in from-computer.js with a resolveSandboxed() guard, an execute-extension denylist, an honest failure when the desktop shell is absent, and a findWindowByTitle read-back oracle. It was written 2026-08-21, AFTER the operator sessions the plan cites.\" The map had not caught up. Audit evidence, both rows from 2026-08-21: the one failure is \"File not found: ...\\Desktop\\Parmesan garlic bread recipe.txt\", an honest not-found for a file that does not exist, and the one success carries unverified:true with the caveat \"whether the associated application actually rendered it\" — which is the evidence contract working, not a defect. A capability with one honest refusal and one honest success is not a `fail`.",
+      "ok": 1,
+      "f": 1
     },
     {
       "c": "desk",
@@ -867,7 +897,7 @@
       "tools": [
         "list_folder"
       ],
-      "ok": 0,
+      "ok": 6,
       "f": 2,
       "note": "Directory listing. Failed both times and is withheld from voice.",
       "ev": "0 ok / 2 fail, and withheld from the live tool declaration."
@@ -899,7 +929,9 @@
         "write_file"
       ],
       "note": "create_folder, move_file, copy_file, rename_file, delete_file, read_file, list_folder, open_folder. EXERCISED 2026-08-27: 7 of 8 verified against the real filesystem.",
-      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) by scripts/verify-dark-nodes.js --group=fileops, in a real temp sandbox, with the FILESYSTEM as the oracle rather than each tool's own ok flag: create_folder (directory exists on disk), copy_file (copy present with identical bytes), rename_file (old name gone, new name present), move_file (file at destination), read_file (returned the real bytes), list_folder (listed the sandbox), delete_file (file removed from disk) — 7 pass, 0 fail. open_folder is a DISPOSITION: it needs a desktop shell, and running it would pop a real Explorer window on the operator's screen rather than measure anything. This node was dark because nobody had ever called these tools, not because they were broken."
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) by scripts/verify-dark-nodes.js --group=fileops, in a real temp sandbox, with the FILESYSTEM as the oracle rather than each tool's own ok flag: create_folder (directory exists on disk), copy_file (copy present with identical bytes), rename_file (old name gone, new name present), move_file (file at destination), read_file (returned the real bytes), list_folder (listed the sandbox), delete_file (file removed from disk) — 7 pass, 0 fail. open_folder is a DISPOSITION: it needs a desktop shell, and running it would pop a real Explorer window on the operator's screen rather than measure anything. This node was dark because nobody had ever called these tools, not because they were broken.",
+      "ok": 14,
+      "f": 6
     },
     {
       "c": "web",
@@ -908,8 +940,8 @@
       "tools": [
         "web_search"
       ],
-      "ok": 117,
-      "f": 10,
+      "ok": 151,
+      "f": 13,
       "note": "Still warn on main, but for a different reason than in this audit. It is no longer 'only Wikipedia': exa-mcp answers again, and a second keyless provider plus an escalating per-provider cooldown are now merged to main. The remaining risk is quota, not deadness - two free tiers of ~150 and ~100 calls a day, both vendor claims since neither endpoint publishes a rate-limit header.",
       "ev": "Measured 2026-08-26 through the shipping module: exa-mcp median 1634ms, you-mcp median 2621ms, 3 of 3 queries each answered. ddg-html is alive again too - 4 of 5 queries in ~1s, and its miss failed in 73ms rather than a 10s timeout - so it is intermittent, not dead as recorded here. Fix is MERGED to main as of 2026-08-26 (PR #26, merge 2c0a4e9). (BUG-361, BUG-365)"
     },
@@ -932,7 +964,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Opens a link in the real browser. CLOSED 2026-08-27 as already-done: both of D-6's asks were shipped by BUG-273 B2.",
-      "ev": "DISPOSITION 2026-08-27 (Track D-6), verified in source rather than assumed. D-6 asked for two things: \"add the read-back confirmation, and say it landed in the OS default rather than the browser that was named\". Both already exist — from-dashboard.js:406 returns confirmedStep: \"your default browser was handed \u003curl> and accepted it\", which IS the read-back and which names the OS default explicitly. BUG-273 B2 split the two halves: the hand-off IS confirmed (openExternal resolving means the OS took the URL), so it sits in confirmedStep where the voice layer may say it aloud, while `reason` narrows to the one genuinely unknown thing — whether the page rendered. The node's own note already said the complaint was \"a missing confirmation, not a broken feature\"; the confirmation is there."
+      "ev": "DISPOSITION 2026-08-27 (Track D-6), verified in source rather than assumed. D-6 asked for two things: \"add the read-back confirmation, and say it landed in the OS default rather than the browser that was named\". Both already exist — from-dashboard.js:406 returns confirmedStep: \"your default browser was handed \u003curl> and accepted it\", which IS the read-back and which names the OS default explicitly. BUG-273 B2 split the two halves: the hand-off IS confirmed (openExternal resolving means the OS took the URL), so it sits in confirmedStep where the voice layer may say it aloud, while `reason` narrows to the one genuinely unknown thing — whether the page rendered. The node's own note already said the complaint was \"a missing confirmation, not a broken feature\"; the confirmation is there.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "web",
@@ -960,8 +994,8 @@
         "browser_launch_debug",
         "browser_switch"
       ],
-      "ok": 57,
-      "f": 13,
+      "ok": 139,
+      "f": 33,
       "note": "OPEN after 2026-08-27 triage. browser_launch_debug works (15 ok / 1 fail) but nothing auto-launches it on first need. The wiring is the work, and it is not done.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and said plainly rather than left ambiguous. D-6: \"wire the EXISTING browser_launch_debug (15/1) to auto-launch on first need. Do not build a launcher.\" Measured: browser_launch_debug 15 ok / 1 fail, newest failure 2026-08-05 — the tool itself is sound. What is missing is the wiring, so a browser_* call on a cold machine still reports the debug port unreachable instead of starting Chrome once and retrying. Deliberately not attempted in this pass: the change spawns a real browser process on first use, which is a live-behaviour change to a T3 surface that wants its own verification sitting (a harness cannot prove \"launched once, then the retry succeeded\" without actually launching). Left open with the mechanism named rather than half-wired."
     },
@@ -972,7 +1006,7 @@
       "tools": [
         "web_fetch"
       ],
-      "ok": 6,
+      "ok": 8,
       "f": 0,
       "note": "Fetches and reads a page. Small sample, clean, and the SSRF guard was hardened on 08-20.",
       "ev": "6 ok / 0 fail"
@@ -985,7 +1019,9 @@
         "browser_check_captcha"
       ],
       "note": "Google serves a CAPTCHA to the automated browser, which ends the run. It correctly refuses to solve it.",
-      "ev": "screen text read back: \"google.com/sorry/index?continue=...\"\nsee_and_click could not find \"I am not a robot\" and did not pretend to."
+      "ev": "screen text read back: \"google.com/sorry/index?continue=...\"\nsee_and_click could not find \"I am not a robot\" and did not pretend to.",
+      "ok": 1,
+      "f": 0
     },
     {
       "c": "comms",
@@ -995,8 +1031,8 @@
         "gmail_unread",
         "gmail_read"
       ],
-      "ok": 98,
-      "f": 72,
+      "ok": 112,
+      "f": 97,
       "note": "Hard down. The refresh token is expired or revoked. The error message is exemplary; following it reproduces the fault.",
       "ev": "0 ok / 27 fail over the last three days.\n\"invalid_grant: Token has been expired or revoked. This is NOT a network problem and will not recover on its own. Run node scripts/google-auth.js.\"  BUG-291 in flight."
     },
@@ -1021,7 +1057,7 @@
         "whatsapp_send"
       ],
       "ok": 16,
-      "f": 24,
+      "f": 27,
       "note": "Opens the right chat, then cannot identify the window to type into. The message is not sent, and it says so.",
       "ev": "0 ok / 4 fail over the last three days.\n\"WhatsApp opened the chat with mom (+91...), but I could not identify its window, so I cannot type into it safely. The message is NOT sent.\""
     },
@@ -1034,8 +1070,8 @@
         "whatsapp_contact_save",
         "whatsapp_contact_delete"
       ],
-      "ok": 28,
-      "f": 0,
+      "ok": 37,
+      "f": 1,
       "note": "Resolves a contact name to a number. CLOSED 2026-08-27: 29 ok / 0 fail, and the never-auto-send-to-a-fuzzy-match property already holds by construction.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6). Measured: 29 ok / 0 fail — it has NEVER failed, so D-6's ask (\"normalise case/diacritics/spacing, suggest top candidate with confirm. NEVER auto-send to a fuzzy match\") is a hardening request against a perfect record rather than a bug report. The safety half already holds and is deliberate: from-whatsapp.js resolves near-misses with levenshtein and produces a fuzzyNote — \"closest match to X is saved contact Y\" — which is a NOTE handed back for confirmation, never a send. The code says so explicitly, contrasting itself with semantic.forget()'s fuzzy pass \"which DELETES on a single candidate\". Normalising diacritics further would be an improvement to a tool with no recorded failure, which is not what this campaign is for."
     },
@@ -1058,7 +1094,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "No tool exists. It said so plainly rather than faking it.",
-      "ev": "\"Even with context within the app, I still cannot start a video call.\"  Filed as a proposed goal."
+      "ev": "\"Even with context within the app, I still cannot start a video call.\"  Filed as a proposed goal.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "media",
@@ -1070,7 +1108,7 @@
         "spotify_next",
         "spotify_previous"
       ],
-      "ok": 77,
+      "ok": 106,
       "f": 5,
       "note": "Plays a named track by driving the desktop app. Once resumed the wrong song and corrected itself when challenged.",
       "ev": "77 ok / 5 fail. \"Confirming Come Down by The Kid LAROI is now playing.\""
@@ -1083,7 +1121,7 @@
         "spotify_volume"
       ],
       "ok": 52,
-      "f": 1,
+      "f": 3,
       "note": "Per-app volume. Worked first try on request.",
       "ev": "52 ok / 1 fail"
     },
@@ -1094,7 +1132,7 @@
       "tools": [
         "spotify_status"
       ],
-      "ok": 41,
+      "ok": 42,
       "f": 0,
       "note": "The playback oracle. Never failed.",
       "ev": "41 ok / 0 fail. spotify_play_pause 26 ok / 0 fail."
@@ -1124,8 +1162,8 @@
         "get_app_volume",
         "set_app_mute"
       ],
-      "ok": 105,
-      "f": 0,
+      "ok": 189,
+      "f": 1,
       "note": "set_volume, get_volume and media_key. Not one failure in 154 calls.",
       "ev": "set_volume 68/0, get_volume 37/0, media_key 49/0, media_status 28/1"
     },
@@ -1136,7 +1174,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Plays inside the dashboard when the video ID resolves. The reason it often did not was one regex missing five URL shapes, including the /live/ path news streams use.",
-      "ev": "CAUSE IDENTIFIED AND FIXED 2026-08-27 (BUG-381 / Track D-4). \"It often does not [resolve]\" was true and the reason was one regex: the video-id extractor recognised watch?v=, youtu.be/, /embed/ and /shorts/ and MISSED /live/, /v/, youtube-nocookie.com/embed/, and any watch URL where v= was not the first query parameter. A news livestream is served from /live/, which is why news queries in particular failed to embed. Extraction now lives in util/youtube-id.js, reads all nine shapes, and refuses to invent an id for a non-YouTube host. The other half of the old evidence line -- \"54 calls hit the handler with a non-media type\" -- is NOT a defect: those are open_web calls for search/weather/flights/web cards, which never had a video to embed. STILL WARN pending one live embed of a /live/ URL; nothing here is verified against a running dashboard."
+      "ev": "CAUSE IDENTIFIED AND FIXED 2026-08-27 (BUG-381 / Track D-4). \"It often does not [resolve]\" was true and the reason was one regex: the video-id extractor recognised watch?v=, youtu.be/, /embed/ and /shorts/ and MISSED /live/, /v/, youtube-nocookie.com/embed/, and any watch URL where v= was not the first query parameter. A news livestream is served from /live/, which is why news queries in particular failed to embed. Extraction now lives in util/youtube-id.js, reads all nine shapes, and refuses to invent an id for a non-YouTube host. The other half of the old evidence line -- \"54 calls hit the handler with a non-media type\" -- is NOT a defect: those are open_web calls for search/weather/flights/web cards, which never had a video to embed. STILL WARN pending one live embed of a /live/ URL; nothing here is verified against a running dashboard.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
@@ -1158,7 +1198,9 @@
         "dsh_task"
       ],
       "note": "The only build-content engine, and it is online. No fallback by design - a build with no engine fails loudly.",
-      "ev": "hermes-agent.online, mode cli, slots 1"
+      "ev": "hermes-agent.online, mode cli, slots 1",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
@@ -1168,7 +1210,7 @@
         "start_project",
         "project_status"
       ],
-      "ok": 13,
+      "ok": 31,
       "f": 0,
       "note": "Project scaffolding. Never failed, always gated behind a tier-3 confirmation.",
       "ev": "13 ok / 0 fail"
@@ -1180,7 +1222,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Reads the deliverable against the spec and refuses it. It caught a page that only went dark via prefers-color-scheme.",
-      "ev": "\"[review] The page does not default to a dark theme; it only switches via prefers-color-scheme, contrary to the mandatory dark-themed requirement\""
+      "ev": "\"[review] The page does not default to a dark theme; it only switches via prefers-color-scheme, contrary to the mandatory dark-themed requirement\"",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
@@ -1192,7 +1236,9 @@
         "revise_project"
       ],
       "note": "index_project, search_code, revise_project. EXERCISED 2026-08-27, including the BUG-368 oracle. WARN for the same offline-embedder caveat as documents.",
-      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5), and the oracle is the one the work order demands rather than \"it returned ok\". BUG-368 is why: an earlier index run put 94% of its budget into .venv and indexed none of MYTHOS's own source WHILE REPORTING SUCCESS. So index_project is judged on two things — the result must contain no .venv/node_modules content, and search_code must find a symbol that exists only in MYTHOS's own source. Both hold: index_project indexed src/core with no dependency-tree content in the result, and search_code found createEffectorHub inside src/core. revise_project is a DISPOSITION — it routes to the build engine and would write real project files, which a read-only harness must not do. WARN not OK: same offline-embedder caveat as documents — the pipeline is proved, the ranking is not."
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5), and the oracle is the one the work order demands rather than \"it returned ok\". BUG-368 is why: an earlier index run put 94% of its budget into .venv and indexed none of MYTHOS's own source WHILE REPORTING SUCCESS. So index_project is judged on two things — the result must contain no .venv/node_modules content, and search_code must find a symbol that exists only in MYTHOS's own source. Both hold: index_project indexed src/core with no dependency-tree content in the result, and search_code found createEffectorHub inside src/core. revise_project is a DISPOSITION — it routes to the build engine and would write real project files, which a read-only harness must not do. WARN not OK: same offline-embedder caveat as documents — the pipeline is proved, the ranking is not.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
@@ -1205,7 +1251,9 @@
         "generate_image"
       ],
       "note": "generate_pdf, generate_deck, generate_spreadsheet, generate_image. EXERCISED 2026-08-27: 3 of 4 verified by magic bytes; image gen is a disposition, not a green.",
-      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) with ARTIFACT oracles, never the return value — a generator that returns ok:true has proved nothing. generate_pdf: a real PDF, %PDF- magic bytes, 16385 bytes, degraded:false (Chrome resolved here; the documented HTML degradation would have been reported as n/a, not as a pass). generate_spreadsheet: 6460 bytes, PK local-file header AND xl/workbook.xml inside the ZIP. generate_deck: 45407 bytes, PK header AND ppt/presentation.xml. generate_image is a DISPOSITION — it needs a keyed image lane and there is no free one under the no-spend decision, so it closes as a recorded non-change and never as a green. Worth recording: the harness first reported all three generators as FAILING because it read `.path` off the result when the field is `savedTo` — a harness bug that looks exactly like a product bug, which is why every verdict names the oracle it used."
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) with ARTIFACT oracles, never the return value — a generator that returns ok:true has proved nothing. generate_pdf: a real PDF, %PDF- magic bytes, 16385 bytes, degraded:false (Chrome resolved here; the documented HTML degradation would have been reported as n/a, not as a pass). generate_spreadsheet: 6460 bytes, PK local-file header AND xl/workbook.xml inside the ZIP. generate_deck: 45407 bytes, PK header AND ppt/presentation.xml. generate_image is a DISPOSITION — it needs a keyed image lane and there is no free one under the no-spend decision, so it closes as a recorded non-change and never as a green. Worth recording: the harness first reported all three generators as FAILING because it read `.path` off the result when the field is `savedTo` — a harness bug that looks exactly like a product bug, which is why every verdict names the oracle it used.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
@@ -1214,7 +1262,7 @@
       "tools": [
         "use_skill"
       ],
-      "ok": 5,
+      "ok": 20,
       "f": 2,
       "note": "Loads a skill playbook on demand. CLOSED 2026-08-27 as a disposition: the two failures are a month old, the loader was fixed, and the message was always honest.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), and D-6 predicted this outcome: \"if they are genuinely absent the message is already honest and this is a disposition\". Measured: 20 ok / 2 fail, and BOTH failures are 2026-07-27. One is a correct refusal (\"A skill name is required\"). The other — \"Skill 'ui-ux-pro-max' not found. Available skills: taste-frontend, ponytail, karpathy-guidelines, caveman\" — is honest by construction: it names what IS resolvable, which is exactly what a caller needs. The underlying cause was a loader searching one root, since fixed with multi-root plus MYTHOS_SKILLS_DIR. Zero failures in the month since."
@@ -1230,8 +1278,8 @@
         "toggle_goal",
         "delete_goal"
       ],
-      "ok": 118,
-      "f": 2,
+      "ok": 258,
+      "f": 3,
       "note": "Read, create, propose and toggle all work at the data layer. The HUD panel did not reflect a toggle it did not make itself - fixed after the last session, unproven.",
       "ev": "list_goals 60/0, propose_goal 37/1, create_goal 8/0, rest.goals.toggle 13/0\nBUG-290 fixed 2026-08-21 01:00 -- NOT live-verified."
     },
@@ -1246,7 +1294,7 @@
         "reminder_approve_action",
         "calendar_upcoming"
       ],
-      "ok": 49,
+      "ok": 67,
       "f": 2,
       "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
@@ -1254,15 +1302,15 @@
     {
       "c": "cog",
       "n": "timer_add",
-      "s": "fail",
+      "s": "ok",
       "tools": [
         "timer_add",
         "timer_cancel"
       ],
-      "ok": 0,
+      "ok": 2,
       "f": 2,
-      "note": "A 30-second timer was rejected, and it then invented a manual count and announced time was up.",
-      "ev": "0 ok / 2 fail. Logged as a hallucination on the operator's instruction.\nBUG-289 fixed 2026-08-21 00:58 -- NOT live-verified."
+      "note": "timer_add, timer_cancel. CLOSED 2026-08-27: BUG-289 added the seconds unit on 2026-08-21; both recorded failures predate it and both successes postdate it.",
+      "ev": "DISPOSITION 2026-08-27 (Track B, BUG-384), dated rather than counted. The node read fail 0/2 — and the 0 was wrong as well as the label. Audit rows, in order: FAIL 2026-08-13T10:45Z and FAIL 2026-08-20T13:45Z, both carrying the pre-fix message \"Could not parse that time. Try ISO date, 'in 20 minutes', 'tomorrow 9am', or 'HH:MM'\" — which does not mention seconds, because seconds were impossible. BUG-289 shipped 2026-08-21 and added a seconds unit plus a fractional count. Then OK 2026-08-21T08:47Z and OK 2026-08-23T01:37Z. Every failure is before the fix and every success is after it, which is what a fixed parser looks like. Same finding as the `reminders` node in Track D-6: one parser family, one fix, two stale nodes."
     },
     {
       "c": "dev",
@@ -1271,7 +1319,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "The PowerShell automation child. Online on every boot; it is the transport under every desktop verb.",
-      "ev": "\"pc-child online\" on every boot"
+      "ev": "\"pc-child online\" on every boot",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "dev",
@@ -1284,7 +1334,9 @@
         "cua_click"
       ],
       "note": "OPEN after 2026-08-27 triage. Needs >=5 real boots before anything is touched; a harness cannot supply them.",
-      "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED. D-6 is explicit about why: \"Add a first-line ready handshake with a timestamp; sample >=5 boots before touching the timeout — one run is not a mechanism.\" That instruction is the blocker. The observation is two live boots minutes apart on the same commit, one OFFLINE on a startup handshake that timed out and one fine, which is a sample of two and cannot distinguish a race from a slow machine. Changing the timeout on that evidence would be exactly the \"one run is not a mechanism\" mistake the work order warns against. Needs the operator to boot the driver >=5 times; then the handshake timestamp is worth adding, because it would say WHERE the time went."
+      "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED. D-6 is explicit about why: \"Add a first-line ready handshake with a timestamp; sample >=5 boots before touching the timeout — one run is not a mechanism.\" That instruction is the blocker. The observation is two live boots minutes apart on the same commit, one OFFLINE on a startup handshake that timed out and one fine, which is a sample of two and cannot distinguish a race from a slow machine. Changing the timeout on that evidence would be exactly the \"one run is not a mechanism\" mistake the work order warns against. Needs the operator to boot the driver >=5 times; then the handshake timestamp is worth adding, because it would say WHERE the time went.",
+      "ok": 53,
+      "f": 9
     },
     {
       "c": "dev",
@@ -1307,7 +1359,9 @@
         "phone_file_push"
       ],
       "note": "FIXED since this audit. adb WAS installed all along - the adapter just looked for it on PATH while the installer put it project-local, and doctor.js resolved it the other way and reported 'No gaps'. The adapter now shares the installer's resolver. No handset is currently attached, so the verbs are reachable but unproven end-to-end.",
-      "ev": "Measured 2026-08-26: findInstalledAdb() -> \"\u003crepo>\\Android Platform Tools\\platform-tools\\adb.exe\", spawn OK, \"Android Debug Bridge version 1.0.41\". Live manifest: \"android-child: ONLINE\". \"adb devices\" returns an empty list - no device plugged in. (BUG-360 (b))"
+      "ev": "Measured 2026-08-26: findInstalledAdb() -> \"\u003crepo>\\Android Platform Tools\\platform-tools\\adb.exe\", spawn OK, \"Android Debug Bridge version 1.0.41\". Live manifest: \"android-child: ONLINE\". \"adb devices\" returns an empty list - no device plugged in. (BUG-360 (b))",
+      "ok": 4,
+      "f": 0
     },
     {
       "c": "dev",
@@ -1316,7 +1370,9 @@
       "tools": [],
       "kind": "subsystem",
       "note": "The proxy could not bind its port. NOT a loop and NOT a config override -- both of those were wrong. The failure is now diagnosable; closing it needs one live boot.",
-      "ev": "EVIDENCE REWRITTEN 2026-08-27 (BUG-379); the previous two sentences were both false. (1) \"the healer retried it in a loop\" -- it did not: the playbook ran ONCE ever (2026-08-26), 63 of the 65 events reached the healer as no-match because aether-proxy-rebind did not exist until 2026-08-13, and the work order's own oracle (real orphaned listener, real bus/diagnostician/healer, 38s against a 15s cooldown) measured 1 anomaly + 1 attempt, no loop. The anomaly comes from a whenReady().then() rejection arm, which runs once per process -- the 65 records were 65 PROCESSES. (2) \".env says AETHER_ENABLED=false, config.json overrides it\" -- no config.json exists on any path that would be read; mythos/.env:347 sets AETHER_PROXY_ENABLED=true deliberately under its own Voice Nodes heading, and AETHER_ENABLED (line 337) gates a different subsystem entirely (main.js:1213). What WAS broken: nothing named the process holding the port, and `target` could never name the port either because ports() returns an object and main.js tested `.length` on it -- an unreachable branch whose .join() would have thrown inside the error handler. Both fixed. Port 4480 is free as of 2026-08-27, so the collision itself may be historical. STAYS RED because nothing here makes the proxy bind when another process holds the port -- that is correct behaviour -- and no live boot has yet heard the new sentence."
+      "ev": "EVIDENCE REWRITTEN 2026-08-27 (BUG-379); the previous two sentences were both false. (1) \"the healer retried it in a loop\" -- it did not: the playbook ran ONCE ever (2026-08-26), 63 of the 65 events reached the healer as no-match because aether-proxy-rebind did not exist until 2026-08-13, and the work order's own oracle (real orphaned listener, real bus/diagnostician/healer, 38s against a 15s cooldown) measured 1 anomaly + 1 attempt, no loop. The anomaly comes from a whenReady().then() rejection arm, which runs once per process -- the 65 records were 65 PROCESSES. (2) \".env says AETHER_ENABLED=false, config.json overrides it\" -- no config.json exists on any path that would be read; mythos/.env:347 sets AETHER_PROXY_ENABLED=true deliberately under its own Voice Nodes heading, and AETHER_ENABLED (line 337) gates a different subsystem entirely (main.js:1213). What WAS broken: nothing named the process holding the port, and `target` could never name the port either because ports() returns an object and main.js tested `.length` on it -- an unreachable branch whose .join() would have thrown inside the error handler. Both fixed. Port 4480 is free as of 2026-08-27, so the collision itself may be historical. STAYS RED because nothing here makes the proxy bind when another process holds the port -- that is correct behaviour -- and no live boot has yet heard the new sentence.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "dev",
@@ -1328,7 +1384,9 @@
         "mcp_call_tool"
       ],
       "note": "mcp_list_servers, mcp_list_tools, mcp_call_tool. EXERCISED 2026-08-27. WARN because MCP is disabled here, so the tools answered honestly about an empty config rather than against a live server.",
-      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5). mcp_list_servers answered truthfully about the real configuration — enabled:false, servers:[], plus a hint naming MCP_SERVERS in mythos/.env — which is a pass for honesty, and the honest answer for an unconfigured bridge is an empty list. mcp_list_tools REFUSED an unknown server with a reason rather than returning silently empty, which is the behaviour that matters. mcp_call_tool is a DISPOSITION and the work order says why: it is T3 and goalId-gated by the leash, and that refusal without a goal is CORRECT SECURITY POSTURE, not a gap — a harness that manufactured a goal to get past it would be measuring the wrong thing. WARN not OK: with MCP_SERVERS unset, nothing here exercised a real stdio server. Closing it needs one configured MCP server, which is an operator action and not a defect."
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5). mcp_list_servers answered truthfully about the real configuration — enabled:false, servers:[], plus a hint naming MCP_SERVERS in mythos/.env — which is a pass for honesty, and the honest answer for an unconfigured bridge is an empty list. mcp_list_tools REFUSED an unknown server with a reason rather than returning silently empty, which is the behaviour that matters. mcp_call_tool is a DISPOSITION and the work order says why: it is T3 and goalId-gated by the leash, and that refusal without a goal is CORRECT SECURITY POSTURE, not a gap — a harness that manufactured a goal to get past it would be measuring the wrong thing. WARN not OK: with MCP_SERVERS unset, nothing here exercised a real stdio server. Closing it needs one configured MCP server, which is an operator action and not a defect.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "dev",
@@ -1337,46 +1395,54 @@
       "tools": [],
       "kind": "subsystem",
       "note": "CLOSED 2026-08-27: BUG-292 added the fingerprint and BUG-298 named the client. Both resolved 2026-08-21; the node still said \"in flight\".",
-      "ev": "DISPOSITION 2026-08-27 (Track D-6). D-6 asked to \"add a fingerprint, then hunt it; a stale token on the phone node is the leading suspect\". Both halves are already done and the node's \"BUG-292 in flight\" was stale. BUG-292 (RESOLVED 2026-08-21) was the logging half — deliberately a logging commit first, because verifyClient was NOT to be loosened: MYTHOS_AUTH_TOKEN is mandatory for the phone node and is known to kill the HUD socket when set. BUG-298 (RESOLVED 2026-08-21) is the second half and NAMES the client: it was the HUD, not the phone node, hammering a server correctly refusing it — 147 rejections between 15:23:04.462Z and 15:44:33.465Z, i.e. 1289s / 147 = one every ~8.8s. The fingerprint turned out not to be needed; the live log carried the arithmetic."
+      "ev": "DISPOSITION 2026-08-27 (Track D-6). D-6 asked to \"add a fingerprint, then hunt it; a stale token on the phone node is the leading suspect\". Both halves are already done and the node's \"BUG-292 in flight\" was stale. BUG-292 (RESOLVED 2026-08-21) was the logging half — deliberately a logging commit first, because verifyClient was NOT to be loosened: MYTHOS_AUTH_TOKEN is mandatory for the phone node and is known to kill the HUD socket when set. BUG-298 (RESOLVED 2026-08-21) is the second half and NAMES the client: it was the HUD, not the phone node, hammering a server correctly refusing it — 147 rejections between 15:23:04.462Z and 15:44:33.465Z, i.e. 1289s / 147 = one every ~8.8s. The fingerprint turned out not to be needed; the live log carried the arithmetic.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "HUD navigation",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "navigate",
         "close_panel"
       ],
-      "note": "Moves the dashboard between panels on the model's own initiative.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 53 calls, 51 ok / 2 fail. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 53 calls, 51 ok / 2 fail. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 51,
+      "f": 2
     },
     {
       "c": "hud",
       "n": "artifacts",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "open_artifact",
         "delete_artifact"
       ],
-      "note": "Opens and removes the files MYTHOS itself produced into the vault.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 17 calls, 14 ok / 3 fail — the highest failure share of the eleven. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 17 calls, 14 ok / 3 fail — the highest failure share of the eleven. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 14,
+      "f": 3
     },
     {
       "c": "hud",
       "n": "pipeline",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "pipeline_status",
         "pipeline_advance",
         "pipeline_execute"
       ],
-      "note": "The staged execution surface behind the dashboard pipeline panel.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 65 calls, 65 ok / 0 fail. No recorded failure, ever. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 65 calls, 65 ok / 0 fail. No recorded failure, ever. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 65,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "kanban",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "kanban_status",
         "kanban_add_card",
@@ -1384,19 +1450,23 @@
         "kanban_assemble",
         "kanban_build_card"
       ],
-      "note": "Board state the operator and the model both write to.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 9 calls, 9 ok / 0 fail. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 9 calls, 9 ok / 0 fail. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 9,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "widgets",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "manage_widget",
         "spawn_widget"
       ],
-      "note": "Spawns and manages HUD widgets.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 1 call, 1 ok / 0 fail. One call is barely evidence, but it is not zero, and `unknown` claimed zero. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 1 call, 1 ok / 0 fail. One call is barely evidence, but it is not zero, and `unknown` claimed zero. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 1,
+      "f": 0
     },
     {
       "c": "hud",
@@ -1406,52 +1476,62 @@
         "daily_plan"
       ],
       "note": "The day-planning surface.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "status readouts",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "read_status",
         "read_system_specs",
         "system_status",
         "job_status"
       ],
-      "note": "Self-inspection: what is running, on what hardware, and how far along.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 183 calls, 183 ok / 0 fail, across read_status, read_system_specs, system_status and job_status — the most-exercised node on the map that claimed never to have been looked at. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 183 calls, 183 ok / 0 fail, across read_status, read_system_specs, system_status and job_status — the most-exercised node on the map that claimed never to have been looked at. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 183,
+      "f": 0
     },
     {
       "c": "hud",
       "n": "ask_agent",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "ask_agent"
       ],
-      "note": "Delegation to a sub-agent.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 3 calls, 3 ok / 0 fail. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 3 calls, 3 ok / 0 fail. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "cog",
       "n": "persona",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "persona_status",
         "set_persona_level"
       ],
-      "note": "Reads and sets the persona level.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 29 calls, 27 ok / 2 fail. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 29 calls, 27 ok / 2 fail. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 27,
+      "f": 2
     },
     {
       "c": "cog",
       "n": "missions",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "run_mission",
         "mission_status"
       ],
-      "note": "The multi-step mission orchestrator.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 3 calls, 3 ok / 0 fail. Invisible to a reading of the packaged-app vault alone; it is the in-repo vault that holds them, which is why the counter reads both. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 3 calls, 3 ok / 0 fail. Invisible to a reading of the packaged-app vault alone; it is the in-repo vault that holds them, which is why the counter reads both. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "mem",
@@ -1463,7 +1543,9 @@
         "okf_import"
       ],
       "note": "Import and export of knowledge in the open exchange format.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "sense",
@@ -1473,18 +1555,22 @@
         "ambient_awareness"
       ],
       "note": "Background sampling of what is on screen.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "desk",
       "n": "clipboard",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "clipboard_read",
         "clipboard_write"
       ],
-      "note": "Reads and writes the system clipboard.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 3 calls, 3 ok / 0 fail. Same as missions — only the in-repo vault has these rows. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 3 calls, 3 ok / 0 fail. Same as missions — only the in-repo vault has these rows. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 3,
+      "f": 0
     },
     {
       "c": "desk",
@@ -1494,19 +1580,23 @@
         "set_wallpaper"
       ],
       "note": "Changes the desktop wallpaper.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "web",
       "n": "local info",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "get_time",
         "get_weather",
         "get_directions"
       ],
-      "note": "Time, weather and directions — keyless lookups with their own providers.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "note": "Measured 2026-08-27 from the audit log: 156 calls, 152 ok / 4 fail, across get_time, get_weather and get_directions. Not verified to the acceptance contract — see the evidence.",
+      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 156 calls, 152 ok / 4 fail, across get_time, get_weather and get_directions. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "ok": 152,
+      "f": 4
     },
     {
       "c": "build",
@@ -1516,7 +1606,9 @@
         "install_from_github"
       ],
       "note": "Installs a project from GitHub. Danger-tier and withheld from voice.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "build",
@@ -1526,7 +1618,9 @@
         "security_scan"
       ],
       "note": "Static security scan of a project. Danger-tier and withheld from voice.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     },
     {
       "c": "comms",
@@ -1536,7 +1630,9 @@
         "compose_email"
       ],
       "note": "Composes an email for review rather than sending one.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
+      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "ok": 0,
+      "f": 0
     }
   ],
   "register": {
@@ -3716,18 +3812,26 @@
           "fix": "A new `external-fact` category, and the design is the safety property: -",
           "verification": "``` node --test test/bug-383-external-fact-fabrication.test.js 13 tests, 13 pass node --test test/claim-check-categories.test.js 6 tests, 6 pass all claim-check consumers 149 tests, 149 pass mutations: 6 run, 6 caught, source restored sha256-identical: F1 the category is UNGATED (re gets a pattern) -> 2 fail F2 a successful lookup no longer backs the claim -> 1 fail F3 web_search dropped from gateTools -> 6 fail F4 the ranking alternative removed -> 3 fail F5 gateTools ignored (falls back to empty tools) -> 5 fail F6 the shape requirement relaxed to match anything -> 4 fail (this one is caught by the FALSE-POSITIVE controls, which is the right way round: relaxing the shape is the change that would make the alarm useless, and it is the controls that notice) ``` Three mutations first reported TARGET ABSENT because their anchors used `\\n` while `claim-check.js` is CRLF — the harness correct…"
         }
+      },
+      {
+        "n": 384,
+        "shape": "entry",
+        "state": "coded",
+        "title": "every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong",
+        "detail": {},
+        "excerpt": "**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped as \"six nodes whose LABEL is stale rather than whose capability is broken\". Measured against the live vault before writing anything, per the Track D finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43 (67%) disagree with the vault.** Eleven labels are contradicted by their own evidence. The six was itself a stale reading. ### Root cause — the map generates its frame and hand-carries its contents `build-capability-map.js` regenerates `vitals`, the tool-coverage cross-check and the `generated` stamp. It preserves each node's `s`, `ok`, `f`, `note` and `ev` as curated human text. That split is right for `note` and `ev` — a human decides what a node MEANS — and wrong for `ok`/`f`, which are not judgement at all. They are a count of rows in `vault/Audit/*.jsonl`, and nothing was counting…"
       }
     ],
     "counts": {
       "verified": 30,
       "fixed": 55,
       "open": 10,
-      "coded": 1,
+      "coded": 2,
       "diagnosed": 1,
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 231,
+    "total": 232,
     "openDeclared": [
       344,
       346,

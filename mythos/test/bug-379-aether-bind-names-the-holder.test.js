@@ -472,7 +472,24 @@ describe('BUG-379 — live: the heal path names the squatter and then gives up',
     // Exactly what main.js's bind-failure handler does: resolve the holder ONCE
     // at detection and put it on the anomaly. The squatter is this process, so
     // the expected pid is known rather than plausible.
-    const holderText = describeHolder(await findPortHolder(port));
+    //
+    // THE LOOKUP IS RETRIED, AND THAT IS NOT PAPERING OVER A FLAKE. This test
+    // passed 5/5 in isolation and 3/3 in a standalone full suite, then failed
+    // under the pre-commit hook — because `findPortHolder` shells out to
+    // `netstat -ano`, which enumerates every TCP connection on the machine,
+    // under a hard LOOKUP_TIMEOUT_MS of 1500. With ~6,600 tests running
+    // concurrently that command does not always finish in time, the lookup
+    // returns null, and `describeHolder(null)` produces text with no pid in it.
+    // The PRODUCT is right there — it declines to name a holder it could not
+    // read — so asserting the single-shot result was asserting the machine's
+    // spare capacity, not the heal path. The retry gives the same idempotent
+    // command a realistic budget; the assertion below is unchanged and still
+    // demands the exact pid.
+    let holder = null;
+    for (let attempt = 0; attempt < 4 && !holder; attempt += 1) {
+      holder = await findPortHolder(port, { timeoutMs: 6000 });
+    }
+    const holderText = describeHolder(holder);
 
     try {
       // Attempt 1: a real bind against a really-held port.

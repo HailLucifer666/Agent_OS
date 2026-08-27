@@ -4748,6 +4748,7 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | D-4 | BUG-381 — YouTube id extraction + typed open_web reasons | **DONE** | the extractor knew 4 URL shapes and missed 5, including `/live/` which is what a news livestream resolves to; 17 distinct failure strings (not 12) now carry one of four typed codes. 17 assertions, 8 mutations; Y1 restores the original regex as the red-first proof | `774e5c9` |
 | D-5 | BUG-382 — the five dark nodes, exercised on oracles | **DONE** | 22 tools, 17 pass / 5 dispositions / 0 FAIL. **No product defect** — and the harness accused the product three times before it was right, each an oracle bug of its own. dark 7→2 | `e74e789` |
 | D-6 | BUG-383 — a fabricated FACT is not a fabricated ACTION | **DONE** | **6 of 10 singles were already closed and the map was stale**; 3 need an operator; 1 real. New evidence-gated `external-fact` category, catch rate **6/9 asserted as a literal**, 3 misses pinned, 0 false positives. 13 assertions, 6 mutations | `01c58f4` |
+| B | BUG-384 — the map hand-carried every per-node count, and **67% of them were wrong** | **DONE** | scoped as "six stale labels"; measured 43 of 91 nodes carrying a count, **29 disagreeing with the vault**, and **11** labels contradicted by their own evidence. Second finding, larger: `resolveVaultRoot()` returns the IN-REPO twin and reports `reachable:true` from it — that copy had never seen 21 tools, so a zero-claim gate reading it would fail OPEN. Counts now derive from every vault root, deduped by record id (1464 + 3183 rows, 1346 shared, union 3301). 32 assertions, 13 mutations all caught, 2 survived a first pass | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5011,120 +5012,155 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position: TRACK D IS COMPLETE.** All six items (D-1 … D-6) are done and
-pushed. Track D was the first track that changes a capability rather than a
-gauge, and it is finished.
+**Position: TRACKS D AND B ARE COMPLETE.** Track D changed capabilities;
+Track B made the gauge stop lying. Both are pushed.
 
 ```
 main                       b04ec8e
-PR #37  Track D-1  BUG-378   fix/bug-378-effector-error-shape      OPEN
-PR #38  Track D-2  BUG-379   fix/bug-379-aether-rebind-terminal    OPEN
-PR #39  Track D-3..D-6       fix/track-d-remaining                 OPEN (stacked on #38)
-suite                      6605 tests / 6605 pass / 0 fail / 0 skipped
+PR #37  Track D-1  BUG-378   fix/bug-378-effector-error-shape      OPEN  (base main)
+PR #38  Track D-2  BUG-379   fix/bug-379-aether-rebind-terminal    OPEN  (base main)
+PR #39  Track D-3..D-6       fix/track-d-remaining                 OPEN  (stacked on #38)
+PR #40  Track B    BUG-384   fix/bug-384-map-counts-from-vault     OPEN  (stacked on #39)
+suite                      6635 tests / 6635 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
-file-size ratchet          all files at or under their ceilings
-map                        91 nodes: 37 ok / 22 warn / 12 fail / 2 dark / 18 unknown
-next free BUG number       384
+map                        91 nodes: 39 ok / 33 warn / 10 fail / 2 dark / 7 unknown
+next free BUG number       385
 ```
 
-**Map movement across Track D** (from the campaign's founding measurement of
-28 ok / 25 warn / 13 fail / 7 dark / 18 unknown, as measured on this branch):
-**ok +9, warn −3, fail −1, dark −5.** The dark column is the real result: five
-nodes that had never been called once are now exercised against oracles.
+Merge order **#37 -> #38 -> #39 -> #40**. #37 and #38 both branch from `main`
+and touch `index.html`, so they conflict on the island; the code does not
+overlap. Resolve by taking both sets of node edits and then running
+`build-capability-map.js --write`, which rewrites every count from the vault
+anyway — so a botched count merge is self-healing now, and only the `s`,
+`note` and `ev` fields need care.
 
-### THE FINDING OF TRACK D, and it should shape whatever comes next
+### THE FINDING OF TRACK B, and it subsumes Track D's
 
-**Every single Track D item named a cause, and in four of six the named cause
-was wrong.** This is no longer a coincidence:
+Track D ended by saying four of six items had named the wrong cause, and
+blamed a structural split: the map regenerates its frame and hand-carries its
+contents. Track B measured that claim instead of repeating it.
 
-- **D-1** blamed three nodes on one error shape. Two did not have it —
-  `run_command`'s evidence was a pre-fix record, `list_folder` never had the
-  defect at all (3 ok / 2 fail, not 0 / 2).
-- **D-2** blamed a looping healer playbook and a `config.json` override.
-  Neither exists. The playbook ran ONCE ever; there is no `config.json`. The
-  real defect — `target` testing `.length` on an object, making the
-  port-naming branch unreachable and its `.join()` a latent throw — was not
-  mentioned.
-- **D-3** said "every call pays their timeout". Cerebras is at position 0 of no
-  lane. The one live instance was somewhere else entirely: a 15s kokoro stall
-  nobody could see because the reason was discarded twice.
-- **D-6** listed ten singles. **Six were already closed** and the map was stale
-  about them, including one node still reading "BUG-292 in flight" for a bug
-  resolved on 2026-08-21.
+**43 of 91 nodes carried a hand-typed `ok`/`f`. 29 of them — 67% — disagreed
+with the audit log.** `goals` was written 118/2 against a real 253/3. Eleven
+labels, not the six the track was scoped for, were contradicted by their own
+evidence. Two Track D dispositions had been reasoned about on sample sizes
+wrong by 2x (`ui_click`: "10 calls is too small to mean anything" — the real
+figure is 22) and by 30x (`cua-driver`: "the evidence is two boots" — 59
+recorded calls). Neither conclusion flips, and both were reached on figures
+the vault did not support.
 
-The cause is structural, not carelessness: **the map's per-node `ok`/`fail`
-counts and `ev` text are hand-carried readings**, while only
-`nodes`/`clusters`/`vitals` regenerate. A node row can be two months stale
-while the page around it says GENERATED today and every gate passes.
+**THE SECOND FINDING IS BIGGER, AND IT WAS NOT ON ANY LIST.**
+`triage-incidents.js:resolveVaultRoot()` returns `MYTHOS_VAULT_ROOT` or falls
+back to the in-repo `mythos/vault`. No env var is set on the operator's
+machine, so **the fallback wins, and every vault-derived reading in this repo
+has been taken from the in-repo copy while reporting `reachable: true`** — a
+confident answer from the wrong source. Measured, one counter pointed at both:
 
-**So, before working ANY node: re-derive its counts from the live vault and
-CHECK THE DATES ON THE ROWS.** If the evidence predates a fix already in the
-tree, the node is a documentation defect, not a code defect. And when an item
-ships its own oracle — D-2's did — **run it before writing anything.** D-2's
-took ten minutes and refuted two of three claims.
+```
+in-repo mythos/vault   34 files   1464 completions   newest 2026-08-25
+%APPDATA%/MYTHOS       40 files   3183 completions   newest 2026-08-26
+shared record ids 1346 · union 3301
+```
 
-### What is left, and none of it is Track D
+They are not stale-and-fresh, they are two populations — the batch launcher
+and the packaged Electron app write to different places. The in-repo copy has
+**never seen 21 tools at all** (`open_file`, `timer_add`, `think_deeply`,
+`camera_look`, `forget_fact`, `write_file`, `read_file`), and the packaged one
+has never seen the rows behind `missions` and `clipboard`. So a `dark`/
+`unknown` gate reading either root alone **fails OPEN** — it confirms a
+measured zero that the other root contradicts. Both `missions` and `clipboard`
+were found only because the counter reads both and dedupes by record id.
+
+**Which root is canonical is still an OPEN QUESTION and this work does not
+answer it.** Reading every root and deduping needs no ruling, and is strictly
+more truthful than either. Do not "fix" it by repointing `resolveVaultRoot()`:
+that also moves the incident-ledger reading, which is a separate decision.
+
+### What Track B did and deliberately did not do
+
+- Counts derive from `scripts/vault-tool-counts.js` on `--write`. **`--check`
+  still does not compare them** — they move every time MYTHOS runs a tool, and
+  a gate on them would block the first commit after every voice session.
+- **Only the falsifiable claim is a gate.** `dark` and `unknown` assert a fact
+  about the DATA, so a call count refutes them; that blocks `--write`. The
+  tempting mirror rule ("labelled ok, newest event a failure") is an advisory
+  and nothing more, because all three of its real hits were CORRECT labels:
+  `spotify_volume` failing honestly with Spotify not running, `close_window`
+  refusing a dead pid and naming `list_windows` as the recovery, and
+  `CAPTCHA wall`, whose `fail` is a deliberate refusal. A gate that reddens on
+  those is a gate somebody switches off.
+- **Eleven nodes left `unknown` for `warn`, and none for `ok`** — however
+  clean their record. `ok` here is the acceptance contract (live-verified,
+  regression test, mutation-proven) and a production call count is not that.
+  So the headline got worse and more truthful: unknown 18 -> 7, warn 22 -> 33.
+  Promoting them is Track F's job.
+- `open a file` and `timer_add` moved `fail` -> `ok`, each dated rather than
+  counted: `open_file`'s only failure is an honest not-found and its only
+  success carries `unverified:true`; `timer_add`'s two failures both predate
+  BUG-289 (2026-08-21) and both successes postdate it.
+- **`list_folder` was left alone** — PR #37 already corrects it, and fixing it
+  twice is a merge conflict for nothing.
+- **`ev` is still curated prose.** Every audit completion carries a `reason`,
+  so the evidence text could be generated too. That is a different change.
+
+### What is left
 
 - **Track A** — three operator minutes (O1 `node mythos/scripts/google-auth.js`,
   the OCR hotkey keypress). Turns two nodes green.
-- **Track B** — six nodes whose LABEL is stale rather than whose capability is
-  broken. Track D just demonstrated how common that is; this track is now
-  higher-value than it looked.
 - **Track C** — three dispositions (CAPTCHA refusal, `focus_window`'s exhausted
-  ladder, video call having no tool).
+  ladder, video call having no tool). `CAPTCHA wall` now also carries a standing
+  advisory from the label rule; closing it as a disposition silences it.
 - **Track E** — eight nodes needing a live microphone.
-- **Track F** — the 18 never-measured `unknown` nodes. `scripts/verify-dark-nodes.js`
-  from D-5 is the shape to copy: one script, an oracle per tool, and four
-  verdicts where a disposition can never be counted as a pass.
+- **Track F** — the `unknown` column, now 7 rather than 18, plus the 11 nodes
+  Track B moved to `warn` with production evidence but no contract verification.
+  `scripts/verify-dark-nodes.js` is the shape to copy.
+- Still open from Track D, each with its reason in the map: `spotify_search`,
+  `Aether mesh`, `browser automation`, `cua-driver`, `ui_click`, and
+  `fabrication` at 67%.
 
-**Still open from Track D, deliberately, each with its reason in the map:**
-`spotify_search` (needs a desktop with Spotify running), `Aether mesh` (needs a
-live boot with a squatted port), `browser automation` (the auto-launch wiring
-spawns a real browser and wants its own sitting), `cua-driver` (needs ≥5 boots),
-`ui_click` (needs a measured desktop run — 10 calls is too small to mean
-anything), and `fabrication` at 67%.
-
-### Five things that will cost you an hour each if nobody tells you
+### Things that will cost you an hour each if nobody tells you
 
 **1. The pre-commit hook runs FOUR gates** plus `build-index --check`. Add or
 remove a registered tool and the commit is blocked until that tool is mapped to
 a node in `index.html`'s island.
 
 **2. Ordering: `sync-test-count --write` BEFORE `build-capability-map --write`,**
-and `build-index --write` after any BUGS.md change. Hit repeatedly across Track
-D: a new BUGS.md entry makes `test/…the real index.html` fail until the register
-is regenerated, which reads as a regression and is not.
+and `build-index --write` after any BUGS.md change. Hit again in Track B: a new
+BUGS.md entry makes `test/…the real index.html` fail until the register is
+regenerated, which reads as a regression and is not.
 
 **3. Run the suite with long-form `TEMP`/`TMP` and free ports from
 `node scripts/pick-free-ports.js`,** or it measures `fail=1 skipped=1` on a clean
-tree and `sync-test-count --write` will record that red run as the baseline. It
-records whatever it measures, **including a one-test flake** — re-run, and re-run
-the failing file in isolation, before believing a single red number.
+tree and `sync-test-count --write` will record that red run as the baseline.
+Capture one TAP run (`--test-reporter=tap > file`) and pipe it into both
+`sync-test-count --write` and `--check`; it reads stdin, so the suite runs once
+instead of three times.
 
 **4. Commit with `git commit -- <pathspec>`, then demand an empty
-`git status --porcelain`.** And if you edited a file AFTER `git add`, re-add it:
-the index holds the stale copy and the commit captures the index, not the tree.
+`git status --porcelain`.** If you edited a file AFTER `git add`, re-add it.
 
-**5. `--next` reads BRANCH NAMES too,** so naming a branch `fix/bug-NNN-…`
-claims NNN immediately. Write the BUGS.md entry early. Renumber with
-`git reset --soft HEAD~1`, never `--amend`.
+**5. `--next` reads BRANCH NAMES too.** Write the BUGS.md entry early.
+Renumber with `git reset --soft HEAD~1`, never `--amend`.
 
-**6. Do not edit a tracked file while the suite is running.** The anti-drift
-tests scan tracked files — BUGS.md, `index.html`, these plan documents.
+**6. Do not edit a tracked file while the suite is running.**
 
 **7. The file-size ratchet will refuse your fix, and it is usually right.**
-It refused three times across Track D (`main.js`, `healer.js`, `from-dashboard.js`
-at 1417/1418) and each refusal produced a better structure: the new code became
-`aether/bind-failure.js`, `immune/aether-rebind.js` and `util/youtube-id.js`, all
-callable from a test without booting anything. **Move the code; do not raise the
-number.**
+Move the code; do not raise the number.
 
-**8. Multi-line anchors do not match — the sources are CRLF.** Every
-search-and-replace script and every mutation harness in Track D hit this. A
-`\n` in a JS string is LF. Use single-line anchors, or split on `/\r?\n/` and
-rejoin with the file's own line ending. When a mutation harness reports TARGET
-ABSENT, that is it refusing to score a mutation that never applied — which is
-the harness working.
+**8. Multi-line anchors do not match — and the two files Track B touched have
+DIFFERENT line endings.** `build-capability-map.js` is CRLF, the new
+`vault-tool-counts.js` is LF. One mutation harness has to handle both, so use
+single-line anchors always.
+
+**9. A `sed` one-liner will eat your backslashes.** Editing the mutation
+harness with `sed` turned `/^mythos\//` into `/^mythos//` and the file stopped
+parsing. Use a real editor for anything containing an escape.
+
+**10. THE MAP IS A CANVAS. It has no DOM element per node.** Verifying it by
+looking for chips or nodes in the DOM returns "NOT FOUND" for every node and
+looks exactly like a broken page. Drive it instead: eval the inline scripts,
+call `resize(); build(); place(); draw(performance.now())`, then read the
+pixels back with `getImageData` and count them against the palette in `:root`.
 ### Standing constraints
 
 - **Two machines and sometimes two sessions share this repo.** Branch, PR,
