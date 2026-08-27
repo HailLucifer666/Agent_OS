@@ -28,6 +28,33 @@
 // off after a colon.
 const NO_MESSAGE = 'no reason given';
 
+// BUG-378 follow-up (2026-08-27). The strings that ARE a string, and are still
+// not a reason. This module owns the question "did we extract any information?",
+// so the answer lives here rather than being re-typed by each consumer — the
+// test for this and effectors/adapter.js both read THIS set, so they cannot
+// drift apart and quietly disagree about what counts as a reason.
+//
+// Found by a hostile-input probe rather than by reading: `reasonText(NaN)`
+// returns the string 'NaN', which is truthy, so it sailed through
+// adapter.js's `reason || noReasonGiven(...)` and became the operator's whole
+// explanation. `{ok:false, error: NaN}` is a plausible product of
+// `error: someCount - other` or a failed parse. Three of fifteen probed shapes
+// landed here (error:NaN, reason:NaN, throw NaN).
+//
+// Deliberately NOT in this set: '0' and 'false'. They are equally useless as
+// prose, but they are indistinguishable from a legitimate numeric error code or
+// flag, and discarding real information is worse than passing along a terse
+// value. Pinned by a test so the next reader does not "finish the job".
+const DEAD_REASON_TEXT = new Set(['[object Object]', '{}', '[]', 'undefined', 'null', 'NaN']);
+
+// True when reasonText() produced something, but that something carries no
+// information a person could act on. Callers that STORE a reason as a standalone
+// field should treat this as "no reason given" and substitute their own context;
+// callers that CONCATENATE into their own sentence can ignore it.
+function isDeadReasonText(text) {
+  return typeof text !== 'string' || !text.trim() || DEAD_REASON_TEXT.has(text.trim());
+}
+
 function describeEmpty(raw) {
   if (raw instanceof Error) {
     const name = raw.name && raw.name !== 'Error' ? raw.name : 'Error';
@@ -57,4 +84,4 @@ function reasonText(raw) {
   return out;
 }
 
-module.exports = { reasonText, NO_MESSAGE };
+module.exports = { reasonText, NO_MESSAGE, DEAD_REASON_TEXT, isDeadReasonText };

@@ -1319,6 +1319,318 @@ each was a real hole:
 
 ---
 
+## BUG-378 — a tool could report failure with no reason at all, and the map's three "error-shape" nodes were two-week-old pre-fix data (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 1 source file changed, 1 test file added (23
+tests), 10 mutations run and all 10 caught, source restored sha256-identical
+after every one. Opened as Track D item D-1. **Two of D-1's three named nodes
+turned out not to have the defect** — that correction is the larger half of this
+entry.
+
+**What the ticket claimed.** Track D-1 named three capability-map nodes as one
+error-shape defect: `run_command` (0/1, reason rendered as the literal
+`[object Object]`), `list_folder` (0/2, "the same defect"), and `spotify_search`
+(0/2, "probably the same dispatch shape"). It asked for the class assertion
+rather than a third hand-patch.
+
+**What the evidence said instead.** Measured against the operator's live vault
+(`%APPDATA%/MYTHOS/vault/Audit`, 3,183 completed rows, 345 completed-fail rows):
+
+| node | map says | vault says | verdict |
+|---|---|---|---|
+| `run_command` | 0 ok / 1 fail, `[object Object]` | 1 fail, dated 2026-07-**29** | real shape defect, **already fixed by P2-12 on 2026-08-13** |
+| `list_folder` | 0 ok / 2 fail | 2 fail **plus 3 ok**, reason fully readable | **not this class at all**; a correct sandbox refusal |
+| `spotify_search` | 0 ok / 2 fail | 2 fail, `reason` key absent, 2026-07-15/16 | pre-fix writer; the *failure* is a UIA chain, not a shape |
+
+Negative control, and the finding that reframes the whole item:
+
+```
+completed-fail rows BEFORE 2026-08-13 (reason-text.js landed): 142 fails, 28 reasonless
+completed-fail rows ON/AFTER 2026-08-13                      : 203 fails,  0 reasonless
+```
+
+Every one of the 28 unreadable rows predates the fix; the newest is 2026-08-04.
+**The map was presenting pre-fix records as current defects.** The
+`[object Object]` row is literally the same record `dispatch-action.js`'s own
+comment already cites by filename.
+
+`list_folder`'s two failures read, verbatim from `aud-08f29369581a`:
+
+```
+"<a path on another user's desktop>" is outside the folders I can access.
+I'm limited to: <the two configured roots>.
+```
+
+(paths elided rather than quoted: AD-7 forbids a drive-letter `Users` literal in
+a tracked file, and it was right to flag the first draft of this line.)
+
+That is the sandbox working as designed. It also has 3 `ok` rows *after* those
+fails (2026-08-23, 2026-08-24). Its map row is wrong on both counts.
+
+**So what was actually still broken.** The class was closed by *convention* —
+"call `reasonText()`" — with nothing able to fail a commit. Probing the real seam
+on HEAD with twelve failure shapes, **seven of the twelve arrived at the audit
+row as an empty string, for all 179 registered tools**, and four of those seven
+were carrying a perfectly readable reason that the code discarded:
+
+```
+{ok:false}                              -> reason ""
+{ok:false, result: undefined}           -> reason ""
+{ok:false, result: null}                -> reason ""
+{ok:false, error: {code:'ECONNRESET'}}  -> reason ""   <-- reason existed
+throw {code:'ENOENT', path:'C:/nope'}   -> reason ""   <-- reason existed
+throw 'adb is not on PATH'              -> reason ""   <-- reason existed
+throw {response:{status:402}}           -> reason ""   <-- reason existed
+```
+
+**Mechanism, and it is in the file that fixed instance #1.**
+`effectors/adapter.js` is the one door: all 29 effector files register
+exclusively via `hub.register(effectorFromTool(...))`, with zero direct
+registrations, so every tool's failure passes through its `invoke()`. Two defects
+there:
+
+1. **The BUG-101 mirror declined precisely when the reason was most degraded.**
+   It read only the *string* spellings of `.error`/`.reason` and then did
+   `if (reason) return ...` — so a non-string `error` fell through with `.result`
+   left `undefined`.
+2. **Its own `catch` was the fourth instance of the class**, nine lines below the
+   comment describing the first fix: `return {ok:false, result: err.message}`.
+   `err.message` is `undefined` for anything that is not an `Error` (proven in
+   node 26, not assumed), and effectors in this tree throw bare strings and plain
+   `{code, path}` bags.
+
+`reasonText()` was extracted in B5 (2026-08-13) for exactly this and had never
+reached either line.
+
+**Parity gap this exposed (the cheapest check that found the most).** Three
+places in this subsystem derive "why did it fail" from the same object by
+different means: `adapter.js` sets `.result`; `dispatch-action.js` audits
+`reasonText(.result)`; `hub.js`'s `reasonOf()` does
+`reasonText(.result) || reasonText(.error)`. **`reasonOf` had the `.error`
+fallback and the dispatcher did not**, so for a top-level-`error` failure the
+breaker stored a real remedy while the audit stored nothing. Pointing all three
+at identical input and diffing the answers is what surfaced it.
+
+**Fix.** `mythos/src/core/effectors/adapter.js` only. Route both paths through
+the shared `reasonText()`; fire the mirror on `== null` rather than
+`=== undefined`; and when a tool genuinely supplied nothing, say so in a sentence
+that names the tool and the keys it did return, bounded to six keys because
+`hub.reasonOf` stores this text untruncated where `dispatch-action` truncates at
+300.
+
+Deliberately **not** a second normaliser in `dispatch-action.js`: two normalisers
+that must agree is the parity gap above. One door, plus a test that keeps it the
+only door.
+
+**Attack pass (Stage 3):**
+
+- *What else matches this?* The last-resort text interpolates `tool.name` (from
+  the registry, not user input) and `Object.keys(result)` (code-defined keys).
+  Bounded to six keys plus a count, so a tool returning a 400-key object cannot
+  emit one unbounded sentence onto the breaker and the voice summary.
+- *Does this hide evidence?* This was the sharpest question and it changed the
+  code. The first draft of the Part D assertion demanded `.result` always be a
+  readable *string*. Grepping the consumers first showed
+  `engagements/executor.js:469`, `from-app-reply.js:133` and `from-pc.js:280`
+  all read `result.result.error` **on the failure path** — flattening would have
+  deleted the exit code and stderr that are the diagnosis. **The assertion was
+  wrong, not the code.** The contract is "`reasonText(.result)` is readable",
+  `.result` may stay structured, and mutation M7 (mirror overwrites a structured
+  `.result`) is now caught by the negative controls.
+- *Who reads this?* The audit trail, the breaker's stored remedy, the voice
+  summary, and `live-tool-adapter`'s outcome evaluation — four surfaces, one
+  normaliser.
+- *What is standing next to it?* `terminal` and `unverified`. The mirror rebuilds
+  the result with `Object.assign`, and `hub.isTerminalResult()` reads
+  `result.terminal` to decide whether to open a breaker permanently. A careless
+  spread would have turned a terminal failure into a retried one. Pinned by its
+  own test.
+- *Is this constant correct?* `MAX_SHAPE_KEYS = 6`, named for its meaning, and
+  the message states how many keys were dropped rather than silently cutting.
+- *Class:* fourth member of **"a failure path that discards its reason"** —
+  BUG-101, P2-12, B5, and now this one, which was inside BUG-101's own fix. The
+  class assertion is the deliverable; the code change is the smaller half.
+- *Platform claims verified in node 26 rather than asserted:* `err.message` is
+  `undefined` for a thrown string and for a thrown object (both true);
+  `JSON.stringify` drops an `undefined`-valued key, so the audit `reason` key
+  vanishes on disk rather than being empty (true); `== null` matches `undefined`
+  and `null` but not `''`/`0`/`false` (true). One claim was **wrong and the
+  comment was corrected before commit**: `Object.keys(Object.create(null))`
+  returns `[]`, it does not throw — only a Proxy with a raising `ownKeys` trap
+  does.
+- *Deliberate non-changes, each with a test:* structured `.result` objects are
+  never flattened; `describeEmpty()` is not made to name the tool (it is shared
+  with concatenating callers that prepend their own context, and the audit row
+  carries `tool` as its own field anyway); `dispatch-action.js` gains no second
+  normaliser.
+
+**Verification.**
+
+```
+node --test test/effector-failure-reason-class.test.js
+  BEFORE the fix : 18 tests, 11 pass, 7 fail  (7 shapes x 179/179 tools,
+                                               "the reason is an empty string")
+  AFTER  the fix : 23 tests, 23 pass, 0 fail, 0 skipped
+
+three-route diff, 11 shapes, identical input:
+  adapter .result / dispatch audit reason / hub.reasonOf remedy
+  -> all three agree on all 11 shapes, 0 unreadable
+
+live, through the real effector and the real dispatcher, using the exact args
+from vault row aud-549dc3fe1c3c (2026-07-29T08:05:52Z, run_command
+hermes --version):
+  reason -> "run_command disabled - set RUN_COMMAND_ALLOWLIST"
+            (was "[object Object]")
+live, a real tool with a real offline adapter:
+  phone_list_devices -> "Android bridge is OFFLINE. Cannot list devices."
+
+mutations: 10 run, 10 caught, each by the assertion that should catch it,
+adapter.js restored sha256-identical after every one:
+  M1  catch reverted to err.message ............ 5 fail (the four throw shapes)
+  M2a mirror reads only the string spellings ... 2 fail
+  M2b mirror bails out when it finds nothing ... 5 fail
+  M3  == null narrowed back to === undefined ... 2 fail
+  M4  last resort returns '' ................... 4 fail
+  M5  last resort does not name the tool ....... 4 fail  (this one survived the
+                                                          first pass and forced a
+                                                          new assertion)
+  M6  key list unbounded again ................. 1 fail
+  M7  mirror overwrites a structured .result ... 5 fail  (locks the disposition)
+  MA1 a direct hub.register() bypasses the door -> Part A names the file and line
+  MA2 enumerator drops the lowercase .tools key -> "walks 175 tools but the repo
+                                                    registers 179"
+```
+
+**What this does NOT close, stated plainly.**
+
+- **`spotify_search` is still red and is not an error-shape bug.** It is a
+  7-step UIA chain (launch Spotify, find the search box, click it, type, read
+  `ui_elements` at depth 5) and it propagates inner effector reasons verbatim.
+  It is the **only** Spotify verb that needs a working UIA tree inside Spotify,
+  which is why the other five are green — the plan's "not a Spotify problem" is
+  right, its "same dispatch shape" is not. Closing it needs the operator's
+  desktop with Spotify running. **Left open deliberately, mechanism named.**
+- **`run_command`'s single failure is unreproducible.** The 2026-07-29 reason was
+  destroyed at write time; the binary it probed (`hermes`, the build engine
+  deleted from the repo on 2026-08-22) has since been updated to
+  v0.20.0/2026.8.3, so the state that failed no longer exists. What IS verified
+  is that the same call today reports a readable reason.
+- **Six of the seven closed shapes are fragility, not observed live bugs.** All
+  28 bad rows predate the writer fix. Only the `catch` (instance #4) is in code
+  that runs on every thrown value, and I could not demonstrate a real effector in
+  this tree throwing a non-`Error` today. Recorded as closing the shape, not as
+  fixing an observed failure.
+- **`result: null` specifically:** verified that no effector returns it and no
+  consumer anywhere distinguishes it from `undefined`. Closed for the invariant,
+  not because it was seen.
+- **Not verified against a booted MYTHOS.** The seam is exercised through the
+  real adapter, real hub and real dispatcher in-process; nothing here needed the
+  Electron shell, and no map node is claimed green on source reading alone.
+
+---
+
+### Follow-up, same day — the guard had two instances of the class it prevents
+
+(Part of the entry above. The heading deliberately does NOT repeat the number:
+`lint-bug-registry` counts headings as DECLARATIONS, so a second `## BUG-378`
+heading reads as a numbering collision and blocks every commit. It did, and this
+is the fix. Prose may cite the number freely — BUG-373 established that prose is
+not allocation.)
+
+`dabd702` shipped the class assertion. A review pass over that commit probed the
+**guard** rather than reading it, and the guard failed twice. Both are the
+"a guard that has the bug it prevents" shape, which is the highest-yield class
+precisely because a green guard feels like proof.
+
+**Hole 1 — the guard policed one directory and claimed to police the door.**
+Part A scanned only `src/core/effectors/`. Probe: add
+`hub.register({id:'smuggled_tool', invoke})` to **`src/main.js`**, one directory
+up. **`fail 0` — invisible.** A smuggled effector is dispatchable and never
+touches `adapter.js`, so the whole one-door premise silently stops holding.
+
+**Hole 2 — the guard matched a spelling, not a rule.** The pattern was the
+literal `hub.register(`. Probe: `const h = hub; h.register(rawEffector(...))`
+**inside the scanned directory**. **`fail 0` — invisible.**
+
+Fixed by making the assertion a rule: any receiver (`\.register\s*\(`), every
+`.js` file under `src/`, scanned at CALL SITES rather than per line — the
+line-based version would also have false-positived on the ordinary formatting
+`hub.register(\n  effectorFromTool(tool))`, which is now pinned by its own probe.
+Measured before widening so it cannot cry wolf: **30 `.register(` call sites
+under `src/`, every one either `effectorFromTool` or `registerNamed`, zero false
+positives.**
+
+`registerNamed` is allowed **with its evidence, not on assumption**: `invoke()`
+resolves out of the `effectors` Map (`hub.js:243`) while `registerNamed` writes a
+separate `namedServices` Map (`hub.js:105`), so a named service can never be
+reached by a tool call and never produces an audit row. `src/main.js` registers
+three (the goals, kanban and pipeline bridges).
+
+**Hole 3 — friendly test data.** The twelve failure shapes in `dabd702` were the
+ones I could imagine from reading the tree. A hostile-input probe of fifteen
+shapes found **three that produced the bare token `NaN`**: `{ok:false, error:
+NaN}`, `{ok:false, reason: NaN}` and `throw NaN`. `reasonText(NaN)` is
+`String(NaN)` → `'NaN'`, which is **truthy**, so it passed the
+`reason || noReasonGiven(...)` test and became the operator's entire explanation
+— a value already on this repo's own dead-literal list.
+
+**Hole 4 — a denylist where a rule belongs, in my own test.** The test hand-typed
+its own copy of the dead-literal list. Two lists that must agree are two lists
+that will disagree, and the one that drifts is whichever nobody is reading.
+
+**Fix.** `DEAD_REASON_TEXT` + `isDeadReasonText()` now live in
+`util/reason-text.js` — the module that owns "is this text actually a reason?" —
+and both `adapter.js` and the test read **that one set**. `adapter.js` gains
+`usableReason()`, which is `reasonText()` plus "and did it carry information",
+used at the door because here the answer is STORED as a standalone field rather
+than concatenated into a caller's own sentence. `reasonText()` itself is
+unchanged: verified byte-for-byte on seven inputs, and
+`test/util-reason-text.test.js` still passes, so no existing caller moves.
+
+**Deliberate non-change, pinned by two tests:** `'0'` and `'false'` are NOT
+treated as dead. They are as useless as prose as `'NaN'` is, but they are
+indistinguishable from a legitimate numeric error code or a meaningful flag, and
+a door that discards real information to tidy its own output is worse than one
+that passes along a terse value. Mutation N4 (adding `'0'` to the set) breaks
+those two tests, so the decision cannot drift silently.
+
+**Verification.**
+
+```
+node --test test/effector-failure-reason-class.test.js test/util-reason-text.test.js
+  36 tests, 36 pass, 0 fail, 0 skipped   (29 in the class file, up from 23)
+
+hostile-input probe, 15 shapes:
+  before: 3 of 15 produced a dead literal ('NaN')
+  after : 0 of 15
+
+guard probes:
+  P1 direct hub.register() in src/main.js   before: fail 0 (missed) -> after: CAUGHT
+  P2 renamed receiver in the effectors dir  before: fail 0 (missed) -> after: CAUGHT
+  P3 valid multi-line formatting            after: fail 0 (no false positive)
+
+full suite: 6562 tests / 6562 pass / 0 fail / 0 skipped  (green on the first run)
+lint-bug-registry: undeclared 130 / baseline 130
+build-capability-map --check / build-index --check : OK
+
+mutations: 12 run against adapter.js + reason-text.js, 12 caught, all three files
+restored sha256-identical. With P1/P2/P3 on the guard that is 14 probes, 14
+behaving correctly. The two that matter most:
+  N2  'NaN' removed from DEAD_REASON_TEXT -> 3 fail   (the DERIVED list is
+                                                       load-bearing, not decorative)
+  N4  '0' added to DEAD_REASON_TEXT       -> 1 fail   (the pinned non-change is
+                                                       genuinely locked)
+```
+
+**Still not closed.** Holes 1 and 3 are fragility, not observed live bugs: no
+effector in this tree registers outside the door today (grepped), and none is
+known to return `NaN`. Both are closed because a guard that only holds for the
+files that existed when it was written is not a guard, not because either was
+seen in the vault. `spotify_search` remains red and still needs the operator's
+desktop.
+
+---
+
 ## BUG-376 — the capability-map gate blocked every commit from any checkout without the live vault (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 1 test rewritten, 1 added, mutation-proven.

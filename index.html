@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6694,
+      "value": 6723,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -893,26 +893,26 @@
     {
       "c": "desk",
       "n": "list_folder",
-      "s": "fail",
+      "s": "ok",
       "tools": [
         "list_folder"
       ],
       "ok": 6,
       "f": 2,
-      "note": "Directory listing. Failed both times and is withheld from voice.",
-      "ev": "0 ok / 2 fail, and withheld from the live tool declaration."
+      "note": "Directory listing. Works; the two failures are the sandbox correctly refusing a path outside the allowed roots.",
+      "ev": "CORRECTED 2026-08-27 (BUG-378) against the live vault: 3 ok / 2 fail, not 0 ok / 2 fail. The 3 ok rows are NEWER than the failures (actor voice-live, 2026-08-23 and 2026-08-24). Both failures carry a fully readable reason and were never an error-shape defect: aud-08f29369581a names the rejected path (another user's desktop, elided here because AD-7 forbids a drive-letter path literal in a tracked file) and reads \"... is outside the folders I can access. I'm limited to: ...\" -- a correct refusal, locked by test/bug-018-list-folder-sandbox.test.js (4/4) and effector-evidence-honesty.test.js:218."
     },
     {
       "c": "desk",
       "n": "run_command",
-      "s": "fail",
+      "s": "warn",
       "tools": [
         "run_command"
       ],
       "ok": 0,
       "f": 1,
-      "note": "Shell execution. Failed with an unrendered object and is withheld from voice.",
-      "ev": "0 ok / 1 fail -- error string was literally \"[object Object]\""
+      "note": "Shell execution. Not broken -- fail-closed by design, because RUN_COMMAND_ALLOWLIST is unset. Never successfully exercised, so not green.",
+      "ev": "CORRECTED 2026-08-27 (BUG-378). The \"[object Object]\" was a PRE-FIX record from 2026-07-29, already fixed by P2-12 on 2026-08-13 -- the map was showing two-week-old data as a current defect, and it is the same row dispatch-action.js's own comment cites. Re-run live through the real effector and dispatcher with the exact args from aud-549dc3fe1c3c (run_command hermes --version): reason is now \"run_command disabled - set RUN_COMMAND_ALLOWLIST\". Both RUN_COMMAND_ALLOWLIST lines are commented out in mythos/.env, so an empty allowlist denies every command -- the documented fail-closed default. The original failure is unreproducible: the hermes binary it probed has since been updated to v0.20.0/2026.8.3 and the program was deleted from the repo on 2026-08-22."
     },
     {
       "c": "desk",
@@ -1146,8 +1146,8 @@
       ],
       "ok": 0,
       "f": 2,
-      "note": "Failed both times and is withheld from voice anyway.",
-      "ev": "0 ok / 2 fail"
+      "note": "Still red, and NOT an error-shape bug. The only Spotify verb that needs a working UIA tree inside Spotify -- needs the operator's desktop.",
+      "ev": "MECHANISM CORRECTED 2026-08-27 (BUG-378), still open. 0 ok / 2 fail, 2026-07-15 and 2026-07-16. The absent reason was the PRE-P2-12 audit writer, which wrote no reason field at all -- not this tool's shape: it is a 7-step UIA chain (launch, find the search box, click, type, read ui_elements at depth 5) and every early return propagates the inner effector's reason verbatim. The plan's guess that it shares run_command's dispatch shape is WRONG; what makes it the odd one out among six Spotify verbs is that it alone requires UIA to find and type into Spotify's search box, and Spotify is a Chromium/CEF app with a lazy accessibility tree. Closing this needs a live desktop with Spotify running; deliberately left open rather than guessed."
     },
     {
       "c": "media",
@@ -3764,6 +3764,16 @@
         }
       },
       {
+        "n": 378,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a tool could report failure with no reason at all, and the map's three \"error-shape\" nodes were two-week-old pre-fix data",
+        "detail": {
+          "fix": "`mythos/src/core/effectors/adapter.js` only. Route both paths through the shared `reasonText()`; fire the mirror on `== null` rather than `=== undefined`; and when a tool genuinely supplied nothing, say so in a sentence that names the tool and the keys it did return, bounded to six keys because `hub.reasonOf` stores this text untruncated where `dispatch-action` truncates at 300. Deliberately",
+          "verification": "``` node --test test/effector-failure-reason-class.test.js BEFORE the fix : 18 tests, 11 pass, 7 fail (7 shapes x 179/179 tools, \"the reason is an empty string\") AFTER the fix : 23 tests, 23 pass, 0 fail, 0 skipped three-route diff, 11 shapes, identical input: adapter .result / dispatch audit reason / hub.reasonOf remedy -> all three agree on all 11 shapes, 0 unreadable live, through the real effector and the real dispatcher, using the exact args from vault row aud-549dc3fe1c3c (2026-07-29T08:05:52Z, run_command hermes --version): reason -> \"run_command disabled - set RUN_COMMAND_ALLOWLIST\" (was \"[object Object]\") live, a real tool with a real offline adapter: phone_list_devices -> \"Android bridge is OFFLINE. Cannot list devices.\" mutations: 10 run, 10 caught, each by the assertion that should catch it, adapter.js restored sha256-identical after every one: M1 catch reverted to err.messag…"
+        }
+      },
+      {
         "n": 379,
         "shape": "entry",
         "state": "verified",
@@ -3855,7 +3865,7 @@
       }
     ],
     "counts": {
-      "verified": 31,
+      "verified": 32,
       "fixed": 56,
       "open": 10,
       "coded": 4,
@@ -3863,7 +3873,7 @@
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 236,
+    "total": 237,
     "openDeclared": [
       344,
       346,
