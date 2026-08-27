@@ -4744,6 +4744,16 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | A5a | Merge `origin/main` (BUG-353) | **DONE** | 6436/6436/0/0 on the merged tree; BUGS.md resolved as union + named drops | `f241084` |
 | A2 | BUG-370 — `build-capability-map.js`; the map stops being hand-edited | **DONE** | 73→91 nodes, 179/179 tools covered both ways, 5th status `unknown`; 19 assertions, 10 mutations; rendering verified in a browser | (this commit) |
 | D-1 | BUG-378 — the error-shape class assertion. **Two of its three nodes were stale data, not defects** | **DONE** | 7 of 12 failure shapes wrote an EMPTY audit reason for all 179/179 tools on HEAD; 28 of 142 pre-2026-08-13 fail rows reasonless vs 0 of 203 after; 23 assertions, 10 mutations all caught; map fail 13→11; `spotify_search` left red with its real mechanism named | (this commit) |
+| D-2 | BUG-379 — the bind failure names the squatter. **Both named causes were false and the loop did not exist** | **DONE** | measured 65 events = 65 PROCESSES not one loop (healer outcomes: no-match 63, error 1); no config.json exists anywhere; found a 3rd defect nobody named (`target` tested `.length` on an object, so the port-naming branch was unreachable and would have thrown); 29 assertions, 17 mutations all caught, 4 survived a first pass | (this commit) |
+| D-3 | BUG-380 — dead provider lanes. **Two of three nodes needed no code** | **DONE** | cerebras is at position 0 of NO lane (so a healthy call never pays its 402) and the registry has no `cerebrasAlive` to de-rank on; `screen_look` re-measured 52 ok/11 fail with ALL 11 failures ≤2026-08-18 and 26 consecutive successes since. Real fix: the TTS chain discarded a skipped rung's reason twice, hiding a 15s kokoro stall. 9 assertions, 7 mutations | `c12b266` |
+| D-4 | BUG-381 — YouTube id extraction + typed open_web reasons | **DONE** | the extractor knew 4 URL shapes and missed 5, including `/live/` which is what a news livestream resolves to; 17 distinct failure strings (not 12) now carry one of four typed codes. 17 assertions, 8 mutations; Y1 restores the original regex as the red-first proof | `774e5c9` |
+| D-5 | BUG-382 — the five dark nodes, exercised on oracles | **DONE** | 22 tools, 17 pass / 5 dispositions / 0 FAIL. **No product defect** — and the harness accused the product three times before it was right, each an oracle bug of its own. dark 7→2 | `e74e789` |
+| D-6 | BUG-383 — a fabricated FACT is not a fabricated ACTION | **DONE** | **6 of 10 singles were already closed and the map was stale**; 3 need an operator; 1 real. New evidence-gated `external-fact` category, catch rate **6/9 asserted as a literal**, 3 misses pinned, 0 false positives. 13 assertions, 6 mutations | `01c58f4` |
+| B | BUG-384 — the map hand-carried every per-node count, and **67% of them were wrong** | **DONE** | scoped as "six stale labels"; measured 43 of 91 nodes carrying a count, **29 disagreeing with the vault**, and **11** labels contradicted by their own evidence. Second finding, larger: `resolveVaultRoot()` returns the IN-REPO twin and reports `reachable:true` from it — that copy had never seen 21 tools, so a zero-claim gate reading it would fail OPEN. Counts now derive from every vault root, deduped by record id (1464 + 3183 rows, 1346 shared, union 3301). 32 assertions, 13 mutations all caught, 2 survived a first pass | (this commit) |
+| C | BUG-385 — three dispositions, and the CAPTCHA detector was inverted | **DONE** | the refusal policy was already right and already pinned; the DETECTOR flagged **6 of 6 ordinary pages** (developers.cloudflare.com, a "Performance and security by Cloudflare" footer, Google's Security Checkup) and MISSED the real challenge text, because two markers named a VENDOR and `includes()` is a substring test. Fixed mostly by removal: 0 FP on 7 controls, 0 FN on 9 challenge shapes. `focus_window`: ladder pinned at exactly 3 rungs, and the map's own note was wrong (3/2/1 classes, not 5/1). `video call`: no tool across all 179, and `phone_call` pinned voice-withheld. 30 assertions, 14 mutations all caught | (this commit) |
+| F | BUG-386 — 37 tools nobody had measured against an oracle | **DONE** | new `scripts/verify-unknown-nodes.js`: **21 pass / 7 n/a / 11 disp / 0 FAIL**. No product defect — and it means something because **8 mutations of REAL PRODUCT CODE were all caught**, 2 after a first pass exposed genuinely weak oracles. The harness accused the product **six times** before it was right, every one fail-open. ok 40→44, unknown 7→5. 10 assertions | (this commit) |
+| A | BUG-387 — `doctor` said the Google grant was OK for three weeks | **DONE (the code half)** | the two nodes still need the operator and no session can supply them. What was broken is the check they would run: `doctor` reported `OK ... configured` while the vault held **88 invalid_grant failures in 60 bursts**, because it tests that three strings are PRESENT and presence is not validity. New `scripts/verify-google-grant.js` (4 verdicts, UNREACHABLE ≠ INVALID, no secret ever printed) + a doctor row that stops overclaiming. Everything else in the chain was already correct and already tested — measured, not assumed. 14 assertions, 10 mutations all caught | (this commit) |
+| E | BUG-388 — the barge-in floor learned the OPERATOR and a verifier called it a verdict on the echo canceller | **the no-microphone half is DONE** | the eight voice nodes still need a live acoustic session; what this removes is the false reading that was steering it. `bleedPeak` is learned in the 500ms protected window on the written assumption that "the assistant's own onset is by construction the loudest thing present" — false, because AEC attenuates MYTHOS 15-20dB while the operator arrives direct. Measured over 731 records in 20 sessions: **22 of 31 ratchets above 0.05 landed exactly on that hold's own peakRms**. Diagnosed 2026-08-19 and deferred as "consequence today is nil" — but `verify-voice-session.js` was calling it "the ungagged oracle" and concluding "Echo cancellation is not removing it". 10 assertions, 10 mutations all caught | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5007,104 +5017,164 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position:** Wave A is complete and merged. **Track D-1, the error-shape class,
-is DONE (BUG-378)** — the class assertion is shipped and two of D-1's three named
-nodes turned out not to have the defect at all. Track D items D-2 … D-6 remain,
-and any of them can be picked up in any order.
-
-**Start state, verified 2026-08-27 (post-D-1):**
+**Position: EVERY TRACK IS DONE AS FAR AS A SESSION CAN TAKE IT.** D, B, C, F,
+the code half of A and the no-microphone half of E are complete. What remains
+needs a person at the machine: three operator minutes (Track A) and a live
+acoustic session (Track E).
 
 ```
-main                       b04ec8e   (PR #36 open, unrelated: BUG-377)
-this work                  branch fix/bug-378-effector-error-shape -> PR
-suite                      6556 tests / 6556 pass / 0 fail / 0 skipped
+main                       b04ec8e
+PR #37  Track D-1  BUG-378   fix/bug-378-effector-error-shape      OPEN  (base main)
+PR #38  Track D-2  BUG-379   fix/bug-379-aether-rebind-terminal    OPEN  (base main)
+PR #39  Track D-3..D-6       fix/track-d-remaining                 OPEN  (stacked on #38)
+PR #40  Track B    BUG-384   fix/bug-384-map-counts-from-vault     OPEN  (stacked on #39)
+PR #41  Track C    BUG-385   fix/bug-385-track-c-dispositions      OPEN  (stacked on #40)
+PR #42  Track F    BUG-386   fix/bug-386-verify-unknown-nodes      OPEN  (stacked on #41)
+PR #43  Track A    BUG-387   fix/bug-387-doctor-verifies-the-grant OPEN  (stacked on #42)
+PR #44  Track E    BUG-388   fix/bug-388-bleed-peak-attribution    OPEN  (stacked on #43)
+suite                      6694 tests / 6694 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
-build-capability-map       --check clean
-build-index                --check clean
-map                        91 nodes: 29 ok / 26 warn / 11 fail / 7 dark / 18 unknown
-next free BUG number       379
+map                        91 nodes: 44 ok / 31 warn / 9 fail / 2 dark / 5 unknown
+next free BUG number       389
 ```
 
-**What D-1 actually found, because it changes how the rest of Track D should be
-read.** The map's per-node `ok`/`fail` counts are hand-carried readings from the
-operator's live vault, and **they can be months stale while presenting as
-current**. Measured against the real vault
-(`%APPDATA%/MYTHOS/vault/Audit`, 345 completed-fail rows):
+Merge order **#37 -> #38 -> #39 -> #40 -> #41 -> #42 -> #43 -> #44**. #37 and #38
+both branch from `main` and touch `index.html`, so they conflict on the island;
+the code does not overlap, and since BUG-384 every count regenerates from the
+vault, so only `s`, `note` and `ev` need care in a merge.
 
-- `run_command`'s `[object Object]` was a **2026-07-29** record, already fixed by
-  P2-12 on 2026-08-13. The map was showing pre-fix data as a live defect.
-- `list_folder` was **not this defect class at all** — 3 ok / 2 fail, not 0 / 2,
-  its reason was always readable, and both failures are the sandbox correctly
-  refusing a path outside the allowed roots.
-- Only `spotify_search` stays red, and **not for the reason the work order
-  guessed**: it is the one Spotify verb that needs a working UIA tree inside
-  Spotify, not a shared dispatch shape.
+## TRACK E WAS NOT EIGHT NODES NEEDING A MICROPHONE
 
-Negative control: 28 of 142 completed-fail rows before 2026-08-13 carried no
-actionable reason; **0 of 203 after it**. So before treating any other Track D
-node's evidence as current, **check the date on the rows it is derived from.**
-Two of the three nodes in the very first item were wrong, and the same risk
-applies to D-2 … D-6.
+It was written up in one line — *"Track E is eight nodes needing a live
+microphone"* — and the ledger that held the per-node detail has since been
+deleted, so that line was the whole specification. Taken at face value it makes
+the entire voice cluster unreachable from a session, which is why nobody read
+the number the cluster is reasoned from. **That number was measuring the wrong
+person, and proving it needs a log file and a unit test, not a microphone.**
 
-**First action:** take any of **D-2 (one terminal condition), D-3 (dead provider
-lanes), D-4 (YouTube id extraction), D-5 (never exercised — needs a harness), or
-D-6 (the ten singles)** from the TRACK D WORK ORDER above. D-1 was sequenced
-first only because its failures were invisible until the fix landed; that is no
-longer true, so nothing is blocked on ordering now.
+`barge-in-policy.js` learns `bleedPeak` — "loudest level seen while MYTHOS was
+provably speaking" — inside the 500ms protected window, on this written
+reasoning: *"the assistant's own onset is by construction the loudest thing
+present"*. It is false. MYTHOS reaches the mic through the speakers and is then
+attenuated 15-20dB by echo cancellation (measured independently by
+`probe-aec-routes.js`: residual 0.0069-0.0141), while the operator arrives
+direct. **Whenever both are present the OPERATOR is by construction the louder
+one** — the exact opposite of the assumption.
 
-**Carry forward from D-1, cheap and reusable:**
+Measured 2026-08-28 over 731 `voice.capture-suspend` records in 20 sessions: of
+**31 upward moves of `bleedPeak` above 0.05, TWENTY-TWO landed on a value exactly
+equal to that hold's own `peakRms`** — the operator. Every session opens at
+0.0043-0.0347, agreeing with the probe, then ratchets to 0.05-0.33 and never
+decays. 2026-08-24 reported **0.1606 for 110 consecutive holds off one frame**.
+The uncontaminated control is 2026-08-26: ended at **0.0313** while the operator
+peaked at 0.1402.
 
-- `test/effector-failure-reason-class.test.js` walks all 179 registered tools
-  through the real adapter, hub and dispatcher. If a Track D fix changes an
-  effector's failure shape, that file is where it will fail first — and Part A
-  pins `effectors/adapter.js` as the one door every tool failure leaves through.
-- The three-route diff (adapter `.result` / dispatch audit reason /
-  `hub.reasonOf` remedy) found the parity gap that reading any single route
-  missed. It is the cheapest check available whenever one fact is derived twice.
+### The deferral that made it survive, and the shape to watch for
 
-### Five things that will cost you an hour each if nobody tells you
+This was diagnosed on 2026-08-19 and deliberately deferred, reasoning that the
+learned floor is dormant so **"Consequence today is nil"**. The premise was
+wrong because nobody looked for a consumer. `verify-voice-session.js` read
+`bleedPeak`, called it **"the ungagged oracle"**, and printed *"Echo cancellation
+is not removing it, whatever the constraint reports as granted"* — a hardware
+verdict derived from the operator's own voice. **That conclusion is why BUG-274
+T4, an acoustic rework, sits in this plan as "the only fix that removes the
+trade".** It should be re-argued from an attributable measurement before anyone
+builds it.
 
-**1. The pre-commit hook runs FOUR gates.** Full suite, `sync-test-count
---check`, `lint-bug-registry`, and `build-capability-map --check`, plus
-`build-index --check`. **Add or remove a registered tool and your commit is
-blocked until that tool is mapped to a node on the capability map.** One line in
-the island plus `--write`; the hook message says so.
+The deferral even wrote the right instruction — *do not re-enable the learned
+floor without checking whether the operator was speaking during that hold's
+opening 500ms* — but wrote it in `BUGS.md`, where no gate can read it. **A
+warning with nothing enforcing it is not a control.** Before deferring anything
+on "consequence today is nil", grep for who reads the value.
 
-**2. Ordering: `sync-test-count --write` must run BEFORE
-`build-capability-map --write`.** The map reads the suite figures out of
-ROADMAP.md's SYNC block. Reverse them and the hook blocks you on a map that is
-one number behind. Confirmed again on 2026-08-27: the map printed
-`! vitals.tests: island says 6533, the code says 6556` and needed a second
-`--write` after the sync.
+### What is left, and none of it is code
 
-**3. Run the suite with the overrides or it lies to you.** Long-form `TEMP` and
-`TMP`, plus free ports from `node scripts/pick-free-ports.js`. Without them a
-clean tree measures `fail=1 skipped=1`, and `sync-test-count --check` will then
-recommend writing that red result in as the baseline. **Do not follow that
-recommendation.** Hit twice on 2026-08-27 during D-1: once because a backgrounded
-command did not inherit the exported `TEMP` (`6556/6554/1/1` on a clean tree),
-and once because `--write` recorded a genuine one-test flake (`6556/6555/1/0`)
-that did not reproduce on a re-run. **`--write` records whatever it measures,
-including a flake — re-run before believing a single red number, and re-run the
-failing file in isolation to tell a flake from a regression.** `BUG-359`'s
-whatsapp-window-settle test was the flake; it passed 4/4 three times alone.
+- **Track A, the operator half** — `node mythos/scripts/google-auth.js`, put the
+  new `GOOGLE_REFRESH_TOKEN` in `mythos/.env`, confirm with
+  `node mythos/scripts/verify-google-grant.js`, then press Ctrl+Alt+X with MYTHOS
+  running. **If it has to be repeated every few days, publish the OAuth consent
+  screen first** — "Testing" status issues 7-day refresh tokens.
+- **Track E, the acoustic half** — eight voice nodes still need a live session.
+  Read `bleedPeak` again once it is attributable; it is now a room measurement
+  rather than a portrait of whoever spoke loudest.
+- **The 5 remaining `unknown` nodes are single dispositions**: `daily_plan`,
+  `set_wallpaper`, `installer`, `security_scan`, `compose_email`. Each is NOT RUN
+  for a written reason, not for lack of a harness.
+- Still open from earlier tracks, each with its reason in the map:
+  `spotify_search`, `Aether mesh`, `browser automation`, `cua-driver`,
+  `ui_click`, and `fabrication` at 67%.
+- **Two open questions this campaign deliberately did not answer:** which vault
+  root is canonical (BUG-384), and how the paid product handles the
+  non-commercial wake-word weights (step 6.5).
 
-**4. Commit with `git commit -- <pathspec>`, then demand an empty
-`git status --porcelain`.** Both halves, neither sufficient.
+### THE CAMPAIGN-WIDE FINDING, now six for six
 
-**5. `--next` is an observation, not a lock.** Write the BUGS.md entry early.
-Note that `--next` reads **branch names too**, so naming a branch
-`fix/bug-NNN-...` claims NNN immediately — which is why `--next` said 379 during
-D-1 while the plan still said 378. Renumber by `git reset --soft HEAD~1` rather
-than `--amend`.
+**Every track was scoped from a written description that understated or
+misstated the problem, and in five of six the description named a cause that
+measurement refuted.** D: 4 of 6 causes wrong. B: eleven stale labels, not six;
+29 of 43 counts wrong. C: two dispositions real, the third hid an inverted
+detector. F: 37 tools, not 18 nodes. A: the one description that was exactly
+right. E: not a microphone problem at all.
 
-**6. Editing a tracked file while the suite runs invalidates the run.** New on
-2026-08-27. Splicing the BUG-378 entry into BUGS.md mid-run made two ratchet
-tests fail with `131 undeclared in code, above baseline 130`; both passed
-immediately when re-run against the settled tree. The anti-drift tests scan
-tracked files — including BUGS.md, `index.html` and the plan documents — so
-finish the edits, then measure.
+**And the sharper one: a verification harness accused the product NINE times
+across two harnesses and was wrong every time, always fail-open** — plus a tenth
+from a truncated log field with no harness involved, and now an eleventh shape:
+a verifier stating a confident conclusion about HARDWARE from a number that
+could not name a source. Read params off the tool DEFINITION, not its name.
+Audit every `n/a` as hard as every FAIL. Print the FULL record, not the summary
+column. Treat a FAIL as a hypothesis until you have read the code it accuses.
+**And before believing any number a harness calls an oracle, ask what else could
+have produced it.**
 
+### Things that will cost you an hour each if nobody tells you
+
+**1. The pre-commit hook runs FOUR gates** plus `build-index --check`.
+
+**2. Ordering: `sync-test-count --write` BEFORE `build-capability-map --write`,**
+and `build-index --write` after any BUGS.md change. Note the loop: sync writes
+the counts the island carries, so the island then goes stale and needs `--write`
+a second time. Run map-write, suite, sync-write, map-write.
+
+**3. Capture ONE TAP run** and pipe it into both `sync-test-count --write` and
+`--check` — it reads stdin, so the suite runs once instead of three times. Use
+long-form `TEMP`/`TMP` and ports from `pick-free-ports.js`. **Never let it write
+a baseline from a red run.**
+
+**4. `git commit -m ... -- <pathspec>`, in that ORDER.** Everything after `--`
+is a pathspec. Then demand an empty `git status --porcelain`.
+
+**5. `--next` reads BRANCH NAMES too.** Write the BUGS.md entry early. And a
+BUG number cited in tracked source whose ENTRY lives on another branch pushes
+the undeclared ratchet over baseline — drop the citation, do not raise the
+number.
+
+**6. Do not edit a tracked file while the suite is running.**
+
+**7. The file-size ratchet will refuse your fix, and it is usually right.**
+Move the code; do not raise the number. `verify-voice-session.js` and
+`s2s-bridge.js` both sit EXACTLY on their ceilings — an edit there must be
+net-zero lines, which is a real design constraint and not just an annoyance.
+
+**8. Tracked PowerShell must be pure ASCII**, and `ps-automation.ps1` has MIXED
+line endings. Single-line anchors always.
+
+**9. A coverage guard scoped to "whatever is currently broken" erodes as you
+fix things.** Anchor it on a stable marker.
+
+**10. THE MAP IS A CANVAS with no DOM element per node.** Drive it:
+`resize(); build(); place(); draw()`, then `getImageData` and count pixels.
+
+**11. `node -e` in this shell eats backticks and backslashes**, and a stray
+`python - <<EOF` hangs on stdin for the full timeout. Write a script file.
+
+**12. RE-RUN THE CLEAN TESTS AFTER EDITING A TEST TO KILL A SURVIVING
+MUTATION.** A mutation harness reports whether the MUTANT fails; it says
+nothing about whether the clean tree still passes.
+
+**13. AN EXISTING TEST MAY ASSERT THE BUG.** BUG-388 was held in place by a test
+requiring the verdict to say "IS reaching the microphone", from a fixture whose
+own `bleedPeak` is one of the contaminated values. When a correct fix turns a
+test red, read the assertion before assuming the fix is wrong.
 ### Standing constraints
 
 - **Two machines and sometimes two sessions share this repo.** Branch, PR,

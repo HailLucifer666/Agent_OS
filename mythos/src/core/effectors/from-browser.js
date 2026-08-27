@@ -1434,15 +1434,10 @@ const DISMISSAL_CONTAINERS = ['dialog', 'alertdialog', 'banner', 'complementary'
 // That is a deliberate boundary — working around anti-bot checks is what gets
 // an operator's real, logged-in accounts banned, and this browser IS their real
 // logged-in browser.
-const CAPTCHA_MARKERS = [
-  'recaptcha', 'hcaptcha', 'turnstile', 'are you a robot', 'verify you are human',
-  'i am not a robot', 'security check', 'cloudflare',
-];
-
-function looksLikeCaptcha(snapshotText) {
-  const hay = String(snapshotText || '').toLowerCase();
-  return CAPTCHA_MARKERS.filter((m) => hay.includes(m));
-}
+// The marker list and its matcher live in util/captcha-markers.js (BUG-385):
+// pure policy, exercisable without loading a browser effector. Re-exported
+// below so existing callers and tests are unaffected by the move.
+const { CAPTCHA_MARKERS, looksLikeCaptcha } = require('../util/captcha-markers.js');
 
 async function browser_dismiss_overlays() {
   const guard = await requireOnline();

@@ -41,6 +41,1284 @@ it is committed.
 
 ---
 
+## BUG-388 — the barge-in floor learned the OPERATOR'S voice and called it the room, and a verifier turned that into a verdict on the echo canceller (✅ FIXED 2026-08-28, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-28. Closure-campaign **Track E**, and the part of it
+that never needed a microphone. 10 assertions, 10 mutations all caught.
+
+**Track E was written up as "eight nodes needing a live microphone".** That
+framing is what kept this closed: the whole voice cluster was treated as
+unreachable from a session, so nobody read the number the cluster is reasoned
+from. It is wrong, and it is wrong in a way that is provable from a log file and
+a deterministic unit test.
+
+### The defect
+
+`barge-in-policy.js` keeps `bleedPeak`, documented as *"loudest level seen while
+MYTHOS was provably speaking"*. It is learned inside the 500 ms **protected
+window** that opens when the assistant starts talking, on this stated reasoning:
+
+> the assistant's own onset is by construction the loudest thing present
+
+That sentence was written as reasoning and never checked, and it is false. MYTHOS's
+voice reaches the microphone through the speakers and is then attenuated 15–20 dB
+by echo cancellation — measured independently by `scripts/probe-aec-routes.js`,
+which puts the Gemini Live route's residual at 0.0069–0.0141. The operator's voice
+arrives direct. **Whenever both are present the operator is by construction the
+LOUDER one**, which is the exact opposite of the assumption. So in the ordinary
+conversational case where the operator is still talking when MYTHOS begins its next
+utterance, what the protected window learns is the operator.
+
+### Why this is not hypothetical
+
+Measured 2026-08-28 from `%APPDATA%/MYTHOS/mythos-server.log`: 731
+`voice.capture-suspend` records across **20 sessions**, grouped into monotonic runs
+of `bleedPeak` (a drop means a new process).
+
+Of the **31 upward moves above 0.05, twenty-two set `bleedPeak` to a value exactly
+equal to that hold's own `peakRms`** — the loudest microphone frame of the hold,
+which is the operator. Every one of those holds also carries `flushedRaw > 0`, so
+real operator audio was passing at the time.
+
+The two populations separate cleanly:
+
+| | measured |
+|---|---|
+| what every session OPENS at, before contamination | **0.0043 – 0.0347** |
+| the acoustic probe's independent residual | **0.0069 – 0.0141** |
+| what `bleedPeak` ratcheted to | **0.0532 – 0.3324** |
+| the operator's own measured interruptions (BUG-274) | **0.0398 – 0.2717** |
+
+The reported "bleed" sits in the operator band. The real bleed agrees with the probe.
+
+**And `bleedPeak` is a running maximum that never decays and deliberately survives
+`reset()`, so one contaminated frame poisons the entire process.** 2026-08-24
+reported `0.1606` for **110 consecutive holds** off a single frame at 20:28:19. The
+uncontaminated control is 2026-08-26: 11 holds, ended at **0.0313** — below the
+0.035 floor — while the operator peaked at 0.1402 in the same session.
+
+### The part that reopened it: this was diagnosed, deferred, and the deferral's premise was wrong
+
+BUG-274 recorded it on 2026-08-19 under *"Two findings from this session recorded
+and deliberately NOT fixed"*, reasoning that the learned floor is dormant
+(BUG-273 A1) so **"Consequence today is nil"**. That premise does not hold, because
+a consumer existed and nobody looked for it. `scripts/verify-voice-session.js` read
+`bleedPeak`, called it **"the ungagged oracle"**, and printed:
+
+> MYTHOS's own voice IS reaching the microphone, ABOVE the level used to detect the
+> operator. **Echo cancellation is not removing it, whatever the constraint reports
+> as granted**
+
+That is a hardware verdict derived from the operator's own voice. It is the
+conclusion behind the Stage 3 note that *"every threshold in this path is
+compensation for echo cancellation not working at all"* and behind BUG-274 T4 being
+carried in the plan as **"the only fix that removes the trade"**. An acoustic
+rework was queued on a number that measured the wrong person.
+
+The deferral even wrote down the right instruction — *"Do not re-enable the learned
+floor on the strength of a `learnedFloor` figure without first checking whether the
+operator was speaking during that hold's opening 500 ms"* — but it wrote it in
+`BUGS.md`, where no gate can read it, and the verifier went on making the claim
+anyway. A warning with nothing enforcing it is not a control.
+
+### The fix
+
+`barge-in-policy.js` now decides **once per utterance, at the transition out of
+IDLE, whether the coming protected window may teach the floor anything at all**,
+using the last level heard while MYTHOS was silent. If the operator was already
+above the floor, no frame of that window is attributable and none is learned; the
+refusal is counted (`bleedWindowsSkipped()`), because "learned nothing" and "the
+room is quiet" are different facts and `bleedPeak` alone cannot tell them apart.
+
+Compared against the static `INITIAL_BLEED_FLOOR` and **deliberately not against
+`bleedFloor()`**: the learned value is the thing under suspicion, so using it would
+let an already-poisoned peak raise the bar for calling the next window
+contaminated — poison protecting itself, failing in the direction of growth. Pinned
+by its own test.
+
+`verify-voice-session.js` no longer converts the number into a verdict about the
+hardware. It still prints the peak and the floor — deleting the claim must not
+delete the data — and now says what would be required to attribute it.
+
+### Scope, and what this does NOT fix
+
+- **This does not change what MYTHOS does today.** The learned floor is dormant, so
+  the floor in force stays `INITIAL_BLEED_FLOOR` either way. What changes is that
+  the number the next session reads is now the room rather than the operator, and
+  the dormant mechanism is no longer armed with a poisoned input for whoever
+  re-enables it.
+- **The `echoRatio >= 0.6` learning path is untouched**, deliberately: a transcript
+  the echo filter matched to MYTHOS's own words is positive attribution, which is
+  the one signal that separates the two on more than amplitude.
+- **An operator who begins speaking INSIDE the 500 ms window is still learned
+  from.** That is a strictly narrower hole than the one closed — the diagnosed and
+  measured path is the operator already talking when the window opens — and closing
+  it needs a per-frame source signal the client does not have.
+- **`bleedPeak` remains an all-time maximum.** With attribution fixed the maximum is
+  over attributable frames and is defensible, but it is still the least robust
+  estimator available; a decaying or percentile statistic would survive a single
+  bad frame better. Not changed here because five test files pin the current
+  semantics and the poisoning source is what mattered.
+- **`bleedWindowsSkipped` is not wired into the suspend log line.** `s2s-bridge.js`
+  sits exactly on its file-size ratchet ceiling, and the fix does not need it:
+  `bleedPeak` is now trustworthy by construction rather than needing a caveat field
+  travelling beside it.
+- **Nothing here needs a microphone, and nothing here closes a Track E node.** The
+  eight voice nodes still need a live acoustic session. What this removes is a false
+  reading that was steering that session's agenda.
+
+### One existing test asserted the bug
+
+`bug-272-verify-voice-session.test.js` required the verdict to say *"IS reaching the
+microphone"* — from a fixture whose `bleedPeak` is **0.1193**, which is itself one
+of the ratcheted values in the table above. The assertion encoded the false
+inference, so it was corrected rather than worked around.
+
+---
+
+## BUG-387 — `doctor` reported the Google grant OK for three weeks while 88 calls failed on it (🔧 CODED 2026-08-28)
+
+**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New
+`scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions,
+9 mutations all caught.
+
+**This does NOT close Track A's two nodes.** They need three operator minutes
+and no session can supply them. What it removes is the reason those three
+minutes kept not happening.
+
+### The defect, measured live on this machine
+
+```
+$ node mythos/scripts/doctor.js
+  OK    Gmail / Calendar sensors    configured: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN
+```
+
+At that same moment, from the vault: **88 `invalid_grant` failures across 60
+separate bursts between 2026-08-06 and 2026-08-26**, every one of them saying
+the refresh token is expired or revoked. The single check an operator runs to
+answer *"is my Gmail set up?"* was answering **yes** about the exact thing that
+was broken.
+
+**The class is an existence check standing in for a correlation check.**
+`KEY_CHECKS` asks whether three strings are present in `.env`. Presence is not
+validity, and for an OAuth refresh token the two come apart permanently and
+silently: the string stays in the file forever after Google revokes it.
+
+### What was NOT wrong, and it is most of the system
+
+Measured before writing anything, because Track A is the one track in this
+campaign whose description turned out to be exactly right, and it would have
+been easy to invent work:
+
+- `from-gmail.js` classifies `invalid_grant` as terminal and its remedy text
+  names the literal command AND the 7-day "Testing publishing status" trap.
+- `hub.js` latches the terminal result per tool and returns the stored remedy
+  without touching the provider again. Verified from the vault: the 88 failures
+  fall into **60 bursts, nearly all of size 1** — one attempt per process, not a
+  retry storm.
+- `gmail-sensor.js` raises `health.anomaly` with `needsOperator: true`.
+- `explainer.js` short-circuits on `needsOperator` and **speaks the whole
+  remedy**, verbatim, including `node scripts/google-auth.js`.
+- Nine test files already cover that chain, two of them asserting the SPOKEN
+  text contains `google-auth.js`.
+- `google-auth.js`'s two historical Windows bugs (cmd.exe splitting the consent
+  URL at `&`; `console.error` + `process.exit` eating Google's real error) are
+  both already fixed.
+
+**A correction I have to record, because I nearly filed a ticket on it.** From
+the episodic `summary` field it looked as though MYTHOS had announced the fault
+nine times over eight days and never once said what to do — one utterance even
+reads *"I do not yet know the cause."* That was **wrong**: `summary` is
+truncated at ~100 characters and `detail.text` carries the complete remedy. Only
+the 2026-08-18 utterance is genuinely deficient, and it predates the BUG-273 C2
+and BUG-278 fixes that repaired exactly it. **Reading a truncated log field and
+accusing the product is the same mistake as a harness reporting a FAIL for its
+own bad arguments** — the third time this campaign has produced it.
+
+### The fix — a verifier, and a doctor row that stops overclaiming
+
+`doctor.js` could not host the check itself, and the file says why: it is
+forbidden from touching a key VALUE (AD-8, pinned by `setup-route.test.js`'s
+canary), and `main()` is synchronous. Sending the refresh token to Google needs
+the value. So the check lives in its own script and doctor points at it:
+
+```
+node mythos/scripts/verify-google-grant.js
+  VALID         a fresh access token came back (never printed)
+  INVALID       exit 1, and the remedy names the command
+  UNCONFIGURED  exit 2, one or more of the three values absent
+  UNREACHABLE   exit 3 — COULD NOT CHECK, which is not the same as broken
+```
+
+**It reuses `createGoogleAdapter().getProfile()` rather than re-implementing a
+token refresh.** That path already carries the bounded `HTTP_TIMEOUT_MS` (an
+`https.request` with no timeout waits forever against a host that accepts and
+then stalls) and the B5 fix that keeps Google's `error_description` instead of
+throwing away the actionable half. A second implementation would be a second
+place for those to be got wrong. The remedy string comes from
+`googleAuthFailureText` for the same reason: one door, both callers.
+
+**UNREACHABLE is a distinct exit code on purpose.** A verifier that cannot
+reach Google and says INVALID would send the operator through an OAuth consent
+flow to fix their wifi. "Could not look" is not "there is nothing there" — the
+most expensive repeated mistake in this repository.
+
+The doctor row now reads `present — validity not checked here` and names the
+verifier. Deliberately not a red row: the keys ARE configured, that check is
+doing its job correctly, and a report that goes red for an expected reason is a
+report people stop reading (the BUG-240 note in that same file).
+
+### Scope
+
+- **No secret is ever printed.** The verifier reports names and outcomes only,
+  and a test plants a canary refresh token and asserts it appears in no line of
+  output on any of the four paths.
+- **Nothing calls the verifier automatically.** It is a command the operator
+  runs, not another background poller — the system already announces this fault
+  out loud and adding a second nag is not the missing piece.
+- **doctor stays value-free and network-free.** The AD-8 invariant is untouched.
+- The two Track A nodes stay as they are: `gmail_unread` red until the token is
+  re-minted, `OCR hotkey` dark until somebody presses Ctrl+Alt+X.
+
+---
+
+## BUG-386 — 37 tools nobody had ever measured against an oracle, and a harness that accused the product six times before it was right (✅ EXERCISED 2026-08-28)
+
+**Status:** ✅ EXERCISED 2026-08-28. Closure-campaign **Track F**. New
+`scripts/verify-unknown-nodes.js` (the sibling of BUG-382's
+`verify-dark-nodes.js`), 10 assertions in
+`test/bug-386-unknown-node-harness.test.js`, **8 mutations of REAL PRODUCT
+CODE, 8 caught**, every touched file restored sha256-identical.
+
+```
+21 pass  ·  7 n/a  ·  11 disp  ·  0 FAIL  ·  exit 0
+```
+
+**No product defect was found.** That is the correct answer for tools that
+were unmeasured rather than broken, and it is only worth anything because the
+harness is proven able to say otherwise — see the mutation section.
+
+### Scope: two populations, and they support different claims
+
+| | nodes | tools | what was actually open |
+|---|---|---|---|
+| never called | 7 | 9 | does any of this run at all |
+| Track B's `warn` set | 11 | 28 | they demonstrably run in production; do they do what they SAY |
+
+The second population exists because BUG-384 found eleven nodes labelled
+`unknown` — "nothing has been measured" — while the vault held as many as 183
+recorded calls for them, and moved them to `warn` on the stated rule that
+production traffic is not the acceptance contract. This is the harness that
+was promised there.
+
+### REAL SUBSYSTEMS, NOT STUBS — the whole design
+
+Every factory in `effectors/` takes a narrow ctx slice: `from-okf` wants
+`ctx.vault`, `from-persona` `ctx.identity`, `from-widgets` `ctx.bus`. Handing
+each a stub would go green and would have measured the stub. So the harness
+builds the REAL modules the way `src/main.js` does —
+`createKanbanEffector({fs, bus})`, `createPipelineEffector({fs, classifier})`,
+`createIdentity({bus, config, fs, identityStore})` — over an `fs-store` rooted
+in a temp sandbox, and the oracle is then the vault file read back off disk.
+Where no real subsystem can be built here, the tool is `n/a` and names the
+dependency instead of being written off.
+
+Sample oracles, none of which is a self-report:
+
+```
+get_time            the answer must carry THIS process's current year, and a
+                    timezone argument must actually change it
+read_system_specs   must agree with node's own os.cpus()/platform — the tool
+                    exists so the model reads real numbers instead of
+                    screenshotting a dashboard (BUG-273)
+kanban_add_card     the card must be in the board FILE on disk, found by
+                    re-reading the vault, not by trusting the return value
+okf_export/import   a ROUND TRIP: import must read back the concept export
+                    wrote. Two calls that each return ok prove nothing about
+                    the format they are supposed to share
+set_persona_level   read back through a DIFFERENT DOOR — identity itself, on
+                    the named trait, to a value it did not already hold
+spawn_widget        the real bus must carry the title and layout a HUD would
+                    render from, not merely some event
+navigate            the returned uiActions must name the resolved route AND a
+                    URL must still be refused (the BUG-273 A1 shape)
+open_artifact       must REFUSE an id that does not exist — for a read tool
+                    nobody has called, the miss is the interesting case
+```
+
+### THE HARNESS ACCUSED THE PRODUCT SIX TIMES AND WAS WRONG SIX TIMES
+
+BUG-382 recorded three such accusations and drew the lesson. This one produced
+six, which says the lesson generalises rather than being a one-off:
+
+| # | what the harness did | what it reported |
+|---|---|---|
+| 1 | assumed `buildTools()` returns an array; from-widgets and from-dashboard return `{TOOLS:[…]}` | two GROUP-level FAILs reading like two broken effectors |
+| 2 | passed `orchestrator: null` to `mission_status` | a FAIL on an unguarded dereference that `main.js` makes unreachable |
+| 3 | looked for files matching `/okf/` when the bundle lands in `Knowledge/<name>/` | `okf_export` FAIL while its own result named the directory it had just written |
+| 4 | waited for a bus event from `navigate`, which returns `uiActions` instead | `navigate` FAIL against correct code |
+| 5 | invented args (`level` not `value`, `{type,body}` not `{title,layout}`, lane `doing` not `review`) | four tools written off as `n/a` for the harness's own mistakes |
+| 6 | passed `buildRunner: null` to `read_status`/`job_status` | a null dereference `main.js` also makes unreachable |
+
+**Every one drifted the same way: what the harness could not do, it called a
+product bug.** #5 is the quietest and the most dangerous — an `n/a` looks
+humble, so nobody re-reads it, and four tools would have stayed unmeasured
+while the report claimed to have looked.
+
+### The break-it proof, which is what makes the 0 FAIL mean anything
+
+A harness that has only ever reported pass is a description. So eight
+mutations were made to **real product code**, each making a tool lie in the
+shape this campaign keeps finding — return `ok` while doing nothing:
+
+```
+CAUGHT  set_persona_level reports success without setting anything
+CAUGHT  okf_export reports success without writing the bundle
+CAUGHT  spawn_widget reports success but never reaches the bus
+CAUGHT  navigate resolves the route but sends the HUD no instruction
+CAUGHT  navigate accepts a URL as a dashboard view (the BUG-273 A1 shape)
+CAUGHT  kanban_add_card reports success but never persists the board
+CAUGHT  get_time answers with a plausible but wrong year
+CAUGHT  ambient_awareness answers status without saying whether it is on
+```
+
+**Two of these SURVIVED a first pass, and both were real holes in oracles I
+had written:**
+
+- `set_persona_level` asked only whether the levels object stringified to
+  something containing `"4"` — and a default level of 4 was already there, so
+  a tool that set nothing passed. *"Something in this blob looks like what I
+  asked for" is not a read-back; it is a coincidence detector.* Now it reads
+  the named trait before and after, targeting a value it did not already hold.
+- `okf_export` counted files under `Knowledge/` rather than asking whether the
+  CONCEPT was on disk, so skipping one write left a sibling file behind and the
+  count still passed. Now it reads the bytes for the concept and the index.
+
+A third reported TARGET ABSENT: a two-line anchor cannot match a file whose
+line endings are not the `\n` in a JS string — the harness refusing to score a
+mutation that never applied, which is the harness working.
+
+### What was deliberately NOT run, and why that is the point
+
+Eleven tools are dispositions with a written reason. A harness that touches the
+operator's real machine to prove a tool works has traded one dishonesty for a
+worse one:
+
+```
+install_from_github  installs software from the network onto the machine
+set_wallpaper        changes the operator's actual desktop
+clipboard_write      overwrites whatever the operator has copied — the same
+                     class as the wakeword test that moved real model files
+                     aside and lost them (root CLAUDE.md)
+delete_artifact      destructive by definition
+compose_email        opens a real browser compose tab
+security_scan        T3, spawns a scanner over real paths
+ask_agent            spend, and the no-spend decision is the operator's
+run_mission          spend
+pipeline_execute     T3, executes a real pipeline stage
+kanban_assemble      T3, drives the build engine (dsh)
+kanban_build_card    T3, drives the build engine
+```
+
+The gate test asserts every disposition SAYS WHY — and caught two of mine that
+were too thin to be useful.
+
+### Map movement, and what stays open
+
+Four nodes reach the acceptance contract and go `ok`: **local info**
+(get_time / get_weather / get_directions), **OKF exchange** (a closed round
+trip), **persona**, **widgets**. `ambient_awareness` leaves `unknown` for
+`warn` — only its `status` action is verified; `on`/`off` need a real screen
+sensor. Everything else stays `warn` or `unknown` with the reason recorded:
+`status readouts` is 2 of 4 (read_status and job_status reach through to the
+build engine), `kanban` and `pipeline` have their T3 halves undone, `clipboard`
+needs pc-child online, and five nodes are single dispositions.
+
+**unknown 7 → 5, warn +1 net, ok +4.**
+
+---
+
+## BUG-385 — the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text (🔧 CODED 2026-08-28)
+
+**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped
+as *"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder,
+video call having no tool)"*. All three are recorded. Two of them turned up a
+real defect on the way, and the CAPTCHA one is the serious entry here.
+
+### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions.
+
+The disposition itself needed nothing: `browser_check_captcha` already returns
+`ok` with `blocked: "captcha"` and a comment saying *"blocked, not failed:
+nothing went wrong, we have simply reached the line this system does not
+cross"*, `browser-obstacles.test.js` already pins the handover wording, and a
+source-shape assertion already fails if anyone adds a solver service. That is a
+complete disposition and it was complete before this ticket.
+
+**What was not right is what counts as a challenge.** `CAPTCHA_MARKERS` held
+two entries that identify a VENDOR rather than a challenge, and `looksLikeCaptcha`
+is fed the aria tree **plus `page.url()`**. Measured against the real function:
+
+```
+FLAGGED  ["cloudflare"]        https://developers.cloudflare.com/workers/
+FLAGGED  ["cloudflare"]        footer "Performance and security by Cloudflare"
+FLAGGED  ["cloudflare"]        a news article about a Cloudflare outage
+FLAGGED  ["cloudflare"]        https://www.cloudflarestatus.com/
+FLAGGED  ["security check"]    Google account "Security Checkup"
+FLAGGED  ["security check"]    a bank help page: "we run a security check on every login"
+
+false positives: 6 of 6 ordinary pages
+```
+
+**And the same run missed real challenge text**, because the markers are plain
+`includes()` substrings:
+
+```
+MISSED   "Verifying you are human. This may take a few seconds."
+         -- the marker is "verify you are human"; the page says "Verifying"
+MISSED   "Checking your browser before accessing"
+MISSED   ".../cdn-cgi/challenge-platform/..."
+MISSED   "Press and hold to confirm you are a human"
+```
+
+So the two broad markers did the **opposite** of their job: they fired on the
+brand name, which appears on a large fraction of the web, and missed the
+challenge, which is identified by its own distinctive text and path.
+
+**Why it is not cosmetic.** `browser_snapshot` runs the same matcher on EVERY
+snapshot and, on a hit, attaches `captchaDetected: true` and the note *"Do NOT
+try to solve or bypass it — ask the operator to complete it in the browser
+window."* On any Cloudflare-fronted page that instruction is false, and the
+model stops browsing to ask the operator to solve a challenge that is not there.
+
+**Fix — mostly a removal, and a rule instead of a brand list.** Bare `cloudflare`
+and bare `security check` are gone; a vendor's name is not a challenge.
+`verif(y|ying) … you are (a) human` is now stem-tolerant. Four distinctive
+markers are added, and the code says which are GROUNDED and which are not:
+`/sorry/` and `/sorry/index` come from **this repo's own vault** — the recorded
+incident reads `google.com/sorry/index?continue=…` — while
+`cdn-cgi/challenge-platform`, `checking your browser before accessing` and
+`press and hold` are phrases that no ordinary page carries, so at worst they
+change nothing. **No upstream markup was verified from this machine and the
+comment says so**, because a confident sentence about another vendor's DOM is
+exactly the kind of claim this repo has been wrong about before.
+
+**The safety boundary did not move and could not have.** "Never solve or bypass"
+is structural — there is no solver anywhere and a source assertion keeps it that
+way. Detection quality is an honesty property sitting above that boundary, so
+tightening it cannot open a hole; the worst case of a miss is that MYTHOS keeps
+browsing a challenge page without telling the operator, which is what already
+happens today for every phrasing in the MISSED list.
+
+### C-2 — `focus_window`: the ladder is exhausted, and the map described it wrongly
+
+The disposition holds and is binding in root `CLAUDE.md`: the escalation ladder
+(thread-attach → foreground-lock-timeout override → minimize/restore) is
+exhausted, Windows is refusing deliberately, and **no fourth rung may be added**.
+The lock-timeout override restores the system-wide setting in a `finally`, so it
+never leaks.
+
+**But the map row was wrong about the evidence.** It read *"Five of six failures
+are stale PIDs it created itself… One is a genuine OS refusal."* Re-derived from
+the union of both vaults, the six failures are **three** classes, not two:
+
+```
+3  stale pid        "Cannot focus PID 18832: ... That pid no longer exists,
+                     so nothing was focused. Call list_windows again"
+2  no main window   "Process 4420 has no main window."
+1  foreground lock  "...blocked by the OS foreground-lock; tried thread-attach,
+                     lock-timeout override and minimize/restore."
+```
+
+Two corrections. The count is 3/2/1, not 5/1. And *"stale PIDs it created
+itself"* is false for at least one of them — **the model asked to focus PID 1**,
+which `focus_window` never handed out.
+
+**One real gap, and it is one line.** The stale-pid failure names its recovery
+(`list_windows`); the no-main-window failure names none. `list_windows` is the
+right recovery there too — it enumerates windowed processes, so a pid absent
+from it is the answer. Fixed in `ps-automation.ps1` at both sites.
+
+### C-3 — video call: no tool exists, and nothing can stand in for one
+
+A disposition with nothing to fix. Verified across all **179** registered tools:
+nothing matches `/call|video|meet|zoom|facetime|dial|ring/` except `phone_call`
+(from-android.js, a VOICE call over the Android node), `cua_bring_to_front`,
+`mcp_call_tool` and `recall_memory` — none of which is a video call.
+
+**The substitution risk is the part worth pinning.** A model denied a tool does
+not always decline; it reaches for the nearest one, and `phone_call` is the
+nearest thing to "call someone". It is **withheld from the voice surface**
+(absent from `DEFAULT_ALLOWLIST`), so on the surface where the request was
+recorded it is not reachable at all — which is why the recorded answer was the
+honest *"I still cannot start a video call"* rather than a voice call presented
+as a video one. That is pinned by test, so promoting `phone_call` to voice later
+has to argue with this assertion first.
+
+---
+
+## BUG-384 — every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong (🔧 CODED 2026-08-27)
+
+**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped
+as "six nodes whose LABEL is stale rather than whose capability is broken".
+Measured against the live vault before writing anything, per the Track D
+finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43
+(67%) disagree with the vault.** Eleven labels are contradicted by their own
+evidence. The six was itself a stale reading.
+
+### Root cause — the map generates its frame and hand-carries its contents
+
+`build-capability-map.js` regenerates `vitals`, the tool-coverage cross-check
+and the `generated` stamp. It preserves each node's `s`, `ok`, `f`, `note` and
+`ev` as curated human text. That split is right for `note` and `ev` — a human
+decides what a node MEANS — and wrong for `ok`/`f`, which are not judgement at
+all. They are a count of rows in `vault/Audit/*.jsonl`, and nothing was
+counting them.
+
+So a row could be a month stale while the page said GENERATED today and all
+five gates passed. Measured drift, largest first:
+
+```
+goals            map 118/2   vault 253/3    +135
+system volume    map 105/0   vault 183/1     +78
+browser autom.   map  57/13  vault 135/33    +78 ok, +20 fail
+web_search       map 117/10  vault 151/13    +34
+spotify_play     map  77/5   vault 106/5     +29
+ui_click         map   5/5   vault  16/6     +11   (Track D-6 declined to act on
+                                                    "10 calls"; the real figure
+                                                    was 22)
+cua-driver       map   —/—   vault  50/9           (Track D-6 declined to act on
+                                                    "two boots"; the real figure
+                                                    was 59 calls)
+```
+
+The last two matter beyond the numbers: **two Track D dispositions were
+written against sample sizes that were wrong by 2x and 30x.** Neither
+conclusion flips — `ui_click` is 16/6 with no failure since 2026-08-09, and
+cua-driver's question was always about BOOTS not calls — but they were reached
+on figures the vault did not support.
+
+### The eleven contradicted labels
+
+Two kinds, and only one of them is falsifiable without judgement.
+
+**HARD — the label asserts a measured zero and the vault is not zero.** The map's
+own legend defines `dark` as "MEASURED as never exercised (a call count of zero
+was read)" and `unknown` as "nothing has been measured". Nine `unknown` nodes
+carry the identical sentence *"no call count has ever been read for it"*, and
+for all nine that sentence is false:
+
+```
+status readouts  173/0     local info      146/4     pipeline    62/0
+HUD navigation    51/2     persona          24/2     artifacts   14/3
+kanban             5/0     ask_agent         3/0     widgets      1/0
+```
+
+**SOFT — the newest event disagrees with the label.** Four nodes. Three are
+genuinely stale (`open a file`, `list_folder`, `timer_add` are labelled `fail`
+and their newest event is a success); **two are correct labels that this rule
+would have falsely accused**, which is why it is not a gate — see below.
+
+### Fix — counts are derived, and only the falsifiable rule is a gate
+
+New `scripts/vault-tool-counts.js` streams `vault/Audit/*.jsonl` (one file is
+133 MB — `readFileSync` is not available to this) and returns per-tool
+`{ok, fail, lastOk, lastFail}`. `build-capability-map.js --write` sums it per
+node and writes `ok`/`f`.
+
+**The vault-absent rule is inherited verbatim from the `untriaged` vital in the
+same file, whose comment records why:** a checkout that cannot measure does not
+get to rewrite the field, *not even to add a flag* — an earlier version stamped
+`stale: true` and broke `--check` for CI, every worktree and every fresh clone.
+So with no vault, counts are PRESERVED byte-for-byte and the label rules are
+SKIPPED with an explicit "could not look" line. Never a confident zero.
+
+**Only the hard rule gates.** `dark`/`unknown` + any recorded call → `--check`
+fails and `--write` refuses. The soft rule prints as an advisory and fails
+nothing, because the data says it would fire on correct content:
+
+```
+spotify_volume  ok, newest event a failure 2026-08-24:
+  "No audio session for process 'Spotify' - its mute state was NOT changed,
+   and nothing else was changed either. Apps with a live audio session right
+   now: system-sounds|0, electron|5552."          <- Spotify was not running.
+
+close_window    ok, newest event a failure 2026-08-24:
+  "Cannot close PID 6644: ... That pid no longer exists, so nothing was
+   closed. Call list_windows for the app's current pid before trying again."
+
+CAPTCHA wall    fail, and its one recorded call is a SUCCESS — because the
+                `fail` is a deliberate refusal disposition, not a defect.
+```
+
+All three are the evidence contract working. A gate that reddens on those is a
+gate somebody switches off, which is the reason this file already gives for not
+checking node NAMES against deleted programs.
+
+### Scope — what this does NOT do
+
+- **It does not turn a count into a status.** Nine nodes leave `unknown` for
+  `warn`, never for `ok`, however clean their record: `ok` on this map is an
+  acceptance contract (live-verified, regression test, mutation-proven) and a
+  production call count is not that. `warn` here reads "measured, works in
+  production, not yet verified to the contract" and each note says so. The
+  headline therefore gets WORSE and more truthful: unknown 18 -> 9, warn 22 -> 31.
+- **It does not derive `ev`.** The Audit rows carry a `reason` on every failure,
+  so the evidence text could be generated too. Deliberately not attempted here:
+  `ev` is curated prose and replacing it is a different change.
+- **`list_folder` is left alone** — PR #37 (BUG-378) already corrects it to
+  ok 3/2, and fixing it twice is a merge conflict for no gain.
+- **`--check` still does not compare counts.** They change every time MYTHOS
+  runs a tool; a gate on them would block the first commit after every voice
+  session.
+
+### One repair outside this ticket, because it blocked the gate
+
+BUG-379's live test (`bug-379-aether-bind-names-the-holder.test.js`) failed under
+the pre-commit hook after passing 5/5 in isolation and 3/3 in a standalone full
+suite. Not a flake to be re-run away: `findPortHolder` shells out to
+`netstat -ano`, which enumerates every TCP connection on the machine, under a
+hard `LOOKUP_TIMEOUT_MS` of 1500 ms. With ~6,600 tests running concurrently that
+command does not always finish, so the lookup returns null. Reproduced
+deliberately rather than assumed:
+
+```
+findPortHolder(port, {timeoutMs: 1})
+  -> "could not determine what holds it: netstat could not be run
+      (Command failed: netstat -ano -p TCP)"      <- no pid, so the assertion fails
+findPortHolder(port, {timeoutMs: 6000})
+  -> "held by pid 10580 (node.exe)"
+```
+
+The PRODUCT is correct in both rows — it declines to name a holder it could not
+read. The test was asserting the machine's spare capacity. It now retries the
+same idempotent command with a realistic budget; the assertion is unchanged and
+still demands the exact pid. Threading of a holder the anomaly already carries is
+covered separately by synthetic values, so no coverage rests on netstat running.
+
+---
+
+## BUG-383 — a fabricated FACT is not a fabricated ACTION, and nothing was looking at the first kind (✅ REDUCED 2026-08-27, mutation-proven — 6/9 measured, not eliminated)
+
+**Status:** ✅ REDUCED 2026-08-27. 1 file changed, 13 new assertions, 6 mutations
+run and all 6 caught, source restored sha256-identical. Track D-6's `fabrication`
+item (BUG-275's mechanism). **Deliberately not marked FIXED:** the measured catch
+rate is 6 of 9 and the entry says so.
+
+### Root cause — the detector had no category for this shape of lie
+
+Every claim category in `claim-check.js` catches a claim about **what MYTHOS
+did**: "I logged that", "I sent it", "I searched". The recorded fabrication was a
+claim about **what is true in the world**:
+
+> "Claimed *Claude Mythos 5* leads the LiveBench coding board."
+
+There is no "I did X" in that sentence. The file's own header explains that
+first-person prefixes are **mandatory, not optional**, and lists six false
+positives that proves — so no amount of tuning the existing regexes could ever
+have reached this. It needed a new category, not a wider one.
+
+**Fix.** A new `external-fact` category, and the design is the safety property:
+
+- **`re` is null.** The category has *only* the evidence-gated tier, so it can
+  fire **only** when a fact-finding tool (`web_search`, `get_weather`,
+  `screen_look`, `document_search` and 10 more) was attempted in the window and
+  did **not** succeed. Without that gate a pattern this broad would flag ordinary
+  conversation every turn — "the meeting is at four".
+- **A successful lookup BACKS the claim.** This is the F1b lesson already
+  recorded in the `searching` category: a detector that makes the assistant
+  retract a true statement is worse than no detector, because it also trains the
+  operator to distrust correct answers.
+- **Assertion SHAPES, not topics** — a ranking or superlative, a citation, a bare
+  quantity with a unit, or "the current X is Y". Plain narration is not matched,
+  which is the honest limit below.
+
+**The one-tool-one-category invariant was PRESERVED, not weakened.**
+`test/claim-check-categories.test.js` enforces that no tool is claimed by two
+categories, and that invariant is right — it keeps ownership unambiguous for the
+categories that flag an action. This category is cross-cutting: it watches the
+same fact-finding tools `searching` owns, for a completely different claim. So it
+declares them under a new **`gateTools`** field and leaves `tools` empty. Dropping
+`web_search` to satisfy the invariant would have removed the very tool behind the
+recorded incident.
+
+### SCOPE, HONESTLY — the measured rate, asserted as a number
+
+The work order demands it: *"this reduces fabrication, it does not eliminate it,
+and the disposition records the measured catch rate over ≥3 samples."*
+
+```
+labelled fabrications      9
+caught                     6      -> 67%
+knowingly missed           3
+false positives            0      (on the honest-sentence controls)
+```
+
+**6 of 9 is asserted as a literal in the test**, so the number here cannot drift
+from the code. The three misses are **pinned by their own assertion** — plain
+narration with no ranking, quantity or citation shape ("that library was
+deprecated last year", "the meeting moved to Thursday") — specifically so the
+detector can never *look* as though it were complete. Zero false positives matters
+more than the catch rate: this module's header says it favours misses over false
+positives everywhere, because a noisy honesty alarm is one nobody reads.
+
+**Verification.**
+
+```
+node --test test/bug-383-external-fact-fabrication.test.js   13 tests, 13 pass
+node --test test/claim-check-categories.test.js               6 tests,  6 pass
+all claim-check consumers                                  149 tests, 149 pass
+
+mutations: 6 run, 6 caught, source restored sha256-identical:
+  F1 the category is UNGATED (re gets a pattern)      -> 2 fail
+  F2 a successful lookup no longer backs the claim    -> 1 fail
+  F3 web_search dropped from gateTools                -> 6 fail
+  F4 the ranking alternative removed                  -> 3 fail
+  F5 gateTools ignored (falls back to empty tools)    -> 5 fail
+  F6 the shape requirement relaxed to match anything  -> 4 fail
+     (this one is caught by the FALSE-POSITIVE controls, which is the right
+      way round: relaxing the shape is the change that would make the alarm
+      useless, and it is the controls that notice)
+```
+
+Three mutations first reported TARGET ABSENT because their anchors used `\n`
+while `claim-check.js` is CRLF — the harness correctly refusing to score a
+mutation that never applied.
+
+---
+
+### Track D-6's other nine singles, triaged 2026-08-27
+
+Measured before assuming any needed work. **Six were already closed** and the map
+was stale about them; **three genuinely need an operator.**
+
+| node | verdict |
+|---|---|
+| `hand-off to browser` | **already done.** Both of D-6's asks shipped in BUG-273 B2 — `from-dashboard.js:406` returns `confirmedStep: "your default browser was handed <url> and accepted it"`, which is the read-back *and* names the OS default. → `ok` |
+| `reminders` | **already done.** BUG-289 (2026-08-21) added the seconds unit and fractional counts. Newest reminder/timer failure in the vault: **2026-08-20**, the day before. Zero since. → `ok` |
+| `use_skill` | **disposition, as D-6 predicted.** 20 ok / 2 fail, both **2026-07-27**; one is a correct refusal, the other names what *is* resolvable, which is honest by construction. Loader since fixed with multi-root + `MYTHOS_SKILLS_DIR`. → `ok` |
+| `build_project` | **the work order was right.** 5 completed, **5 ok, 0 fail** — the builder has never failed. Both red runs are the ACCEPTANCE verifier declining a deliverable, which is the verifier working. → `ok` |
+| `rejected clients` | **already closed, and the node said "in flight".** BUG-292 (fingerprint) and BUG-298 (the client) both RESOLVED 2026-08-21. It was the **HUD**, not the phone node: 147 rejections over 1289s = one every ~8.8s. → `ok` |
+| `whatsapp_contacts` | **29 ok / 0 fail — never failed.** The never-auto-send-to-a-fuzzy-match property already holds and is deliberate: `levenshtein` produces a `fuzzyNote` handed back for confirmation, and the code contrasts itself with `semantic.forget()`'s pass "which DELETES on a single candidate". → `ok` |
+| `browser automation` | **OPEN, not fixed.** `browser_launch_debug` is sound (15 ok / 1 fail) but nothing auto-launches it. Deliberately not attempted: the wiring spawns a real browser on first use, a live-behaviour change to a T3 surface that needs its own verification sitting. |
+| `cua-driver` | **OPEN, blocked by its own instruction** — "sample ≥5 boots before touching the timeout". The evidence is two boots. Changing the timeout on that would be the exact mistake the work order warns against. |
+| `ui_click` | **OPEN, needs a measured desktop run.** 5 ok / 5 fail over **10 calls**, newest failure 2026-08-01. A 50% rate over 10 samples supports neither "broken" nor "fine"; any code change would be tuning against noise. |
+
+---
+
+## BUG-382 — five dark nodes, 22 tools, zero recorded calls: a harness that judges on oracles, and three times it accused the product of its own bugs (✅ EXERCISED 2026-08-27)
+
+**Status:** ✅ EXERCISED 2026-08-27. 1 new script, 1 new test file (10
+assertions). Track D-5. **No product defect found** — and that is the honest
+result for nodes that were unmeasured rather than broken.
+
+**Final measured run of `node scripts/verify-dark-nodes.js`: 17 pass, 5
+dispositions, 0 FAIL, exit 0.** All 22 tools accounted for.
+
+### Why a harness and not a fix
+
+Five map nodes were `dark`: `file ops`, `generators`, `documents`,
+`code search`, `MCP bridge` — 22 registered tools with **zero recorded calls
+between them**. Dark is not broken, it is unmeasured, and the work order is
+explicit that these "need a harness not a fix". A tool nobody has ever called has
+no evidence either way, and writing "probably fine" into the map would be exactly
+the dishonesty this campaign exists to remove.
+
+### The rule the harness runs on
+
+**Every check is an ORACLE, not a self-report.** A generator returning `ok:true`
+has proved nothing; a file whose first five bytes are `%PDF-` has proved
+something.
+
+| group | oracle | result |
+|---|---|---|
+| file ops | the filesystem, read back after each call | **7 pass**, 1 disposition (`open_folder` needs a desktop shell) |
+| generators | magic bytes — `%PDF-`, and the `PK\x03\x04` ZIP header plus `xl/workbook.xml` / `ppt/presentation.xml` | **3 pass** (PDF 16385 b real, xlsx 6460 b, pptx 45407 b), 1 disposition |
+| documents | a REAL corpus (6 files from `mythos/docs` + `Plans`), searched for a term known to be present | **3 pass** (26 chunks embedded, 10 hits), 1 disposition |
+| code search | the BUG-368 oracle: no `.venv`/`node_modules` in the result, AND a symbol found inside MYTHOS's own `src/core` | **2 pass**, 1 disposition |
+| MCP bridge | an unknown server must be REFUSED with a reason, not answered emptily | **2 pass**, 1 disposition |
+
+**The five dispositions, each with its reason in code:** `open_folder` (would pop
+a real Explorer window rather than measure anything), `generate_image` (needs a
+keyed image lane; no free one under the no-spend decision — so it closes as a
+disposition and *never* as a green), `document_answer` (needs a brain lane, i.e.
+spend), `revise_project` (routes to the build engine and would write real project
+files), and `mcp_call_tool` — which the work order itself says to record as
+**correct security posture**: it is T3 and goalId-gated by the leash, and a
+harness that manufactured a goal to get past it would be measuring the wrong
+thing.
+
+### THE FINDING THAT MATTERS MOST: the harness was wrong three times, and blamed the product every time
+
+| # | harness bug | what it reported |
+|---|---|---|
+| 1 | read `.path` off a generator result; the field is `savedTo` | three generators FAILING **while holding real artifacts on disk** |
+| 2 | returned an ARRAY of vectors from a single-in `embed(text)` | `document_search` broken |
+| 3 | returned a bare array where `{provider, dim, vec}` was required — `vector-index.add()` silently returns `false` without `.vec`, and `search()` returns `[]` unless `provider` and `dim` match | `document_search` AND `search_code` broken, zero hits for **every** query including `"the"` |
+
+All three drifted in the **fail-open direction**: what the harness could not do
+correctly, it reported as the code being broken. Each was fixed by reading the
+real contract instead of guessing at it. This is the "a model of a system is not
+the system" class, and it is why the script's standing rule is that every verdict
+names the oracle it used, and why a FAIL gets investigated before it is written
+into the map. Had any of those three been believed, this entry would have
+reported three fictional product defects.
+
+**Node statuses, honestly split:** `file ops` and `generators` → **ok**.
+`documents`, `code search` and `MCP bridge` → **warn**, and the caveats are real:
+the first two were verified with a deterministic **offline word-bag embedder** so
+the harness measures the tools rather than the provider, which proves the
+chunker, store, vector index and search path work end to end but says nothing
+about ranking quality with real embeddings; and `MCP bridge` ran with
+`MCP_SERVERS` unset, so nothing exercised a live stdio server. Map: **dark 7 → 2**.
+
+**Verification.**
+
+```
+node scripts/verify-dark-nodes.js
+  17 pass · 5 disp · 0 FAIL · exit 0
+
+node --test test/bug-382-dark-node-harness.test.js
+  10 tests, 10 pass, 0 fail
+```
+
+The gate test asserts the **harness** is trustworthy rather than re-asserting the
+tools: that `isPdf` rejects an HTML fallback and an empty buffer, that `isZip`
+rejects `PK\x05\x06` (an empty-archive end record, not a file entry), that the
+four verdicts are distinct so a disposition can never be counted as a pass, that
+a group exists per dark node, and that the FAIL path actually records a FAIL —
+because a harness whose failure path has never fired is one nobody should trust.
+
+**What this does NOT close.**
+
+- **Nothing here proves ranking quality** for `documents` or `code search`. One
+  run with ollama or mistral-embed live would.
+- **`MCP bridge` never reached a real server.** That needs one configured MCP
+  server, which is an operator action, not a defect.
+- `documents` and `code search` are **excluded from the suite test** on purpose —
+  `index_project` walks `src/core` and `document_ingest` chunks and embeds six
+  real files, which is right for a script and too slow for the suite. Stated
+  rather than hidden; they are covered by running the script.
+- **`open_folder`, `generate_image`, `document_answer`, `revise_project` and
+  `mcp_call_tool` were never executed.** Five of 22 tools remain unexercised by
+  deliberate choice, each with its reason recorded.
+
+---
+
+## BUG-381 — the YouTube id extractor knew four URL shapes and missed five, including the /live/ path news streams use (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 1 new module, 1 file edited, 17 assertions,
+8 mutations run and all 8 caught, both files restored sha256-identical.
+Track D-4, both halves.
+
+**Measured first, against the operator's live vault.** `open_web`: **160
+completed, 135 ok, 25 fail** — the map said 131/19, so it was stale *and* it
+under-counted the failures. **17 distinct failure strings, not the twelve** the
+work order expected. Grouped by real cause:
+
+| cause | count |
+|---|---|
+| a correct refusal of a malformed call (no url / no type / no query) | 9 |
+| upstream genuinely returned nothing for the query | 10 |
+| **"Found results but could not extract a YouTube video ID"** | **3** |
+| a provider fetch failure (weather) | 3 |
+
+So D-4's named cause is the **smallest of four**. It was still real, and the
+regex it lived in was why.
+
+### Root cause — four shapes recognised, five missed
+
+```
+MATCH  youtube.com/watch?v=ID        MISS  youtube.com/live/ID
+MATCH  youtu.be/ID                   MISS  youtube.com/watch?app=desktop&v=ID
+MATCH  youtube.com/shorts/ID         MISS  youtube.com/watch?feature=share&v=ID
+MATCH  m.youtube.com/watch?v=ID      MISS  youtube-nocookie.com/embed/ID
+                                     MISS  youtube.com/v/ID
+```
+
+Two of those misses explain the logged failures directly. **`/live/` is what a
+news livestream resolves to**, and the failing queries included "CNN live news",
+"CNN news dashboard" and "today's news". And `watch?v=` required `v` to be the
+**first** query parameter, so any URL carrying `app=desktop` or `feature=share`
+ahead of it — which is exactly what a share sheet or a mobile redirect produces —
+was unreadable.
+
+**Fix.** Extraction moves to `src/core/util/youtube-id.js` and reads all nine
+shapes. It carries a **host guard**: an unrelated URL containing an 11-character
+path segment (`example.com/live/dQw4w9WgXcQ`) returns null rather than a fake id,
+because a widened parser that invents an id would hand the media window a video
+that does not exist *and report success*.
+
+A module rather than a wider regex in place because **`from-dashboard.js` was at
+1417 lines against a ratchet ceiling of 1418** — one line of headroom. The
+ratchet was right again: a parser with nine cases belongs somewhere a test can
+reach without constructing a dashboard effector.
+
+### The other half — typed reasons
+
+"Twelve ways of saying no is twelve things a caller cannot branch on" — measured
+as seventeen. **All 22 failure sites in the `open_web` handler now carry a typed
+`code`**, one per measured cause group: `bad-request`, `no-results`,
+`unplayable-results`, `provider-error`. Four codes, coarse on purpose — a caller
+branches on what it can *do*, and there are four different things to do.
+
+`fail(reason, code)` is **additive**: the prose stays exactly where it was, in
+`.result`, because it is good prose and the voice layer speaks it. Every existing
+consumer is unaffected. Zero net lines added, so the file lands at exactly 1418.
+
+**Attack pass (Stage 3):**
+
+- *What else matches this?* The dangerous direction for a widened parser is
+  false positives, not misses — hence the host guard and the retained
+  `{11}` length, both mutation-proven. `youtube.com/results?search_query=`,
+  `/@CNN` and the bare domain all correctly return null.
+- *Does this hide evidence?* No. Codes are added beside the prose, never instead
+  of it, and a test pins that `result: reason` still holds.
+- *Is this constant correct?* The `{11}` id length is YouTube's actual id width;
+  relaxing it is mutation Y5 and is caught.
+- *Class:* the same family as the last three tickets, one level up — the reason
+  here was human-readable but not machine-classifiable, so a caller could not
+  branch on it.
+- *Deliberate non-change:* the prose of all 17 strings is untouched. Rewriting
+  them would be a spoken-output change dressed as a diagnostic improvement, and
+  several were themselves carefully-worded remedies from earlier tickets.
+
+**Verification.**
+
+```
+node --test test/bug-381-youtube-id-and-typed-open-web-reasons.test.js
+  before the fix : 11 tests, 9 pass, 2 fail
+                   ("22 of 22 open_web failures carry no typed code")
+  after  the fix : 17 tests, 17 pass, 0 fail
+file-size ratchet: from-dashboard.js 1418 (ceiling 1418) — at, never over
+
+mutations: 8 run across both files, 8 caught, both restored sha256-identical.
+  Y1 restores the ORIGINAL four-shape regex -> 3 fail. That is the red-first
+     proof for the extractor: the "five shapes that were being missed"
+     assertion goes red against exactly the code that shipped before.
+  Y2 host guard dropped        -> the fake-id test catches it
+  Y3 /live/ arm dropped        -> the livestream shape catches it
+  Y4 query-anywhere v= dropped -> the share-link shapes catch it
+  C3 one failure loses its code -> the all-22-typed walk catches it
+```
+
+**What this does NOT close.** Neither node goes green. The extractor is
+unit-verified across the real URL shapes but **no live search has been driven
+through it** — closing `YouTube embed` needs one live embed of a `/live/` URL on
+a running dashboard. And 135/160 is not a green number even though 19 of the 25
+failures are correct refusals or genuinely-empty upstream results. The remaining
+`open_web` prose is unchanged, so a caller that wants to branch should read `code`
+and not pattern-match the sentence.
+
+---
+
+## BUG-380 — a TTS rung that declined said which, never why, so 15 seconds of silence a day was invisible (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 2 files edited, 9 assertions, 7 mutations run
+and all 7 caught, both files restored sha256-identical. Track D-3. **Two of
+D-3's three nodes turned out to need no code at all** — that measurement is
+half this entry.
+
+### What D-3 claimed, and what the evidence said
+
+| claim | verdict |
+|---|---|
+| "Cerebras returns 402 … both are still ranked, so **every call pays their timeout**" | **FALSE as stated.** Cerebras sits at position 2–4 of every lane it appears in and position 0 of **none** (voice@3 build@4 simple@4 reasoning@2 memory@2 text@2; absent from vision and embed). A healthy call never reaches it. The 402 is real — 27 occurrences — and unfixable without spend. |
+| "**De-rank on probe evidence**" | **Impossible as specified, and unnecessary.** The registry exposes `groqAlive`/`mistralAlive`/`openrouterAlive` and **no `cerebrasAlive`** — there is no probe evidence for cerebras to de-rank on. And B1 (2026-08-14) already made a per-attempt timeout feed the cooldown and added per-(provider,model) breakers with x2 backoff; its own comment records **rejecting** a hand re-rank because "the breaker is self-correcting; the edit is not". |
+| "8s per look burned on a dead provider" | **HISTORICAL, and it stopped.** See `screen_look` below. |
+| "add a per-attempt timeout matching the chain cooldown" | **Already exists** — `CHAIN_ATTEMPT_TIMEOUT_MS`, default 30000, per-call overridable. |
+
+**`screen_look`, re-measured against the live vault: 52 ok / 11 fail, not 49/11 —
+and all eleven failures fall between 2026-08-06 and 2026-08-18.** Newest failure
+`2026-08-18T11:38:48`; newest success `2026-08-24T20:12:01`. **Since 2026-08-19
+there have been 26 look calls across five separate days: 26 ok, 0 fail.** B1's
+two fixes are why. Vision's head is now `google/gemini-3.5-flash-lite` with NIM
+demoted to position 3 — the 8s precedent was NIM at position 0.
+
+### The one live defect, and it is in the voice path
+
+Found by running the repo's own `doctor.js`, which says it in its own words:
+
+```
+gap  Kokoro model (TTS chain rung)  no .onnx weights under models/kokoro — the
+     first fallback to kokoro will spend up to 15000ms downloading before
+     falling through to edge
+     why: kokoro is a member of VOICE_TTS_CHAIN, so its absence is paid for at
+          runtime rather than reported here
+```
+
+`VOICE_TTS_CHAIN` is `gemini,kokoro,edge,piper`. The `TTS chain` node's own
+existing evidence already showed the live path — `tts.failover from gemini-tts to
+**edge-tts** on 429 (limit 10/day)` — landing on edge and therefore *skipping*
+kokoro, i.e. having probed and paid for it. Google's free tier caps at 10/day and
+google heads four lanes, so this failover happens **daily**.
+
+**Two corrections to the framing, from reading the code rather than the ticket:**
+the cost is once per **process**, not per call (`tts.js`: "resolve() probes the
+configured chain ONCE", sticky `active`; `kokoro-tts.js`: LOAD_TIMEOUT_MS "bounds
+only the FIRST probe of a cold load"). So it is 15 seconds of silence on the
+first daily failover, not 15 seconds a turn.
+
+**Mechanism — the reason was discarded twice on the way out:**
+
+```js
+// providers/tts.js
+async function probe(p) { try { return await p.isAvailable(); } catch { return false; } }
+log.info('tts.unavailable', { provider: nameOf(p) });    // which, never why
+
+// providers/kokoro-tts.js
+async function isAvailable() { ... catch { return false; } }   // reason gone again
+```
+
+So a bounded load timeout, a bad model id and a corrupt cache were one
+indistinguishable `false`, and nothing anywhere recorded that fifteen seconds had
+gone into a stalled Hugging Face download. `doctor.js` could predict the cost from
+disk; the runtime paid it and said nothing — **two routes deriving the same fact,
+and the silent one was the one the operator actually hears.**
+
+**Fix.** `providers/tts.js` — `probe()` returns `{ok, reason, ms}` instead of a
+boolean, consulting an optional `unavailableReason()` hook and keeping the thrown
+message when `isAvailable()` throws; `tts.unavailable` now logs `reason` and `ms`.
+`providers/kokoro-tts.js` — records the decline text (including on the sticky
+already-failed path, which `loadModel()`'s own `.catch()` can set without
+`isAvailable()` ever seeing the error) and exposes it. `isAvailable(): boolean`
+remains every provider's contract; the hook is additive, and a provider that does
+not implement it still gets its thrown message and its timing.
+
+Also added: an optional `providers` injection seam on `createTtsChain`, same
+reasoning as `routes/config.js`'s injectable `wakewordModelsDir`. Without it a
+test naming real rungs probes the **real** kokoro provider — measured at
+**15,109 ms per case, six cases**, when an early draft did exactly that. That
+accident is also the live proof the cost is real.
+
+**Attack pass (Stage 3):**
+
+- *Does this hide evidence?* The opposite — it is the entire point. Nothing is
+  overwritten: the provider name still logs, and `reason`/`ms` are added beside it.
+- *Is this a defect or a decision?* Split deliberately. The **invisibility** is a
+  defect and is fixed. **Whether to install kokoro weights or drop the rung** is a
+  decision, already listed as one of three open operator decisions, and is
+  untouched — the node stays `warn` because the 15s is still paid until that call
+  is made. Making the cost legible is what turns it into an informed decision.
+- *What else matches this?* Every other chain rung inherits the same reporting for
+  free, and none of them is worse off than before.
+- *Class:* the same "a failure path that discards its reason" family as the
+  previous two tickets, this time on the most user-visible surface in the product.
+- *Deliberate non-changes:* the chain order, the download policy, and every
+  provider's boolean `isAvailable()` contract.
+
+**Verification.**
+
+```
+node --test test/bug-380-tts-chain-says-why-a-rung-was-skipped.test.js
+  before the fix : 6 tests, 0 pass, 6 fail
+  after  the fix : 9 tests, 9 pass, 0 fail
+
+mutations: 7 run across providers/tts.js and providers/kokoro-tts.js, 7 caught,
+both files restored sha256-identical. Three needed repair on a first pass:
+  T1/T3 the harness reported TARGET ABSENT — the anchors used LF while the
+        sources are CRLF, which is the harness correctly refusing to score a
+        mutation that never applied
+  K1    SURVIVED: every other case uses injected fake rungs, so kokoro's OWN
+        reason was untested, and the first replacement assertion was ALSO
+        vacuous — it matched the string `lastUnavailableReason =`, which
+        survives `lastUnavailableReason = null`, i.e. survives the defect
+```
+
+**What this does NOT close.** The 15s is still paid until the operator installs
+kokoro's weights or drops the rung — a decision, not a defect. Nothing here is
+verified against a booted MYTHOS; the tests drive the real chain code with
+injected rungs, and the 15,109 ms figure comes from an accidental real probe
+rather than a scripted one. `brain lanes` stays `warn`: cerebras's 402 is real and
+needs spend, and google's 10/day cap is a genuine daily cliff — both named as the
+no-spend decision requires.
+
+---
+
+## BUG-379 — 65 bind failures named the port three times and the squatter zero times, and the retry loop the work order described did not exist (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 2 new modules, 3 files edited, 29 assertions,
+17 mutations run and all 17 caught, every file restored sha256-identical.
+Opened as Track D item D-2. **Both of D-2's named causes were wrong**, one of its
+three requested changes was already true, and the fix landed on a defect the work
+order did not mention at all.
+
+**Symptom.** Between **2026-08-08 and 2026-08-09** the operator's vault recorded
+**65 separate `aether-proxy-bind-failed` anomalies** for `127.0.0.1:4480` —
+45 on the 08th (12:01→23:35) and 148 rows on the 09th (00:45→23:35), clustering
+into 65 discrete events 2–10 minutes apart. Every one of them said
+"address already in use" three times over and named the holder **zero** times.
+
+### What the work order claimed, and what the evidence said
+
+| claim | verdict |
+|---|---|
+| "A healer playbook retried an unbindable port every few minutes for hours" | **FALSE.** The playbook ran **once, ever** (2026-08-26). 63 of the 65 events reached the healer as `outcome: no-match` — `aether-proxy-rebind` did not exist until 2026-08-13 (Wave 7, `a66fc9d`). |
+| "`config.json` silently overrides `AETHER_ENABLED=false` in `.env` at boot" | **FALSE.** No `config.json` exists anywhere it would be read (all four candidate paths checked). `mythos/.env:347` sets **`AETHER_PROXY_ENABLED=true`** deliberately, under its own "Voice Nodes" heading. `AETHER_ENABLED` (line 337) gates a **different subsystem** — the BLE proximity sensor at `main.js:1213`. Two near-identical key names for unrelated features, which is what fooled the work order's own author. |
+| "Ship a diagnostic that names the squatting pid" | **TRUE, and it was the only real item.** |
+
+Healer outcome histogram over the whole vault:
+
+```
+no-match | null                  63
+error    | aether-proxy-rebind    1
+```
+
+**Ran the work order's own oracle before writing anything** — a real orphaned
+listener, the real bus, real diagnostician, real healer and real scanner-proxy,
+38 seconds against a `cooldownMs` of 15000:
+
+```
+health.anomaly emissions        : 1
+health.diagnosed emissions      : 1
+healer audit rows for this kind : 1   (aether-proxy-rebind, error, "bind-failed-again")
+does the operator learn WHO holds the port? NO
+```
+
+One attempt. **No loop.** The anomaly is emitted from a `whenReady().then(...)`
+rejection arm in `main.js`, which runs at most once per process, and the heal
+action catches its own bind error without re-emitting. The 65 events were **65
+processes**, not one process looping. Two independent routes agreed on the count
+after the first counter read `e.kind` instead of `e.payload.kind` — the bus hands
+subscribers the event **envelope** (`bus/index.js:66`), not the payload.
+
+### Root cause 1 — nothing ever looked up who held the port
+
+For a failure that is *by definition* about another process, the one fact that
+would have ended the episode was never collected.
+
+### Root cause 2 — `target` could never name the port either, and would have thrown if it tried
+
+`scanner-proxy.ports()` returns an **object** (`{phone: 4480}`).
+`main.js` tested `failedPorts.length` — `undefined` on an object, so the branch
+meant to name the port was **unreachable**, and the `failedPorts.join(', ')`
+inside it would have **thrown inside an error handler** if it ever had run. That
+is why every record in the vault reads "the Aether proxy port range" while the
+code's own comment three lines above promises the operator hears which port. Not
+mentioned in the work order; found by reading the handler.
+
+### Root cause 3 (latent) — the rebind had no terminal condition
+
+`aether-proxy-rebind` declares `cooldownMs: 15000` and **no `verifyMs`**, so it
+never creates a `pendingVerifications` entry, never trips the recurrence detector
+and **can never emit `heal-failed`**. Today the anomaly cannot repeat, so it
+cannot loop — but `immune/announcer.js` records that probes re-emit
+`health.anomaly` every 4s and that "healer.js's cooldown is the dedup", i.e. the
+healer's design assumes repetition. Any future repeating source of this kind
+would retry every 15 seconds forever with nothing recording that the retries were
+futile.
+
+**Fix.** Two new focused modules plus three edits:
+
+- **`src/core/util/port-holder.js`** — bounded, injectable "what holds this
+  port?". Shape copied from the existing precedent `getListenerPid()` in
+  `scripts/verify-propose-goal.js` rather than invented: Windows `netstat -ano
+  -p TCP`, `LISTENING` rows only, exact port equality, honest null. Added: a
+  `reason` string so a failed lookup explains itself, a `tasklist` name lookup,
+  and a 1.5s per-child ceiling.
+- **`src/core/aether/bind-failure.js`** — builds the anomaly payload. `reason`
+  (the field `immune/explainer.js` speaks, AD-5) gains the holder; `error` keeps
+  the raw text byte-for-byte; `target` names the real port; `holder` is carried
+  structured so the healer reads it instead of looking it up again.
+- **`src/core/immune/aether-rebind.js`** — the heal action, with a 3-attempt cap
+  that ends in `terminal: true` and a spoken reason naming the squatter, and a
+  budget that resets on a real recovery.
+- `main.js`, `healer.js`, `scanner-proxy` call sites rewired.
+
+**Both new modules exist because the file-size ratchet refused the inline
+version** — `mythos/src/main.js: 1373 -> 1406` and
+`mythos/src/core/immune/healer.js: 876 -> 945`, with the ratchet's own message
+saying the baseline is a ceiling and the code belongs elsewhere. It was right
+twice: both files are monoliths, and both extracted units are now callable from a
+test without booting an application. Final: **main.js 1369 (≤1373), healer.js 875
+(≤876)** — under, never raised.
+
+**Attack pass (Stage 3):**
+
+- *What else matches this?* The netstat parse is the hostile surface. Exact port
+  equality, not substring — `44801` contains `4480`, and a substring match names
+  an **innocent** process with full confidence, which is worse than saying
+  nothing. `LISTENING` only — an ESTABLISHED row's pid is the *client*. IPv6
+  `[::]:445` works via last-colon-field rather than a second code path. All four
+  pinned by tests, all four mutation-proven.
+- *Does this hide evidence?* No, and this was checked deliberately: `error` keeps
+  the raw bind message untouched and only `reason` is enriched (BUG-378's lesson).
+  Mutation B2 (overwriting `error`) is caught.
+- *Who reads this?* `immune/explainer.js` speaks `reason`; the healer reads
+  `holder`; the audit stores all of it. Verified before choosing which field to
+  enrich.
+- *Is this constant correct?* `MAX_ATTEMPTS = 3` across three 15s cooldowns ≈ 45s
+  of patience, justified against `scanner-proxy.js`'s own statement that a stale
+  instance releases its ports sub-second. `LOOKUP_TIMEOUT_MS = 1500` is a ceiling
+  on a boot-path diagnostic, not a budget.
+- *What did my fix newly make necessary?* **It created the next bug, and a test
+  caught it.** The first draft called `findPortHolder()` inside the heal action,
+  spawning up to two child processes per retry; that latency raced the 10ms
+  window in the existing `aether-proxy-rebind-playbook.test.js` and turned it
+  red. The failing test was right — a remediation path is the wrong place to
+  start doing detective work. Now: one lookup per bind failure, at detection,
+  reused by every retry. Pinned by a test asserting the heal module does not even
+  import the lookup.
+- *The file already knew.* `main.js`'s comment above the emit already said the
+  operator should hear *which port range*; the code under it could not. And
+  `scanner-proxy.js`'s header already documented "the caller retry start() after
+  fixing whatever held the port" — the missing half was saying what held it.
+- *Platform claims verified where they run, not asserted:* `tasklist` with a
+  non-matching filter prints `INFO: No tasks are running which match the
+  specified criteria.` **unquoted, and exits 0** — so requiring a leading quote
+  rejects it on any locale, and an earlier `/^INFO:/i` check was proven
+  unreachable by a mutation and **deleted rather than kept as reassurance**.
+- *Deliberate non-changes:* the two duplicate `getListenerPid()` copies in
+  `scripts/verify-propose-goal*.js` are **left alone** — collapsing three copies
+  is a refactor, and a refactor riding inside a fix acquires a blast radius it did
+  not need. Recorded in the new module's header as owed. The confusing
+  `AETHER_ENABLED` / `AETHER_PROXY_ENABLED` pair is **not renamed**: both are
+  documented public config keys and renaming either is a breaking change for
+  every existing `.env`.
+
+**Verification.**
+
+```
+node --test test/bug-379-aether-bind-names-the-holder.test.js
+  before the fix (stub reproducing today's behaviour): 15 tests, 3 pass, 12 fail
+  after  the fix                                     : 29 tests, 29 pass, 0 fail
+
+node --test test/bug-379-... test/aether-proxy-rebind-playbook.test.js test/file-size-ratchet.test.js
+  36 tests, 36 pass, 0 fail   (includes the existing test my first draft broke)
+
+live oracle, the squatter being THIS process so the expected pid is exact:
+  findPortHolder(port).pid === process.pid          -> pass
+  heal detail contains "held by pid <process.pid>"   -> pass
+  4th attempt -> terminal:true, "...stays OFFLINE..." -> pass
+  and it stays terminal on the 5th                    -> pass
+
+file-size ratchet: main.js 1369 (ceiling 1373), healer.js 875 (ceiling 876)
+
+mutations: 17 run across port-holder.js, aether-rebind.js and bind-failure.js,
+17 caught, all three restored sha256-identical. Four survived a first pass and
+each was a real hole:
+  H3  the platform guard  — the assertion matched the FIXTURE's own use of the
+                            word "platform", not the code's behaviour
+  H6  the tasklist guard  — the INFO case was never tested, and the guard it
+                            would have exercised turned out to be dead code
+  B3  target naming the port — never asserted at all
+  B4  a throwing lookup     — never asserted at all
+```
+
+**What this does NOT close.**
+
+- **Not live-verified against a booted MYTHOS.** Every path is driven through the
+  real modules in-process, and the port collision is real, but nobody has watched
+  a real boot with a squatted 4480 and heard the sentence. That needs the
+  operator's desktop.
+- **The `Aether mesh` node stays `fail`.** The diagnostic is now honest, but
+  nothing here makes the proxy bind when something else holds the port — that is
+  the correct behaviour, not a defect. It becomes green only once a live boot
+  confirms the spoken sentence.
+- **Root cause 3 is fragility, not an observed loop**, and the code says so. The
+  cap has never fired in production because the anomaly cannot repeat today.
+
+---
+
 ## BUG-378 — a tool could report failure with no reason at all, and the map's three "error-shape" nodes were two-week-old pre-fix data (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 1 source file changed, 1 test file added (23

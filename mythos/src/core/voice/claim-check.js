@@ -131,6 +131,71 @@ const CLAIM_CATEGORIES = [
     // searching is stated.
     re: /\b(?:i(?:'ve| have) |i )(searched|looked up)\b/i,
   },
+  // BUG-383 (2026-08-27), Track D-6's `fabrication` item, BUG-275's mechanism.
+  //
+  // EVERY CATEGORY ABOVE CATCHES A CLAIM ABOUT WHAT MYTHOS DID. This one catches
+  // a claim about WHAT IS TRUE IN THE WORLD, which is the other half of the
+  // recorded incident and the half nothing was looking at:
+  //
+  //   "Claimed 'Claude Mythos 5' leads the LiveBench coding board."
+  //
+  // There is no "I did X" in that sentence, so no amount of tuning the regexes
+  // above could ever have reached it. It is an assertion of external fact,
+  // volunteered in a turn where the tool that could have established it did not
+  // succeed. The second recorded instance was the faked 30-second timer count,
+  // and BUG-289 already fixed its parser cause — but the model reaching for a
+  // fact it did not have is the pattern, not the parser.
+  //
+  // EVIDENCE-GATED, HARD. `re` is null on purpose: this category has ONLY the
+  // gated tier, so it can fire only when a fact-finding tool was actually
+  // attempted this window and did not succeed. Without that gate a pattern this
+  // broad would flag ordinary conversation — "the meeting is at four" — every
+  // turn. With it, the state is rare: the model tried to look something up, the
+  // lookup did not come back, and it then stated the answer anyway.
+  //
+  // SCOPE, HONESTLY: this REDUCES fabrication, it does not eliminate it. A
+  // fabricated fact phrased as plain narration with no ranking, quantity or
+  // citation shape will pass, and a turn where no fact-finding tool was
+  // attempted at all is invisible to it by construction. The measured catch rate
+  // is recorded in the BUG-383 entry rather than implied here.
+  {
+    name: 'external-fact',
+    // `tools` IS EMPTY ON PURPOSE, and `gateTools` carries the list instead.
+    //
+    // test/claim-check-categories.test.js enforces that no tool is claimed by two
+    // categories, and that invariant is correct: it keeps ownership unambiguous
+    // for the categories that flag an ACTION, so exactly one category can say
+    // "this tool should have backed that claim". This category is cross-cutting —
+    // it watches the same fact-finding tools `searching` owns, for a completely
+    // different claim — so it declares them separately. The invariant is
+    // preserved rather than weakened to accommodate a new case.
+    tools: [],
+    // The tools whose FAILURE leaves the model without an answer it has just
+    // told the operator it had. Used for the evidence gate, for the backed
+    // check, and for candidateTools.
+    gateTools: [
+      'web_search', 'web_fetch', 'get_weather', 'get_directions',
+      'screen_look', 'screen_read_text', 'camera_look',
+      'document_search', 'document_answer', 'search_code', 'search_files',
+      'media_status', 'spotify_status', 'browser_snapshot',
+    ],
+    re: null,
+    // Assertion SHAPES, not topics. Each alternative is a way of stating a fact
+    // as settled: a ranking or superlative, a citation, a bare quantity with a
+    // unit, or a definite "X is Y" about a named thing. Deliberately requires a
+    // shape — plain narration is not matched, which is exactly the honest limit
+    // recorded above.
+    ellipticalRe: new RegExp([
+      // ranking / superlative: "leads the board", "is the fastest", "tops the"
+      '\\b(?:leads|tops|ranks|beats|outperforms|is\\s+(?:the\\s+)?(?:best|fastest|top|leading|highest|number\\s*one))\\b',
+      // citation of an external source as settled fact
+      '\\baccording to\\b|\\bper\\s+(?:the\\s+)?(?:latest|current|official)\\b',
+      // a bare quantity with a unit, stated as current fact
+      '\\b(?:is|are|was|sits\\s+at|stands\\s+at)\\s+(?:currently\\s+)?[-+]?\\d[\\d,.]*\\s*(?:%|percent|degrees|c\\b|f\\b|km|miles|mph|kph|dollars|usd|inr)',
+      // "the current/latest X is Y"
+      '\\bthe\\s+(?:current|latest|most\\s+recent)\\s+\\w+\\s+is\\b',
+    ].join('|'), 'i'),
+  },
 ];
 
 // Future/intent markers. Belt-and-suspenders alongside the past-tense-only
@@ -183,20 +248,34 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
     if (FUTURE_RE.test(sentence)) continue;
     for (const category of CLAIM_CATEGORIES) {
       if (flaggedCategories.has(category.name)) continue; // one flag per category per reply
-      let match = category.re.exec(sentence);
+      // BUG-383: `re` may be null. The external-fact category has ONLY the
+      // evidence-gated tier, because an ungated pattern that broad would flag
+      // ordinary conversation every turn. A null `re` therefore means "never
+      // fires unless a tool from this category was attempted and did not
+      // succeed", which is the whole safety property of that category.
+      // A cross-cutting category declares its tools under `gateTools` so the
+      // one-tool-one-category invariant stays true (see external-fact's note).
+      // Everything downstream — the gate, the backed check, candidateTools —
+      // reads this one resolved list.
+      const gate = (category.gateTools && category.gateTools.length)
+        ? category.gateTools : category.tools;
+      let match = category.re ? category.re.exec(sentence) : null;
       if (!match && category.ellipticalRe
-          && category.tools.some((tool) => attemptedUnproven.has(tool))) {
+          && gate.some((tool) => attemptedUnproven.has(tool))) {
         match = category.ellipticalRe.exec(sentence);
       }
       if (!match) continue;
-      const backed = category.tools.some((tool) => successfulTools.has(tool));
+      // A fact-finding tool that SUCCEEDED backs the claim. This is what stops
+      // the detector telling the assistant to retract a statement it had just
+      // earned — the F1b lesson recorded in the searching category above.
+      const backed = gate.some((tool) => successfulTools.has(tool));
       if (backed) continue;
       flaggedCategories.add(category.name);
       claims.push({
         category: category.name,
         phrase: match[0],
         sentence,
-        candidateTools: category.tools.slice(),
+        candidateTools: gate.slice(),
       });
     }
   }
