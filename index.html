@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6751,
+      "value": 6758,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -2068,7 +2068,7 @@
       {
         "n": 47,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "\"It forgets what we were talking about\" (in-session)",
         "detail": {
           "symptom": "Mid-conversation, MYTHOS loses the thread; sometimes it forgets a build it started three turns earlier.",
@@ -2079,7 +2079,7 @@
       {
         "n": 48,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Durable facts evicted by trivia (cross-session)",
         "detail": {
           "symptom": "It forgets things it was explicitly told days ago, while remembering recent noise.",
@@ -2091,7 +2091,7 @@
       {
         "n": 49,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Replies feel like \"just another chatbot\"",
         "detail": {
           "cause": "Not the model. `RULES` in `voice-agent.js` carried ~39 prohibition tokens against 3 permissions, so the prompt itself trained disengagement. Two specific offenders: the FRUSTRATION RULE fired on",
@@ -2101,7 +2101,7 @@
       {
         "n": 50,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "`cortex.thought` had zero subscribers (no proactivity)",
         "detail": {
           "symptom": "MYTHOS never follows up on a loose end unprompted.",
@@ -2113,7 +2113,7 @@
       {
         "n": 51,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Builds shipped content from the engine the repo had already retired",
         "detail": {
           "cause": "Commit `37953ca` made Hermes-Agent the single build-content engine \"so there is one engine with one behaviour\", precisely because the brain-backed generators invented titles and topics (the fabricated \"Week of November 20, 2023\" page in `build-engine.js`'s header; live failures where a \"DESIGN SYSTEM\" spec shipped as \"Kinetic Depth | Parallax Engine\"). That commit wired `build-runner.js` and the engagement executor — **it never touched `agent-actions.js`**. So the Hermes first draft was then OVERWRITTEN by a direct `brain.think({lane:'build'})` call in two places: the research-grounded regeneration and the review-rejection retry. Both fire for `risk='feature'`, which `risk-classifier.js` assigns to nearly every real request (\"landing page\", \"dashboard\", and the verbs build/create/design). Net effect: the artifact the operator actually received came from the exact engine the swap existed…",
@@ -2124,7 +2124,7 @@
       {
         "n": 52,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Every text build silently ran on a 3-minute timeout",
         "detail": {
           "cause": "`build-engine.js` passed `timeoutMs: o.timeoutMs` and **no caller has ever set it**, so every build inherited the hermes adapter's generic `HERMES_TASK_TIMEOUT_MS` (180000). Meanwhile `hermes-runner.js` — the other Hermes path — gives its builds 30 minutes because (.env.example) \"builds run a real agent loop and need real headroom\". A grounded build stacks research + skill resolution + a possible review-retry into that one budget.",
@@ -2134,7 +2134,7 @@
       {
         "n": 53,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Built pages had no images, by construction",
         "detail": {
           "symptom": "\"There are no pictures. There is nothing. It is just blank pages.\"",
@@ -2155,7 +2155,7 @@
       {
         "n": 55,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "One chunk spoken twice: the \"5-6 word repetition\"",
         "detail": {
           "cause": "`voice-loop.js`'s `playNextChunk()` wired the same unguarded fallback to two handlers: ```js audio.onerror = () => speakChunkFallback(chunk.text, session, onOneDone); audio.play().catch(() => speakChunkFallback(chunk.text, session, onOneDone)); ``` An `\u003caudio>` element whose data fails to decode does BOTH — fires `error` and rejects the pending `play()` promise. That is specified resource-selection behaviour, not an edge case. `speakChunkFallback()`",
@@ -2166,7 +2166,7 @@
       {
         "n": 56,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "MYTHOS talks to itself: own TTS fed back into the Live mic",
         "detail": {
           "cause": "In S2S (Gemini Live) mode the microphone streams continuously while MYTHOS's *server-side* TTS — the boot greeting, reminders, build announcements, idle thoughts — plays out of the speakers from a",
@@ -2177,7 +2177,7 @@
       {
         "n": 57,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "The article copy was choosing the design system",
         "detail": {
           "cause": "`build-pack.js` passed the WHOLE card text to ui-ux-pro-max's `search.py`, which keyword-matches the entire query string against its pattern / style / typography databases. The card text was mostly *article copy*, so the news content picked the design: | Words in the copy | What the skill returned | |---|---| | \"price-performance\" | pattern",
@@ -2187,7 +2187,7 @@
       {
         "n": 58,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Every build failed as \"hermes-agent not installed\" on a busy machine",
         "detail": {
           "fix": "The probe resolves `true | false | 'timeout'`. A timeout keeps the adapter"
@@ -2207,7 +2207,7 @@
       {
         "n": 82,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-059] — MYTHOS went deaf; idle-timeout and session-max killed the reconnect path",
         "detail": {
           "symptom": "\"why do you keep going offline? I have to click you every time.\"",
@@ -2218,7 +2218,7 @@
       {
         "n": 83,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-060] — two voices speaking simultaneously",
         "detail": {
           "symptom": "\"two voices speaking simultaneously\" (2 incidents).",
@@ -2229,7 +2229,7 @@
       {
         "n": 84,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-061] — the last word clipped on barge-in",
         "detail": {
           "symptom": "speech \"consistently cut off at the end, losing the last one or two words.\"",
@@ -2240,7 +2240,7 @@
       {
         "n": 85,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-065] — Spotify played the wrong song while reporting success",
         "detail": {
           "symptom": "asked for \"Russia on Ice\" and \"soft jazz\", got \"Of the New Day\" and \"Lady in the Blue Dress\" — while MYTHOS reported success. BUGS.md's Wave 5 already fixed the *detection*; this is the flag being thrown away one frame up the stack.",
@@ -2251,7 +2251,7 @@
       {
         "n": 86,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-068] — an unverified outcome still reported `status:ok` on the fast path",
         "detail": {
           "cause": ", `live-tool-adapter.js`: the AWAITED (fast) branch answered `ok: Boolean(outcome && outcome.ok)` with no check for `outcome.unverified` at all; only the slow/late path (`reportLateOutcome`) honored it. A real record (`aud`@14:33:38): `ui_type` returning \"the focused control exposes neither ValuePattern nor TextPattern\" — an honest unverified — was still reported to the model as `status:'ok'` whenever it happened to resolve before the awaited branch's timeout.",
@@ -2261,7 +2261,7 @@
       {
         "n": 87,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-063] — \"spotify_play FAILED: spotify_play started\"",
         "detail": {
           "cause": "A slow tool's in-progress START was committed with `ok:false`, which the narration layer rendered as the nonsensical (verbatim, `session.json`) \"spotify_play FAILED: spotify_play started\".",
@@ -2271,7 +2271,7 @@
       {
         "n": 88,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-069] — the immune healer claimed to heal things it never touched",
         "detail": {
           "cause": ", `server/index.js`'s `health.healed` subscriber: it labeled an outcome `healed` whenever the event fired, including `outcome:'no-match'` / `'cooldown'` / `'error'` — 36 such pairs in the episodic logs per the operator's plan. Same defect class as BUG-085: an instrument reporting success it didn't achieve.",
@@ -2281,7 +2281,7 @@
       {
         "n": 89,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "/090/091 [source: BUG-072/073/074] — `ui_click`/`ui_type` target the right window, or say they cannot",
         "detail": {
           "fix": "a failed focus now retries once before giving up; on a still-dead pid, `lastLaunchedPid` is cleared and the failure names `list_windows` explicitly so the model re-resolves instead of retrying a corpse. **Failure mode B — stale a11y element path (folded into BUG-089).** `Resolve-UIAElement` (`ps-automation.ps1`) now retries once on an out-of-range path and, on a genuine miss, returns the current candidate labels instead of a bare index error. **Failure mode C — `ui_click` had no evidence oracle at all (BUG-090/BUG-073).**"
@@ -2298,7 +2298,7 @@
       {
         "n": 93,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-076] — `status` kept dead-ending on `unknown-effector` even after being approved",
         "detail": {
           "cause": ", `effectors/hub.js`: Wave 6 already added a \"did you mean read_status?\" suggestion for the literal `status`, but nothing ever wired that suggestion to an actual retry — the operator approved it (`aud`@11:11:29) and the next call still said `status` and still got `unknown-effector`. A suggestion nobody can act on is the same defect as no suggestion.",
@@ -2308,7 +2308,7 @@
       {
         "n": 94,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-077] — `send_key` had no function-key row, so alt+F4 (\"close Spotify\") was unexpressible",
         "detail": {
           "fix": "Added `f1`-`f12` to `NAMED_KEYS` (`from-pc.js`) and `$VK_CODES` (`ps-automation.ps1`, `VK_F1=0x70`..`VK_F12=0x7B`, contiguous). The honest-failure-for-anything-unmapped contract is unchanged. 🔧 FIXED+UNIT-VERIFIED: `test/bug-077-send-key-fn-keys.test.js` (4 cases, including the exact recorded case and all 12 function keys)."
@@ -2325,7 +2325,7 @@
       {
         "n": 96,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-080] — durable identity facts written from text nobody said",
         "detail": {
           "cause": "`from-memory.js`'s `remember()` tool already quarantined identity claims to low confidence; `memory/index.js`'s automatic conversation-distillation loop (3b) did not — it wrote straight to `user-facts` at confidence 0.7 with no check at all. **Fix — one guard at the shared chokepoint, per the operator's instruction,** inside `semantic.js`'s `write()` itself (every caller passes through it): an identity-class claim (name/nickname/address-as) is quarantined to confidence 0.2 unless its `sources` explicitly mark a confirmed operator utterance, AND a cheap word-overlap check against `Identity/operator-profile.txt` catches contradictions even from a \"confirmed\" source."
@@ -2334,7 +2334,7 @@
       {
         "n": 97,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-079] — no local time anywhere in the Live prompt",
         "detail": {
           "fix": "`buildLiveSystemInstruction()` (`server/index.js`) now appends the current local date/time; `server/index.js` passes the FUNCTION itself (not its one-time result) as `live-session.js`'s `systemInstruction` dependency, and `buildSetup()` calls it fresh — piggybacking on the reconnect occasion BUG-082 already created, rather than adding a new timer. 🔧 FIXED+UNIT-VERIFIED: `test/server-live-wiring.test.js` — asserts the setup frame's `systemInstruction` carries a real current-year local time string on first connect AND after an idle-triggered reconnect (proving the refresh, not just the initial injection). No live check owed for the mechanism; the runbook's time-check (item 9) is about the SPOKEN behavior, which does need ears."
@@ -2851,10 +2851,10 @@
       {
         "n": 230,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a pending tool ack was recorded as a FAILURE, and a completion claim over it was corrected as a lie",
         "detail": {},
-        "excerpt": "**Symptoms.** 17:29:26 — reply \"Message sent to Alex, sir.\" logged in the same turn as `whatsapp_send=FAIL`. 17:38:56 — \"Playing 'Tera Mera Rishta' on YouTube for you now\" against an `open_web` that could NOT be confirmed. `claimed-action-not-taken` ×5, `live-tool-outcome-late-for-turn` ×14. **Structural, and already half-solved.** `live-tool-adapter.js` answers any call still running at `TOOL_ACK_DEADLINE_MS` (1500 ms) with `status:'started'` plus `STARTED_MESSAGE` — \"Say what you are DOING, not what happened — do NOT claim completion\". That is correct design (BUG-128): the turn boundary belongs to the model and awaiting harder cannot fix it. `TOOL_ACK_DEADLINE_MS` is not implicated and is unchanged. Three real gaps, all fixed 2026-08-14. **1. The record was mislabelled.** `commitAction({ok:false, started:true, …})` wrote a pending ack as a failure. The audit shows `browser_navigate=FAI…"
+        "excerpt": "**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `TOOL_ACK_DEADLINE_MS` in `mythos/server/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED. **Symptoms.** 17:29:26 — reply \"Message sent to Alex, sir.\" logged in the same turn as `whatsapp_send=FAIL`. 17:38:56 — \"Playing 'Tera Mera Rishta' on YouTube for you now\" against an `open_web` that could NOT be confirmed. `claimed-action-not-taken` ×5, `live-tool-outcome-late-for-turn` ×14. **Structural, and already half-solved.** `live-tool-adapter.js` answers any call still running at `TOOL_ACK_DEADLINE_MS` (1500 ms) with `status:'started'` plus `STARTED_MESSAGE` — \"Say what you are DOING, not what happened — do NOT claim completion\". That is correct design (BUG-128): the turn boundary belongs to the model and awaiting harder cannot fix it. `TOOL_ACK_DEADLINE_MS` is not implicated and is…"
       },
       {
         "n": 231,
@@ -2910,7 +2910,7 @@
       {
         "n": 236,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Gmail: dead credentials, a dropped reason, and MYTHOS diagnosing it wrong out loud",
         "detail": {
           "symptom": "11 failures across the day (00:36 → 17:27). Ten said `invalid_grant`. The one at 12:29:39 said `\"Gmail fetch failed: \"` — nothing after the colon. And MYTHOS told the operator \"Network request failed… Google APIs appear unreachable\" and filed an incident saying so. **That is a wrong diagnosis on the permanent record.**",
@@ -3086,10 +3086,10 @@
       {
         "n": 253,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "28 untracked incidents, triaged",
         "detail": {},
-        "excerpt": "The first run of BUG-252's reporter against the live vault. Disposition for every previously-untracked incident id, so the ledger is answered rather than merely counted. Fixed-elsewhere rows cite the entry that carries the fix; the rest are open with a named reason. | Incident | Date | Disposition | |---|---|---| | `inc-1786102413272-1`, `inc-1786104367729-1` | 08-07 | Reclassified, see BUG-234 part 1a — `live-reasoning-leak` moved off the fault channel to `voice.live.reasoning-filtered`. Not a fault; no containment change. | | `inc-1786193617857-1` | 08-08 | Open — speech not recognised. Overlaps the transcript work in BUG-224's session but has no isolated repro; needs a live session with `live-turn-no-user-transcript` counts captured. | | `inc-1786194147637-2`, `inc-1786237852737-1` | 08-08/09 | By design, not a defect — `live-idle-exhausted` is the deliberate idle-session cost-saving…"
+        "excerpt": "**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `findUntracked` in `mythos/scripts/triage-incidents.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED. The first run of BUG-252's reporter against the live vault. Disposition for every previously-untracked incident id, so the ledger is answered rather than merely counted. Fixed-elsewhere rows cite the entry that carries the fix; the rest are open with a named reason. | Incident | Date | Disposition | |---|---|---| | `inc-1786102413272-1`, `inc-1786104367729-1` | 08-07 | Reclassified, see BUG-234 part 1a — `live-reasoning-leak` moved off the fault channel to `voice.live.reasoning-filtered`. Not a fault; no containment change. | | `inc-1786193617857-1` | 08-08 | Open — speech not recognised. Overlaps the transcript work in BUG-224's session but has no isolated repro; needs a live session w…"
       },
       {
         "n": 254,
@@ -3113,10 +3113,10 @@
       {
         "n": 256,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a third of the operator's durable facts never reached the prompt",
         "detail": {},
-        "excerpt": "`LIVE_FACTS_MAX_CHARS` was 4000. The operator's real `user-facts.md` holds 37 facts after two days of use, of which **26 fit** — the oldest 11 fell off the front of every session frame. Raised to 8000. The reasoning is a cost comparison, not generosity: a fact the model cannot see is one it asks `recall_memory` for, and per BUG-255 that round-trip is a second inference pass plus a scarce request, while the facts block is composed **once per session** (BUG-136) and costs only tokens. Trading prompt size for round-trips is the correct direction on a rate-limited tier. Still a hard cap — unbounded growth eventually crowds the frame, and the answer at that point is distillation, not a larger number. `test/live-memory-inject.test.js`'s cap test now asserts the *behaviour* (bounded at all; drops oldest first) against a generous ceiling rather than pinning the constant, since the value is a tun…"
+        "excerpt": "**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `LIVE_FACTS_MAX_CHARS` in `mythos/server/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED. `LIVE_FACTS_MAX_CHARS` was 4000. The operator's real `user-facts.md` holds 37 facts after two days of use, of which **26 fit** — the oldest 11 fell off the front of every session frame. Raised to 8000. The reasoning is a cost comparison, not generosity: a fact the model cannot see is one it asks `recall_memory` for, and per BUG-255 that round-trip is a second inference pass plus a scarce request, while the facts block is composed **once per session** (BUG-136) and costs only tokens. Trading prompt size for round-trips is the correct direction on a rate-limited tier. Still a hard cap — unbounded growth eventually crowds the frame, and the answer at that point is distillation, not a larger num…"
       },
       {
         "n": 257,
@@ -3241,10 +3241,10 @@
       {
         "n": 272,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "BUG-271's live re-test: what the 20-minute session proved, what it broke, and the fix plan for all of it",
         "detail": {},
-        "excerpt": "**SLICES 1-4 FIXED IN CODE 2026-08-18** (`6d1dc34` wake word, `8bf1acc` echo instrumentation, `daf89d4` barge-in state machine, `190cd74` tool honesty). Slice 5's records are this entry plus `scripts/verify-voice-session.js`. **NOT LIVE-VERIFIED - slices 1 and 3 are acoustic and device-dependent, and the scripted mic session is the gate.** Suite 4940/4940/0 fail/0 skipped. **Five corrections to this entry's own fix plan, all found by reading the code before writing any:** 1. **There is no 13-second ceiling.** `OWN_VOICE_IDLE_CEILING_MS` is 8000 and is REFRESHED by every arriving assistant-audio chunk (`s2s-bridge.js:508`), so the observed 10.5-13s holds are \"last chunk plus 8s\". \"Change the 13s ceiling to 2s\" was not actionable. The ceiling is unchanged; what changed is that it is no longer what ends holds, because a real interruption now confirms in under 500ms. 2. **\"Preroll cap 300 ->…"
+        "excerpt": "**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `OWN_VOICE_IDLE_CEILING_MS` in `mythos/ui/public/js/voice/s2s-bridge.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED. **SLICES 1-4 FIXED IN CODE 2026-08-18** (`6d1dc34` wake word, `8bf1acc` echo instrumentation, `daf89d4` barge-in state machine, `190cd74` tool honesty). Slice 5's records are this entry plus `scripts/verify-voice-session.js`. **NOT LIVE-VERIFIED - slices 1 and 3 are acoustic and device-dependent, and the scripted mic session is the gate.** Suite 4940/4940/0 fail/0 skipped. **Five corrections to this entry's own fix plan, all found by reading the code before writing any:** 1. **There is no 13-second ceiling.** `OWN_VOICE_IDLE_CEILING_MS` is 8000 and is REFRESHED by every arriving assistant-audio chunk (`s2s-bridge.js:508`), so the observed 10.5-13s holds are \"last chunk…"
       },
       {
         "n": 273,
@@ -3881,18 +3881,29 @@
           "symptom": "/",
           "cause": "/"
         }
+      },
+      {
+        "n": 391,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "the last 28 entries recorded by hand, each against the artifact it names, and every citation re-checked by a test",
+        "detail": {
+          "symptom": "/",
+          "cause": "/",
+          "fix": "`, past tense, naming real code. BUG-390 recorded three mechanical oracles built to close them and rejected for false positives."
+        }
       }
     ],
     "counts": {
       "verified": 45,
-      "fixed": 138,
+      "fixed": 167,
       "open": 16,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
-      "unrecorded": 28
+      "unrecorded": 0
     },
-    "total": 239,
+    "total": 240,
     "openDeclared": [
       344,
       346,

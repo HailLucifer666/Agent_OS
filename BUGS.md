@@ -41,6 +41,84 @@ it is committed.
 
 ---
 
+## BUG-391 — the last 28 entries recorded by hand, each against the artifact it names, and every citation re-checked by a test (✅ FIXED 2026-08-28)
+
+**Status:** ✅ FIXED 2026-08-28. **unrecorded 28 → 0.** Every entry in the register
+now states a status a machine can read. 7 assertions.
+
+### What this is, and why it could not be automated
+
+BUG-389 and BUG-390 taught the register to READ statuses that were already
+written, which took 133 → 36 → 28. These last 28 (BUG-047…097, 230, 236, 253,
+256, 272) genuinely had none: narrative entries in the shape
+`**Symptom.** / **Root cause.** / **Fix.**`, past tense, naming real code.
+
+BUG-390 recorded three mechanical oracles built to close them and rejected for
+false positives. **A fourth was not attempted.** Instead each entry's own
+`**Fix.**` section was read, the specific file and artifact it names were
+extracted by hand, and that pair was checked against the current tree.
+
+**All 28 are present.** Four needed individual investigation because the first
+pass looked in the wrong place — and in every case the fix had shipped and the
+file had moved:
+
+| entry | first guess | where it actually is |
+|---|---|---|
+| BUG-048 | `identity/reflection.js` | `identity/index.js` |
+| BUG-051 | `src/core/agent/agent-actions.js` | `src/core/effectors/agent-actions.js` |
+| BUG-053 | `build-engine.js` | `skills/build-pack.js` |
+| BUG-058 | `adapters/hermes-agent/` | deleted — see below |
+
+### The BUG-058 case is the interesting one
+
+*(That heading deliberately does not begin with the id: a heading whose first
+token is `BUG-nnn` IS a declaration to `parseBugs`, so the first draft of this
+section registered a second BUG-058, created a phantom collision, and left an
+entry with no status. The same shape as this ticket's other self-inflicted catch
+— prose about an id must not look like an id.)*
+
+Its fix lived in the Hermes adapter, and **that adapter was deleted wholesale on
+2026-08-22 when DeepSeek Harness replaced it**. The absent artifact is not
+evidence the work never happened: `adapters/dsh-agent/index.js` carries the same
+policy — `kind: 'timeout'` and `lastProbeDiagnostic` keep the adapter ONLINE on a
+slow probe and record why, which is exactly what the ticket changed. **The
+behaviour was ported with the engine swap.** Its status cites the successor.
+
+### FIXED, deliberately not VERIFIED
+
+Every recorded status says the same thing about its own limit: *source presence
+proves the fix LANDED, not that it works.* That is the difference between the two
+states in this register, and inflating 28 entries to `verified` on a grep would
+have destroyed the distinction that makes `verified` worth anything.
+
+### The citations are machine-readable because a citation nobody re-runs decays
+
+Each status reads `Verified in source 2026-08-28 (BUG-391): \`SYM\` in \`FILE\``.
+`test/bug-391-recorded-statuses-cite-live-evidence.test.js` re-runs every one:
+the file exists, the artifact is still in it, and any named regression test
+exists. **If somebody renames `titleSatisfiesQuery`, BUG-085's recorded status
+becomes a false claim carrying generator authority — worse than the gap it
+replaced**, and the suite now fails instead.
+
+Two guards on the guard: it asserts it found ≥25 citations before checking any of
+them, so it cannot pass by matching nothing; and it asserts **no citation points
+at a test file as its source evidence**, because a fix confirmed by its own test
+proves the test exists, not that the product changed — that was one of the three
+oracles BUG-390 rejected.
+
+### Scope
+
+- **This closes the reading gap, not the verification gap.** 28 entries are now
+  recorded as fixed on source evidence. None of them gained a live verification
+  they did not already have.
+- **BUG-253 is a triage record, not a defect.** Its status is that the triage was
+  performed; the open items it lists are the incidents it dispositions, which
+  carry their own entries.
+- **BUG-272 records slices 1–4 plus 4b as fixed in code** and names no open slice,
+  so it reads fixed. The barge-in work that followed it has its own tickets.
+
+---
+
 ## BUG-390 — three deferred tickets were tracked as nothing, and one entry wore another entry's status (✅ FIXED 2026-08-28, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-28. 11 assertions, 10 mutations all caught, source
@@ -8252,6 +8330,8 @@ Every entry below is ✅ FIXED with tests unless marked otherwise.
 
 ### BUG-047 — "It forgets what we were talking about" (in-session)
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `VOICE_HISTORY_MAX_TURNS` in `mythos/server/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Symptom.** Mid-conversation, MYTHOS loses the thread; sometimes it forgets a
 build it started three turns earlier.
 
@@ -8282,6 +8362,8 @@ the whole server suite. Same guard shape as the `LAST_BOOT_PATH` read above it.
 
 ### BUG-048 — Durable facts evicted by trivia (cross-session)
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `operator-profile` in `mythos/src/core/identity/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Symptom.** It forgets things it was explicitly told days ago, while remembering
 recent noise.
 
@@ -8302,6 +8384,8 @@ reflection's conversation window 2 -> 7 days. Recall widened from 8 hits/7 days 
 **Tests.** `test/persona.test.js`, `test/reflection.test.js`.
 
 ### BUG-049 — Replies feel like "just another chatbot"
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `CHARACTER` in `mythos/src/core/voice/voice-agent.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Root cause.** Not the model. `RULES` in `voice-agent.js` carried ~39
 prohibition tokens against 3 permissions, so the prompt itself trained
@@ -8325,6 +8409,8 @@ talking to it. The tests assert the permissions are present and the contract is
 intact.
 
 ### BUG-050 — `cortex.thought` had zero subscribers (no proactivity)
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `FOLLOWUP_MIN_GAP_MS` in `mythos/server/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Symptom.** MYTHOS never follows up on a loose end unprompted.
 
@@ -8350,6 +8436,8 @@ is active. Changing that is a cortex-tick change, not a conversation change.
 **Tests.** `test/proactive-followup.test.js` (6 cases).
 
 ### BUG-051 — Builds shipped content from the engine the repo had already retired
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `generateContent` in `mythos/src/core/effectors/agent-actions.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Symptom (operator's words).** Builds fail "drastically"; the few that land are
 "ugly as shit", blank, or about the wrong topic entirely.
@@ -8378,6 +8466,8 @@ folded into the prompt instead of being dropped.
 
 ### BUG-052 — Every text build silently ran on a 3-minute timeout
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `DSH_TEXT_BUILD_TIMEOUT_MS` in `mythos/src/core/effectors/build-engine.js` — renamed from the HERMES_ prefix when DeepSeek Harness replaced Hermes on 2026-08-22, so this fix survived the engine swap too. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Root cause.** `build-engine.js` passed `timeoutMs: o.timeoutMs` and **no
 caller has ever set it**, so every build inherited the hermes adapter's generic
 `HERMES_TASK_TIMEOUT_MS` (180000). Meanwhile `hermes-runner.js` — the other
@@ -8390,6 +8480,8 @@ skill resolution + a possible review-retry into that one budget.
 it. Below hermes-runner's 30 min: this path generates one artifact, not a tree.
 
 ### BUG-053 — Built pages had no images, by construction
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `picsum.photos` in `mythos/src/core/skills/build-pack.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Symptom.** "There are no pictures. There is nothing. It is just blank pages."
 
@@ -8439,6 +8531,8 @@ UI build prompts, alongside 3797 chars of skill essences.
 
 ### BUG-055 — One chunk spoken twice: the "5-6 word repetition"
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `createChunkCompletion` in `mythos/ui/public/js/voice/voice-loop.js`. Regression test `mythos/test/voice-chunk-double-speak.test.js` present. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Reported by the operator 2026-07-31**, mid-session: "the voice glitches, I am
 hearing 5-6 words repetitions". Two separate defects were behind it; this is the
 first.
@@ -8474,6 +8568,8 @@ ignored instead of re-speaking what was already heard.
 source-shape gate so an unguarded handler cannot be re-wired).
 
 ### BUG-056 — MYTHOS talks to itself: own TTS fed back into the Live mic
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `setCaptureSuspended` in `mythos/ui/public/js/voice/s2s-bridge.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **The other half of the repetition report**, and the more consequential one.
 
@@ -8518,6 +8614,8 @@ bridge's own header documents why it has no meaningful Node-side double).
 on headphones.
 
 ### BUG-057 — The article copy was choosing the design system
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `designQuery` in `mythos/src/core/effectors/design-system-prompt.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Reported by the operator 2026-07-31** with the artifact attached: a news digest
 that "does not match" the requested dark-theme/ui-ux-pro-max expectation. It was
@@ -8566,6 +8664,8 @@ rejected it: inconsistent branding, a missing story, an unsupported statistic.)
 **Tests.** `test/design-query-intent.test.js` (10 cases).
 
 ### BUG-058 — Every build failed as "hermes-agent not installed" on a busy machine
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): the Hermes adapter this fixed was deleted on 2026-08-22 when DeepSeek Harness replaced it, but the policy survived the swap — `kind: 'timeout'` and `lastProbeDiagnostic` in `mythos/adapters/dsh-agent/index.js` keep the adapter ONLINE on a slow probe and record why, which is exactly what this ticket changed. An absent artifact here is a moved subsystem, not work that never happened.
 
 **The likely explanation for the operator's "everything fails" and "tens of
 thousands of attempts".** Measured 2026-07-31 while MYTHOS was running:
@@ -8877,6 +8977,8 @@ do it alongside.
 
 ### BUG-082 [source: BUG-059] — MYTHOS went deaf; idle-timeout and session-max killed the reconnect path
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `closedByUs` in `mythos/src/core/voice/live-session.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Complaint:** "why do you keep going offline? I have to click you every time."
 
 **Root cause**, `src/core/voice/live-session.js`: `armIdle()`'s 45s idle timer and
@@ -8937,6 +9039,8 @@ session against the real Gemini Live endpoint, and whether 3 rotations / 120s /
 
 ### BUG-083 [source: BUG-060] — two voices speaking simultaneously
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `getLiveSession` in `mythos/server/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Complaint:** "two voices speaking simultaneously" (2 incidents).
 
 **Root cause.** `server/index.js`'s `proactiveSpeak()` (boot greeting, reminders,
@@ -8968,6 +9072,8 @@ announcements only); needs its own pass.
 
 ### BUG-084 [source: BUG-061] — the last word clipped on barge-in
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `stopAll` in `mythos/ui/public/js/voice/pcm-player.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Complaint:** speech "consistently cut off at the end, losing the last one or
 two words."
 
@@ -8988,6 +9094,8 @@ to use long-duration chunks so they still test genuine-interrupt behavior.
 doesn't make barge-in feel unresponsive. See runbook item 2.
 
 ### BUG-085 [source: BUG-065] — Spotify played the wrong song while reporting success
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `titleSatisfiesQuery` in `mythos/src/core/effectors/from-spotify.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Complaint:** asked for "Russia on Ice" and "soft jazz", got "Of the New Day" and
 "Lady in the Blue Dress" — while MYTHOS reported success. BUGS.md's Wave 5 already
@@ -9020,6 +9128,8 @@ playing. See runbook item 3.
 
 ### BUG-086 [source: BUG-068] — an unverified outcome still reported `status:ok` on the fast path
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `reportLateOutcome` in `mythos/src/core/voice/live-tool-adapter.js`. Regression test `mythos/test/live-tool-adapter.test.js` present. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Root cause**, `live-tool-adapter.js`: the AWAITED (fast) branch answered
 `ok: Boolean(outcome && outcome.ok)` with no check for `outcome.unverified` at
 all; only the slow/late path (`reportLateOutcome`) honored it. A real record
@@ -9039,6 +9149,8 @@ logic. No live check owed for this one specifically.
 
 ### BUG-087 [source: BUG-063] — "spotify_play FAILED: spotify_play started"
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `summarizeActionsForResult` in `mythos/src/core/voice/action-outcome-summary.js`. Regression test `mythos/test/bug-063-started-state.test.js` present. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Root cause.** A slow tool's in-progress START was committed with `ok:false`,
 which the narration layer rendered as the nonsensical (verbatim, `session.json`)
 "spotify_play FAILED: spotify_play started".
@@ -9051,6 +9163,8 @@ extracted from `server/index.js`) special-cases `a.started` before reading
 the exact recorded narration string). Pure narration logic — no live check owed.
 
 ### BUG-088 [source: BUG-069] — the immune healer claimed to heal things it never touched
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `actuallyHealed` in `mythos/server/index.js`. Regression test `mythos/test/bug-069-healer-no-match-label.test.js` present. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Root cause**, `server/index.js`'s `health.healed` subscriber: it labeled an
 outcome `healed` whenever the event fired, including `outcome:'no-match'` /
@@ -9068,6 +9182,8 @@ real bus + real server + real WS client). No live check owed — this is a label
 fix over deterministic inputs.
 
 ### BUG-089/090/091 [source: BUG-072/073/074] — `ui_click`/`ui_type` target the right window, or say they cannot
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `Resolve-UIAElement` in `mythos/adapters/pc-child/ps-automation.ps1`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Complaint (operator, mid-plan):** "the ui_click is not working." Plus one
 incident: "ui_type repeatedly failing despite approvals and visible confirmation
@@ -9143,6 +9259,8 @@ against an injected-`BrowserWindow` seam mirroring `live-session.js`'s
 
 ### BUG-093 [source: BUG-076] — `status` kept dead-ending on `unknown-effector` even after being approved
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `ALIASES` in `mythos/src/core/effectors/hub.js`. Regression test `mythos/test/open-folder-and-suggestions.test.js` present. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Root cause**, `effectors/hub.js`: Wave 6 already added a "did you mean
 read_status?" suggestion for the literal `status`, but nothing ever wired that
 suggestion to an actual retry — the operator approved it (`aud`@11:11:29) and the
@@ -9159,6 +9277,8 @@ prefix contract still holds for a genuinely unmapped name. No live check owed �
 this is deterministic dispatch logic.
 
 ### BUG-094 [source: BUG-077] — `send_key` had no function-key row, so alt+F4 ("close Spotify") was unexpressible
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `NAMED_KEYS` in `mythos/src/core/effectors/from-pc.js`. Regression test `mythos/test/bug-077-send-key-fn-keys.test.js` present. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Evidence:** `Invalid key: "alt"`, `Invalid key: "f4"` — the model tried them as
 two separate calls, both rejected; `alt` was already a valid modifier, but `f4`
@@ -9196,6 +9316,8 @@ live, that's a new, bigger piece of work — not a regression of this fix.
 
 ### BUG-096 [source: BUG-080] — durable identity facts written from text nobody said
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `IDENTITY_CLAIM_RE` in `mythos/src/core/memory/semantic.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Evidence:** `vault/Semantic/user-facts.md` contained "The user's name is Alex"
 (mined from MYTHOS's OWN typed Notepad probe text, "Hi Alex, this is Mythos"),
 "the user will call me 'Eve'", and an inferred "operator really enjoys playing
@@ -9229,6 +9351,8 @@ case and a contradicting-a-confirmed-source case). No live check owed — this i
 deterministic write-path guard testable with real vault fixtures.
 
 ### BUG-097 [source: BUG-079] — no local time anywhere in the Live prompt
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `buildLiveSystemInstruction` in `mythos/server/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Evidence:** MYTHOS said "have a good afternoon" at ~01:50 local; the operator
 corrected "a.m. not p.m."
@@ -13723,6 +13847,8 @@ rejected; the derivation IS the invariant.
 
 ## BUG-230 — a pending tool ack was recorded as a FAILURE, and a completion claim over it was corrected as a lie
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `TOOL_ACK_DEADLINE_MS` in `mythos/server/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 **Symptoms.** 17:29:26 — reply "Message sent to Alex, sir." logged in the same
 turn as `whatsapp_send=FAIL`. 17:38:56 — "Playing 'Tera Mera Rishta' on YouTube
 for you now" against an `open_web` that could NOT be confirmed.
@@ -14103,6 +14229,8 @@ the caveat; switching the ledger to reported usage is its own change.
 **Regression test**: `test/goal-budget-calibration.test.js`, 9 tests.
 
 ## BUG-236 — Gmail: dead credentials, a dropped reason, and MYTHOS diagnosing it wrong out loud
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `googleError` in `mythos/adapters/google/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **Symptom.** 11 failures across the day (00:36 → 17:27). Ten said `invalid_grant`.
 The one at 12:29:39 said `"Gmail fetch failed: "` — nothing after the colon. And
@@ -14756,6 +14884,8 @@ bug, not the fix.
 
 ## BUG-253 — 28 untracked incidents, triaged
 
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `findUntracked` in `mythos/scripts/triage-incidents.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
+
 The first run of BUG-252's reporter against the live vault. Disposition for
 every previously-untracked incident id, so the ledger is answered rather than
 merely counted. Fixed-elsewhere rows cite the entry that carries the fix; the
@@ -14879,6 +15009,8 @@ case, the `web_search`/`screen_look` redirects and the `context` warning must
 survive, so a later "fix" cannot silently make it either reflexive or dead.
 
 ## BUG-256 — a third of the operator's durable facts never reached the prompt
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `LIVE_FACTS_MAX_CHARS` in `mythos/server/index.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 `LIVE_FACTS_MAX_CHARS` was 4000. The operator's real `user-facts.md` holds 37
 facts after two days of use, of which **26 fit** — the oldest 11 fell off the
@@ -15425,6 +15557,8 @@ the bleed got), `framesZeroed` (how much the noise gate silenced) and
 `framesDropped` (how much speech the preroll ring lost).
 
 ## BUG-272 — BUG-271's live re-test: what the 20-minute session proved, what it broke, and the fix plan for all of it
+
+**Status:** ✅ FIXED. Verified in source 2026-08-28 (BUG-391): `OWN_VOICE_IDLE_CEILING_MS` in `mythos/ui/public/js/voice/s2s-bridge.js`. Source presence proves the fix LANDED, not that it works — hence FIXED, not VERIFIED.
 
 **SLICES 1-4 FIXED IN CODE 2026-08-18** (`6d1dc34` wake word, `8bf1acc` echo
 instrumentation, `daf89d4` barge-in state machine, `190cd74` tool honesty).
