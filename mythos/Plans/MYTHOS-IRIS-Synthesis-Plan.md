@@ -4752,6 +4752,7 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | C | BUG-385 — three dispositions, and the CAPTCHA detector was inverted | **DONE** | the refusal policy was already right and already pinned; the DETECTOR flagged **6 of 6 ordinary pages** (developers.cloudflare.com, a "Performance and security by Cloudflare" footer, Google's Security Checkup) and MISSED the real challenge text, because two markers named a VENDOR and `includes()` is a substring test. Fixed mostly by removal: 0 FP on 7 controls, 0 FN on 9 challenge shapes. `focus_window`: ladder pinned at exactly 3 rungs, and the map's own note was wrong (3/2/1 classes, not 5/1). `video call`: no tool across all 179, and `phone_call` pinned voice-withheld. 30 assertions, 14 mutations all caught | (this commit) |
 | F | BUG-386 — 37 tools nobody had measured against an oracle | **DONE** | new `scripts/verify-unknown-nodes.js`: **21 pass / 7 n/a / 11 disp / 0 FAIL**. No product defect — and it means something because **8 mutations of REAL PRODUCT CODE were all caught**, 2 after a first pass exposed genuinely weak oracles. The harness accused the product **six times** before it was right, every one fail-open. ok 40→44, unknown 7→5. 10 assertions | (this commit) |
 | A | BUG-387 — `doctor` said the Google grant was OK for three weeks | **DONE (the code half)** | the two nodes still need the operator and no session can supply them. What was broken is the check they would run: `doctor` reported `OK ... configured` while the vault held **88 invalid_grant failures in 60 bursts**, because it tests that three strings are PRESENT and presence is not validity. New `scripts/verify-google-grant.js` (4 verdicts, UNREACHABLE ≠ INVALID, no secret ever printed) + a doctor row that stops overclaiming. Everything else in the chain was already correct and already tested — measured, not assumed. 14 assertions, 10 mutations all caught | (this commit) |
+| E | BUG-388 — the barge-in floor learned the OPERATOR and a verifier called it a verdict on the echo canceller | **the no-microphone half is DONE** | the eight voice nodes still need a live acoustic session; what this removes is the false reading that was steering it. `bleedPeak` is learned in the 500ms protected window on the written assumption that "the assistant's own onset is by construction the loudest thing present" — false, because AEC attenuates MYTHOS 15-20dB while the operator arrives direct. Measured over 731 records in 20 sessions: **22 of 31 ratchets above 0.05 landed exactly on that hold's own peakRms**. Diagnosed 2026-08-19 and deferred as "consequence today is nil" — but `verify-voice-session.js` was calling it "the ungagged oracle" and concluding "Echo cancellation is not removing it". 10 assertions, 10 mutations all caught | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5015,9 +5016,10 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position: EVERY TRACK A SESSION CAN DO IS DONE.** D, B, C, F and the code
-half of A are complete. What remains needs a person at the machine: three
-operator minutes (Track A) and a live microphone (Track E).
+**Position: EVERY TRACK IS DONE AS FAR AS A SESSION CAN TAKE IT.** D, B, C, F,
+the code half of A and the no-microphone half of E are complete. What remains
+needs a person at the machine: three operator minutes (Track A) and a live
+acoustic session (Track E).
 
 ```
 main                       b04ec8e
@@ -5028,81 +5030,72 @@ PR #40  Track B    BUG-384   fix/bug-384-map-counts-from-vault     OPEN  (stacke
 PR #41  Track C    BUG-385   fix/bug-385-track-c-dispositions      OPEN  (stacked on #40)
 PR #42  Track F    BUG-386   fix/bug-386-verify-unknown-nodes      OPEN  (stacked on #41)
 PR #43  Track A    BUG-387   fix/bug-387-doctor-verifies-the-grant OPEN  (stacked on #42)
-suite                      6684 tests / 6684 pass / 0 fail / 0 skipped
+PR #44  Track E    BUG-388   fix/bug-388-bleed-peak-attribution    OPEN  (stacked on #43)
+suite                      6694 tests / 6694 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
 map                        91 nodes: 44 ok / 31 warn / 9 fail / 2 dark / 5 unknown
-next free BUG number       388
+next free BUG number       389
 ```
 
-Merge order **#37 -> #38 -> #39 -> #40 -> #41 -> #42 -> #43**. #37 and #38 both
-branch from `main` and touch `index.html`, so they conflict on the island; the
-code does not overlap, and since BUG-384 every count regenerates from the vault,
-so only `s`, `note` and `ev` need care in a merge.
+Merge order **#37 -> #38 -> #39 -> #40 -> #41 -> #42 -> #43 -> #44**. #37 and #38
+both branch from `main` and touch `index.html`, so they conflict on the island;
+the code does not overlap, and since BUG-384 every count regenerates from the
+vault, so only `s`, `note` and `ev` need care in a merge.
 
-## THE THREE OPERATOR MINUTES, and now they are checkable
+## TRACK E WAS NOT EIGHT NODES NEEDING A MICROPHONE
 
-```
-1.  node mythos/scripts/google-auth.js          (browser consent, ~2 min)
-    put the new GOOGLE_REFRESH_TOKEN in mythos/.env
-2.  node mythos/scripts/verify-google-grant.js  <- NEW: says whether step 1 worked
-3.  press Ctrl+Alt+X with MYTHOS running        (the OCR hotkey, ~10 sec)
-```
+It was written up in one line — *"Track E is eight nodes needing a live
+microphone"* — and the ledger that held the per-node detail has since been
+deleted, so that line was the whole specification. Taken at face value it makes
+the entire voice cluster unreachable from a session, which is why nobody read
+the number the cluster is reasoned from. **That number was measuring the wrong
+person, and proving it needs a log file and a unit test, not a microphone.**
 
-Step 2 did not exist before BUG-387, and its absence is the whole Track A
-story: **`doctor` reported `OK  Gmail / Calendar sensors — configured` for
-three weeks while the vault held 88 `invalid_grant` failures across 60
-bursts.** It tests that three strings are PRESENT in `.env`, and for an OAuth
-refresh token presence and validity come apart permanently and silently —
-Google revokes the grant, the string stays in the file forever. An existence
-check standing in for a correlation check, on the one command an operator runs
-to answer "is my Gmail set up?".
+`barge-in-policy.js` learns `bleedPeak` — "loudest level seen while MYTHOS was
+provably speaking" — inside the 500ms protected window, on this written
+reasoning: *"the assistant's own onset is by construction the loudest thing
+present"*. It is false. MYTHOS reaches the mic through the speakers and is then
+attenuated 15-20dB by echo cancellation (measured independently by
+`probe-aec-routes.js`: residual 0.0069-0.0141), while the operator arrives
+direct. **Whenever both are present the OPERATOR is by construction the louder
+one** — the exact opposite of the assumption.
 
-**If step 1 has to be repeated every few days, doing it again will not help.**
-An OAuth consent screen left in "Testing" publishing status issues refresh
-tokens that expire in 7 days. Publish the app first (Google Cloud Console ->
-APIs & Services -> OAuth consent screen -> Publish app), THEN re-authorise. The
-product already says this out loud; it is repeated here because it is the
-difference between three minutes once and three minutes weekly.
+Measured 2026-08-28 over 731 `voice.capture-suspend` records in 20 sessions: of
+**31 upward moves of `bleedPeak` above 0.05, TWENTY-TWO landed on a value exactly
+equal to that hold's own `peakRms`** — the operator. Every session opens at
+0.0043-0.0347, agreeing with the probe, then ratchets to 0.05-0.33 and never
+decays. 2026-08-24 reported **0.1606 for 110 consecutive holds off one frame**.
+The uncontaminated control is 2026-08-26: ended at **0.0313** while the operator
+peaked at 0.1402.
 
-### TRACK A IS THE ONE TRACK WHOSE DESCRIPTION WAS RIGHT
+### The deferral that made it survive, and the shape to watch for
 
-Worth recording, because the other four were not. "Three operator minutes" was
-exactly true, and nearly everything around it was already correct — measured
-rather than assumed, in this order:
+This was diagnosed on 2026-08-19 and deliberately deferred, reasoning that the
+learned floor is dormant so **"Consequence today is nil"**. The premise was
+wrong because nobody looked for a consumer. `verify-voice-session.js` read
+`bleedPeak`, called it **"the ungagged oracle"**, and printed *"Echo cancellation
+is not removing it, whatever the constraint reports as granted"* — a hardware
+verdict derived from the operator's own voice. **That conclusion is why BUG-274
+T4, an acoustic rework, sits in this plan as "the only fix that removes the
+trade".** It should be re-argued from an attributable measurement before anyone
+builds it.
 
-- `from-gmail` classifies `invalid_grant` as terminal; its remedy names the
-  literal command and the 7-day trap.
-- `hub.js` latches the terminal result per tool. The 88 failures fall into **60
-  bursts, nearly all of size one** — one attempt per process, not a retry storm.
-- `gmail-sensor` raises `health.anomaly` with `needsOperator: true`.
-- `explainer.js` short-circuits on it and SPEAKS the whole remedy verbatim.
-- Nine test files already cover that chain; two assert the spoken text contains
-  `google-auth.js`.
-- `google-auth.js`'s two historical Windows bugs are both already fixed.
-
-**So the honest Track A finding is that only the DIAGNOSTIC lied.** Everything
-that detects, classifies, announces and explains the fault was right; the thing
-the operator would run to check was the one thing that was wrong.
-
-### A correction I have to leave written down
-
-From the episodic `summary` field it looked as though MYTHOS had announced this
-fault nine times over eight days and never once said what to do — one utterance
-even reads *"I do not yet know the cause."* **That was wrong.** `summary`
-truncates at ~100 characters; `detail.text` carries the complete remedy
-including the command. Only the 2026-08-18 utterance is genuinely deficient,
-and it predates the BUG-273 C2 and BUG-278 fixes that repaired exactly it.
-
-That is the third instance in this campaign of **accusing the product from an
-artifact of how the evidence was displayed** — after a harness misreading a
-return contract, and a harness writing tools off for its own bad arguments.
-Read the full record, not the summary column, before filing anything.
+The deferral even wrote the right instruction — *do not re-enable the learned
+floor without checking whether the operator was speaking during that hold's
+opening 500ms* — but wrote it in `BUGS.md`, where no gate can read it. **A
+warning with nothing enforcing it is not a control.** Before deferring anything
+on "consequence today is nil", grep for who reads the value.
 
 ### What is left, and none of it is code
 
-- **Track A, the operator half** — the three minutes above. Turns `gmail_unread`
-  green and `OCR hotkey` off dark.
-- **Track E** — eight nodes needing a live microphone.
+- **Track A, the operator half** — `node mythos/scripts/google-auth.js`, put the
+  new `GOOGLE_REFRESH_TOKEN` in `mythos/.env`, confirm with
+  `node mythos/scripts/verify-google-grant.js`, then press Ctrl+Alt+X with MYTHOS
+  running. **If it has to be repeated every few days, publish the OAuth consent
+  screen first** — "Testing" status issues 7-day refresh tokens.
+- **Track E, the acoustic half** — eight voice nodes still need a live session.
+  Read `bleedPeak` again once it is attributable; it is now a room measurement
+  rather than a portrait of whoever spoke loudest.
 - **The 5 remaining `unknown` nodes are single dispositions**: `daily_plan`,
   `set_wallpaper`, `installer`, `security_scan`, `compose_email`. Each is NOT RUN
   for a written reason, not for lack of a harness.
@@ -5113,16 +5106,38 @@ Read the full record, not the summary column, before filing anything.
   root is canonical (BUG-384), and how the paid product handles the
   non-commercial wake-word weights (step 6.5).
 
+### THE CAMPAIGN-WIDE FINDING, now six for six
+
+**Every track was scoped from a written description that understated or
+misstated the problem, and in five of six the description named a cause that
+measurement refuted.** D: 4 of 6 causes wrong. B: eleven stale labels, not six;
+29 of 43 counts wrong. C: two dispositions real, the third hid an inverted
+detector. F: 37 tools, not 18 nodes. A: the one description that was exactly
+right. E: not a microphone problem at all.
+
+**And the sharper one: a verification harness accused the product NINE times
+across two harnesses and was wrong every time, always fail-open** — plus a tenth
+from a truncated log field with no harness involved, and now an eleventh shape:
+a verifier stating a confident conclusion about HARDWARE from a number that
+could not name a source. Read params off the tool DEFINITION, not its name.
+Audit every `n/a` as hard as every FAIL. Print the FULL record, not the summary
+column. Treat a FAIL as a hypothesis until you have read the code it accuses.
+**And before believing any number a harness calls an oracle, ask what else could
+have produced it.**
+
 ### Things that will cost you an hour each if nobody tells you
 
 **1. The pre-commit hook runs FOUR gates** plus `build-index --check`.
 
 **2. Ordering: `sync-test-count --write` BEFORE `build-capability-map --write`,**
-and `build-index --write` after any BUGS.md change.
+and `build-index --write` after any BUGS.md change. Note the loop: sync writes
+the counts the island carries, so the island then goes stale and needs `--write`
+a second time. Run map-write, suite, sync-write, map-write.
 
 **3. Capture ONE TAP run** and pipe it into both `sync-test-count --write` and
 `--check` — it reads stdin, so the suite runs once instead of three times. Use
-long-form `TEMP`/`TMP` and ports from `pick-free-ports.js`.
+long-form `TEMP`/`TMP` and ports from `pick-free-ports.js`. **Never let it write
+a baseline from a red run.**
 
 **4. `git commit -m ... -- <pathspec>`, in that ORDER.** Everything after `--`
 is a pathspec. Then demand an empty `git status --porcelain`.
@@ -5135,7 +5150,9 @@ number.
 **6. Do not edit a tracked file while the suite is running.**
 
 **7. The file-size ratchet will refuse your fix, and it is usually right.**
-Move the code; do not raise the number.
+Move the code; do not raise the number. `verify-voice-session.js` and
+`s2s-bridge.js` both sit EXACTLY on their ceilings — an edit there must be
+net-zero lines, which is a real design constraint and not just an annoyance.
 
 **8. Tracked PowerShell must be pure ASCII**, and `ps-automation.ps1` has MIXED
 line endings. Single-line anchors always.
@@ -5151,9 +5168,12 @@ fix things.** Anchor it on a stable marker.
 
 **12. RE-RUN THE CLEAN TESTS AFTER EDITING A TEST TO KILL A SURVIVING
 MUTATION.** A mutation harness reports whether the MUTANT fails; it says
-nothing about whether the clean tree still passes. A tightened assertion here
-was green in the mutation run and red in the full suite, because it asserted a
-code the product did not yet surface.
+nothing about whether the clean tree still passes.
+
+**13. AN EXISTING TEST MAY ASSERT THE BUG.** BUG-388 was held in place by a test
+requiring the verdict to say "IS reaching the microphone", from a fixture whose
+own `bleedPeak` is one of the contaminated values. When a correct fix turns a
+test red, read the assertion before assuming the fix is wrong.
 ### Standing constraints
 
 - **Two machines and sometimes two sessions share this repo.** Branch, PR,

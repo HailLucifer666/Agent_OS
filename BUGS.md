@@ -41,6 +41,141 @@ it is committed.
 
 ---
 
+## BUG-388 — the barge-in floor learned the OPERATOR'S voice and called it the room, and a verifier turned that into a verdict on the echo canceller (✅ FIXED 2026-08-28, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-28. Closure-campaign **Track E**, and the part of it
+that never needed a microphone. 10 assertions, 10 mutations all caught.
+
+**Track E was written up as "eight nodes needing a live microphone".** That
+framing is what kept this closed: the whole voice cluster was treated as
+unreachable from a session, so nobody read the number the cluster is reasoned
+from. It is wrong, and it is wrong in a way that is provable from a log file and
+a deterministic unit test.
+
+### The defect
+
+`barge-in-policy.js` keeps `bleedPeak`, documented as *"loudest level seen while
+MYTHOS was provably speaking"*. It is learned inside the 500 ms **protected
+window** that opens when the assistant starts talking, on this stated reasoning:
+
+> the assistant's own onset is by construction the loudest thing present
+
+That sentence was written as reasoning and never checked, and it is false. MYTHOS's
+voice reaches the microphone through the speakers and is then attenuated 15–20 dB
+by echo cancellation — measured independently by `scripts/probe-aec-routes.js`,
+which puts the Gemini Live route's residual at 0.0069–0.0141. The operator's voice
+arrives direct. **Whenever both are present the operator is by construction the
+LOUDER one**, which is the exact opposite of the assumption. So in the ordinary
+conversational case where the operator is still talking when MYTHOS begins its next
+utterance, what the protected window learns is the operator.
+
+### Why this is not hypothetical
+
+Measured 2026-08-28 from `%APPDATA%/MYTHOS/mythos-server.log`: 731
+`voice.capture-suspend` records across **20 sessions**, grouped into monotonic runs
+of `bleedPeak` (a drop means a new process).
+
+Of the **31 upward moves above 0.05, twenty-two set `bleedPeak` to a value exactly
+equal to that hold's own `peakRms`** — the loudest microphone frame of the hold,
+which is the operator. Every one of those holds also carries `flushedRaw > 0`, so
+real operator audio was passing at the time.
+
+The two populations separate cleanly:
+
+| | measured |
+|---|---|
+| what every session OPENS at, before contamination | **0.0043 – 0.0347** |
+| the acoustic probe's independent residual | **0.0069 – 0.0141** |
+| what `bleedPeak` ratcheted to | **0.0532 – 0.3324** |
+| the operator's own measured interruptions (BUG-274) | **0.0398 – 0.2717** |
+
+The reported "bleed" sits in the operator band. The real bleed agrees with the probe.
+
+**And `bleedPeak` is a running maximum that never decays and deliberately survives
+`reset()`, so one contaminated frame poisons the entire process.** 2026-08-24
+reported `0.1606` for **110 consecutive holds** off a single frame at 20:28:19. The
+uncontaminated control is 2026-08-26: 11 holds, ended at **0.0313** — below the
+0.035 floor — while the operator peaked at 0.1402 in the same session.
+
+### The part that reopened it: this was diagnosed, deferred, and the deferral's premise was wrong
+
+BUG-274 recorded it on 2026-08-19 under *"Two findings from this session recorded
+and deliberately NOT fixed"*, reasoning that the learned floor is dormant
+(BUG-273 A1) so **"Consequence today is nil"**. That premise does not hold, because
+a consumer existed and nobody looked for it. `scripts/verify-voice-session.js` read
+`bleedPeak`, called it **"the ungagged oracle"**, and printed:
+
+> MYTHOS's own voice IS reaching the microphone, ABOVE the level used to detect the
+> operator. **Echo cancellation is not removing it, whatever the constraint reports
+> as granted**
+
+That is a hardware verdict derived from the operator's own voice. It is the
+conclusion behind the Stage 3 note that *"every threshold in this path is
+compensation for echo cancellation not working at all"* and behind BUG-274 T4 being
+carried in the plan as **"the only fix that removes the trade"**. An acoustic
+rework was queued on a number that measured the wrong person.
+
+The deferral even wrote down the right instruction — *"Do not re-enable the learned
+floor on the strength of a `learnedFloor` figure without first checking whether the
+operator was speaking during that hold's opening 500 ms"* — but it wrote it in
+`BUGS.md`, where no gate can read it, and the verifier went on making the claim
+anyway. A warning with nothing enforcing it is not a control.
+
+### The fix
+
+`barge-in-policy.js` now decides **once per utterance, at the transition out of
+IDLE, whether the coming protected window may teach the floor anything at all**,
+using the last level heard while MYTHOS was silent. If the operator was already
+above the floor, no frame of that window is attributable and none is learned; the
+refusal is counted (`bleedWindowsSkipped()`), because "learned nothing" and "the
+room is quiet" are different facts and `bleedPeak` alone cannot tell them apart.
+
+Compared against the static `INITIAL_BLEED_FLOOR` and **deliberately not against
+`bleedFloor()`**: the learned value is the thing under suspicion, so using it would
+let an already-poisoned peak raise the bar for calling the next window
+contaminated — poison protecting itself, failing in the direction of growth. Pinned
+by its own test.
+
+`verify-voice-session.js` no longer converts the number into a verdict about the
+hardware. It still prints the peak and the floor — deleting the claim must not
+delete the data — and now says what would be required to attribute it.
+
+### Scope, and what this does NOT fix
+
+- **This does not change what MYTHOS does today.** The learned floor is dormant, so
+  the floor in force stays `INITIAL_BLEED_FLOOR` either way. What changes is that
+  the number the next session reads is now the room rather than the operator, and
+  the dormant mechanism is no longer armed with a poisoned input for whoever
+  re-enables it.
+- **The `echoRatio >= 0.6` learning path is untouched**, deliberately: a transcript
+  the echo filter matched to MYTHOS's own words is positive attribution, which is
+  the one signal that separates the two on more than amplitude.
+- **An operator who begins speaking INSIDE the 500 ms window is still learned
+  from.** That is a strictly narrower hole than the one closed — the diagnosed and
+  measured path is the operator already talking when the window opens — and closing
+  it needs a per-frame source signal the client does not have.
+- **`bleedPeak` remains an all-time maximum.** With attribution fixed the maximum is
+  over attributable frames and is defensible, but it is still the least robust
+  estimator available; a decaying or percentile statistic would survive a single
+  bad frame better. Not changed here because five test files pin the current
+  semantics and the poisoning source is what mattered.
+- **`bleedWindowsSkipped` is not wired into the suspend log line.** `s2s-bridge.js`
+  sits exactly on its file-size ratchet ceiling, and the fix does not need it:
+  `bleedPeak` is now trustworthy by construction rather than needing a caveat field
+  travelling beside it.
+- **Nothing here needs a microphone, and nothing here closes a Track E node.** The
+  eight voice nodes still need a live acoustic session. What this removes is a false
+  reading that was steering that session's agenda.
+
+### One existing test asserted the bug
+
+`bug-272-verify-voice-session.test.js` required the verdict to say *"IS reaching the
+microphone"* — from a fixture whose `bleedPeak` is **0.1193**, which is itself one
+of the ratcheted values in the table above. The assertion encoded the false
+inference, so it was corrected rather than worked around.
+
+---
+
 ## BUG-387 — `doctor` reported the Google grant OK for three weeks while 88 calls failed on it (🔧 CODED 2026-08-28)
 
 **Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New

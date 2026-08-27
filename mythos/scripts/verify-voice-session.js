@@ -507,10 +507,10 @@ function main() {
       // suppressed. Every check in that session came back `no-reference`, which reads as
       // "no echo" and means "could not have seen one".
       //
-      // The bleed numbers are the oracle that is NOT gagged: bleedPeak is the RMS the mic
-      // actually heard while MYTHOS was speaking. If that is above the barge-in floor,
-      // MYTHOS's own voice is reaching the microphone regardless of what the transcripts
-      // say — which is the T4 question, answered.
+      // BUG-388 — THE BLEED NUMBERS ARE GAGGED TOO, and this block used to insist they
+      // were not. bleedPeak cannot name a source: it learned the OPERATOR in 22 of the 31
+      // ratchets recorded in mythos-server.log, so "above the floor" was reachable from
+      // their own voice and was read here as proof the echo canceller had failed.
       const noRefAll = echoAll.length > 0
         && echoAll.every((e) => String(e.reason || '') === 'no-reference');
       let bleedPeak = null;
@@ -528,11 +528,10 @@ function main() {
           + 'own-voice gate shuts the mic while MYTHOS speaks. Read this as NOT MEASURED';
       }
       if (bleedPeak !== null && bleedFloor !== null) {
-        verdict += `. The ungagged oracle: room bleed peaked at ${bleedPeak} against a barge-in `
-          + `floor of ${bleedFloor} — MYTHOS's own voice ${bleedPeak > bleedFloor
-            ? 'IS reaching the microphone, ABOVE the level used to detect the operator. '
-              + 'Echo cancellation is not removing it, whatever the constraint reports as granted'
-            : 'is staying below the level used to detect the operator'}`;
+        verdict += `. Room bleed peaked at ${bleedPeak} against a barge-in floor of `
+          + `${bleedFloor}, and that peak is NOT attributable to a source by itself: `
+          + 'unless the operator was silent as each hold opened it may be their voice '
+          + 'and not MYTHOS\'s (BUG-388), so it cannot settle whether AEC is working';
       } else {
         verdict += '. Either AEC is working on all three, or nothing was audible (headphones, '
           + 'muted speakers, mic on a different device) — this run cannot tell those apart, and '
