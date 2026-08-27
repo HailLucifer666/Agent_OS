@@ -98,6 +98,119 @@ deadline; that is a property of the machine under load, not a defect, and the
 fix makes the outcome identical either way instead of pretending the race is
 gone.
 
+## BUG-372 — `doctor.js` read the kokoro VOICE ID and called it a model, so a dead TTS rung reported "No gaps" (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27 — the REPORT half. Whether kokoro should be
+installed or dropped from the default chain is an operator decision and is
+untouched. 6 regression tests, 6 mutations, none survived.
+
+**NUMBERING NOTE, because the audit plan is misleading here.** The 2026-08-26
+plan files this defect under "BUG-240 — the kokoro TTS rung is dead". BUG-240 is
+already taken by a different, **fixed** defect: `@huggingface/transformers`
+being unreachable from `app.asar` through ESM `import()`, closed 2026-08-15.
+Same engine, different mechanism, different file, different fix. Reusing 240
+would have created a third real collision in BUGS.md, so this took a new number (372 — see the collision note below).
+Anyone reading the plan's BUG-240 reference should read this entry instead.
+
+**And it is 372, not 371, by 42 seconds — `--next` IS NOT A LOCK.** A concurrent
+session took the number 371 for an unrelated defect (the pre-commit hook naming a
+failing test file and discarding its assertion text), committing at 13:09:56;
+this work landed at 13:10:38. `lint-bug-registry.js --next` had answered **371 to
+both of us, and it was right both times**. Earlier commit wins, so this renumbered.
+
+**THE WINDOW IS BETWEEN ASKING AND WRITING**, which is narrower than it first
+looks and rules out the obvious fixes. It is not a fetch problem: for most of the
+window the number existed only in the other session's intent, on no ref anywhere.
+And it is not a reading-uncommitted-work problem — `--next` ALREADY reads
+uncommitted working-tree headings. Measured both directions 2026-08-27: appending
+an uncommitted `## BUG-390` heading moved `--next` from 373 to 391, and removing it
+moved it back. An entry claiming that as the gap would send the next person to
+build something that already exists, which is why it is recorded here as measured
+rather than as reasoned.
+
+**The real gap is that the gate's duplicate check has never been cross-branch.**
+It compares declarations within ONE working tree, so two branches can each hold a
+perfectly clean registry while their union is broken — which is exactly what
+happened, and why nothing failed until a human noticed. The gate did not
+malfunction; its scope simply stopped at the tree, and nothing said so. Verified
+feasible by the other session: `git show <ref>:BUGS.md` across every local
+and remote ref, parsing `^## BUG-(\d+)`, resolves today and correctly reports that
+this branch declares 368 while another tree does not; four refs carry no BUGS.md
+and need a try/catch. Not built here — it is that script's owner's call, and a new
+gate feature is a scope change rather than a loose end.
+
+Renumbered by AMENDING rather than by a follow-up commit, deliberately: the linter
+counts numbers cited in commit MESSAGES as in use, so a follow-up would have left
+371 permanently claimed by two unrelated defects — which is precisely what BUG-280
+and BUG-360 already are, and what the paragraph above claims this entry avoided.
+
+**Symptom.** `node scripts/doctor.js` ended with *"No gaps. Every tracked key,
+model and binary is present."* on a machine where `mythos/models/` contains only
+`piper` and `whisper`, while `VOICE_TTS_CHAIN` was
+`gemini,kokoro,edge,piper`.
+
+**Mechanism.** The voice section printed the kokoro **voice id** (`af_heart`) and
+nothing ever asked about the kokoro **model**. A voice id is a string in `.env`:
+it is present whether or not any weights exist, so it can never be a gap.
+Reading it as evidence of an installed engine is the same half-truth that made
+this report print `OK  Android platform-tools (adb)` and "No gaps" through the
+whole of BUG-360 while all 14 `phone_*` tools were dead.
+
+**THE COST IS NOT ZERO, and the plan got this wrong.** The plan says "Rung 2
+resolves unavailable on every fallback", which reads as free. It is not.
+`isAvailable()` calls `KokoroTTS.from_pretrained()`, so **the probe IS the
+download**: on a cold machine the first fallback to rung 2 races an ~80MB+
+HuggingFace fetch against `LOAD_TIMEOUT_MS` (15s) before falling through to
+edge. Measured 2026-08-27 against a deliberately bogus model id, so nothing
+large was fetched: the probe took **4,066ms** to fail — a live network
+round-trip — and the result is sticky for the process (second call 0ms). So a
+missing kokoro model costs up to 15s of silence on the first fallback of each
+process, once, and is free thereafter.
+
+Also measured, and it removes the plan's assumed cause: `kokoro-js` and
+`@huggingface/transformers` **are** installed and declared in `package.json`.
+The rung is not dead for want of a dependency. `models/kokoro` is a download
+cache, not a shipped asset.
+
+**Fix.** A `kokoro` row in `assetChecks()` that is a gap only when kokoro is
+actually in the chain — a machine that has dropped the rung has nothing wrong
+with it, and a report that is red for an expected reason is a report people stop
+reading. Three things about it are deliberate:
+
+- **It asks the provider where to look.** `providers/kokoro-tts.js` now exports
+  `modelCacheDir(env)`, the one place that decision is made, and doctor calls
+  it. Recomputing the path in doctor would be BUG-360 with a different noun:
+  green about a directory nothing loads from. Pinned by test — the mutation that
+  hardcodes the path in doctor is caught by name.
+- **It searches for weights, not for a directory.** `@huggingface/transformers`
+  writes to `<cacheDir>/models--<org>--<repo>/…`, so a top-level listing misses a
+  complete model, and a bare `existsSync()` goes green on an **aborted** download
+  — precisely the state a 15s probe timeout leaves behind. Both directions are
+  pinned.
+- **It does NOT route through `src/core/setup/model-paths.js`**, though that is
+  the shared model resolver and wakeword/`piper-child` use it. It searches extra
+  roots, so adopting it would change which weights the provider LOADS — a
+  behaviour change to a live voice path, which is a different decision from
+  making the report honest. Recorded as a choice rather than left as an oversight.
+
+The hint names two remedies that both work (drop the rung, or let the first
+fallback populate the cache) and names no script. BUG-360's hint pointed at an
+`--install` that unpacked into an already-populated directory while the runtime
+resolved elsewhere, so following it looped forever; a test now fails if this hint
+names a `scripts/*.js` that does not exist.
+
+**What this does NOT fix.** kokoro still resolves unavailable on this machine,
+and the first fallback still pays for it. `doctor.js` reports that honestly now;
+it does not change it. The wider question the plan raised — every capability
+doctor reports resolving through the same helper the runtime consumer uses — is
+enforced here for kokoro and for adb, and is **not** enforced globally.
+
+**Files:** `mythos/scripts/doctor.js` (575 → 658),
+`mythos/providers/kokoro-tts.js` (114 → 137).
+**Test:** `mythos/test/bug-372-doctor-kokoro-model.test.js` (6 tests).
+
+---
+
 ## BUG-368 — `index_project` indexed a Python virtualenv instead of MYTHOS, and reported success (✅ FIXED 2026-08-27)
 
 **Status:** ✅ FIXED 2026-08-27. Shares BUG-362's root cause and its test file; 13 tests, 10 mutations, none survived.

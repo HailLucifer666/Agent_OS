@@ -44,11 +44,48 @@ const wakeword = require('./setup-wakeword.js');
 const android = require('./setup-android.js');
 const dsh = require('./setup-dsh.js');
 const { findModelFile, userDataModelsDir } = require('../src/core/setup/model-paths');
+// The kokoro PROVIDER, not a path literal — see the kokoro row in assetChecks().
+// Requiring it is inert: every heavy import inside it is a dynamic import()
+// reached only from loadModel().
+const kokoro = require('../providers/kokoro-tts.js');
 
 // Does this directory hold at least one .onnx voice? Mirrors piper-child.js's own
 // test so the two never disagree about "installed".
 function dirHasOnnx(dir) {
   try { return fs.readdirSync(dir).some((f) => f.endsWith('.onnx')); } catch { return false; }
+}
+
+// treeHasOnnx — dirHasOnnx one level down is not enough for a HuggingFace cache.
+// @huggingface/transformers writes weights to
+// <cacheDir>/models--<org>--<repo>/... , so the cache directory itself contains
+// only directories and a bare existsSync() on it would report a MODEL for a
+// folder holding nothing but an aborted download's scaffolding. That is the
+// failure this whole row exists to stop, so it is measured rather than assumed.
+function treeHasOnnx(dir, maxDepth) {
+  const limit = typeof maxDepth === 'number' ? maxDepth : 4;
+  let frontier = [[dir, 0]];
+  while (frontier.length) {
+    const next = [];
+    for (const [d, depth] of frontier) {
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        if (e.isFile() && e.name.endsWith('.onnx')) return true;
+        if (e.isDirectory() && depth + 1 <= limit) next.push([path.join(d, e.name), depth + 1]);
+      }
+    }
+    frontier = next;
+  }
+  return false;
+}
+
+// ttsChain(env) — parsed in ONE place. It was read inline in the voice section
+// only; the kokoro asset row below needs the same answer, and two parses of one
+// setting is how a report starts disagreeing with itself.
+function ttsChain(env) {
+  const e = env || process.env;
+  return String(e.VOICE_TTS_CHAIN || e.VOICE_TTS_PROVIDER || 'edge')
+    .split(',').map((s) => s.trim()).filter(Boolean);
 }
 
 // ---- environment ------------------------------------------------------------
@@ -199,6 +236,12 @@ function assetChecks() {
   // second, and setup-dsh.js keeps that rule.
   const dshFound = dsh.findInstalled();
 
+  // Ask the provider where it reads from. Recomputing this path here is the
+  // BUG-360 defect with a different noun — see the kokoro row below.
+  const kokoroDir = kokoro.modelCacheDir();
+  const kokoroInChain = ttsChain().includes('kokoro');
+  const kokoroModelPresent = treeHasOnnx(kokoroDir);
+
   return [
     {
       id: 'silero',
@@ -228,6 +271,47 @@ function assetChecks() {
       // which is why this row used to spell out that the advertised command was
       // fictional). Verified by pointing at the file, not by memory.
       fix: 'node scripts/setup-piper.js --install   (installs into ' + piperDir + ')',
+    },
+    {
+      // BUG-240. This report said "No gaps" on a machine where mythos/models/
+      // holds only piper and whisper, because the voice section printed the
+      // kokoro VOICE ID (af_heart) and nothing ever asked about the kokoro
+      // MODEL. A voice id is a string in .env; it is present whether or not
+      // any weights exist, so it can never be a gap and reading it as one is
+      // the same half-truth the adb row below was fixed for.
+      //
+      // WHAT THIS COSTS WHEN IT IS MISSING, measured 2026-08-27 rather than
+      // assumed — and it is not free, which is what the ticket got wrong.
+      // isAvailable() calls KokoroTTS.from_pretrained(), so the PROBE is the
+      // download. On a cold machine the first fallback to rung 2 races an
+      // ~80MB+ HuggingFace fetch against LOAD_TIMEOUT_MS and then falls
+      // through to edge. Measured against a deliberately bogus model id the
+      // probe took 4,066ms to fail, which is a live network round-trip, and
+      // the result is sticky for the process. So a missing kokoro model is not
+      // "rung 2 resolves unavailable" — it is up to LOAD_TIMEOUT_MS of silence
+      // on the first fallback of every process, once, and then free.
+      //
+      // Only a gap when kokoro is actually IN the chain: a machine that has
+      // removed it has nothing wrong with it, and a report that is red for an
+      // expected reason is a report people stop reading.
+      id: 'kokoro',
+      label: 'Kokoro model (TTS chain rung)',
+      required: false,
+      ok: !kokoroInChain || kokoroModelPresent,
+      detail: !kokoroInChain
+        ? 'not in VOICE_TTS_CHAIN — nothing to install'
+        : (kokoroModelPresent
+          ? 'cached in ' + kokoroDir
+          : 'no .onnx weights under ' + kokoroDir + ' — the first fallback to kokoro '
+            + 'will spend up to ' + kokoro.LOAD_TIMEOUT_MS + 'ms downloading before falling through to edge'),
+      why: 'kokoro is a member of VOICE_TTS_CHAIN, so its absence is paid for at '
+        + 'runtime rather than reported here',
+      // Both options are real, and neither loops. The adb hint's failure was
+      // naming an --install that unpacked into an already-populated directory
+      // and left the runtime resolving elsewhere; there is no setup-kokoro.js
+      // to name here, so this says what actually changes the outcome.
+      fix: 'either drop kokoro from VOICE_TTS_CHAIN in mythos/.env, or let the first '
+        + 'fallback populate ' + kokoroDir + ' (it downloads on demand; nothing to run)',
     },
     {
       id: 'dsh',
@@ -342,8 +426,7 @@ function voiceIdentity() {
     engine: e.label,
     voice: voiceFor({ name: e.name }, cfg) || '(engine default)',
   }));
-  const chain = String(process.env.VOICE_TTS_CHAIN || process.env.VOICE_TTS_PROVIDER || 'edge')
-    .split(',').map((s) => s.trim()).filter(Boolean);
+  const chain = ttsChain();
   return { error: null, rows, chain, unified: process.env.VOICE_UNIFIED_LIVE_VOICE !== 'false' };
 }
 

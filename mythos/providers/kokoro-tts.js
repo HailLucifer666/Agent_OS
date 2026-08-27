@@ -35,11 +35,32 @@ function withTimeout(promise, ms) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+// modelCacheDir(env) — the ONE place the kokoro cache location is decided.
+//
+// Exported so scripts/doctor.js can report on the directory this provider
+// ACTUALLY READS rather than forming a second opinion about where the model
+// ought to live. BUG-360 is the bill for the alternative: for weeks doctor
+// printed "OK  Android platform-tools (adb)" and "No gaps" while all 14 phone_*
+// tools were dead, because the report and the runtime resolved the same binary
+// differently. A doctor row that recomputes this path is that bug with a
+// different noun, and it would be green about a directory nothing loads from.
+//
+// Deliberately NOT routed through src/core/setup/model-paths.js, even though
+// that is the shared model resolver and wakeword/piper-child use it. It searches
+// several roots (userData, packaged build), so adopting it here would change
+// which weights this provider LOADS — a behaviour change to a live voice path,
+// which is a different decision from making the report honest. Pinned by test so
+// the divergence is a recorded choice rather than an oversight.
+function modelCacheDir(env) {
+  const e = env || process.env;
+  return e.KOKORO_MODEL_DIR || path.join(__dirname, '..', 'models', 'kokoro');
+}
+
 async function loadModel() {
   if (!modelPromise) {
     const modelId = process.env.KOKORO_MODEL_ID || 'onnx-community/Kokoro-82M-v1.0-ONNX';
     const dtype = process.env.KOKORO_DTYPE || 'q8';
-    const modelDir = process.env.KOKORO_MODEL_DIR || path.join(__dirname, '..', 'models', 'kokoro');
+    const modelDir = modelCacheDir();
     modelPromise = (async () => {
       const { env } = await import('@huggingface/transformers');
       env.cacheDir = modelDir;
@@ -111,4 +132,6 @@ module.exports = {
   isAvailable,
   listVoices,
   synthesize,
+  modelCacheDir,
+  LOAD_TIMEOUT_MS,
 };
