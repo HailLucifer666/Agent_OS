@@ -41,6 +41,69 @@ it is committed.
 
 ---
 
+## BUG-375 — a withheld phone tool blamed a missing handset when adb itself was unreachable (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27. 9 regression tests, 6 mutations, none survived.
+Found by running the 2026-08-26 audit plan's **verification step 3**, which named
+this rule specifically and had never been executed.
+
+**Mechanism.** `tool-capability.js`'s phone rule gated on one boolean carrying two
+facts:
+
+```js
+androidDevice = state === 'ONLINE' && Array.isArray(st.devices) && st.devices.length > 0;
+```
+
+so a false value meant *either* "adb is unreachable" *or* "adb is fine, no phone
+plugged in" — and both produced the single reason string **"no Android device is
+attached over adb"**. When the adapter is down, that sends the operator looking
+for a handset for a problem no handset can fix.
+
+Not hypothetical: BUG-374 measured `doctor.js` reporting `OK` for adb while
+`ANDROID_ADB_BIN` pointed at a nonexistent path, which is exactly the state that
+produces an OFFLINE adapter. The two bugs are the same defect in two reports, and
+were found in the same hour.
+
+**The audience makes it worse than a log line.** This reason is what
+`live-tools.js` withholds a tool with, so it reaches the **model**, which relays
+the remedy out loud. A wrong cause here becomes a wrong instruction spoken to the
+operator.
+
+**Fix.** `androidOnline` is now a separate snapshot fact, and the phone rule's
+`reason` is a function of the snapshot rather than a constant — so the refusal
+names the cause that was actually measured. `reason` may now be a string *or* a
+function; the other four rules keep their strings, and the consumer resolves
+either. Three things are pinned deliberately:
+
+- **The two branches must produce DIFFERENT strings**, so a "fix" that appends
+  the adb sentence to both branches fails.
+- **Unknown is not offline.** A missing adapter, a `getStatus()` that throws, and
+  an empty `state` all leave `androidOnline` true. Blaming adb on a failure to
+  *ask* would put a wrong remedy in the model's mouth on the strength of an
+  exception. Both the absent-adapter and the throwing-adapter paths are covered —
+  they are different code paths, and a mutation proved it (below).
+- **Every reason reaching a caller is a string**, checked across all five rules
+  and both phone branches. The shape `reason: rule.reason` would have handed the
+  model a function body.
+
+**A mutation survived and it was a gap in the new test.** Setting
+`androidOnline = false` inside the `catch` changed nothing, because the
+"unreadable adapter" test passes `adapters: {}` — which skips the `try` body
+entirely and never reaches the `catch`. A throwing `getStatus()` is a different
+path, and it is now its own test. Second time in one session that an
+absent-versus-throwing distinction hid an untested branch.
+
+**What this does NOT fix.** `androidDevice` is still false for an unknown state,
+so an unreadable-but-present adapter withholds the phone tools while reporting
+the *device* reason. That is pre-existing, it is recorded by a test rather than
+changed, and altering it inside a fix about wording would be a behaviour change
+smuggled in under a message change.
+
+**Files:** `mythos/src/core/voice/tool-capability.js`.
+**Test:** `mythos/test/bug-375-phone-refusal-names-the-cause.test.js` (9 tests).
+
+---
+
 ## BUG-374 — BUG-360's outage was still reproducible through the documented override, and the guard against it was a tautology (✅ FIXED 2026-08-27)
 
 **Status:** ✅ FIXED 2026-08-27. 7 new tests, 2 existing ones repaired, 6
