@@ -41,6 +41,147 @@ it is committed.
 
 ---
 
+## BUG-384 — every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong (🔧 CODED 2026-08-27)
+
+**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped
+as "six nodes whose LABEL is stale rather than whose capability is broken".
+Measured against the live vault before writing anything, per the Track D
+finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43
+(67%) disagree with the vault.** Eleven labels are contradicted by their own
+evidence. The six was itself a stale reading.
+
+### Root cause — the map generates its frame and hand-carries its contents
+
+`build-capability-map.js` regenerates `vitals`, the tool-coverage cross-check
+and the `generated` stamp. It preserves each node's `s`, `ok`, `f`, `note` and
+`ev` as curated human text. That split is right for `note` and `ev` — a human
+decides what a node MEANS — and wrong for `ok`/`f`, which are not judgement at
+all. They are a count of rows in `vault/Audit/*.jsonl`, and nothing was
+counting them.
+
+So a row could be a month stale while the page said GENERATED today and all
+five gates passed. Measured drift, largest first:
+
+```
+goals            map 118/2   vault 253/3    +135
+system volume    map 105/0   vault 183/1     +78
+browser autom.   map  57/13  vault 135/33    +78 ok, +20 fail
+web_search       map 117/10  vault 151/13    +34
+spotify_play     map  77/5   vault 106/5     +29
+ui_click         map   5/5   vault  16/6     +11   (Track D-6 declined to act on
+                                                    "10 calls"; the real figure
+                                                    was 22)
+cua-driver       map   —/—   vault  50/9           (Track D-6 declined to act on
+                                                    "two boots"; the real figure
+                                                    was 59 calls)
+```
+
+The last two matter beyond the numbers: **two Track D dispositions were
+written against sample sizes that were wrong by 2x and 30x.** Neither
+conclusion flips — `ui_click` is 16/6 with no failure since 2026-08-09, and
+cua-driver's question was always about BOOTS not calls — but they were reached
+on figures the vault did not support.
+
+### The eleven contradicted labels
+
+Two kinds, and only one of them is falsifiable without judgement.
+
+**HARD — the label asserts a measured zero and the vault is not zero.** The map's
+own legend defines `dark` as "MEASURED as never exercised (a call count of zero
+was read)" and `unknown` as "nothing has been measured". Nine `unknown` nodes
+carry the identical sentence *"no call count has ever been read for it"*, and
+for all nine that sentence is false:
+
+```
+status readouts  173/0     local info      146/4     pipeline    62/0
+HUD navigation    51/2     persona          24/2     artifacts   14/3
+kanban             5/0     ask_agent         3/0     widgets      1/0
+```
+
+**SOFT — the newest event disagrees with the label.** Four nodes. Three are
+genuinely stale (`open a file`, `list_folder`, `timer_add` are labelled `fail`
+and their newest event is a success); **two are correct labels that this rule
+would have falsely accused**, which is why it is not a gate — see below.
+
+### Fix — counts are derived, and only the falsifiable rule is a gate
+
+New `scripts/vault-tool-counts.js` streams `vault/Audit/*.jsonl` (one file is
+133 MB — `readFileSync` is not available to this) and returns per-tool
+`{ok, fail, lastOk, lastFail}`. `build-capability-map.js --write` sums it per
+node and writes `ok`/`f`.
+
+**The vault-absent rule is inherited verbatim from the `untriaged` vital in the
+same file, whose comment records why:** a checkout that cannot measure does not
+get to rewrite the field, *not even to add a flag* — an earlier version stamped
+`stale: true` and broke `--check` for CI, every worktree and every fresh clone.
+So with no vault, counts are PRESERVED byte-for-byte and the label rules are
+SKIPPED with an explicit "could not look" line. Never a confident zero.
+
+**Only the hard rule gates.** `dark`/`unknown` + any recorded call → `--check`
+fails and `--write` refuses. The soft rule prints as an advisory and fails
+nothing, because the data says it would fire on correct content:
+
+```
+spotify_volume  ok, newest event a failure 2026-08-24:
+  "No audio session for process 'Spotify' - its mute state was NOT changed,
+   and nothing else was changed either. Apps with a live audio session right
+   now: system-sounds|0, electron|5552."          <- Spotify was not running.
+
+close_window    ok, newest event a failure 2026-08-24:
+  "Cannot close PID 6644: ... That pid no longer exists, so nothing was
+   closed. Call list_windows for the app's current pid before trying again."
+
+CAPTCHA wall    fail, and its one recorded call is a SUCCESS — because the
+                `fail` is a deliberate refusal disposition, not a defect.
+```
+
+All three are the evidence contract working. A gate that reddens on those is a
+gate somebody switches off, which is the reason this file already gives for not
+checking node NAMES against deleted programs.
+
+### Scope — what this does NOT do
+
+- **It does not turn a count into a status.** Nine nodes leave `unknown` for
+  `warn`, never for `ok`, however clean their record: `ok` on this map is an
+  acceptance contract (live-verified, regression test, mutation-proven) and a
+  production call count is not that. `warn` here reads "measured, works in
+  production, not yet verified to the contract" and each note says so. The
+  headline therefore gets WORSE and more truthful: unknown 18 -> 9, warn 22 -> 31.
+- **It does not derive `ev`.** The Audit rows carry a `reason` on every failure,
+  so the evidence text could be generated too. Deliberately not attempted here:
+  `ev` is curated prose and replacing it is a different change.
+- **`list_folder` is left alone** — PR #37 (BUG-378) already corrects it to
+  ok 3/2, and fixing it twice is a merge conflict for no gain.
+- **`--check` still does not compare counts.** They change every time MYTHOS
+  runs a tool; a gate on them would block the first commit after every voice
+  session.
+
+### One repair outside this ticket, because it blocked the gate
+
+BUG-379's live test (`bug-379-aether-bind-names-the-holder.test.js`) failed under
+the pre-commit hook after passing 5/5 in isolation and 3/3 in a standalone full
+suite. Not a flake to be re-run away: `findPortHolder` shells out to
+`netstat -ano`, which enumerates every TCP connection on the machine, under a
+hard `LOOKUP_TIMEOUT_MS` of 1500 ms. With ~6,600 tests running concurrently that
+command does not always finish, so the lookup returns null. Reproduced
+deliberately rather than assumed:
+
+```
+findPortHolder(port, {timeoutMs: 1})
+  -> "could not determine what holds it: netstat could not be run
+      (Command failed: netstat -ano -p TCP)"      <- no pid, so the assertion fails
+findPortHolder(port, {timeoutMs: 6000})
+  -> "held by pid 10580 (node.exe)"
+```
+
+The PRODUCT is correct in both rows — it declines to name a holder it could not
+read. The test was asserting the machine's spare capacity. It now retries the
+same idempotent command with a realistic budget; the assertion is unchanged and
+still demands the exact pid. Threading of a holder the anomaly already carries is
+covered separately by synthetic values, so no coverage rests on netstat running.
+
+---
+
 ## BUG-383 — a fabricated FACT is not a fabricated ACTION, and nothing was looking at the first kind (✅ REDUCED 2026-08-27, mutation-proven — 6/9 measured, not eliminated)
 
 **Status:** ✅ REDUCED 2026-08-27. 1 file changed, 13 new assertions, 6 mutations

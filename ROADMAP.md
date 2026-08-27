@@ -20,7 +20,7 @@ Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-c
 ---
 
 <!-- SYNC:TEST-COUNT:START -->
-**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-27): **6605 tests, 6605 passing, 0 failing, 0 skipped.**
+**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-08-27): **6635 tests, 6635 passing, 0 failing, 0 skipped.**
 <!-- SYNC:TEST-COUNT:END -->
 ## Go-live proof plan (F1–F9) — 2026-08-08
 
