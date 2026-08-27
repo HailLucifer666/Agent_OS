@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6723,
+      "value": 6740,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -1748,7 +1748,7 @@
       {
         "n": 11,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "Browser automation offline / misconfigured",
         "detail": {
           "symptom": "`browser_navigate` returns \"Browser automation is OFFLINE. Run setup-chrome-debug.ps1 first.\" even after the user grants Chrome access, because nothing ever called the adapter's own auto-connect. Also `browser_evaluate` only read a `script` key, so calls sending `query`/`expression`/`javascript` failed with a missing-argument error even when the browser was online.",
@@ -1848,7 +1848,7 @@
       {
         "n": 20,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "coded",
         "title": "Voice pipeline picks up phantom background noise",
         "detail": {
           "symptom": "User in an AC room (should be quiet) but MYTHOS picks up background noise and transcribes it. User says they'll \"have to use third-party STT software from GitHub because this ain't working well.\"",
@@ -1861,7 +1861,7 @@
       {
         "n": 21,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "coded",
         "title": "MYTHOS gives canned empathy instead of diagnosing problems",
         "detail": {
           "symptom": "When user expressed deep frustration (\"you are not working as expected\"), MYTHOS repeated \"You seem frustrated, what's not working?\" verbatim three times — no actual diagnosis, templated empathy.",
@@ -1896,7 +1896,7 @@
       {
         "n": 24,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Calendar and Gmail integration never completed",
         "detail": {
           "symptom": "User repeatedly asked about calendar integration (\"calendar phase is still left to add to integrate\") and Gmail. MYTHOS correctly said it doesn't have those tools — but this is a stated user expectation that remained unfulfilled across the entire dataset."
@@ -1929,7 +1929,7 @@
       {
         "n": 27,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "coded",
         "title": "Voice pipeline transcribes MYTHOS's own TTS output as user speech (audio feedback loop)",
         "detail": {
           "symptom": "MYTHOS executed `web_search({\"query\":\"best pizza recipe\"})` and `open_web` when the user never asked for it — user confirmed: \"I never said to web search best pizza recipe.\" Transcript shows the trigger text was MYTHOS's own prior spoken reply (\"...including Neapolitan and NYT styles. Shall I show you the search results...\") echoed back as if the user had said it. A `remember()` and a `log_incident()` call fired the same way — off MYTHOS's own speech, not the user's.",
@@ -1955,7 +1955,7 @@
       {
         "n": 29,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "coded",
         "title": "Orphaned browser-automation Chrome process keeps playing audio after MYTHOS + browser are fully closed",
         "detail": {
           "symptom": "A YouTube video MYTHOS opened for \"news\" kept playing audio in the background after the user closed the browser window AND closed the terminal running `start.bat`. Checked Task Manager — nothing obviously identifiable was running. Only fix was to run `start.bat` again, reopen the HUD, and ask MYTHOS by voice to close the news panel — which worked. **Root cause (two candidate mechanisms, not yet isolated by live reproduction):** 1. **Windows SIGINT/SIGTERM delivery gap (already documented elsewhere in this codebase).** `main.js:541-542` wires `process.on('SIGINT'/'SIGTERM', stopRunningLoops)`, which calls `pcChild.shutdownPcChild()` and `browserAgent.disconnect()` (`main.js:524-525`). But `main.js`'s own comment block (lines 493-495) already documents that a watched-directory handle can block `child.kill('SIGINT'/'SIGTERM')` from ever reaching `process.on()` on Windows — the same known ga…",
@@ -2036,7 +2036,7 @@
       {
         "n": 36,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "duplicate",
         "title": "SMTC `media_status` fails — \"Failed to get session manager\"",
         "detail": {
           "files": "superseded — see `mythos/adapters/pc-child/ps-automation.ps1` and BUG-004 above. ---"
@@ -2045,7 +2045,7 @@
       {
         "n": 37,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "Concurrent sessions editing the same file can silently undo each other's verified fixes on `git pull`/fast-forward",
         "detail": {
           "symptom": "This session live-verified a fix to `mythos/adapters/pc-child/ps-automation.ps1` (BUG-004's WinRT bridging + BUG-026's DPI-awareness + `click_at`), then pushed it to `origin/main`. A different, concurrent session had branched from an *older* snapshot of that same file, made its own (different, ultimately also-not-fully-working) fix attempt, and pushed its own commit. When this session later ran `git pull --ff-only origin main`, the pull succeeded cleanly — a normal fast-forward, zero conflicts — but the resulting file on disk had lost the DPI-awareness block, the entire `click_at` command, and the proven WinRT fix, replaced by the other session's untested rewrite.",
@@ -2144,7 +2144,7 @@
       {
         "n": 54,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "Installed skills reached builds only partly",
         "detail": {
           "cause": "The 2026-07-31 multi-root loader fix (`7d95f42`) was real but incomplete in two ways: 1. `pluginRoots()` searched `\u003cpack>/src` and `\u003cpack>/.claude/skills` but not `\u003cpack>/skills` — a third layout real packs use. A skill in an unsearched layout fails exactly like an uninstalled one: silently. 2. `loadEssence()` read ONLY the repo-vendored `mythos/skills/\u003cname>/SKILL-CORE.md`. Since essences are what get auto-injected into every build prompt, a skill cloned from GitHub was visible to `use_skill` but absent from the automatic injection — the operator's \"add skills from GitHub in future\" requirement could not work.",
@@ -2196,7 +2196,7 @@
       {
         "n": 59,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Ad blocking silently gave up entirely, over a cosmetic-only API",
         "detail": {
           "cause": "`session.registerPreloadScript()` arrived in",
@@ -2290,7 +2290,7 @@
       {
         "n": 92,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-075] — YouTube belongs in the Electron app, not the dashboard widget",
         "detail": {},
         "excerpt": "**Complaint (verbatim):** \"I did not ask you to play on YouTube widget. I specifically said, open YouTube on the Electron app.\" `launch_app(\"youtube\")` then failed 3x — honestly, since nothing named YouTube is a Windows executable. Separately, a German video played that \"could not be stopped with standard playback controls.\" **Verified before building anything (per the plan's own instruction to check the premise first):** `ui.open-web` was emitted server-side and picked up by exactly one subscriber — the dashboard's own browser JS, an overlay inside the SAME window, never a second `BrowserWindow`. `electron/main.js` had **zero** subscription to anything from the server child; the `'ipc'` fork slot existed but carried only lifecycle messages. Confirms the complaint exactly: \"the Electron app\" literally could not have opened, regardless of client branch. **Fix — the lazy path, per the oper…"
@@ -2343,7 +2343,7 @@
       {
         "n": 98,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "[source: BUG-081] — `spawnWebWidget` never dedupes, so surfaces stack",
         "detail": {
           "fix": "`spawnedByType` (widgetType → teardown) reuses/replaces the existing card for that surface. Deliberately exempt: `'dynamic'` (Item 11 generative-UI cards) are legitimately multi-instance and deduping them would be a regression. No new test: this codebase has zero DOM/jsdom precedent for any widget-kind module (`test/dynamic-widget-spec-validation.test.js`'s own header states this explicitly) — matching that existing convention rather than introducing new test infra for one fix. 🔧 FIXED,",
@@ -2433,7 +2433,7 @@
       {
         "n": 179,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "`mythos/.env` is the only config source, and it is not shipped",
         "detail": {},
         "excerpt": "`package.json` `build.files` excludes `mythos/.env`, and `mythos/src/main.js` loaded configuration from exactly that one file. So ~140 schema keys silently fell back to their defaults in the install, and **there was no UI anywhere in the packaged build to set a non-secret key** — the first-run wizard's key store only ever exposed provider API keys. Dev's `.env` was the only place that ever set `VOICE_S2S_ENABLED=true`, `VOICE_TTS_PROVIDER=gemini`, `WAKEWORD_ENABLED=true`, the `AETHER_*`/`HERMES_*` block, the Gmail OAuth triple and the local tool paths. **FIXED.** New `mythos/src/core/config/settings-store.js` — a flat `{KEY:\"value\"}` JSON at `\u003cuserData>/config.json`, injected into the server child as `MYTHOS_SETTINGS_PATH`. Precedence, applied in `loadConfig` and asserted by test: `process.env` > `userData/config.json` > `mythos/.env` > schema default. Unknown keys are dropped and report…"
@@ -2441,7 +2441,7 @@
       {
         "n": 180,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "three userData directories, no migration (the empty second brain)",
         "detail": {},
         "excerpt": "`package.json` `name` is `agent-os`, `build.productName` is `MYTHOS`, and nothing called `app.setName`. So Electron derived userData from `name` for the packaged app and from the literal `Electron` for a dev run, while NSIS wrote to `productName`: %APPDATA%\\Electron the dev run %APPDATA%\\agent-os the installed .exe %APPDATA%\\MYTHOS install-selection.json The install's vault was therefore a second, independent brain with none of dev's `Identity/boundaries.md`, `operator-profile.txt`, `operator-style.txt`, `Contacts/contacts.json` or 8 learned `Skills/*.md`. **FIXED.** `electron/main.js` calls `app.setName('MYTHOS')` before any `getPath('userData')`, and `electron/vault-migration.js` gained `adoptSiblingVault` — on first boot, if the canonical vault is empty, it ranks `%APPDATA%\\{agent-os,Electron}\\vault` by file count then bytes, copies the richest, verifies, and writes its OWN marker (sh…"
@@ -2449,7 +2449,7 @@
       {
         "n": 181,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a missing `boundaries.md` was read as a corrupt one (incident 3)",
         "detail": {},
         "excerpt": "`identity/index.js` `init()` forced `boundaries.max_autonomous_tier = 1` and emitted `identity-boundaries-malformed` whenever the tier did not parse — and a file that does not exist reads as `''`, which does not parse. `leash/index.js` takes `Math.min(config.AUTONOMOUS_MAX_TIER, identity.getMaxAutonomousTier())`, so the ceiling was pinned to 1 regardless of configuration and every Tier-2 tool asked for approval. **FIXED.** Absent and malformed are now different conditions. Absent → the configured ceiling applies, with a distinct non-critical `identity-boundaries-absent` anomaly; malformed → the §11 fail-safe is unchanged, clamp to 1 plus the exact critical anomaly (both contract tests still green). New `src/core/identity/boundaries-seed.js` writes a commented `boundaries.md` at the operator's own configured ceiling during boot, from its own module because two contract tests correctly for…"
@@ -2457,7 +2457,7 @@
       {
         "n": 182,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "models were delivered to a directory that does not ship (incident 4)",
         "detail": {},
         "excerpt": "The wake-word detector bug was already fixed (BUG-175) and `deriveWakewordDefaults` arms `WAKEWORD_ENABLED` as soon as the weights are on disk. **Delivery** was broken three ways: the models live under `mythos/ui/public/models`, which `build.files` excludes, so a packaged install has no models directory at all; the installer recorded `silero:true, wakeword:true, adb:true` and fetched nothing; and even a successful download wrote into the install tree, which an update replaces wholesale — so every upgrade would have silently un-installed the wake word again. **FIXED.** New `src/core/setup/model-paths.js`: downloaders write to a userData-scoped models directory (`MYTHOS_MODELS_DIR`, injected by Electron), readers search userData first and the install tree second so an existing machine needs no migration, and a zero-byte file counts as absent because that is what a failed download leaves be…"
@@ -2465,7 +2465,7 @@
       {
         "n": 183,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "92 tools declared to the Live model, regardless of whether they can run",
         "detail": {},
         "excerpt": "`voice/live-tools.js` declared its curated allowlist unconditionally. Curation answers \"is this a spoken verb?\"; nothing answered \"does the machinery behind this exist here?\". So a fresh install declared Gmail tools with no OAuth, phone tools with no adb and browser tools with no CDP, and the model called them before the operator had spoken. **FIXED.** New `src/core/voice/tool-capability.js` gates each declaration on a per-session capability snapshot (credentials present / adapter online / a device actually attached), and the withheld-for-unavailable set is logged SEPARATELY from the withheld-by-allowlist set — one is a curation decision to revisit, the other is a machine that needs setting up, and merging them is how a missing adb reads as somebody's choice. Deliberately narrow: any tool no rule names is available, and an adapter that cannot be asked counts as available, because wrongly…"
@@ -2473,7 +2473,7 @@
       {
         "n": 184,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "the CDP poller logged a full stack every 15 seconds, forever",
         "detail": {},
         "excerpt": "5,760 stack traces a day on the one machine where a diagnosable log mattered most, for a debug browser the operator had not asked for. **FIXED.** `startAutoConnect` keeps its `setInterval` (and its unref contract) but only attempts every `factor` ticks, doubling to a 32x ceiling — a 15s poller settles at one attempt every 8 minutes. The first failure logs at warn with its message; the rest are quiet; reaching the ceiling logs one info heartbeat so \"still watching for a debug browser\" stays visible without being loud. Everything resets on a successful connect. On-demand launch is untouched, and `getStatus()` still reports every failure verbatim — only the log line is withheld. ### Incident 1 (the volume loop) — no new code, and why Both halves had already landed the same day: ducking hysteresis in `server/index.js` and the S2S parity derivation in `voice-defaults.js` (`deriveLiveVoiceDefa…"
@@ -2481,7 +2481,7 @@
       {
         "n": 185,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "the full-session transcript rendered nothing over a 26-turn session",
         "detail": {},
         "excerpt": "The F7 panel opened and said *\"No conversation yet — start speaking to see the transcript\"* while `vault/Conversation/session.json` held **26 turns**. No console error, no failed request, HTTP 200 from `/api/conversation/history`. **Root cause: a type mismatch across the wire, swallowed by a defensive catch.** The route builds its `session` field with `memory.fs.readJSON()`, so the client receives a **parsed object**. `conversation.js` passes `payload.session` straight into `buildTranscript()`, which did `JSON.parse(sessionJsonText)` — and `JSON.parse` of an object stringifies it to `\"[object Object]\"` and throws. The `catch` that exists for genuinely corrupt session JSON treated that as corruption and fell back to an empty rolling window, discarding the **entire session half** of the transcript. The episodic half survived, which is why the panel was not merely broken but *plausibly* emp…"
@@ -2489,7 +2489,7 @@
       {
         "n": 186,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "a toggle that could not toggle, and lied about its state",
         "detail": {},
         "excerpt": "The same button, two defects, both structural rather than cosmetic: 1. `onTranscript` only ever called `overlays.openPanel('conversation')`. `openPanel` on an already-open panel is a `focus()`, so the second click did nothing observable — a dead button, on a control whose title says \"Toggle\". 2. `setTranscriptOpen()` was implemented in `compose-bar.js`, exported, and **called from nowhere.** `aria-pressed` stayed `\"false\"` for the entire session with the panel open on screen. Measured, not inferred: `aria-pressed` read `\"false\"` immediately after a click that rendered the panel. **FIXED**, and deliberately not from the click handler. The button cannot stay honest that way: the header ×, the backdrop, Escape/`closeTop`, `closeAll` and a `close_panel` tool call all close the panel without the button hearing about it. `createOverlayManager` now takes an optional `onChange(panelId, isOpen)`,…"
@@ -2497,7 +2497,7 @@
       {
         "n": 187,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the key store was orphaned by the userData rename",
         "detail": {},
         "excerpt": "`app.setName('MYTHOS')` moved `app.getPath('userData')` from `%APPDATA%\\agent-os` to `%APPDATA%\\MYTHOS`. `adoptSiblingVault` (BUG-180) carries the **vault** across those siblings. `keys.json` is not in the vault — it sits directly in userData (`main.js`'s `storePath()`), so it was left behind, and so was `config.json`. Measured, not inferred: `%APPDATA%\\agent-os\\keys.json` is **1,309 bytes, mtime 2026-08-11T20:03Z**; `%APPDATA%\\MYTHOS\\keys.json` does not exist. The packaged build's own `/api/setup/status` answers `needsSetup: true` with *\"none of: GOOGLE_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, …\"*, and the first-run wizard then covers the HUD — which is the part the operator sees. Confirmed by driving the packaged HUD in a real browser: the transcript button could not be clicked because `.setup-overlay` intercepted every pointer event. **FIXED.** `adoptSiblingUserDataFiles` in `electr…"
@@ -2505,7 +2505,7 @@
       {
         "n": 188,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Hermes was installed into the directory the updater deletes",
         "detail": {},
         "excerpt": "`setup-hermes.js` installed unconditionally into `\u003crepo>/Hermes Agent`. For a packaged install `\u003crepo>` is `resources/app.asar.unpacked` — inside the install tree, which the NSIS updater replaces wholesale. That is not a theory: during this session's update run the silent uninstaller was measured deleting **23,283 files / 1,801 MB** before the new ones were written. `doctor.js` restated that one path by hand (with a comment explaining that requiring `setup-hermes.js` would run its installer), so it could not see an install anywhere else either. This is the same defect `src/core/setup/model-paths.js` already fixed for model weights, and that `setup-android.js` never had because it honours `MYTHOS_TOOLS_DIR`. **FIXED.** `setup-hermes.js` resolves its home as `HERMES_HOME` (explicit operator override, still wins) → `MYTHOS_TOOLS_DIR/Hermes Agent` (what `electron/main.js:634` injects, i.e. `…"
@@ -2513,7 +2513,7 @@
       {
         "n": 189,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the installer asked without ever looking at the disk",
         "detail": {},
         "excerpt": "`build/installer.nsh`'s component page hardcoded every checkbox (Silero and wake word checked, Hermes and adb not) and never probed anything. Worse, the `customInstall` fallback — the path an **update** takes, where the page is skipped entirely — wrote `silero:true, wakeword:true` unconditionally into `install-selection.json`, so every silent update queued a re-download of assets already on disk with no page shown and nothing asked. **FIXED.** A `DetectComponents` macro probes exactly the paths `electron/main.js` injects (`$APPDATA\\MYTHOS\\models\\…`, `$APPDATA\\MYTHOS\\tools\\…`), checks all three wake-word assets all-or-nothing (a partial set cannot arm `WAKEWORD_ENABLED`, so it must still offer the download), and checks all three legitimate Hermes homes including the `HERMES_HOME` env var. A detected component renders as \"— already installed\", unchecked and disabled: visible rather than hi…"
@@ -2521,7 +2521,7 @@
       {
         "n": 190,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "effector catch blocks stringified a non-Error as \"[object Object]\"",
         "detail": {},
         "excerpt": "`from-gmail.js`, `from-memory.js`, `from-hermes.js`, `from-widgets.js`, `from-dashboard.js`, `from-pc.js`, `agent-actions.js` all built their failure message as `err.message || err` — fine for a real `Error`, useless for a plain object thrown/returned by an adapter (`err.message` undefined, falls through to `String(err)` -> the literal `\"[object Object]\"` in the audit trail). `dispatch-action.js` had already fixed exactly this for its own one call site (`reasonText()`, REMEDIATION P2-12) but the fix never reached the effectors themselves. **FIXED.** Extracted `reasonText()` to `src/core/util/reason-text.js`; every effector catch block above now uses it. `test/util-reason-text.test.js`."
@@ -2529,7 +2529,7 @@
       {
         "n": 191,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "recurring-failure anomalies rendered a blank trigger",
         "detail": {},
         "excerpt": "`identity/reflection.js`'s learning-loop pass emitted `{kind:'recurring-failure', detail: line}` with no `target`, so `immune/announcer.js`'s `onHealed` (which builds \"Trigger: `\u003ckind>` on `\u003ctarget>`\") had nothing to put after \"on\" and the diagnostician/healer could not name what actually failed. **FIXED.** `reflection.js` now recovers a best-effort `target` by matching the brain's free-text failure line against the real tool names of the FAIL actions that fed the brain call in the first place, falling back to the line's first word. `healer.js`'s `record-lesson` action uses the same field for the lesson's `trigger.tool`."
@@ -2537,7 +2537,7 @@
       {
         "n": 192,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a lost-transcript anomaly had no way to tell two different causes apart",
         "detail": {},
         "excerpt": "`live-session.js`'s `live-turn-no-user-transcript` anomaly (a turn that answered without recording anything the operator said) carried only `{kind, turnId, reason}`. Diagnosing WHY needed `audioIn` (did the browser send mic frames at all?) and `scFields` (did an `inputTranscription` come back?), both of which existed only in a separate `live.turn-parts` log line, requiring a manual vault cross-reference every time. **FIXED.** The anomaly now carries `audioIn`/`scFields` directly, snapshotted before the per-turn counters reset (they were being cleared before the anomaly emit ran). `test/live-session.test.js`."
@@ -2545,7 +2545,7 @@
       {
         "n": 193,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "s2s-bridge.js's mic-suspend gate had no server-side trail",
         "detail": {},
         "excerpt": "`s2s-bridge.js` suspends mic capture around MYTHOS's own TTS and media playback (the German-narration-transcribed-as-operator incident, 2026-07-31), entirely client-side — the server never learned a suspend happened, so a lost-transcript incident could not be correlated against \"was the mic gated at the time\". **FIXED.** `setCaptureSuspended` now sends a best-effort `voice-capture-suspend` message on every start/clear/ceiling-fail-open transition; `server/index.js` logs it as `voice.capture-suspend`. `sendMessageOverride` added as an injectable seam so this is unit-testable without mocking the whole `ws.js` module graph. `test/s2s-capture-suspend-log.test.js`."
@@ -2553,7 +2553,7 @@
       {
         "n": 194,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a healer row rendered as blank, and a cooldown read as \"unhandled\"",
         "detail": {},
         "excerpt": "Two related HUD/episodic mislabelings: (1) `audit.js`'s Audit view rendered a healer row's deliberately-`null` `tool` field (BUG-125) as literally nothing, indistinguishable from a dispatch that lost its tool name; (2) `server/index.js`'s `health.healed` subscriber labeled a `cooldown`-suppressed playbook the same `'unhandled'` as a real no-match/error, so a playbook correctly throttling itself read as a standing problem the healer had given up on. **FIXED.** The Audit view shows \"heal\" for a `decision:'heal'` row instead of blank; `outcome:'cooldown'` gets its own episodic label instead of folding into `'unhandled'`. `test/bug-069-healer-no-match-label.test.js` updated."
@@ -2561,7 +2561,7 @@
       {
         "n": 195,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a partial-success turn let a false claim survive next to one real success",
         "detail": {},
         "excerpt": "`voice-agent.js`'s deterministic honesty guard only fired when the WHOLE turn failed (`allFailedActions.length > 0 && !anySuccess`). A turn where one send succeeded and a second failed was left entirely to the corrective brain pass, which the model can (and, in the 2026-08-12/13 session, did) still ignore — claiming both succeeded. **FIXED.** Added an `else if (needsCorrective)` branch that reuses `claim-check.js`'s `detectUnbackedClaims` (the same detector the Live path already uses) against the turn's failed+unverified actions, and appends a per-tool \"`\u003ctool>` did not succeed — `\u003creason>`.\" clause naming exactly which call didn't back the claim — without touching the tool that actually succeeded. `test/voice-agent-tools.test.js`."
@@ -2569,7 +2569,7 @@
       {
         "n": 196,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the Live path never told the model its own claim was wrong",
         "detail": {},
         "excerpt": "`live-tool-adapter.js`'s `onLiveTurnComplete` already detected an unbacked claim (`detectUnbackedClaims`) and emitted `health.anomaly` `kind:'claimed-action-not-taken'` — but that only ever reached the Audit view. Live had already SPOKEN the false claim, nothing told the model it was wrong, and a retained session kept repeating it. **FIXED.** Each flagged claim now also gets a `sendSystemNotice()` correction — the only channel that still reaches a closed Live turn — explicitly framed as a correction of the model's OWN prior statement (not a report about the operator), naming the real reason and instructing it to retract aloud. `LIVE_SYSTEM_NOTICE_INSTRUCTION` gained one line documenting that a notice can be this kind of self-correction. `test/promise-followthrough.test.js`."
@@ -2577,7 +2577,7 @@
       {
         "n": 197,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "an unanswered T3+ confirm expired silently, with no trace anywhere",
         "detail": {},
         "excerpt": "`leash/confirm.js`'s only expiry mechanism was an opportunistic sweep inside `create()` — an entry nobody ever answered just vanished with no audit row, no anomaly, and no signal to whatever was waiting on the outcome. The 2026-08-12/13 session's `gmail_send` confirm (1 created, 0 completed) is exactly this: no record anywhere of why it never completed. **FIXED.** Each confirm now arms an unref'd per-entry `setTimeout` (cleared on accept/reject) that writes an audit `decision:'deny' reason:'confirm-ttl-expired'` row, emits `health.anomaly` `kind:'confirm-expired-silently'`, and emits a routable `confirm-expired` bus event carrying the entry's `connectionId`. `server/index.js` uses that to dismiss the prompt on every surface (`announceConfirmResolved`) and, if the confirm came from a Live session, calls `resolveLiveConfirm(id, null, false, {expired:true})` so the model hears an explicit E…"
@@ -2585,7 +2585,7 @@
       {
         "n": 198,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a mic-suspend gate gave no visible sign it had suspended the mic",
         "detail": {},
         "excerpt": "`s2s-bridge.js`'s captureSuspended gate (media-echo protection around spotify_play/open_web) drops mic frames client-side with no HUD change at all — the orb kept showing 'listening' while the mic was actually gated. This is candidate 1 for the lost-transcript incidents (21/21 empty operator transcripts on 2026-08-10): the operator had no reason to doubt they were being heard. **FIXED.** `setVoiceState()` now tracks the underlying voice-loop state separately from the mute overlay, so `setCaptureSuspended` can paint a dedicated `'muted'` state (and restore the REAL prior state on clear, not a hardcoded `'listening'` guess) plus a caption. `core-orb.js` renders it with its own color/label (`MIC MUTED`) rather than collapsing to idle. `test/s2s-capture-suspend-log.test.js`. Not independently verifiable without a real browser + mic — see the live-verify checklist below."
@@ -2593,7 +2593,7 @@
       {
         "n": 199,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "nothing reacted to a lost-transcript anomaly while it was happening",
         "detail": {},
         "excerpt": "Diagnosing a `live-turn-no-user-transcript` anomaly needed a manual vault dig after the fact; nothing tried to correct course DURING the conversation it was still live in, even for candidate 1 (the client mic gate outliving the media/TTS burst it was meant to cover). **FIXED.** `live-session.js` gained a direct per-connection callback, `onSuspendedTurnAnomaly` (same \"direct callback, not a bus event\" pattern `onInterrupted` already uses, and for the identical reason — the shared process bus has no connectionId, so a bus subscriber would clear every OTHER connection's mic gate too). `server/index.js` wires it to send `{type:'live-watchdog-clear'}` to that one connection; `s2s-bridge.js` handles it by checking its OWN `captureSuspended` and clearing early if set — a no-op on a client that was never suspended (candidate 2, Gemini dropping the transcript server-side, has no client-side fix).…"
@@ -2601,7 +2601,7 @@
       {
         "n": 200,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "send_key aborted on a drifted caret instead of trying to recover it",
         "detail": {},
         "excerpt": "`Handle-SendKey`'s caret-owner guard (2026-08-02) aborts outright when the keyboard caret belongs to a different app than the target — correct, but Handle-UiType's own WAVE 9 fix already showed the caret drifting away (a confirm-dialog round trip, a stray click) is recoverable by re-focusing an editable element in the target window, and send_key never got that recovery. **FIXED.** Before aborting, `Handle-SendKey` now calls the SAME `Focus-EditableDescendant` helper Handle-UiType already uses (UIA SetFocus on the target window's largest editable descendant, falling back to a click at its center) and re-checks the caret owner before giving up. Not independently verifiable without a real Windows session — see the live-verify checklist."
@@ -2609,7 +2609,7 @@
       {
         "n": 201,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "send_key('enter') had no WM_CHAR route, unlike ui_type's text path",
         "detail": {},
         "excerpt": "`Handle-UiType` escalates through `sendinput-unicode -> uia-setvalue -> wm-char-post` for ordinary text on MSIX-blocked targets, but `Handle-SendKey`'s Enter ladder stopped at `wm-key-post` and `uia-invoke-focused` — missing the WM_CHAR form some RichEdit/Chromium composers listen for specifically (some controls treat WM_KEYDOWN(VK_RETURN) and WM_CHAR('\\r') as distinct signals). **FIXED.** Added a 4th route posting `WM_CHAR` with `\\r` to the focused control, gated on the same proof-of-absence as every other route (oracle re-checked, only reached when nothing else already landed) so honest-fail stays intact by construction. Not independently verifiable without a real Windows session."
@@ -2617,7 +2617,7 @@
       {
         "n": 202,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "ctrl+s had no recovery path on an MSIX target, unlike every other route in this file",
         "detail": {},
         "excerpt": "Combos deliberately get no escalation ladder (a wrong base key delivered via WM_KEYDOWN would be a silent wrong action) — but that blanket rule left ctrl+s with zero recovery on the exact MSIX blackhole every other route in this file works around, and no way to know a Save-As dialog had opened instead of a silent save. **FIXED.** ctrl+s is now an explicit, narrow exception (not a generalization to arbitrary combos): when SendInput delivers the combo, the foreground window title is checked for a Save-As dialog; when it delivers zero events, a new `Find-InvokableSaveDescendant` helper looks for an on-screen, invokable element literally named 'Save'/'Save As' anywhere in the foreground window's UIA tree and invokes it instead. A detected Save-As dialog is reported as its own distinct outcome (`result:'save-as-dialog-opened'`), never folded into plain success or failure — dismissing it is th…"
@@ -2625,7 +2625,7 @@
       {
         "n": 203,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "spotify_play fell back to a blind keystroke guess after a REAL click failed",
         "detail": {},
         "excerpt": "A play control's real bounding rect was located via `ui_elements`, and its `click_at` (a genuine SendInput mouse click at that physical screen coordinate) failed — and the code fell through to the same blind Tab+Enter keystroke guess BUG-026's own 3rd-attempt comment already explains is unreliable (Enter kept landing back in the search box). Unlike the cua-driver path above it (which posts a click to a window without activating it and DOES have a foreground-delivery retry, already applied at its own click loop), `click_at` has no \"background\" mode to retry into — it already is a real, physical click. **FIXED.** When a play control was located and its `click_at` fails, `from- spotify.js` now fails honestly with the real click error instead of guessing via keystrokes. The \"no identifiable play control was found at all\" fallback path (where a keystroke guess is the only option left) is unch…"
@@ -2633,7 +2633,7 @@
       {
         "n": 204,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "whatsapp_send refused on a wrong conversation with no recovery",
         "detail": {},
         "excerpt": "WAVE 9's own refusal (BUG-064) correctly REFUSES rather than typing into the wrong chat when the deep link silently failed to switch conversations — but never retried, so every one of these was an honest failure the operator then had to redo by hand. **FIXED** — with a deliberate deviation from the remediation plan's literal wording, documented in code: the plan asked for a retry \"via in-app search → click contact → re-run the composer oracle\", but from-whatsapp.js's own header explicitly rejects exactly that UI-hunting approach as \"the fragile path\" this Electron app already paid for twice. Implementing it here would undo the reason the deep-link design exists. Instead, `whatsapp_send` retries the SAME deep link once (`whatsapp://send?phone=...`) — the diagnosed root cause is the first navigation not taking, and a second attempt is the fix consistent with the architecture already chosen…"
@@ -2641,7 +2641,7 @@
       {
         "n": 205,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "no way to remove a WhatsApp contact without overwriting it",
         "detail": {},
         "excerpt": "`whatsapp_contact_save` already deletes-then-rewrites a contact internally when replacing one, but there was no tool to remove one WITHOUT immediately re-adding it — incident inc-1786616401736-1. A throwaway/test contact could only be overwritten with a new number, never actually deleted. **FIXED.** New `whatsapp_contact_delete` tool (T3, destructive, same tier as the save it undoes), same case-insensitive lookup and read-back-verify discipline `whatsapp_contact_save` already uses. Added to the Live voice allowlist alongside its sibling. `test/whatsapp-contact-delete.test.js`."
@@ -2649,7 +2649,7 @@
       {
         "n": 206,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "forget_fact was a dead end on any paraphrased correction",
         "detail": {},
         "excerpt": "`semantic.forget()`'s only match mode was exact substring — a spoken correction phrased differently than the stored fact (\"forget that I said kids come first\" vs. a stored \"children/family priority\") reported \"No stored fact contains ...\" even though the intended fact was right there. This is the mechanism behind the false \"children/family priority\" fact the operator could not get MYTHOS to actually forget. **FIXED.** When exact substring finds nothing, `forget()` now falls back to a normalized token-overlap pass (the same half-the-terms floor `recall()` already uses) across every stored bullet. Exactly one plausible match auto-resolves; more than one returns `candidates` instead of deleting anything, and the `forget_fact` effector turns that into \"found N similar facts ... which one?\" rather than guessing. `test/bug-160-semantic- supersede.test.js`. **Not yet done**: actually deleting t…"
@@ -2657,7 +2657,7 @@
       {
         "n": 207,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "no automated guard against the BUG-171 class recurring",
         "detail": {},
         "excerpt": "`live-tools.js`'s own comments have described \"an act-tool promoted without its read/list counterpart\" five separate times (log_incident, ui_click, set_volume, whatsapp_send, cua_click) — each found by an operator noticing the model improvise, never by anything automated. A hand-typed `LIVE_TOOL_ALLOWLIST` override bypasses this file's own review entirely. **FIXED.** New `ACT_TOOL_READ_COUNTERPARTS` table + `findMissingReadCounterparts()` codify the pairs this file's comments already documented in prose. `buildFunctionDeclarations` logs a `WARNING` naming the BUG-171 shape when a custom allowlist has an act-tool but none of its read counterparts; a test pins that `DEFAULT_ALLOWLIST` itself stays clean. `test/live-tools-wrong-channel-guard.test.js`."
@@ -2665,7 +2665,7 @@
       {
         "n": 208,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "camera_look's \"no vision brain\" was a wiring gap, not lane exhaustion",
         "detail": {},
         "excerpt": "`camera_look` reads `var brain = (ctx && ctx.brain) || null;`. `main.js`'s `registerFromDashboard(hub, {...})` call never included a `brain` key at all — unlike `registerFromPc(hub, {brain: brain, ...})` twenty lines earlier, which wires the identical dependency for `screen_look`. `brain` was ALWAYS null in production; NIM_API_KEY being present never mattered, and the generic \"no vision brain is available\" message read exactly like lane exhaustion. **FIXED.** Added `brain: brain` to the `registerFromDashboard` ctx object in `main.js`. `test/camera-look-brain-wiring.test.js` pins both the call-site source shape (main.js isn't unit-tested end-to-end for this) and the unit-level behavior (a wired brain is actually reached; an unwired one still fails honestly)."
@@ -2673,7 +2673,7 @@
       {
         "n": 209,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a dead vision lane looked identical to a slow one",
         "detail": {},
         "excerpt": "`vision-call.js`'s `visionThink` had one fixed 12s race against `brain.think` — when every vision provider was actually down (not just slow), the call still waited the full 12s and reported `timedOut:true`, indistinguishable from a merely-slow provider. The 2026-08-12/13 session's ×4 screen_look/ camera_look failures matched this: with the fast providers down, the lane degraded to 90-185s NIM models and the 12s timeout always lost. **FIXED.** `visionThink` now checks `registry.chainFor('vision')` — the same alive-only ranking `brain.think`'s own chain-walk already uses internally — before the real call. An empty chain fails FAST with `laneEmpty:true` and a `reason` naming that no provider is live, instead of waiting out the full timeout for a foregone conclusion. `screen_look`/`camera_look` both surface `result.reason` instead of the generic \"offline\" message. Injectable via a `chainFor`…"
@@ -2681,7 +2681,7 @@
       {
         "n": 210,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "no way to pin the Live session's speech language",
         "detail": {},
         "excerpt": "Gemini Live auto-detects the spoken language with no operator override, so a session's STT could drift into Korean/Spanish mid-conversation with no way to stop it short of restarting. **FIXED.** New `GEMINI_LIVE_LANGUAGE` config key (BCP-47, default unset = auto-detect, unchanged default behavior). `live-session.js`'s `buildSetup()` adds `speechConfig.languageCode` only when set. Documented caveat, not fixed by this: per Gemini Live's own docs, some languages (Hindi, Bengali) are speech-INPUT-only for this API — pinning one changes what the model expects to HEAR, not what it speaks back in. `test/live-session-language-pin.test.js`."
@@ -2689,7 +2689,7 @@
       {
         "n": 211,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "no way to switch the Live voice back after trying another",
         "detail": {},
         "excerpt": "`server/index.js`'s `setLiveVoice()` (close-open the Live session with a new `GEMINI_LIVE_VOICE`) had no memory of what the voice was before a switch, so \"switch back\" required the operator to re-type the exact prior voice id. **FIXED.** New `recordLiveVoiceSwitch`/`popPreviousLiveVoice` in `voice-choice.js` (in-memory, process-lifetime, one-entry history — a runtime undo, not a durable preference; deliberately distinct from `undefined` = \"nothing recorded\" vs. `null` = \"revert TO no-override\", a real and valid target that a naive single-sentinel design would have collapsed into \"nothing to revert\"). New `revertLiveVoice()` in `server/index.js` and `POST /api/tts/voice/revert` route. `test/voice-choice.test.js`, `test/tts-voices-route.test.js`."
@@ -2697,7 +2697,7 @@
       {
         "n": 212,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a pipeline-injected notice wasn't explicitly owned as the model's own speech",
         "detail": {},
         "excerpt": "`LIVE_SYSTEM_NOTICE_INSTRUCTION` explained what a `[SYSTEM NOTICE]`-prefixed message IS (an automated notice, not the operator speaking) but never said what happens to it once the model speaks it — leaving room for the model to disclaim its own boot greeting (\"the operator told me to say that\") if asked to repeat or explain it. **FIXED.** Added one clause: a notice like the boot greeting is still the model's OWN SPEECH once said — the notice only supplies WHAT to say, same as any other instruction reaching it through this channel. `test/bug-117-system-notice-attribution.test.js`. Verified by code reading (not a new test) that the boot greeting has no path that reaches Live unwrapped: `deliverBootGreeting()` calls `proactiveSpeak()`, whose Live branch unconditionally prepends `SYSTEM_NOTICE_PREFIX` — there is no second injection site for this content. ### Wave 6 item 4 (reasoning-leak reg…"
@@ -2705,7 +2705,7 @@
       {
         "n": 213,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "an aether-proxy bind failure had no recovery, ever",
         "detail": {},
         "excerpt": "`main.js`'s `aether-proxy-bind-failed` handler called `scannerProxy.stop()` and left it dead for the rest of the process — nothing ever retried, even when the port collision was a stale MYTHOS instance still releasing its ports on exit (the common case). **FIXED**, with a deliberate choice between the plan's two offered options: a SAME-PORT retry via a new healer playbook (`aether-proxy-rebind`, `retry-aether-proxy` action calling the existing `scannerProxy.start()`/ `whenReady()` — scanner-proxy.js's own comments already document this as the sanctioned recovery path), NOT a port shift. Shifting to a different base was the plan's OTHER offered option and would have been actively dangerous here: `scanner-proxy.js`'s own header states \"PORT ORDER IS THE CONTRACT\" — the Aether aggregator is a separate, externally-run process pointed at these exact ports via `--peers`, so silently renumberin…"
@@ -2713,7 +2713,7 @@
       {
         "n": 214,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "reminder/timer times fell through on ordinary phrasing",
         "detail": {},
         "excerpt": "`parseWhen()` (from-calendar.js, shared by `reminder_add`'s free-form `when` and `timer_add`'s internally-built one) required either a colon (`HH:MM`) or a `today`/`tomorrow` prefix for every time-of-day pattern — a bare `\"5pm\"`, `\"at 9:30\"`, `\"noon\"`, or `\"in an hour\"` all fell through to \"Could not parse that time\" with no fixture either way. **FIXED.** Widened to accept: a bare hour with am/pm and no colon (`\"5pm\"`); a leading `\"at \"` on any existing pattern; the literals `\"noon\"`/`\"midnight\"`; and `\"in an hour\"`/`\"in half an hour\"` (word-number durations the numeric-only pattern cannot match at all). Deliberately NOT a general word-number parser — a bare hour with no am/pm and no colon (`\"5\"`) stays honestly refused as genuinely ambiguous. `test/parse-when-widening.test.js`. **Deferred-fixture follow-up, re-searched 2026-08-14 with full vault access (both `mythos/vault` and the Elect…"
@@ -2721,7 +2721,7 @@
       {
         "n": 215,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "open_web reported success with zero verification",
         "detail": {},
         "excerpt": "Every `open_web` branch (YouTube, weather, flights, image, web-embed, search) returned a bare `ok()` — resolving real content (a geocoded URL, a video id, search cards) and handing it to the client is not proof the dashboard actually rendered it; no `ui.open-web-consumed` ack exists to confirm that. **FIXED**, choosing the plan's lower-risk offered option over building a new HUD-ack round trip: every `open_web` outcome now goes through `evidence.unverified()` — the same evidence contract every other world-changing effector in this codebase already enforces. Still `ok:true` (real content WAS resolved) but honestly marked as unconfirmed. A genuine failure (bad type, invalid URL, no results) is unaffected — it still returns a real `fail()`, never wrapped as an unverified success. `test/open-web-evidence-honesty.test.js`."
@@ -2729,7 +2729,7 @@
       {
         "n": 216,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "no durable record of when MYTHOS first booted on this install",
         "detail": {},
         "excerpt": "\"When did you first boot\" / \"how long have you been in development\" had no honest answer — `version.js`'s `bootDate` is the CURRENT process's boot time, re-stamped on every restart, and answers neither question. **FIXED.** New `identity/boot-timeline.js`: `ensureFirstBootRecorded()` writes `vault/Identity/first-boot.json` exactly once, ever, for the lifetime of an install (same durability class as `Identity/boundaries.md`); every later boot just reads it back. Wired into `capabilities.writeManifest()` so the existing `self_capabilities` self-knowledge tool surfaces it for free — no new tool, no new wiring at the voice layer. `test/capabilities-manifest.test.js`."
@@ -2737,7 +2737,7 @@
       {
         "n": 217,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "log_incident could fire on the model's own initiative",
         "detail": {},
         "excerpt": "Observed in the 2026-08-12/13 session: `log_incident` called unbidden (noticing its own mistake or a tool failure) rather than in response to an explicit operator request to log something. **FIXED** at the prompt level — the only lever available, since the tool itself has no way to distinguish who decided to call it. Tightened the catalog description to say explicitly: only when the OPERATOR asks; do NOT call this on your own initiative; noticing something is wrong is not the same as being asked to log it. `test/from-memory.test.js`. **Not independently verifiable here**: confirming it stops firing unbidden needs a real voice session and an episodic-log review — see the live-verify checklist. ### Wave 7 item 6 (stt-failed x10 / provider-down) — no separate work Per the plan: already covered by Wave 5's lane-health preflight (`vision-call.js`'s `chainFor` check generalizes to the same pro…"
@@ -2745,7 +2745,7 @@
       {
         "n": 218,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "Wave 1's \"loud\" confirm expiry wrote `tool:undefined` in production",
         "detail": {},
         "excerpt": "`leash/index.js`'s new `onExpire` handler (Wave 1, BUG-197) read `entry.action.tool`/`.tier` directly. Every real caller — `voice-agent.js`, `cortex/index.js`, `live-tool-adapter.js`, `engagements/executor.js` — stores the enveloped shape `confirm.create(summary, {decision, goalId, tier}, connectionId)`, the exact BUG-119-class mismatch this same file's `accept()` wrapper already documents and unwraps a few lines below. Only `test/leash-confirm-expiry.test.js`'s bare `{tool, args}` fixture ever exercised the fixed path, so the real-shape bug shipped green. Live-verified 2026-08-13: a real `createLeash` + real `memory.audit` (on-disk vault) + real 1.5s wall-clock TTL, given the production envelope, wrote an audit deny row and `health.anomaly` with `tool` and `target` both `undefined` — defeating the entire point of Wave 1 (an operator or Live session hearing \"an unnamed tool's confirm exp…"
@@ -2753,7 +2753,7 @@
       {
         "n": 219,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "Wave 3's ctrl+s escalation gate never fires on Win11's MSIX Notepad",
         "detail": {},
         "excerpt": "`Handle-SendKey`'s ctrl+s branch (Wave 3, BUG-202) gated its `Find-InvokableSaveDescendant` fallback on `$comboSentZero` — `SendInput()`'s own return value being zero. Live-verified 2026-08-13 against a real launched Notepad (MSIX): `SendInput` always reports success (the OS accepts all 4 combo events), so `$comboSentZero` is never true, and the branch returned `{sent:true, mechanism:'sendinput-vk'}` with no `save-as-dialog-opened` flag — while no Save-As dialog ever opened and the title kept its `*` unsaved marker. This is exactly the MSIX SendInput blackhole `adapters/CLAUDE.md` already documents (\"silently discard SendInput while still reporting the injected event as successful\"), on the one app this fix's own commit message names as the target — the escalation ladder Wave 3 added was dead code for it. **FIXED (the false-success half).** The pre-send foreground title is now captured f…"
@@ -2761,7 +2761,7 @@
       {
         "n": 220,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "two of the six real leaked-reasoning texts still weren't caught",
         "detail": {},
         "excerpt": "Pulled the six actual leaked-reasoning replies verbatim from `Episodic/2026-08-11.jsonl` and `Episodic/2026-08-12.jsonl` (`%APPDATA%\\ agent-os\\vault` — these are the real texts `test/live-reasoning-strip.test.js` only ever paraphrased). Running the real `stripReasoningLead()` against all six found two it still let through unstripped: - One turn used the label `\"Self-Correction:\"` once and then, LATER IN THE SAME REPLY, `\"Self-Correction during reasoning:\"` — different wording. `SELF_CORRECTION_RE` only matched the literal colon-immediately-after spelling, and — separately — the marker scan only ever used a non-global `.exec()`, which finds the FIRST occurrence of a marker, not the last one the code's own comment claims to look for. The second header, and the truncated real text behind it, went to the operator verbatim. - Two turns used a header the fix never recognized at all, `\"Reasonin…"
@@ -2769,7 +2769,7 @@
       {
         "n": 221,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "`ui_type` aborted on an advisory UIA focus call, killing the very ladder built for MSIX Notepad",
         "detail": {
           "cause": "`Handle-UiType` opens with an OPTIONAL pre-focus step: when the caller supplies an `elementPath`, it resolves that element and calls `SetFocus()` on it. That call was the **only unguarded `SetFocus()` in `ps-automation.ps1`** — the other three are wrapped precisely because SetFocus is advisory and throws on controls that refuse focus. Win11's WinUI3 Notepad refuses it. The exception escaped to `Handle-UiType`'s outer `catch`, which returns `'Type failed: ' + message`. What never ran is the damage: `uia-setvalue` and `wm-char-post` — the two routes in the escalation ladder that need",
@@ -2779,7 +2779,7 @@
       {
         "n": 222,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "`self_capabilities` was unreachable from voice, so \"what can you do?\" had no honest answer",
         "detail": {},
         "excerpt": "**Live, same session as BUG-221** (2026-08-14). The operator's complaints were that MYTHOS \"doesn't even know what its capabilities are\", \"keeps repeating web search, web search\", and has no idea what was fixed or changed between sessions — despite every fix being committed. The server log for that session states the mechanism plainly: live-tools: declared 82, withheld 77 — ... self_capabilities, use_skill, ... `self_capabilities` (T0, read-only) sat in `VOICE_ALLOWLIST_EXEMPT`, whose rationale read: *\"read_status/self_capabilities-style summaries cover these; not a distinct spoken verb of their own.\"* Both halves were wrong. `read_status` reports runtime state (goals, adapters, spend) and has never carried the tool catalog; and \"what can you do?\" is as distinct a spoken verb as exists. With no tool able to answer it, the model did what this file's own `camera_look` and `whatsapp_send` c…"
@@ -2787,7 +2787,7 @@
       {
         "n": 223,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "a failure string shipped as `ok:true`: `close_window`'s dispatcher arm had no convention guard",
         "detail": {
           "verification": "`test/pc-child-string-is-failure.test.js` — pins the gate's existence and its position before `Write-Response`, plus the end-to-end dispatcher assertion (windows-only skip guard; CI is `windows-latest`, so it runs there)."
@@ -2796,7 +2796,7 @@
       {
         "n": 224,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "MYTHOS's own Live voice was fed back to Gemini's VAD, causing BOTH the interruptions and the clipped last word",
         "detail": {
           "verification": "`test/live-half-duplex-gate.test.js` (9 — the send-not-observe ordering, preroll replay + bound, barge-in release, ceiling, kill switch; plus behavioural coverage of the player edges through its `contextFactory` seam). `test/s2s-barge-in-backstop.test.js`'s \"never sends a cancel frame\" assertion was"
@@ -2813,7 +2813,7 @@
       {
         "n": 226,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "verified",
         "title": "spoken failure messages were mojibaked because PowerShell 5.1 parses a BOM-less script as cp1252",
         "detail": {
           "verification": "`test/ps-source-is-ascii.test.js` — enumerates `git ls-files '*.ps1'` and asserts no byte above `0x7F`, reporting the offending offset with ASCII context. It has a non-vacuity check (fails if the file list is empty or stops covering `ps-automation.ps1`), and it earned its keep immediately: it caught `setup-chrome-debug.ps1`, which the hand scan that preceded it missed because that scan only walked `adapters/`."
@@ -2822,7 +2822,7 @@
       {
         "n": 227,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "fresh-PC install fails with \"cannot be closed\": a 1-character MAX_PATH overflow",
         "detail": {
           "verification": "`test/installer-path-budget.test.js` — budget is `260 − 80 = 180` chars for the longest path relative to the install root, the 80 being worst-case for the NSIS temp directory (measured 63 here; a longer Windows account name is exactly the variable that differs between the machine that builds and the machine that installs). It walks the source tree so it runs in CI without a build, pins both exclusions and the native-module inclusions, and additionally measures `dist/win-unpacked` for real when a build newer than the config exists. It was verified red against the pre-fix build (reported 200 chars)."
@@ -2831,7 +2831,7 @@
       {
         "n": 228,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "diagnosed",
         "title": "four browser-ish tools, disambiguated only in prose: five identical refusals, and one fabricated browser launch",
         "detail": {
           "verification": "`test/browser-intent-disambiguation.test.js`, 16 tests, verified red against the pre-fix source (6 failed)."
@@ -2840,7 +2840,7 @@
       {
         "n": 229,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the operator's speech was thrown away by a 1.2 s ring against an 8 s gate",
         "detail": {
           "symptom": "`live-turn-no-user-transcript` ×33 on 2026-08-14; 76 of 287 conversation records (26%) stored an empty operator transcript. What the operator experienced: MYTHOS answering things they had not said, and losing what they had.",
@@ -2859,7 +2859,7 @@
       {
         "n": 231,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "WhatsApp read the composer before WebView2 had drawn it",
         "detail": {
           "symptom": "`whatsapp_send` failed at 17:29:26 and 17:31:11 with \"could not read its message box (No editable element found…)\", then succeeded at 17:31:47 — only because the operator told it to wait. Their diagnosis on the call: \"WhatsApp takes a couple of seconds to start.\"",
@@ -2870,7 +2870,7 @@
       {
         "n": 232,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "every vision call burned 8 seconds on two dead providers, and the cooldown that should have caught it could not see the failure",
         "detail": {
           "symptom": "`screen_look` failed at 14:11:36 and 14:13:52 — both while MYTHOS was hunting the Notepad Save dialog, so it ran that whole sequence blind. Latency from the audit's allow→completed pairs: | tool | n | median | max | |---|---|---|---| | `screen_look` | 5 | 10,254 ms | 12,341 ms | | `camera_look` | 13 | 9,484 ms | 9,793 ms | against `DEFAULT_VISION_TIMEOUT_MS = 12000`. The median call sat at 85% of its own budget and the max exceeded it.",
@@ -2880,7 +2880,7 @@
       {
         "n": 233,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "every diagnostic field attached to an anomaly was discarded before it was stored",
         "detail": {
           "cause": "`server/index.js`'s subscriber wrote a fixed four-field allowlist — `{kind, scope, error, target}` — and dropped everything else. `reason` went with them, the very field `anomaly-payloads-need-reason` establishes as load-bearing for the spoken explanation, leaving a summary that is a trailing dash.",
@@ -2890,7 +2890,7 @@
       {
         "n": 234,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "open",
         "title": "the health channel was carrying things that are not faults",
         "detail": {
           "symptom": "68 heal → `no-match` records against 6 applied. At one point 15 `live-reconnect-failed` inside 30 seconds (12:29:51 → 12:30:21), one every ~2 s, each getting a full diagnose → heal → announce → two-episodic-writes round trip. Three separate causes wearing one coat, and the plan's reading of the first was",
@@ -2900,7 +2900,7 @@
       {
         "n": 235,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a goal's entire budget was one planning call",
         "detail": {
           "symptom": "Three goals created at 17:32:12. Two auto-paused five seconds later, before either had done anything. From `vault/Goals/*.json`: \"Set up the backend API endpoints\" spent {tokens:31272, actions:2} budget {tokens:20000, actions:25} \"Develop the frontend components\" spent {tokens:31200, actions:2} budget {tokens:20000, actions:25} ~15,600 tokens per action against a 20,000 total. The operator asked for structured project tracking and got two of three tasks paused on arrival.",
@@ -2920,7 +2920,7 @@
       {
         "n": 237,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "MYTHOS's apology became a project goal",
         "detail": {
           "symptom": "A goal titled `Commitment: I'll get it right`, with MYTHOS's entire apology stored in its `reason` field: \"I hear you loud and clear, boss, my wires are definitely crossed today…\".",
@@ -2931,7 +2931,7 @@
       {
         "n": 238,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "DEGRADED was a dead Google token being retried forever",
         "detail": {
           "symptom": "The HUD orb showed DEGRADED for the whole session and named no cause.",
@@ -2942,7 +2942,7 @@
       {
         "n": 239,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the double voice: a third speech path with no Live guard",
         "detail": {
           "symptom": "\"A second voice / echo.\"",
@@ -2952,7 +2952,7 @@
       {
         "n": 240,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "kokoro-tts has never loaded in any packaged build",
         "detail": {
           "symptom": "`tts.provider-failed kokoro-tts \"Cannot find package '@huggingface/transformers'\"`. The keyless local TTS fallback is fiction for every packaged user.",
@@ -2963,7 +2963,7 @@
       {
         "n": 241,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the HUD could never show \"speaking\"",
         "detail": {
           "symptom": "\"The main HUD remains blue during speech, whereas it should turn green.\"",
@@ -2973,7 +2973,7 @@
       {
         "n": 242,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the mic gate's ring was derived from the wrong constant",
         "detail": {
           "symptom": "238 `voice.capture-suspend` events; 18 of 104 user turns reached the server with no `inputTranscription`.",
@@ -2984,7 +2984,7 @@
       {
         "n": 243,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "camera_look was confidently wrong and nothing could catch it",
         "detail": {
           "symptom": "Two incidents: \"reported seeing a mouse with a bright green light\" (there was none) and \"correctly identified colour context, but misidentified the object\".",
@@ -2995,7 +2995,7 @@
       {
         "n": 244,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a build shipped fabricated content; the verifier caught it and was ignored",
         "detail": {
           "symptom": "Builds \"failing\", and one that succeeded with generic placeholder content.",
@@ -3005,7 +3005,7 @@
       {
         "n": 245,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the build-engine probe proved nothing, and its heal could never fail",
         "detail": {
           "symptom": "`state: ONLINE` with `cliProbeDiagnostic: null` while every build failed; `build-engine-reprobe` \"succeeded\" four times.",
@@ -3015,7 +3015,7 @@
       {
         "n": 246,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "\"Searching…\" was flagged as a lie, and it wasn't",
         "detail": {
           "symptom": "`claimed-action-not-taken` x2, target `searching`, and a `[SYSTEM] CORRECTION` telling the model to retract a",
@@ -3025,7 +3025,7 @@
       {
         "n": 247,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "read_file resolved the vault against the wrong root",
         "detail": {
           "symptom": "`read_file {\"path\":\"vault/builds/…\"}` → `ENOENT … \\app.asar.unpacked\\mythos\\vault\\builds\\…`.",
@@ -3036,7 +3036,7 @@
       {
         "n": 248,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the immune explainer's 7-day episodic scan was the lag",
         "detail": {
           "symptom": "`loop.stalled` x2 (1405ms and 312ms against a 250ms threshold).",
@@ -3046,7 +3046,7 @@
       {
         "n": 249,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "nothing learned in a session reached recall",
         "detail": {
           "symptom": "\"MYTHOS did not remember previously requested songs.\"",
@@ -3056,7 +3056,7 @@
       {
         "n": 250,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "Audit and Incidents rolled on UTC while Episodic rolled local",
         "detail": {
           "symptom": "This session wrote `Audit/2026-08-14.jsonl` and `Incidents/2026-08-14.jsonl` alongside `Episodic/2026-08-15.jsonl` for events minutes apart.",
@@ -3066,7 +3066,7 @@
       {
         "n": 251,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the Live voice path had no memory of the operator",
         "detail": {
           "symptom": "\"MYTHOS did not remember previously requested songs\" (`inc-1786745736899-8`), and a week earlier the operator described talking to \"two brains\" — the typed surface knowing things the spoken one did not.",
@@ -3076,7 +3076,7 @@
       {
         "n": 252,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the incident ledger and BUGS.md had no mechanical relationship",
         "detail": {
           "symptom": "Of 30 incidents in the operator's live vault (`Semantic/incidents.md`, 2026-08-07 onward), **2** were cited by id in BUGS.md. Six copies of one voice-node-duplicate loop, whatsapp typing into Chrome Legacy Window, both camera misidentifications and the HUD colour mismatch had no entry at all.",
@@ -3094,7 +3094,7 @@
       {
         "n": 254,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the operator's authored persona had never once reached the model",
         "detail": {
           "symptom": "The operator asked why persona tuning seemed to have no effect, and separately why MYTHOS didn't sound like the character described in `vault/Identity/self.md`. Trait dials read back correctly (`persona_status` answered with all seven values), so the dials looked fine and the question looked subjective.",
@@ -3104,7 +3104,7 @@
       {
         "n": 255,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "think_deeply was reached for ten times in one conversation",
         "detail": {
           "symptom": "\"It felt a lot slower, sometimes doesn't reply at all.\" Two turns logged `live.turn-stalled` at the 10s detector threshold."
@@ -3121,7 +3121,7 @@
       {
         "n": 257,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "151 anonymous socket errors in twelve minutes",
         "detail": {},
         "excerpt": "`sensors.aether.socket_error` logged the bare event name with **no payload**. A real session carried 151 of them, one every ~5 seconds from boot to close, none of which said what failed or where. An aggregator that is merely absent — `ECONNREFUSED`, the common case when `AETHER_ENABLED` is on without the BLE bridge running — was indistinguishable from a wrong URL, a TLS failure, or a port claimed by something else. The reconnect backoff itself is correct (200ms doubling to a 5s cap, which is exactly the observed ~12/minute) and is deliberately unchanged: retrying forever is right for a sensor whose aggregator may come up at any time. What was wrong is that the retry was **mute**. **FIXED 2026-08-15**: the handler now takes its `err` argument and logs `url` plus a truncated `code`. Separately, `AETHER_ENABLED` is set to `false` in the operator's local `.env` (untracked) because the bridge…"
@@ -3129,7 +3129,7 @@
       {
         "n": 258,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "a \"live\" test that only lived on one machine: CI red for three days unnoticed",
         "detail": {},
         "excerpt": "`test/immune.test.js`'s build-engine-reprobe test claimed to run \"a genuine live re-probe, not a mock\" against the real hermes-agent adapter — but nothing pinned what `hermes` meant for that probe. `cliBin()` resolves to `process.env.HERMES_CLI || 'hermes'`, and tests do not load `mythos/.env` (only `src/main.js` does), so the probe's target was whatever the surrounding machine happened to offer: `hermes` on PATH, an exported `HERMES_CLI`, or a running gateway. On the operator's shell one of those was true, so the local pre-commit hook ran green and the suite numbers were committed as `0 fail`. On CI (windows-latest, `npm ci`, no hermes anywhere) and on any fresh clone the probe honestly returned OFFLINE with `spawn hermes ENOENT`, the healer action returned `ok:false`, and the outcome assertion `verifying` failed — **the `ci` workflow's test job has been failing on every push since 2026…"
@@ -3137,7 +3137,7 @@
       {
         "n": 259,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "an unref'd timeout timer that never fires: the SECOND cause of CI red",
         "detail": {},
         "excerpt": "BUG-258 fixed, pushed, and **CI was still red** — which is how the second, independent cause was found. `src/core/conversation/briefing.js`'s `withTimeout()` helper (every boot-greeting fact source is raced against a per-source timeout) created its timer and then called `t.unref()` on it. An unref'd timer does not hold the event loop open, so in a process with nothing else pending the loop drains before the timer fires and the timeout simply never happens. Production never noticed (boot runs amid dozens of live handles), and local Node 24 runs never noticed (that runner's child keeps the loop alive), but CI's **Node 22** test-runner child drains: in `test/briefing-facts.test.js`, the \"stats() hangs past the timeout\" test left a never-settling race, the runner reported *\"Promise resolution is still pending but the event loop has already resolved\"*, failed that test, and cancelled its ~64…"
@@ -3145,7 +3145,7 @@
       {
         "n": 260,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "announced build completions named their artifact \"[object Object]\"",
         "detail": {},
         "excerpt": "**Found by exploration 2026-08-17 (fix-plan Wave 2.1); no operator report — the spoken sentence still made sense enough to pass unnoticed.** The push path of build completion lost the artifact path at the perception seam: `sensors/job.js` emitted `job.artifact` verbatim — an OBJECT (`{path, …}`, the shape `job_status`, `agent-actions` and `from-dashboard` all read as `artifact.path`) — and `conversation/announcer.js`'s `onJobPerception` stringified whatever it found. `String({path:'…'})` is `\"[object Object]\"`, so the announcer's artifact name, the spoken sentence AND the `brain.think`-composed model-visible prompt all carried the garbage. The pull path (`job_status`) was always correct — the two surfaces disagreed. **FIXED 2026-08-17, both halves.** The sensor now emits the PATH STRING (`(job.artifact && job.artifact.path) || null`), and the announcer accepts object-or-string defensivel…"
@@ -3153,7 +3153,7 @@
       {
         "n": 261,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "open_folder's window oracle was a single coin-flip check, and \"pc-child not running\" was indistinguishable from \"no window\"",
         "detail": {},
         "excerpt": "**Found by exploration 2026-08-17 (fix-plan Wave 2.2).** Two defects in the WAVE 6 oracle: 1. `open_folder` waited a fixed 700ms and checked `findExplorerWindow` exactly once. On a busy machine Explorer routinely takes longer to create and title its window, so real successes came back **unverified** — the exact false-negative the evidence contract exists to prevent, on the tool's happy path. 2. The title match was exact-only (case-insensitive). Special/localized folders whose Explorer window title carries more than the bare leaf never matched, same false-unverified. 3. `findExplorerWindow` returned null both when pc-child was offline and when no window matched, and the unverified reason mentioned both causes in one breath — the model could not tell \"retry, the checker is down\" from \"the folder is already open elsewhere\". **FIXED 2026-08-17, both files.** `from-pc.js`'s `findExplorerWindo…"
@@ -3161,7 +3161,7 @@
       {
         "n": 262,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "episodic→semantic distillation could never run: two dead gates, and every skip was silent",
         "detail": {},
         "excerpt": "**Found by the 2026-08-17 fix-plan exploration (Wave 3.1); root in the same perception gate BUGS.md's Phase 4 note proved blocked `mull()`.** Long-term memory distillation had two structural dead-ends and zero observability: 1. **The idle gate never opened.** `cortex/index.js` tested `perceptions.length === 0`, but `sensors/timer.js` pushes a `perception.tick` heartbeat (kind:'timer') every tick, so the branch — and the consolidate inside it — was unreachable in real operation (live boots measured 45/45 and 65/65 ticks, never 0 perceptions). 2. **The active branch's consolidate sat below `if (!decision) return;`.** `decide()` returns null whenever no goal arbitrates out, which is the NORMAL state of a purely conversational session — exactly the sessions that produce the episodic entries worth distilling. 3. **Every skip was silent.** The distillation step's skips (no brain, empty tail, n…"
@@ -3169,7 +3169,7 @@
       {
         "n": 263,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "ui_type's fields-absent fallback asserted \"text went elsewhere\" on a bare pid mismatch",
         "detail": {},
         "excerpt": "**The remaining half of the 2026-08-09/10 WhatsApp window-targeting class (BUG-253 row `inc-1786317422916-1`).** The 2026-08-10 fix introduced PS's `typedIntoSameApp` verdict so a WebView2 child pid (WhatsApp's msedgewebview2 receiving the keys while `WhatsApp.Root.exe` owns the window) would not be refused as a wrong window — but only for the fields-PRESENT case. When `typedIntoSameApp` is ABSENT (an older ps-automation adapter, or the Test-SameApp lookup failing), the code fell back to strict pid equality and FAILED with \"Typed into the wrong window: the text went to …\" — a claim of knowledge it did not have. The 2026-08-09 audit's two refused sends were exactly this shape: right window, message actually typed, refused as having gone elsewhere. **FIXED 2026-08-17 (fix-plan 3.2).** The branch is now split on the one app-identity signal the payload carries, the landed TITLE: `typedIntoSa…"
@@ -3177,7 +3177,7 @@
       {
         "n": 264,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "open_web had no honest in-tool route to the real browser",
         "detail": {},
         "excerpt": "**BUG-253 rows `inc-1786236109564-1`/`inc-1786236365947-3` (08-09), the widget-vs-browser half.** The operator asked for a browser window; open_web rendered a dashboard widget. Nothing was \"broken\" — open_web is a widget renderer by design, and the 2026-08-09 remedy taught the model that with ever-stronger refusal text — but the only honest path it named was `browser_navigate`, a different surface needing an attached debug browser, while the operator's actual intent (\"open this site in my browser\") had NO route through the tool the model keeps reaching for. Tool-selection semantics with a dead end. **FIXED 2026-08-17 (fix-plan 3.3).** `open_web` now takes `browser:true`: with a url (or a query that IS one, normalized to https) it routes through the SAME `newtab` mechanism the frame-blocking domains already use, so the client's newtab branch opens the real browser window — no new client m…"
@@ -3185,7 +3185,7 @@
       {
         "n": 265,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the voice-node-duplicate-identify anomaly re-alarmed on every reconnect bounce",
         "detail": {},
         "excerpt": "**BUG-253's largest untracked cluster: six reports of one loop in ~30 minutes (08-08), each narrated by the immune explainer as a fresh unexplained fault.** The identify handler emitted `health.anomaly 'voice-node-duplicate-identify'` on EVERY duplicate claim with no damping — and since one phone on a flaky network bounces exactly like two misconfigured devices (the server genuinely cannot tell them apart, per the payload's own reason text), a single reconnect storm produced an anomaly storm, each one invoking the expensive no-match explainer path. **FIXED 2026-08-17 (fix-plan 3.4), server side.** The emission is damped to one per nodeId per 60s (`VOICE_NODE_DUP_ANOMALY_MIN_INTERVAL_MS`, same TTL-map shape as the healer's suppressedTools/BUG-013); bounces inside the window increment a per-node suppressed counter that rides the NEXT emitted anomaly as `detail.suppressedCount`, so the stor…"
@@ -3217,7 +3217,7 @@
       {
         "n": 269,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "the global press-to-talk hotkey is intermittent",
         "detail": {},
         "excerpt": "**FIXED IN CODE 2026-08-17 (`9b98bc3`) — live re-verification pending (the 20-press check in the v0.1.10 Part B sitting). Operator-reported 2026-08-17, same sitting.** Three independent defects were found and fixed, each of which alone produces the reported symptom: (1) the lost-IPC race — `registerTalkHotkey()` ran before the renderer's `onHotkey` listener existed and Electron does not queue IPC for unregistered listeners, so a press in that window was lost forever; now a `mythos:renderer-ready` signal plus a single-press latch (`electron/hotkey-latch.js`) that flushes exactly once and re-arms on reload. (2) Toggle re-entrancy — `toggleVoice()` was async but invoked un-awaited, so two presses during mic acquisition interleaved; now an in-flight guard (`voice/toggle-guard.js`) that drops concurrent presses rather than queueing them. (3) Structural lag — the visible `arming` state now set…"
@@ -3225,7 +3225,7 @@
       {
         "n": 270,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "first live voice session: utterances split mid-thought, and missed speech left zero evidence",
         "detail": {},
         "excerpt": "**FIXED IN CODE 2026-08-17 — live re-verification pending (re-run the voice checks of the v0.1.10 Part B sitting). Operator-reported 2026-08-17, the first real voice conversation on the batch path.** **CORRECTION 2026-08-17 (see BUG-271):** this fix is VALID — but it touched the batch path, and the operator's machine runs the **Gemini Live path** (`VOICE_S2S_ENABLED`). That is why nothing changed after this shipped: the reported symptoms were produced by the Live path, which this entry never touched. The revert and the loud clip-drops stand for the batch path; BUG-271 is the Live-path diagnosis and fix. **Observed, verbatim:** \"I spoke to it, had a conversation… It is very glitchy. It interrupts and it's breaking in between all sorts of things. I did a microphone test as well. It's not picking up words from the noise. The microphone is fine because I have been using this microphone since…"
@@ -3233,7 +3233,7 @@
       {
         "n": 271,
         "shape": "entry",
-        "state": "unrecorded",
+        "state": "fixed",
         "title": "first Gemini Live voice session: a self-interrupting echo loop, phantom words from noise, and the evidence that was computed then thrown away",
         "detail": {},
         "excerpt": "**FIXED IN CODE 2026-08-17 (`d3d6226`, `bb10623`, `952580e`, plus this entry's commit) — live re-verification pending (the acoustic re-test in the noisy room; see Re-verification below). This is the Live-path diagnosis of the symptoms BUG-270 fixed on the wrong path.** **Three defects, all on the Gemini Live path (`VOICE_S2S_ENABLED`), which the operator's machine runs.** The batch path (`voice-loop.js`) has carried defences against each of these for years; the Live path (`s2s-bridge.js` → `live-session.js`) never got them. That is the whole live-vs-batch distinction, and it is why BUG-270's valid fix changed nothing here (see the correction note on that entry). **(1) The echo loop — MYTHOS interrupting itself.** The speakers replay MYTHOS's reply into the mic; Gemini's server-side VAD is configured `START_SENSITIVITY_HIGH` (deliberately, for fast speech onset) and fires on it; the trans…"
@@ -3862,18 +3862,26 @@
         "title": "the barge-in floor learned the OPERATOR'S voice and called it the room, and a verifier turned that into a verdict on the echo canceller",
         "detail": {},
         "excerpt": "**Status:** ✅ FIXED 2026-08-28. Closure-campaign **Track E**, and the part of it that never needed a microphone. 10 assertions, 10 mutations all caught. **Track E was written up as \"eight nodes needing a live microphone\".** That framing is what kept this closed: the whole voice cluster was treated as unreachable from a session, so nobody read the number the cluster is reasoned from. It is wrong, and it is wrong in a way that is provable from a log file and a deterministic unit test. ### The defect `barge-in-policy.js` keeps `bleedPeak`, documented as *\"loudest level seen while MYTHOS was provably speaking\"*. It is learned inside the 500 ms **protected window** that opens when the assistant starts talking, on this stated reasoning: > the assistant's own onset is by construction the loudest thing present That sentence was written as reasoning and never checked, and it is false. MYTHOS's vo…"
+      },
+      {
+        "n": 389,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the ticket register called 133 entries \"unrecorded\" while 96 of them stated a status it never looked for",
+        "detail": {},
+        "excerpt": "**Status:** ✅ FIXED 2026-08-28. 1 source file changed, 1 test file added (17 assertions), 10 mutations run and all 10 caught, source restored sha256-identical. **133 unrecorded → 36, with zero entries that already had a status changing state.** ### The defect `build-index.js` printed this on every run, and `index.html` published it: ``` build-index: 133 entries state no status a machine can read. ``` Its own header explained why: *\"only about a quarter state a status in a form a machine can read. The rest are a heading and prose.\"* **That sentence was measured against the reader, not against `BUGS.md`, and it is false.** Of the 133: | | count | |---|---| | opens with a **bold marker line** — `**FIXED.**`, `**Fixed** by \\\u003csha\\> | **88** | | has an ordinary `**Status:**` line the regexes missed | **8** | | genuinely states nothing | **36** | | pointer-only stubs with no entry | **4** | The…"
       }
     ],
     "counts": {
-      "verified": 32,
-      "fixed": 56,
-      "open": 10,
-      "coded": 4,
-      "diagnosed": 1,
-      "duplicate": 1,
-      "unrecorded": 133
+      "verified": 44,
+      "fixed": 135,
+      "open": 11,
+      "coded": 8,
+      "diagnosed": 2,
+      "duplicate": 2,
+      "unrecorded": 36
     },
-    "total": 237,
+    "total": 238,
     "openDeclared": [
       344,
       346,

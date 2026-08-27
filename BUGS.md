@@ -41,6 +41,103 @@ it is committed.
 
 ---
 
+## BUG-389 — the ticket register called 133 entries "unrecorded" while 96 of them stated a status it never looked for (✅ FIXED 2026-08-28, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-28. 1 source file changed, 1 test file added (17
+assertions), 10 mutations run and all 10 caught, source restored sha256-identical.
+**133 unrecorded → 36, with zero entries that already had a status changing state.**
+
+### The defect
+
+`build-index.js` printed this on every run, and `index.html` published it:
+
+```
+build-index: 133 entries state no status a machine can read.
+```
+
+Its own header explained why: *"only about a quarter state a status in a form a
+machine can read. The rest are a heading and prose."* **That sentence was measured
+against the reader, not against `BUGS.md`, and it is false.** Of the 133:
+
+| | count |
+|---|---|
+| opens with a **bold marker line** — `**FIXED.**`, `**Fixed** by \<sha\> | **88** |
+| has an ordinary `**Status:**` line the regexes missed | **8** |
+| genuinely states nothing | **36** |
+| pointer-only stubs with no entry | **4** |
+
+The bold marker line is simply the convention `BUGS.md` used **before**
+`**Status:**` existed. Nothing ever looked for it. Three narrower faults sat
+alongside it, all of the same shape — a reader that checks one place and reports
+on all of them:
+
+- **`**Status:**` required its marker to be adjacent to the colon.** BUG-011 reads
+  `**Status:** Fix 2 (param aliasing) ✅ VERIFIED · Fix 1 ✅ LIVE-VERIFIED` — three
+  separately verified fixes — and was read as no status at all.
+- **`VERIFIED` was not in the fixed family.** Only `FIXED`/`RESOLVED` were, so an
+  entry whose author wrote the stronger word scored lower than one who wrote the
+  weaker one.
+- **The `coded` and `diagnosed` checks read only the HEADING while `fixed` read
+  the heading AND the status line.** BUG-020's `**Status:** 🔧 CODED` was invisible
+  purely because of that asymmetry.
+
+### Why the fix is reading and not guessing
+
+The refusal-to-guess rule is untouched, and it is what keeps this safe: **an entry
+that states nothing is still `unrecorded`**, and 36 of them still are.
+
+Deriving a status from anything other than the author's own words was measured and
+rejected. 75 of the no-status entries have a commit naming them — but **BUG-051's
+only commit is `docs(bugs): file BUG-051..BUG-058`**, the commit that FILED it, and
+**BUG-059's matches name other bugs in their subject** and mention 059 only in the
+body. A commit-derived status would have closed bugs nobody had fixed. Tightening
+to *fix-type commit, id in the subject, shipped on main* still leaves BUG-273,
+which has exactly that and whose successor BUG-278 exists because the fix
+*"shipped, passed its tests, and never ran"*. **Shipping is not fixing**, and no
+amount of git archaeology turns one into the other.
+
+### The dangerous half was the recovery's side effect
+
+**Three entries that were already classified CORRECTLY flipped during
+development**, and they are the reason this landed with a precedence rule rather
+than a wider search:
+
+| entry | its own status | what a body-wide marker scan did |
+|---|---|---|
+| BUG-037 | `**Status:** ⚠️ MITIGATED` | → open |
+| BUG-038 | `**Status:** ✅ FIXED` | → open |
+| BUG-367 | `**Status:** ✅ FIXED` | → open |
+
+All three carry a later `**Not fixed in this pass:**` subsection — a scoped note
+about **part** of the work, not the ticket's disposition. A fourth, BUG-001
+(`✅ CLOSED via BUG-026's fix … live-verified working`), read as a *duplicate* the
+moment the duplicate window was widened from 40 characters to 300, because the
+word appears far later on the line.
+
+**So: one status source per entry, chosen deterministically. An explicit
+`**Status:**` line always wins; a bold marker line is consulted only when there is
+no `**Status:**` at all.** The negative marker is matched against an explicit verb
+list (`NOT done|fixed|attempted|started|implemented`) so that BUG-098's
+`**NOT done, and not attempted:**` reads OPEN while BUG-049's `**Not
+unit-testable.**` — which is not a status — stays unrecorded.
+
+### Scope
+
+- **`\bFIXED\b` appears somewhere in 100 of the 121 no-status entries**, including
+  sentences about other tickets' fixes and about things that were explicitly not
+  fixed. Every marker pattern is therefore anchored to the start of a line and to
+  `**`. A free-text search would have closed bugs on the strength of a
+  cross-reference.
+- **36 entries remain unrecorded and that is the correct answer for them.** They
+  need a human or a verification run, not a cleverer regex.
+- The `OPEN WORK` register still outranks everything, including an entry's own
+  `**FIXED**` marker. Pinned by a test.
+- No new state was invented. `SUPERSEDED` maps to the existing `duplicate` (it
+  points at another entry) and `MITIGATED` to `fixed`, rather than growing the
+  register's shape for two rows.
+
+---
+
 ## BUG-388 — the barge-in floor learned the OPERATOR'S voice and called it the room, and a verifier turned that into a verdict on the echo canceller (✅ FIXED 2026-08-28, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-28. Closure-campaign **Track E**, and the part of it
