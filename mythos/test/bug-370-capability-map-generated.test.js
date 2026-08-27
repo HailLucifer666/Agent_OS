@@ -107,12 +107,41 @@ describe('A2 — the live vault is absent here, and the map must say so rather t
     untriaged: { value: 34, label: 'untriaged incidents', tone: 'fail', measuredAt: '2026-08-26' },
   };
 
-  test('an unreachable vault preserves the last reading and flags it stale', () => {
+  test('an unreachable vault preserves the last reading VERBATIM', () => {
+    // BUG-376. This used to assert that the entry gained `stale: true`, which
+    // looked honest and was a live defect. Once a vault-reachable machine wrote
+    // a fresh reading, every other checkout wanted to add the flag back, so
+    // `--check` exited 1 with zero real problems — the pre-commit hook was
+    // broken for CI, every worktree and every fresh clone. It hid for a day
+    // because it only appears AFTER a machine with the vault has written;
+    // before that, the committed island already carried the flag and the two
+    // agreed.
+    //
+    // A machine that cannot measure does not get to rewrite the field, not even
+    // to annotate it. The value and its `measuredAt` stamp are the honest
+    // signal on their own.
     const v = build.buildVitals(previous, facts({ reachable: false, reason: 'not here' }), { today: '2026-02-02' });
-    assert.strictEqual(v.untriaged.value, 34, 'the last real reading is kept');
-    assert.strictEqual(v.untriaged.measuredAt, '2026-08-26', 'with the stamp it was read at, not today');
-    assert.strictEqual(v.untriaged.stale, true);
-    assert.strictEqual(v.untriaged.staleReason, 'not here');
+    assert.deepStrictEqual(v.untriaged, previous.untriaged,
+      'the preserved entry must be byte-identical to what was committed — any added field '
+      + 'makes every vault-less checkout disagree with the island and fail the gate');
+    assert.strictEqual(v.untriaged.measuredAt, '2026-08-26', 'the stamp it was read at, not today');
+  });
+
+  test('a vault-less checkout does not report the island stale', () => {
+    // The defect itself, at the level a human hits it: a fresh reading written
+    // by a machine WITH the vault must round-trip unchanged through a machine
+    // WITHOUT it. If this fails, `git commit` is blocked everywhere except the
+    // operator's desktop.
+    const fresh = {
+      untriaged: {
+        value: 0, label: 'untriaged incidents', tone: 'ok',
+        source: 'live vault incident ledger', measuredAt: '2026-08-27', stale: false,
+      },
+    };
+    const v = build.buildVitals(fresh, facts({ reachable: false, reason: 'no vault here' }), { today: '2026-08-28' });
+    assert.deepStrictEqual(v.untriaged, fresh.untriaged);
+    assert.deepStrictEqual(build.checkVitals({ vitals: v }, v), [],
+      'and the comparison must find nothing to report');
   });
 
   test('an unreachable vault with no previous reading renders "?" and never 0', () => {

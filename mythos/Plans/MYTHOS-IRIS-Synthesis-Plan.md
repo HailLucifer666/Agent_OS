@@ -4915,41 +4915,187 @@ any number of sought ones.
   CI says nothing about the code. The local full suite plus the pre-commit hook
   is the merge gate until O6 is done.
 
+## TRACK D WORK ORDER — 25 nodes closable with no operator, no vault, no spend
+
+Derived 2026-08-27 from the map's own data island, not from counting by eye.
+Full per-node detail, including the other five tracks, is in the closure ledger:
+https://claude.ai/code/artifact/253e0658-8e0b-4448-992f-9c8b7b3e3586
+
+**Ordered so shared root causes are fixed once.** The groups are the point; the
+order inside a group is not. Four groups close 13 of the 25 nodes between them.
+
+### D-1. The error-shape class — 3 nodes, and the only one that is urgent
+
+`run_command` (0/1) failed with its reason rendered as the literal string
+`[object Object]`. **Nobody knows why it failed**, because the shape ate the
+reason before anyone could read it. `list_folder` (0/2) is the same defect.
+`spotify_search` (0/2) is probably the same dispatch shape — the other five
+Spotify verbs are green, so it is not a Spotify problem.
+
+There is a known-good pattern already in the tree: `reasonText()` in
+`from-whatsapp.js`, and the normalisation in `adapter.js` from the earlier
+"{ok:false,error} surfaced as a bare Failed" fix.
+
+**This is the third instance of this class and the first two were hand-patched.**
+Ship the class assertion, not a third instance: a test that walks EVERY
+registered effector, forces a failure, and asserts the reason renders as a
+string a human can act on. Then read what the three failures actually say and
+fix those — they have never been visible.
+
+### D-2. One terminal condition — 2 nodes
+
+`Aether mesh` (fail) and `immune system` (warn) are one defect seen twice. A
+healer playbook retried an unbindable port every few minutes for hours. Three
+parts: surface that `config.json` silently overrides `AETHER_ENABLED=false` in
+`.env` at boot; give the rebind playbook a terminal condition (N attempts ->
+OFFLINE with a spoken reason); ship a diagnostic that names the squatting pid.
+Oracle: boot with an orphaned listener on the port, get exactly N attempts and
+one honest anomaly, not a loop.
+
+### D-3. Dead provider lanes — 3 nodes
+
+`brain lanes`, `screen_look` (49/11) and `TTS chain`. Cerebras returns 402 and
+the Gemini free tier caps at 10/day, and both are still ranked, so every call
+pays their timeout. Measured precedent: 8s per look burned on a dead provider
+while a live one answered in 1.8s. De-rank on probe evidence and add a
+per-attempt timeout matching the chain cooldown. Under the no-spend decision
+these close as green-with-caveat once the dead time is gone — the caveat is
+quota, and it must be named.
+
+### D-4. YouTube id extraction — 2 nodes
+
+`open_web (widget)` (131/19) and `YouTube embed` share one cause. Also
+normalise the twelve distinct failure strings into typed reasons: twelve ways
+of saying no is twelve things a caller cannot branch on.
+
+### D-5. Never exercised, needs a harness not a fix — 5 nodes
+
+`documents` (needs a seed corpus — use `mythos/docs/` and the Plans, real and
+always present), `code search` (index this repo; **known trap: an earlier index
+run put 94% of its budget into `.venv` and indexed none of MYTHOS's own source
+while reporting success**), `generators` (verify the artifact is real — PDF
+magic bytes, xlsx unzips; image gen needs a keyed lane, and with none free that
+one is a disposition not a green), `MCP bridge` (exercise tools/list and
+tools/call over stdio; record the no-goalId/no-T3 path as correct security
+posture, not a gap), `file ops` (8 tools, one temp sandbox).
+
+### D-6. Singles — 10 nodes
+
+| node | what it needs |
+|---|---|
+| `hand-off to browser` | the feature works; add the read-back confirmation, and say it landed in the OS default rather than the browser that was named |
+| `browser automation` | wire the EXISTING `browser_launch_debug` (15/1) to auto-launch on first need. Do not build a launcher |
+| `whatsapp_contacts` (28/0) | normalise case/diacritics/spacing, suggest top candidate with confirm. NEVER auto-send to a fuzzy match |
+| `reminders` (49/2) | sub-minute phrasing; same parser family as `timer_add`, likely closes with it |
+| `use_skill` (5/2) | check the search path covers the skills people name; if they are genuinely absent the message is already honest and this is a disposition |
+| `build_project` (5/0) | never failed — the last two runs failed ACCEPTANCE. Check the verifier rules before calling the builder wrong |
+| `cua-driver` | intermittent startup race, undiagnosed. Add a first-line ready handshake with a timestamp; **sample >=5 boots before touching the timeout — one run is not a mechanism** |
+| `rejected clients` | 147 identical lines that never name the client. Add a fingerprint, then hunt it; a stale token on the phone node is the leading suspect |
+| `ui_click` (5/5) | needs a MEASURED run against a fixed target script, not a code change. The ladder went 2 rungs to 5 on 08-20 and 10 calls is too small to mean anything |
+| `fabrication` (BUG-275) | extend `claim-check.js` so claims about external facts made AFTER a tool failure are flagged for retraction. **Scope honestly: this reduces fabrication, it does not eliminate it**, and the disposition records the measured catch rate over >=3 samples |
+
+**Not in Track D, deliberately.** Track A is three operator minutes (O1
+google-auth, the OCR hotkey keypress). Track B is six nodes whose LABEL is
+stale rather than whose capability is broken — verification, not engineering.
+Track C is three dispositions (CAPTCHA refusal, focus_window's exhausted
+ladder, video call having no tool). Track E is eight nodes needing a live
+microphone. Track F is the 18 never-measured nodes and wants one harness.
+Picking those up here will produce work that cannot be finished.
+
+---
+
 ## RESUME HERE
 
-**Position:** Wave A is **complete**. Six ledger items closed plus two defects
-found while closing them (BUG-367 the attach contract, BUG-369 the frozen
-README badge). Branch `fix/a2-capability-map`, cut fresh from `ee69497` after
-PR #28 merged. Still working in the worktree at `.claude/worktrees/closure-wave-a`
-because a second session is live in the main checkout.
+**Position:** Wave A is complete and merged. The instruments are honest; no map
+node has turned green yet, and that was the point. **Track D is the next work,
+and it is the first track that changes a capability rather than a gauge.**
 
-**What Wave A actually bought.** Not one map node turned green, and that is the
-correct outcome: Wave A was about making the instruments honest before using
-them to declare anything. The instruments now say, and can no longer stop
-saying: 179 registered tools, 115 reachable by voice, 64 withheld, 91 nodes,
-28 ok · 25 warn · 13 fail · 7 dark · 18 not-yet-measured, 34 untriaged
-incidents last read 2026-08-26.
+**Start state, verified 2026-08-27:**
 
-**Next action:** A3, the incident drain — 34 untriaged to zero by human
-judgement, the writer loop deliberately dropped (see the correction above).
-**It cannot be done from this worktree**: `resolveVaultRoot()` here falls back
-to the stale in-repo twin and reports zero incidents, which is precisely the
-false-green A2 was built to refuse. Run it in the main checkout with
-`MYTHOS_VAULT_ROOT` pointed at the live vault, or not at all.
+```
+main                       744aecf   (zero open PRs)
+suite                      6520 tests / 6520 pass / 0 fail / 0 skipped
+registry ratchet           130 / 130
+build-capability-map       --check clean
+map                        91 nodes: 28 ok / 25 warn / 13 fail / 7 dark / 18 unknown
+next free BUG number       376
+```
 
-The same constraint binds **D1** (`verify-withheld.js`): a worktree links only
-six gitignored paths and `mythos/.venv` is a symlink here, which both file
-walkers skip because `Dirent.isDirectory()` is false for a symlink. D1 must run
-in the main checkout or refuse to run at all.
+**First action:** branch fresh from `744aecf` and take **D-1, the error-shape
+class** (above). It is the only item in Track D where the failures are
+currently invisible, so it is the only one where you cannot even read the bug
+until the fix lands. Everything else in Track D can be picked up in any order.
 
-**Blocking:** nothing in code. Two things are waiting on the operator: **O1**
-(`node mythos/scripts/google-auth.js`, five minutes, unblocks B8 and the whole
-gmail node) and **O6** (GitHub Actions billing — every check still fails before
-a job starts, so red CI on this repository says nothing about the code and the
-local suite plus the pre-commit hook remain the only real gate).
+### Five things that will cost you an hour each if nobody tells you
 
-**Suite at the time of writing:** 6441 tests, 6441 pass, 0 fail, 0 skipped.
-Numbers here are indicative only — `node scripts/sync-test-count.js --check` is
-the authority, and `node scripts/build-capability-map.js --check` is now the
-authority for the map. Neither number is hand-typed anywhere, including here:
-this line is prose and will go stale, which is why both commands exist.
+**1. The pre-commit hook runs FOUR gates, and one is new.** Full suite,
+`sync-test-count --check`, `lint-bug-registry`, and `build-capability-map
+--check`. **Add or remove a registered tool and your commit is blocked until
+that tool is mapped to a node on the capability map.** One line in the island
+plus `--write`; the hook message says so.
+
+**2. Ordering: `sync-test-count --write` must run BEFORE
+`build-capability-map --write`.** The map reads the suite figures out of
+ROADMAP.md's SYNC block. Reverse them and the hook blocks you on a map that is
+one number behind.
+
+**3. Run the suite with the overrides or it lies to you.** Long-form `TEMP` and
+`TMP` (an 8.3 short path makes spawned servers abort with a libuv assertion and
+report only ECONNREFUSED), plus free ports from
+`node scripts/pick-free-ports.js`. Without them a clean tree measures
+`fail=1 skipped=1`, and `sync-test-count --check` will then recommend writing
+that red result in as the baseline. **Do not follow that recommendation.**
+
+**4. Commit with `git commit -- <pathspec>`, then demand an empty
+`git status --porcelain`.** Both halves, neither sufficient. Pathspec stops a
+stale index from shipping content the gates never tested; the porcelain check
+stops a file dirty on disk but outside the pathspec from being tested and then
+left out, which makes the green run describe a tree absent from history. Both
+happened on 2026-08-27.
+
+**5. `--next` is an observation, not a lock.** It reads refs and the working
+tree at the instant asked, and it is correct — but two sessions were handed the
+same number inside one minute, because the window is between ASKING and
+WRITING. Write the BUGS.md entry early. Earlier commit wins a collision, and
+renumber by `git reset --soft HEAD~1` rather than `--amend`: the hook runs
+while HEAD is still the old commit, so an amend that removes a citation is
+blocked by the citation it is removing.
+
+### Standing constraints
+
+- **Two machines and sometimes two sessions share this repo.** Branch, PR,
+  never push to main. If another session is live in the main checkout, take a
+  worktree — that removes the shared index rather than managing it.
+- **A worktree tests LESS than the main checkout and does not say so.** Six
+  gitignored paths are linked by `setup-worktree.js`; `mythos/.venv` is a
+  symlink there and both file walkers skip it, because `Dirent.isDirectory()`
+  is false for a symlink. Anything that walks the tree, or reads the live vault,
+  must run in the main checkout or refuse.
+- **CI is billing-blocked (O6).** Every check fails before a job starts, with
+  `steps=0` in one to four seconds. Red CI here says nothing about the code;
+  the local suite plus the hook is the only real gate. Verify `steps=0` on the
+  specific head before merging past red, rather than assuming.
+
+### What "closed" means, per node
+
+Verified live against the running system or a real oracle, never "the tests
+pass" alone · a regression test shown failing first and mutation-proven after,
+with the mutation confirmed to have APPLIED · counts and literal commands in
+the BUGS.md entry and the commit body · the map row regenerated by
+`build-capability-map.js`, never hand-edited. **Or** a recorded disposition: a
+code comment saying why, a test locking the behaviour in, and a map row reading
+"by design".
+
+**Blocking nothing in Track D.** Waiting on the operator, and worth one nudge
+at the start of the session rather than at the end: **O1** (`node
+mythos/scripts/google-auth.js`, five minutes, turns two nodes green) and **O6**
+(Actions billing). Three decisions are also open and are the operator's, not a
+session's: BUG-348 (`media_status` reads one SMTC session and never asks
+whether it is the one making sound), whether to install the kokoro TTS model or
+drop it from the default chain, and the audit plan's step 6, which boots MYTHOS
+and types into live windows.
+
+**Numbers in this block are prose and will go stale.** The authorities are
+`node scripts/sync-test-count.js --check`, `node scripts/lint-bug-registry.js`
+and `node scripts/build-capability-map.js --check`. Trust their output over any
+sentence here, including this one.

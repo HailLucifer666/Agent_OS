@@ -209,7 +209,22 @@ function buildVitals(previous, facts, deps = {}) {
       source: 'live vault incident ledger', measuredAt: today(deps), stale: false,
     };
   } else if (prev.untriaged) {
-    vitals.untriaged = { ...prev.untriaged, stale: true, staleReason: vault.reason };
+    // PRESERVED VERBATIM. A machine that cannot measure does not get to rewrite
+    // this field — not even to add a flag.
+    //
+    // The first version stamped `stale: true` here, which looked honest and was
+    // a live defect: after a vault-reachable machine wrote a fresh reading, every
+    // OTHER checkout wanted to add the flag back, so `--check` exited 1 with zero
+    // real problems and the pre-commit hook was broken for CI, every worktree and
+    // every fresh clone. It went unnoticed for a day because it only appears once
+    // a machine WITH the vault has written; before that the committed island
+    // already carried the flag and the two agreed.
+    //
+    // Passing the entry through untouched removes the whole class: the value and
+    // its `measuredAt` stamp are the honest signal on their own, the reader can
+    // see how old the reading is, and no checkout can downgrade another's
+    // measurement. The `--check` diff then has nothing to disagree about.
+    vitals.untriaged = { ...prev.untriaged };
   } else {
     vitals.untriaged = {
       value: '?', label: 'untriaged incidents', tone: '',
