@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6533,
+      "value": 6562,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -493,8 +493,8 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Detects anomalies and applies playbooks. One playbook looped on a port it can never bind.",
-      "ev": "healer aether-proxy-rebind -> bind-failed-again, repeated every few minutes:\nlisten EADDRINUSE 127.0.0.1:4480"
+      "note": "Detects anomalies and applies playbooks. No playbook ever looped -- the common historical outcome was no-match, which is a different problem.",
+      "ev": "EVIDENCE CORRECTED 2026-08-27 (BUG-379). The old line claimed aether-proxy-rebind repeated \"every few minutes\". Measured across the whole vault, the healer's outcomes for this anomaly kind are: no-match 63, error 1. The playbook ran ONCE, on 2026-08-26; the other 63 events predate its existence (added 2026-08-13, Wave 7) and so had no remediation at all. That no-match path is the expensive one -- immune/healer.js's own F8 note records it invoking the explainer's brain call plus a 7-day episodic scan -- which is why B3 added no-match storm damping. Still WARN, honestly: the subsystem works, but its most common recorded outcome for a real recurring anomaly was \"nothing to do\", and the rebind playbook still declares no verifyMs, so it can never emit heal-failed. BUG-379 gave that playbook a 3-attempt terminal condition as a guard against a future repeating source."
     },
     {
       "c": "cog",
@@ -1315,8 +1315,8 @@
       "s": "fail",
       "tools": [],
       "kind": "subsystem",
-      "note": "The proxy cannot bind its port and the healer retried it in a loop. The .env says it is disabled; the running app started it anyway.",
-      "ev": "\"Aether scanner-proxy could not bind 127.0.0.1:4480 for node phone: listen EADDRINUSE\"  repeated for hours\nmythos/.env says AETHER_ENABLED=false -- config.json overrides it."
+      "note": "The proxy could not bind its port. NOT a loop and NOT a config override -- both of those were wrong. The failure is now diagnosable; closing it needs one live boot.",
+      "ev": "EVIDENCE REWRITTEN 2026-08-27 (BUG-379); the previous two sentences were both false. (1) \"the healer retried it in a loop\" -- it did not: the playbook ran ONCE ever (2026-08-26), 63 of the 65 events reached the healer as no-match because aether-proxy-rebind did not exist until 2026-08-13, and the work order's own oracle (real orphaned listener, real bus/diagnostician/healer, 38s against a 15s cooldown) measured 1 anomaly + 1 attempt, no loop. The anomaly comes from a whenReady().then() rejection arm, which runs once per process -- the 65 records were 65 PROCESSES. (2) \".env says AETHER_ENABLED=false, config.json overrides it\" -- no config.json exists on any path that would be read; mythos/.env:347 sets AETHER_PROXY_ENABLED=true deliberately under its own Voice Nodes heading, and AETHER_ENABLED (line 337) gates a different subsystem entirely (main.js:1213). What WAS broken: nothing named the process holding the port, and `target` could never name the port either because ports() returns an object and main.js tested `.length` on it -- an unreachable branch whose .join() would have thrown inside the error handler. Both fixed. Port 4480 is free as of 2026-08-27, so the collision itself may be historical. STAYS RED because nothing here makes the proxy bind when another process holds the port -- that is correct behaviour -- and no live boot has yet heard the new sentence."
     },
     {
       "c": "dev",
@@ -3666,10 +3666,21 @@
           "fix": "`mythos/scripts/build-capability-map.js`. A machine that cannot measure does not get to rewrite the field — not even to annotate it. The preserved entry passes through",
           "verification": "``` before: build-capability-map --check -> exit 1 from a vault-less worktree after : build-capability-map --check -> exit 0, \"the map matches the code. OK.\" node --test test/bug-370-capability-map-generated.test.js 20 tests, 20 pass, 0 fail mutation: re-adding `stale: true` -> caught by both new assertions by name; script restored sha256-identical ``` ---"
         }
+      },
+      {
+        "n": 379,
+        "shape": "entry",
+        "state": "verified",
+        "title": "65 bind failures named the port three times and the squatter zero times, and the retry loop the work order described did not exist",
+        "detail": {
+          "symptom": "Between",
+          "fix": "Two new focused modules plus three edits: -",
+          "verification": "``` node --test test/bug-379-aether-bind-names-the-holder.test.js before the fix (stub reproducing today's behaviour): 15 tests, 3 pass, 12 fail after the fix : 29 tests, 29 pass, 0 fail node --test test/bug-379-... test/aether-proxy-rebind-playbook.test.js test/file-size-ratchet.test.js 36 tests, 36 pass, 0 fail (includes the existing test my first draft broke) live oracle, the squatter being THIS process so the expected pid is exact: findPortHolder(port).pid === process.pid -> pass heal detail contains \"held by pid \u003cprocess.pid>\" -> pass 4th attempt -> terminal:true, \"...stays OFFLINE...\" -> pass and it stays terminal on the 5th -> pass file-size ratchet: main.js 1369 (ceiling 1373), healer.js 875 (ceiling 876) mutations: 17 run across port-holder.js, aether-rebind.js and bind-failure.js, 17 caught, all three restored sha256-identical. Four survived a first pass and each was a real hol…"
+        }
       }
     ],
     "counts": {
-      "verified": 26,
+      "verified": 27,
       "fixed": 54,
       "open": 10,
       "coded": 1,
@@ -3677,7 +3688,7 @@
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 226,
+    "total": 227,
     "openDeclared": [
       344,
       346,

@@ -37,6 +37,9 @@ const PROVIDER_ROTATE_VERIFY_MS = 60000;
 // expressed as a TTL, so the existing restoreTimer needs no special case.
 const TERMINAL_SUPPRESS_MS = 24 * 60 * 60 * 1000;
 
+// BUG-379: the aether rebind action, with its retry budget and terminal condition.
+const { createAetherRebindAction } = require('./aether-rebind');
+
 const SEED_PLAYBOOKS = [
   {
     // The id is load-bearing in stored audit rows (briefing-facts reads
@@ -317,6 +320,8 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
   const registry = require('../brain/registry');
   const { BRAIN_TABLES } = require('../brain/lanes.default');
 
+  const aetherRebind = createAetherRebindAction({ getScannerProxy: getScannerProxy });
+
   return {
     // Wave 7 (2026-08-13) — the aether-proxy-bind-failed anomaly (main.js)
     // used to just stop() and leave the proxy dead for the rest of the
@@ -331,17 +336,11 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
     // moving to a different base would misattribute readings to the wrong
     // room instead of failing loudly. Same ports, retried, or an honest
     // failure — never a quiet renumbering.
-    'retry-aether-proxy': async function() {
-      const proxy = getScannerProxy && getScannerProxy();
-      if (!proxy) return { ok: false, reason: 'missing-dependency:scanner-proxy' };
-      try {
-        proxy.start();
-        await proxy.whenReady();
-        return { ok: true, result: { ports: typeof proxy.ports === 'function' ? proxy.ports() : null } };
-      } catch (err) {
-        return { ok: false, reason: 'bind-failed-again', detail: err && err.message };
-      }
-    },
+    // BUG-379: extracted to immune/aether-rebind.js — it grew a retry budget and
+    // a terminal condition, and the file-size ratchet correctly refused to let
+    // healer.js carry them (876 -> 945). The module also makes the budget
+    // testable without standing up a healer.
+    'retry-aether-proxy': aetherRebind,
     // registry.js has no selective per-provider refresh and no live key-swap
     // capability — NIM's own two-key rotation is already structural in chain.js's
     // expand(). The real, honest action is a full forced re-probe (Spec Ambiguities #11).

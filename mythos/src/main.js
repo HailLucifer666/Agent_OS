@@ -6,6 +6,7 @@ const path = require('path');
 const { createLogger } = require('./core/logger');
 const { installCrashHandlers } = require('./core/crash-handlers');
 const { createBus } = require('./core/bus');
+const { buildBindFailureAnomaly } = require('./core/aether/bind-failure');
 const { loadConfig, SCHEMA } = require('./core/config');
 const { createLifecycle } = require('./core/lifecycle');
 const { createMemory } = require('./core/memory');
@@ -826,7 +827,7 @@ async function main() {
         // retry a dead port every 2s forever with nothing explaining why.
         scannerProxy.whenReady().then(
           () => logger.info('aether.proxy.started', { ports: scannerProxy.ports() }),
-          (err) => {
+          async (err) => {
             // scanner-proxy.js already tears down any sibling ports it opened
             // on a partial bind failure; stop() here is the documented way to
             // release this instance's own state, and is idempotent if it
@@ -834,26 +835,22 @@ async function main() {
             // line, so this is visible the same way other boot-time failures
             // are — not swallowed.
             logger.error('aether.proxy.bind-failed', { error: err && err.message });
+            // BUG-379: the payload is built in aether/bind-failure.js. It names WHICH
+            // process holds the port - 65 vault records over 2026-08-08/09 never did -
+            // and it fixes `target`, which could never name the port because ports()
+            // returns an OBJECT and this tested `.length` on it (so the naming branch
+            // was unreachable, and its .join() would have THROWN in this error handler
+            // if it ever ran). Extracted rather than inlined because the file-size
+            // ratchet refused main.js growing 1373 -> 1406, and it was right: a payload
+            // builder with three failure modes belongs somewhere a test can call
+            // without booting the application.
             const failedPorts = (function() {
-              try { return scannerProxy.ports(); } catch (_) { return null; }
+              try { return Object.values(scannerProxy.ports() || {}); } catch (_) { return []; }
             })();
             scannerProxy.stop();
-            // 2026-08-10: `error` is not the field the spoken path reads.
-            // immune/explainer.js builds its sentence from `reason` (AD-5,
-            // deterministic wording shared with conversation/announcer.js), so
-            // this anomaly was announced to the operator as "I do not yet know
-            // the cause" while the cause was sitting right here in `error`.
-            // Carry both: `reason` for the sentence, `target` so the operator
-            // hears WHICH port range, since a bind failure is almost always
-            // another instance still holding it.
-            bus.emit('health.anomaly', {
-              kind: 'aether-proxy-bind-failed',
-              error: err && err.message,
-              reason: err && err.message,
-              target: failedPorts && failedPorts.length
-                ? 'ports ' + failedPorts.join(', ')
-                : 'the Aether proxy port range',
-            });
+            bus.emit('health.anomaly', await buildBindFailureAnomaly({
+              err: err, ports: failedPorts, portBase: config.AETHER_PROXY_PORT_BASE,
+            }));
           }
         );
       }

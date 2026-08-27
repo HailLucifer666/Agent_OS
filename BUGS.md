@@ -41,6 +41,191 @@ it is committed.
 
 ---
 
+## BUG-379 — 65 bind failures named the port three times and the squatter zero times, and the retry loop the work order described did not exist (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 2 new modules, 3 files edited, 29 assertions,
+17 mutations run and all 17 caught, every file restored sha256-identical.
+Opened as Track D item D-2. **Both of D-2's named causes were wrong**, one of its
+three requested changes was already true, and the fix landed on a defect the work
+order did not mention at all.
+
+**Symptom.** Between **2026-08-08 and 2026-08-09** the operator's vault recorded
+**65 separate `aether-proxy-bind-failed` anomalies** for `127.0.0.1:4480` —
+45 on the 08th (12:01→23:35) and 148 rows on the 09th (00:45→23:35), clustering
+into 65 discrete events 2–10 minutes apart. Every one of them said
+"address already in use" three times over and named the holder **zero** times.
+
+### What the work order claimed, and what the evidence said
+
+| claim | verdict |
+|---|---|
+| "A healer playbook retried an unbindable port every few minutes for hours" | **FALSE.** The playbook ran **once, ever** (2026-08-26). 63 of the 65 events reached the healer as `outcome: no-match` — `aether-proxy-rebind` did not exist until 2026-08-13 (Wave 7, `a66fc9d`). |
+| "`config.json` silently overrides `AETHER_ENABLED=false` in `.env` at boot" | **FALSE.** No `config.json` exists anywhere it would be read (all four candidate paths checked). `mythos/.env:347` sets **`AETHER_PROXY_ENABLED=true`** deliberately, under its own "Voice Nodes" heading. `AETHER_ENABLED` (line 337) gates a **different subsystem** — the BLE proximity sensor at `main.js:1213`. Two near-identical key names for unrelated features, which is what fooled the work order's own author. |
+| "Ship a diagnostic that names the squatting pid" | **TRUE, and it was the only real item.** |
+
+Healer outcome histogram over the whole vault:
+
+```
+no-match | null                  63
+error    | aether-proxy-rebind    1
+```
+
+**Ran the work order's own oracle before writing anything** — a real orphaned
+listener, the real bus, real diagnostician, real healer and real scanner-proxy,
+38 seconds against a `cooldownMs` of 15000:
+
+```
+health.anomaly emissions        : 1
+health.diagnosed emissions      : 1
+healer audit rows for this kind : 1   (aether-proxy-rebind, error, "bind-failed-again")
+does the operator learn WHO holds the port? NO
+```
+
+One attempt. **No loop.** The anomaly is emitted from a `whenReady().then(...)`
+rejection arm in `main.js`, which runs at most once per process, and the heal
+action catches its own bind error without re-emitting. The 65 events were **65
+processes**, not one process looping. Two independent routes agreed on the count
+after the first counter read `e.kind` instead of `e.payload.kind` — the bus hands
+subscribers the event **envelope** (`bus/index.js:66`), not the payload.
+
+### Root cause 1 — nothing ever looked up who held the port
+
+For a failure that is *by definition* about another process, the one fact that
+would have ended the episode was never collected.
+
+### Root cause 2 — `target` could never name the port either, and would have thrown if it tried
+
+`scanner-proxy.ports()` returns an **object** (`{phone: 4480}`).
+`main.js` tested `failedPorts.length` — `undefined` on an object, so the branch
+meant to name the port was **unreachable**, and the `failedPorts.join(', ')`
+inside it would have **thrown inside an error handler** if it ever had run. That
+is why every record in the vault reads "the Aether proxy port range" while the
+code's own comment three lines above promises the operator hears which port. Not
+mentioned in the work order; found by reading the handler.
+
+### Root cause 3 (latent) — the rebind had no terminal condition
+
+`aether-proxy-rebind` declares `cooldownMs: 15000` and **no `verifyMs`**, so it
+never creates a `pendingVerifications` entry, never trips the recurrence detector
+and **can never emit `heal-failed`**. Today the anomaly cannot repeat, so it
+cannot loop — but `immune/announcer.js` records that probes re-emit
+`health.anomaly` every 4s and that "healer.js's cooldown is the dedup", i.e. the
+healer's design assumes repetition. Any future repeating source of this kind
+would retry every 15 seconds forever with nothing recording that the retries were
+futile.
+
+**Fix.** Two new focused modules plus three edits:
+
+- **`src/core/util/port-holder.js`** — bounded, injectable "what holds this
+  port?". Shape copied from the existing precedent `getListenerPid()` in
+  `scripts/verify-propose-goal.js` rather than invented: Windows `netstat -ano
+  -p TCP`, `LISTENING` rows only, exact port equality, honest null. Added: a
+  `reason` string so a failed lookup explains itself, a `tasklist` name lookup,
+  and a 1.5s per-child ceiling.
+- **`src/core/aether/bind-failure.js`** — builds the anomaly payload. `reason`
+  (the field `immune/explainer.js` speaks, AD-5) gains the holder; `error` keeps
+  the raw text byte-for-byte; `target` names the real port; `holder` is carried
+  structured so the healer reads it instead of looking it up again.
+- **`src/core/immune/aether-rebind.js`** — the heal action, with a 3-attempt cap
+  that ends in `terminal: true` and a spoken reason naming the squatter, and a
+  budget that resets on a real recovery.
+- `main.js`, `healer.js`, `scanner-proxy` call sites rewired.
+
+**Both new modules exist because the file-size ratchet refused the inline
+version** — `mythos/src/main.js: 1373 -> 1406` and
+`mythos/src/core/immune/healer.js: 876 -> 945`, with the ratchet's own message
+saying the baseline is a ceiling and the code belongs elsewhere. It was right
+twice: both files are monoliths, and both extracted units are now callable from a
+test without booting an application. Final: **main.js 1369 (≤1373), healer.js 875
+(≤876)** — under, never raised.
+
+**Attack pass (Stage 3):**
+
+- *What else matches this?* The netstat parse is the hostile surface. Exact port
+  equality, not substring — `44801` contains `4480`, and a substring match names
+  an **innocent** process with full confidence, which is worse than saying
+  nothing. `LISTENING` only — an ESTABLISHED row's pid is the *client*. IPv6
+  `[::]:445` works via last-colon-field rather than a second code path. All four
+  pinned by tests, all four mutation-proven.
+- *Does this hide evidence?* No, and this was checked deliberately: `error` keeps
+  the raw bind message untouched and only `reason` is enriched (BUG-378's lesson).
+  Mutation B2 (overwriting `error`) is caught.
+- *Who reads this?* `immune/explainer.js` speaks `reason`; the healer reads
+  `holder`; the audit stores all of it. Verified before choosing which field to
+  enrich.
+- *Is this constant correct?* `MAX_ATTEMPTS = 3` across three 15s cooldowns ≈ 45s
+  of patience, justified against `scanner-proxy.js`'s own statement that a stale
+  instance releases its ports sub-second. `LOOKUP_TIMEOUT_MS = 1500` is a ceiling
+  on a boot-path diagnostic, not a budget.
+- *What did my fix newly make necessary?* **It created the next bug, and a test
+  caught it.** The first draft called `findPortHolder()` inside the heal action,
+  spawning up to two child processes per retry; that latency raced the 10ms
+  window in the existing `aether-proxy-rebind-playbook.test.js` and turned it
+  red. The failing test was right — a remediation path is the wrong place to
+  start doing detective work. Now: one lookup per bind failure, at detection,
+  reused by every retry. Pinned by a test asserting the heal module does not even
+  import the lookup.
+- *The file already knew.* `main.js`'s comment above the emit already said the
+  operator should hear *which port range*; the code under it could not. And
+  `scanner-proxy.js`'s header already documented "the caller retry start() after
+  fixing whatever held the port" — the missing half was saying what held it.
+- *Platform claims verified where they run, not asserted:* `tasklist` with a
+  non-matching filter prints `INFO: No tasks are running which match the
+  specified criteria.` **unquoted, and exits 0** — so requiring a leading quote
+  rejects it on any locale, and an earlier `/^INFO:/i` check was proven
+  unreachable by a mutation and **deleted rather than kept as reassurance**.
+- *Deliberate non-changes:* the two duplicate `getListenerPid()` copies in
+  `scripts/verify-propose-goal*.js` are **left alone** — collapsing three copies
+  is a refactor, and a refactor riding inside a fix acquires a blast radius it did
+  not need. Recorded in the new module's header as owed. The confusing
+  `AETHER_ENABLED` / `AETHER_PROXY_ENABLED` pair is **not renamed**: both are
+  documented public config keys and renaming either is a breaking change for
+  every existing `.env`.
+
+**Verification.**
+
+```
+node --test test/bug-379-aether-bind-names-the-holder.test.js
+  before the fix (stub reproducing today's behaviour): 15 tests, 3 pass, 12 fail
+  after  the fix                                     : 29 tests, 29 pass, 0 fail
+
+node --test test/bug-379-... test/aether-proxy-rebind-playbook.test.js test/file-size-ratchet.test.js
+  36 tests, 36 pass, 0 fail   (includes the existing test my first draft broke)
+
+live oracle, the squatter being THIS process so the expected pid is exact:
+  findPortHolder(port).pid === process.pid          -> pass
+  heal detail contains "held by pid <process.pid>"   -> pass
+  4th attempt -> terminal:true, "...stays OFFLINE..." -> pass
+  and it stays terminal on the 5th                    -> pass
+
+file-size ratchet: main.js 1369 (ceiling 1373), healer.js 875 (ceiling 876)
+
+mutations: 17 run across port-holder.js, aether-rebind.js and bind-failure.js,
+17 caught, all three restored sha256-identical. Four survived a first pass and
+each was a real hole:
+  H3  the platform guard  — the assertion matched the FIXTURE's own use of the
+                            word "platform", not the code's behaviour
+  H6  the tasklist guard  — the INFO case was never tested, and the guard it
+                            would have exercised turned out to be dead code
+  B3  target naming the port — never asserted at all
+  B4  a throwing lookup     — never asserted at all
+```
+
+**What this does NOT close.**
+
+- **Not live-verified against a booted MYTHOS.** Every path is driven through the
+  real modules in-process, and the port collision is real, but nobody has watched
+  a real boot with a squatted 4480 and heard the sentence. That needs the
+  operator's desktop.
+- **The `Aether mesh` node stays `fail`.** The diagnostic is now honest, but
+  nothing here makes the proxy bind when something else holds the port — that is
+  the correct behaviour, not a defect. It becomes green only once a live boot
+  confirms the spoken sentence.
+- **Root cause 3 is fragility, not an observed loop**, and the code says so. The
+  cap has never fired in production because the anomaly cannot repeat today.
+
+---
+
 ## BUG-376 — the capability-map gate blocked every commit from any checkout without the live vault (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 1 test rewritten, 1 added, mutation-proven.
