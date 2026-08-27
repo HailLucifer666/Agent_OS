@@ -41,6 +41,162 @@ it is committed.
 
 ---
 
+## BUG-386 — 37 tools nobody had ever measured against an oracle, and a harness that accused the product six times before it was right (✅ EXERCISED 2026-08-28)
+
+**Status:** ✅ EXERCISED 2026-08-28. Closure-campaign **Track F**. New
+`scripts/verify-unknown-nodes.js` (the sibling of BUG-382's
+`verify-dark-nodes.js`), 10 assertions in
+`test/bug-386-unknown-node-harness.test.js`, **8 mutations of REAL PRODUCT
+CODE, 8 caught**, every touched file restored sha256-identical.
+
+```
+21 pass  ·  7 n/a  ·  11 disp  ·  0 FAIL  ·  exit 0
+```
+
+**No product defect was found.** That is the correct answer for tools that
+were unmeasured rather than broken, and it is only worth anything because the
+harness is proven able to say otherwise — see the mutation section.
+
+### Scope: two populations, and they support different claims
+
+| | nodes | tools | what was actually open |
+|---|---|---|---|
+| never called | 7 | 9 | does any of this run at all |
+| Track B's `warn` set | 11 | 28 | they demonstrably run in production; do they do what they SAY |
+
+The second population exists because BUG-384 found eleven nodes labelled
+`unknown` — "nothing has been measured" — while the vault held as many as 183
+recorded calls for them, and moved them to `warn` on the stated rule that
+production traffic is not the acceptance contract. This is the harness that
+was promised there.
+
+### REAL SUBSYSTEMS, NOT STUBS — the whole design
+
+Every factory in `effectors/` takes a narrow ctx slice: `from-okf` wants
+`ctx.vault`, `from-persona` `ctx.identity`, `from-widgets` `ctx.bus`. Handing
+each a stub would go green and would have measured the stub. So the harness
+builds the REAL modules the way `src/main.js` does —
+`createKanbanEffector({fs, bus})`, `createPipelineEffector({fs, classifier})`,
+`createIdentity({bus, config, fs, identityStore})` — over an `fs-store` rooted
+in a temp sandbox, and the oracle is then the vault file read back off disk.
+Where no real subsystem can be built here, the tool is `n/a` and names the
+dependency instead of being written off.
+
+Sample oracles, none of which is a self-report:
+
+```
+get_time            the answer must carry THIS process's current year, and a
+                    timezone argument must actually change it
+read_system_specs   must agree with node's own os.cpus()/platform — the tool
+                    exists so the model reads real numbers instead of
+                    screenshotting a dashboard (BUG-273)
+kanban_add_card     the card must be in the board FILE on disk, found by
+                    re-reading the vault, not by trusting the return value
+okf_export/import   a ROUND TRIP: import must read back the concept export
+                    wrote. Two calls that each return ok prove nothing about
+                    the format they are supposed to share
+set_persona_level   read back through a DIFFERENT DOOR — identity itself, on
+                    the named trait, to a value it did not already hold
+spawn_widget        the real bus must carry the title and layout a HUD would
+                    render from, not merely some event
+navigate            the returned uiActions must name the resolved route AND a
+                    URL must still be refused (the BUG-273 A1 shape)
+open_artifact       must REFUSE an id that does not exist — for a read tool
+                    nobody has called, the miss is the interesting case
+```
+
+### THE HARNESS ACCUSED THE PRODUCT SIX TIMES AND WAS WRONG SIX TIMES
+
+BUG-382 recorded three such accusations and drew the lesson. This one produced
+six, which says the lesson generalises rather than being a one-off:
+
+| # | what the harness did | what it reported |
+|---|---|---|
+| 1 | assumed `buildTools()` returns an array; from-widgets and from-dashboard return `{TOOLS:[…]}` | two GROUP-level FAILs reading like two broken effectors |
+| 2 | passed `orchestrator: null` to `mission_status` | a FAIL on an unguarded dereference that `main.js` makes unreachable |
+| 3 | looked for files matching `/okf/` when the bundle lands in `Knowledge/<name>/` | `okf_export` FAIL while its own result named the directory it had just written |
+| 4 | waited for a bus event from `navigate`, which returns `uiActions` instead | `navigate` FAIL against correct code |
+| 5 | invented args (`level` not `value`, `{type,body}` not `{title,layout}`, lane `doing` not `review`) | four tools written off as `n/a` for the harness's own mistakes |
+| 6 | passed `buildRunner: null` to `read_status`/`job_status` | a null dereference `main.js` also makes unreachable |
+
+**Every one drifted the same way: what the harness could not do, it called a
+product bug.** #5 is the quietest and the most dangerous — an `n/a` looks
+humble, so nobody re-reads it, and four tools would have stayed unmeasured
+while the report claimed to have looked.
+
+### The break-it proof, which is what makes the 0 FAIL mean anything
+
+A harness that has only ever reported pass is a description. So eight
+mutations were made to **real product code**, each making a tool lie in the
+shape this campaign keeps finding — return `ok` while doing nothing:
+
+```
+CAUGHT  set_persona_level reports success without setting anything
+CAUGHT  okf_export reports success without writing the bundle
+CAUGHT  spawn_widget reports success but never reaches the bus
+CAUGHT  navigate resolves the route but sends the HUD no instruction
+CAUGHT  navigate accepts a URL as a dashboard view (the BUG-273 A1 shape)
+CAUGHT  kanban_add_card reports success but never persists the board
+CAUGHT  get_time answers with a plausible but wrong year
+CAUGHT  ambient_awareness answers status without saying whether it is on
+```
+
+**Two of these SURVIVED a first pass, and both were real holes in oracles I
+had written:**
+
+- `set_persona_level` asked only whether the levels object stringified to
+  something containing `"4"` — and a default level of 4 was already there, so
+  a tool that set nothing passed. *"Something in this blob looks like what I
+  asked for" is not a read-back; it is a coincidence detector.* Now it reads
+  the named trait before and after, targeting a value it did not already hold.
+- `okf_export` counted files under `Knowledge/` rather than asking whether the
+  CONCEPT was on disk, so skipping one write left a sibling file behind and the
+  count still passed. Now it reads the bytes for the concept and the index.
+
+A third reported TARGET ABSENT: a two-line anchor cannot match a file whose
+line endings are not the `\n` in a JS string — the harness refusing to score a
+mutation that never applied, which is the harness working.
+
+### What was deliberately NOT run, and why that is the point
+
+Eleven tools are dispositions with a written reason. A harness that touches the
+operator's real machine to prove a tool works has traded one dishonesty for a
+worse one:
+
+```
+install_from_github  installs software from the network onto the machine
+set_wallpaper        changes the operator's actual desktop
+clipboard_write      overwrites whatever the operator has copied — the same
+                     class as the wakeword test that moved real model files
+                     aside and lost them (root CLAUDE.md)
+delete_artifact      destructive by definition
+compose_email        opens a real browser compose tab
+security_scan        T3, spawns a scanner over real paths
+ask_agent            spend, and the no-spend decision is the operator's
+run_mission          spend
+pipeline_execute     T3, executes a real pipeline stage
+kanban_assemble      T3, drives the build engine (dsh)
+kanban_build_card    T3, drives the build engine
+```
+
+The gate test asserts every disposition SAYS WHY — and caught two of mine that
+were too thin to be useful.
+
+### Map movement, and what stays open
+
+Four nodes reach the acceptance contract and go `ok`: **local info**
+(get_time / get_weather / get_directions), **OKF exchange** (a closed round
+trip), **persona**, **widgets**. `ambient_awareness` leaves `unknown` for
+`warn` — only its `status` action is verified; `on`/`off` need a real screen
+sensor. Everything else stays `warn` or `unknown` with the reason recorded:
+`status readouts` is 2 of 4 (read_status and job_status reach through to the
+build engine), `kanban` and `pipeline` have their T3 halves undone, `clipboard`
+needs pc-child online, and five nodes are single dispositions.
+
+**unknown 7 → 5, warn +1 net, ok +4.**
+
+---
+
 ## BUG-385 — the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text (🔧 CODED 2026-08-28)
 
 **Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped

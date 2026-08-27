@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6660,
+      "value": 6670,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -1407,8 +1407,8 @@
         "navigate",
         "close_panel"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 53 calls, 51 ok / 2 fail. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 53 calls, 51 ok / 2 fail. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "navigate, close_panel. navigate verified 2026-08-28 including its URL refusal; close_panel needs a connected dashboard.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. navigate passes TWO oracles. First, it does not publish — it returns uiActions, which the server relays to the HUD — so the oracle is that the resolved route comes back in a well-formed action, and the mutation that dropped the uiActions was caught. (The first version of the harness waited for a bus event and recorded a FAIL against correct code: the fourth time in this campaign a harness accused the product of its own mistaken model.) Second, a closed set is only closed if it REFUSES: BUG-273 A1 records this router once taking a URL, moving the view and reporting having launched a browser, so the harness asserts that navigate(\"https://example.com/thing\") still fails by name. The mutation that let a URL through was caught. close_panel is n/a — it awaits a real count back from a connected dashboard, and there is none here, which it says plainly.",
       "ok": 51,
       "f": 2
     },
@@ -1420,8 +1420,8 @@
         "open_artifact",
         "delete_artifact"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 17 calls, 14 ok / 3 fail — the highest failure share of the eleven. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 17 calls, 14 ok / 3 fail — the highest failure share of the eleven. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "open_artifact verified 2026-08-28 on the case that matters — it refuses an id that does not exist. delete_artifact is a disposition.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. For a read tool nobody has called, the interesting case is the MISS, not the hit: a tool that invents an answer for an id that does not exist is worse than one that has never run. So the oracle is an honest refusal, and open_artifact gives one (\"An artifact path or jobId is required\"). delete_artifact is NOT RUN — destructive by definition, and a harness has nothing it may safely delete. The node keeps its 14/3 production record; what this adds is that the read half declines correctly rather than fabricating.",
       "ok": 14,
       "f": 3
     },
@@ -1434,8 +1434,8 @@
         "pipeline_advance",
         "pipeline_execute"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 65 calls, 65 ok / 0 fail. No recorded failure, ever. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 65 calls, 65 ok / 0 fail. No recorded failure, ever. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "pipeline_status verified 2026-08-28. pipeline_advance had nothing to advance; pipeline_execute is a disposition.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Built on the real createPipelineEffector({fs, classifier}) over a sandbox vault. pipeline_status passes. pipeline_advance is n/a and honestly so — with an empty sandbox there is no card to advance, and it says \"No pipeline card matching ... found\" rather than inventing a success; verifying the advance path properly needs a seeded pipeline and is worth doing when someone seeds one. pipeline_execute is NOT RUN: T3, and it executes a real pipeline stage rather than describing one. So this node is one of three verbs closed, and stays warn.",
       "ok": 65,
       "f": 0
     },
@@ -1450,21 +1450,21 @@
         "kanban_assemble",
         "kanban_build_card"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 9 calls, 9 ok / 0 fail. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 9 calls, 9 ok / 0 fail. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "kanban_status/add_card/move_card verified 2026-08-28 against the board file on disk. assemble and build_card are dispositions — they drive the build engine.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. The three non-build verbs are verified against the REAL createKanbanEffector({fs, bus}) over a sandbox vault, and the oracle is the board FILE re-read off disk — add_card must put the card in it, move_card must change the stored lane. The mutation that made add_card report success while never persisting the board was caught. Two contract details the harness had to read rather than guess: LANES is a closed set (backlog|building|review|done), and move_card takes {query, lane} rather than an id. kanban_assemble and kanban_build_card are NOT RUN and say why: both drive the build engine (dsh), which is a real install, a real model call and minutes of wall clock, so a harness running them would be measuring the engine rather than the tool — and root CLAUDE.md rules that there is no fallback engine to fake it with.",
       "ok": 9,
       "f": 0
     },
     {
       "c": "hud",
       "n": "widgets",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "manage_widget",
         "spawn_widget"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 1 call, 1 ok / 0 fail. One call is barely evidence, but it is not zero, and `unknown` claimed zero. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 1 call, 1 ok / 0 fail. One call is barely evidence, but it is not zero, and `unknown` claimed zero. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "spawn_widget, manage_widget. GREEN 2026-08-28: verified on the REAL bus — the oracle is the payload a HUD would render from, not the return value.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Both tools do their work by publishing, so the return value is written before anything is delivered anywhere and is worthless as evidence. The harness subscribes to a real bus and asserts the event carries the title and layout the HUD renders from — asserting the event COUNT would pass on any event at all, which is how the first version accepted a run it should have questioned. spawn_widget emits on ui.open-web (the HUD floating-card channel it shares with the cards open_web spawns) and manage_widget on ui.widget-command. The mutation that returned ok while never reaching the bus was caught. Note the catalogue is closed: manage_widget only accepts known widget names, which is why the harness drives it with `clock` rather than the widget it had just spawned. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
       "ok": 1,
       "f": 0
     },
@@ -1490,8 +1490,8 @@
         "system_status",
         "job_status"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 183 calls, 183 ok / 0 fail, across read_status, read_system_specs, system_status and job_status — the most-exercised node on the map that claimed never to have been looked at. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 183 calls, 183 ok / 0 fail, across read_status, read_system_specs, system_status and job_status — the most-exercised node on the map that claimed never to have been looked at. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "read_status, read_system_specs, system_status, job_status. 2 of 4 verified 2026-08-28: read_status and job_status reach through to the build engine, which a harness cannot supply.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. read_system_specs PASSES on a real oracle: its answer must agree with node's own os.cpus()/platform. That is the point of the tool — BUG-273 records that it exists so the model reads real numbers instead of screenshotting a dashboard to read them off it — so \"it returned something\" would have been the wrong check. system_status also passes (2.2 KB of real payload). read_status and job_status are n/a, not failing: both call buildRunner.listJobs(), and createBuildRunner requires the build engine or a brain lane, neither of which a harness may conjure under the no-spend decision. With it absent they report a failure rather than throwing, which is the honest degradation. Worth recording so nobody re-derives it: the first version of the harness passed buildRunner:null and wrote the resulting message up as a product problem — main.js constructs buildRunner unconditionally and a brain always exists, so null never reaches these in production.",
       "ok": 183,
       "f": 0
     },
@@ -1502,21 +1502,21 @@
       "tools": [
         "ask_agent"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 3 calls, 3 ok / 0 fail. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 3 calls, 3 ok / 0 fail. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "NOT RUN 2026-08-28 — it spends, and the no-spend decision is the operator's.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. ask_agent is a recorded disposition in the harness rather than a gap in it: running it costs a model call, and the campaign's second operator decision is BYO-free lanes with no paid spend. The node keeps its 3/0 production record. Closing it needs either a free lane or the operator's say-so, and both are decisions rather than code.",
       "ok": 3,
       "f": 0
     },
     {
       "c": "cog",
       "n": "persona",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "persona_status",
         "set_persona_level"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 29 calls, 27 ok / 2 fail. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 29 calls, 27 ok / 2 fail. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "persona_status, set_persona_level. GREEN 2026-08-28: verified through the REAL identity module, and read back through a different door than the setter.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Built on the real createIdentity({bus, config, fs, identityStore}) over a sandbox vault rather than a stub — a stubbed identity would have gone green and measured the stub. The oracle reads the named trait from identity.getPersonaLevels() BEFORE and AFTER, targeting a value the trait did not already hold, so \"no change\" cannot pass. That precision was not free: the first version asked only whether the levels object stringified to something containing the number, a mutation that set nothing SURVIVED it because a default already held that value, and the oracle had to be rewritten. \"Something in this blob looks like what I asked for\" is a coincidence detector, not a read-back. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
       "ok": 27,
       "f": 2
     },
@@ -1528,34 +1528,34 @@
         "run_mission",
         "mission_status"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 3 calls, 3 ok / 0 fail. Invisible to a reading of the packaged-app vault alone; it is the in-repo vault that holds them, which is why the counter reads both. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 3 calls, 3 ok / 0 fail. Invisible to a reading of the packaged-app vault alone; it is the in-repo vault that holds them, which is why the counter reads both. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "mission_status is n/a — the real orchestrator needs the build engine and a brain. run_mission is a disposition (spend).",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Neither tool is verified, and the reason is recorded rather than papered over. createOrchestrator requires buildRunner, agentActions, kanban, bus, fs AND a brain lane; stubbing those would measure the stubs, which is the failure mode this harness is built to avoid. The first version passed orchestrator:null, mission_status dereferenced it, and the throw was recorded as a FAIL AGAINST THE PRODUCT — it is not one: src/main.js constructs the orchestrator unconditionally one line above registerFromMission, so null never reaches it in production. The missing null guard is real but unreachable, and the effector adapter's catch would name the throw anyway. Recorded as an observation, not a bug.",
       "ok": 3,
       "f": 0
     },
     {
       "c": "mem",
       "n": "OKF exchange",
-      "s": "unknown",
+      "s": "ok",
       "tools": [
         "okf_export",
         "okf_list",
         "okf_import"
       ],
-      "note": "Import and export of knowledge in the open exchange format.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "note": "okf_export, okf_list, okf_import. GREEN 2026-08-28: a closed round trip — import reads back the concept export wrote to disk.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Was `unknown` at 0/0 — no call had ever been read for it. The oracle is a ROUND TRIP against a real fs-store vault in a temp sandbox, not three independent ok:true answers: export writes vault/Knowledge/harness-probe/, the harness reads the BYTES of the concept file and the bundle index off disk, okf_list must name the artefact that is actually there, and okf_import must return the concept export wrote. Two calls that each succeed prove nothing about the format they are supposed to share. The mutation that made export report success while skipping a write was caught — though only after the oracle was strengthened from \"some file exists under Knowledge/\" to \"the concept is in the bytes\", because the weaker form let a sibling file cover for the missing one. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
       "ok": 0,
       "f": 0
     },
     {
       "c": "sense",
       "n": "ambient_awareness",
-      "s": "unknown",
+      "s": "warn",
       "tools": [
         "ambient_awareness"
       ],
-      "note": "Background sampling of what is on screen.",
-      "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these.",
+      "note": "Screen awareness on/off/status. Leaves `unknown` 2026-08-28: its status action is verified, but on/off need a real screen sensor this machine does not have.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Was `unknown` at 0/0. Only `action:\"status\"` was run, deliberately — `on` and `off` start and stop a real screen sensor. The oracle is that status reports its actual state AND says why when disabled, which it does: {\"enabled\":false,\"running\":false,\"hint\":\"Ambient screen awareness is disabled (SCREEN_AWARENESS_ENABLED=false or pc-child unavailable)\"}. The mutation that made status answer with a bare ok, saying nothing about whether it was enabled, was caught. STAYS WARN rather than going green because one of three actions is verified and the other two need hardware — calling that closed would be the kind of rounding-up this campaign exists to remove.",
       "ok": 0,
       "f": 0
     },
@@ -1567,8 +1567,8 @@
         "clipboard_read",
         "clipboard_write"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 3 calls, 3 ok / 0 fail. Same as missions — only the in-repo vault has these rows. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 3 calls, 3 ok / 0 fail. Same as missions — only the in-repo vault has these rows. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "clipboard_read is n/a here (pc-child offline); clipboard_write is a deliberate disposition — it would overwrite the operator's clipboard.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. clipboard_read returned \"PC automation is OFFLINE. Cannot execute commands.\" — an honest unavailability, not a failure, and the harness records it as n/a. Worth noting for whoever runs this with pc-child up: the oracle deliberately reports only the LENGTH of what it read and never the content, because a verification harness that prints the operator's clipboard into a log is a data leak wearing a test's clothes. clipboard_write is NOT RUN at all: it overwrites whatever the operator has copied, which is the same class as the wakeword test that moved real model files aside and lost them (root CLAUDE.md). A save-and-restore would usually work and would lose the clipboard if the harness died in between.",
       "ok": 3,
       "f": 0
     },
@@ -1587,14 +1587,14 @@
     {
       "c": "web",
       "n": "local info",
-      "s": "warn",
+      "s": "ok",
       "tools": [
         "get_time",
         "get_weather",
         "get_directions"
       ],
-      "note": "Measured 2026-08-27 from the audit log: 156 calls, 152 ok / 4 fail, across get_time, get_weather and get_directions. Not verified to the acceptance contract — see the evidence.",
-      "ev": "MEASURED 2026-08-27 (Track B, BUG-384). This node was labelled `unknown`, whose definition in the legend is \"nothing has been measured\", and it carried the sentence \"no call count has ever been read for it\". Both were false: the audit log holds 156 calls, 152 ok / 4 fail, across get_time, get_weather and get_directions. WHY warn AND NOT ok: `ok` on this map is the acceptance contract — mechanism verified live, a regression test shipped and mutation-proven, evidence recorded as counts and literal commands. A production call count is none of those. `warn` here reads \"measured, works in production, not yet verified to the contract\", and promoting it is Track F's job, not a count's. The counts are no longer hand-typed: build-capability-map.js --write derives them from vault/Audit via vault-tool-counts.js, which reads EVERY vault root and dedupes by record id — the in-repo twin alone had never seen 21 tools at all.",
+      "note": "get_time, get_weather, get_directions. GREEN 2026-08-28: all three exercised against oracles, and get_time is checked against this process's own clock.",
+      "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. This node reached the acceptance contract, so it is the strongest of the four promotions. get_time is not merely \"ok:true\": the answer must carry THIS process's current year, and passing timezone:\"Asia/Tokyo\" must actually change it — a tool returning a plausible date is precisely what a self-report cannot rule out, and the mutation that returned a fixed 1999 date was caught. get_weather and get_directions answered over their free lanes (346 and 143 bytes); their CONTENT is not verified against a second source and the harness says so rather than implying it did. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
       "ok": 152,
       "f": 4
     },
@@ -3828,18 +3828,26 @@
         "title": "the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text",
         "detail": {},
         "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped as *\"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder, video call having no tool)\"*. All three are recorded. Two of them turned up a real defect on the way, and the CAPTCHA one is the serious entry here. ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions. The disposition itself needed nothing: `browser_check_captcha` already returns `ok` with `blocked: \"captcha\"` and a comment saying *\"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\"*, `browser-obstacles.test.js` already pins the handover wording, and a source-shape assertion already fails if anyone adds a solver service. That is a complete disposition and it was complete before this ticket. **What was not right is what counts as a challenge.** `CA…"
+      },
+      {
+        "n": 386,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "37 tools nobody had ever measured against an oracle, and a harness that accused the product six times before it was right",
+        "detail": {},
+        "excerpt": "**Status:** ✅ EXERCISED 2026-08-28. Closure-campaign **Track F**. New `scripts/verify-unknown-nodes.js` (the sibling of BUG-382's `verify-dark-nodes.js`), 10 assertions in `test/bug-386-unknown-node-harness.test.js`, **8 mutations of REAL PRODUCT CODE, 8 caught**, every touched file restored sha256-identical. ``` 21 pass · 7 n/a · 11 disp · 0 FAIL · exit 0 ``` **No product defect was found.** That is the correct answer for tools that were unmeasured rather than broken, and it is only worth anything because the harness is proven able to say otherwise — see the mutation section. ### Scope: two populations, and they support different claims | | nodes | tools | what was actually open | |---|---|---|---| | never called | 7 | 9 | does any of this run at all | | Track B's `warn` set | 11 | 28 | they demonstrably run in production; do they do what they SAY | The second population exists because…"
       }
     ],
     "counts": {
       "verified": 30,
-      "fixed": 55,
+      "fixed": 56,
       "open": 10,
       "coded": 3,
       "diagnosed": 1,
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 233,
+    "total": 234,
     "openDeclared": [
       344,
       346,

@@ -4750,6 +4750,7 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | D-6 | BUG-383 — a fabricated FACT is not a fabricated ACTION | **DONE** | **6 of 10 singles were already closed and the map was stale**; 3 need an operator; 1 real. New evidence-gated `external-fact` category, catch rate **6/9 asserted as a literal**, 3 misses pinned, 0 false positives. 13 assertions, 6 mutations | `01c58f4` |
 | B | BUG-384 — the map hand-carried every per-node count, and **67% of them were wrong** | **DONE** | scoped as "six stale labels"; measured 43 of 91 nodes carrying a count, **29 disagreeing with the vault**, and **11** labels contradicted by their own evidence. Second finding, larger: `resolveVaultRoot()` returns the IN-REPO twin and reports `reachable:true` from it — that copy had never seen 21 tools, so a zero-claim gate reading it would fail OPEN. Counts now derive from every vault root, deduped by record id (1464 + 3183 rows, 1346 shared, union 3301). 32 assertions, 13 mutations all caught, 2 survived a first pass | (this commit) |
 | C | BUG-385 — three dispositions, and the CAPTCHA detector was inverted | **DONE** | the refusal policy was already right and already pinned; the DETECTOR flagged **6 of 6 ordinary pages** (developers.cloudflare.com, a "Performance and security by Cloudflare" footer, Google's Security Checkup) and MISSED the real challenge text, because two markers named a VENDOR and `includes()` is a substring test. Fixed mostly by removal: 0 FP on 7 controls, 0 FN on 9 challenge shapes. `focus_window`: ladder pinned at exactly 3 rungs, and the map's own note was wrong (3/2/1 classes, not 5/1). `video call`: no tool across all 179, and `phone_call` pinned voice-withheld. 30 assertions, 14 mutations all caught | (this commit) |
+| F | BUG-386 — 37 tools nobody had measured against an oracle | **DONE** | new `scripts/verify-unknown-nodes.js`: **21 pass / 7 n/a / 11 disp / 0 FAIL**. No product defect — and it means something because **8 mutations of REAL PRODUCT CODE were all caught**, 2 after a first pass exposed genuinely weak oracles. The harness accused the product **six times** before it was right, every one fail-open. ok 40→44, unknown 7→5. 10 assertions | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5013,9 +5014,9 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position: TRACKS D, B AND C ARE COMPLETE.** D changed capabilities, B made
-the gauge stop lying, C recorded the three deliberate non-changes — and found a
-live defect inside one of them.
+**Position: TRACKS D, B, C AND F ARE COMPLETE.** Only Track A (three operator
+minutes) and Track E (a live microphone) remain, and both need the operator
+rather than a session.
 
 ```
 main                       b04ec8e
@@ -5024,102 +5025,91 @@ PR #38  Track D-2  BUG-379   fix/bug-379-aether-rebind-terminal    OPEN  (base m
 PR #39  Track D-3..D-6       fix/track-d-remaining                 OPEN  (stacked on #38)
 PR #40  Track B    BUG-384   fix/bug-384-map-counts-from-vault     OPEN  (stacked on #39)
 PR #41  Track C    BUG-385   fix/bug-385-track-c-dispositions      OPEN  (stacked on #40)
-suite                      6660 tests / 6660 pass / 0 fail / 0 skipped
+PR #42  Track F    BUG-386   fix/bug-386-verify-unknown-nodes      OPEN  (stacked on #41)
+suite                      6670 tests / 6670 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
-map                        91 nodes: 40 ok / 33 warn / 9 fail / 2 dark / 7 unknown
-next free BUG number       386
+map                        91 nodes: 44 ok / 31 warn / 9 fail / 2 dark / 5 unknown
+next free BUG number       387
 ```
 
-Merge order **#37 -> #38 -> #39 -> #40 -> #41**. #37 and #38 both branch from
-`main` and touch `index.html`, so they conflict on the island; the code does
-not overlap. Since BUG-384 every count regenerates from the vault, so a botched
-count merge is self-healing — only `s`, `note` and `ev` need care.
+Merge order **#37 -> #38 -> #39 -> #40 -> #41 -> #42**. #37 and #38 both
+branch from `main` and touch `index.html`, so they conflict on the island; the
+code does not overlap. Since BUG-384 every count regenerates from the vault, so
+only `s`, `note` and `ev` need care in a merge.
 
-### THE FINDING OF TRACK C — a disposition is where a bad guard hides best
+**Campaign movement, from the founding measurement of 28 ok / 25 warn / 13 fail
+/ 7 dark / 18 unknown to 44 / 31 / 9 / 2 / 5: ok +16, fail −4, dark −5,
+unknown −13.** The warn column grew on purpose — Track B moved eleven nodes
+there rather than to `ok`, because production call counts are not the
+acceptance contract, and Track F then promoted four of them on oracles.
 
-**Track C was the safest-looking track in the campaign and it contained the
-sharpest live defect found so far.** Its three items were all "correct by
-design, just record it". Two were. The third was correct in the half everybody
-looks at and inverted in the half nobody does.
+### THE FINDING THAT SPANS ALL FOUR TRACKS
 
-`browser_check_captcha`'s REFUSAL was right, and was already fully pinned: it
-returns `ok` when blocked, the code says why, the handover wording is asserted,
-and a source-shape test fails if anyone adds a solver. Recording that and moving
-on would have been defensible and would have missed everything.
+Every track was scoped from a written description, and in every track the
+description was wrong in the same direction — it understated the problem and
+named the wrong cause.
 
-**What was never checked is what counts as a CAPTCHA.** `CAPTCHA_MARKERS` held
-bare `cloudflare` and bare `security check`, and the matcher is fed the aria
-tree PLUS `page.url()`:
+| track | what it said | what measurement found |
+|---|---|---|
+| D | six items, each with a named cause | **four of six causes were wrong** |
+| B | "six nodes whose LABEL is stale" | **eleven labels**, and 29 of 43 counts wrong |
+| C | "three dispositions" | two were; the third hid an **inverted CAPTCHA detector** |
+| F | "the 18 never-measured nodes" | **37 tools**, of which the never-called half was only 9 |
 
-```
-FLAGGED  ["cloudflare"]      https://developers.cloudflare.com/workers/
-FLAGGED  ["cloudflare"]      footer "Performance and security by Cloudflare"
-FLAGGED  ["security check"]  Google account "Security Checkup"
-   ... 6 of 6 ordinary pages
+**And the harness is now the most likely thing to be wrong, not the product.**
+Across Tracks D-5 and F, a verification script accused the product **nine
+times** and was wrong every time, always fail-open — three in BUG-382, six in
+BUG-386. What a harness cannot do, it reports as a product bug. The two shapes
+to watch for:
 
-MISSED   "Verifying you are human"   (the marker was "verify you are human")
-MISSED   "Checking your browser before accessing"
-MISSED   ".../cdn-cgi/challenge-platform/..."
-```
+- **A FAIL that is really a contract you misread.** `buildTools()` returns a
+  bare array from some files and `{TOOLS:[…]}` from others; `navigate` returns
+  `uiActions` rather than publishing; the OKF bundle lands in
+  `Knowledge/<name>/` and contains no "okf" in its path.
+- **An `n/a` that is really your own bad arguments, and this one is worse**,
+  because `n/a` looks humble so nobody re-reads it. Four tools were written off
+  as unavailable for calling them with `level` instead of `value`, `{type,body}`
+  instead of `{title,layout}`, and a lane that is not in `LANES`.
 
-The two broad markers did the OPPOSITE of their job — they fired on the brand
-name, which is on a large fraction of the web, and missed the challenge. And
-`browser_snapshot` runs the same matcher on EVERY snapshot, attaching *"Do NOT
-try to solve or bypass it — ask the operator to complete it"*, so on any
-Cloudflare-fronted page the model stopped browsing to ask for a challenge that
-was not there.
+**So: read the params off the tool DEFINITION, never off its name, and treat a
+FAIL as a hypothesis until you have read the code it accuses.**
 
-**The transferable rule: when you disposition something, name the two halves
-separately and check the one that is not the headline.** Here they were the
-POLICY (never solve) and the TRIGGER (what is a challenge). The policy is the
-part with the moral weight, so it is the part that gets reviewed, tested and
-commented — and the trigger sat behind it unexamined for as long as it existed.
-The same shape applies to every remaining "correct by design" claim.
+### Track F, and why its 0 FAIL is worth anything
 
-**Two smaller repeats of the Track B finding**, both in the map's own prose:
-`focus_window`'s note claimed *"five of six failures are stale PIDs it created
-itself"* — really three classes (3 stale pid, 2 no-main-window, 1 foreground
-lock), and at least one of the stale pids was **PID 1**, which `focus_window`
-never handed out. `CAPTCHA wall` was labelled `fail` when its one recorded call
-is an `ok`; the label described an EPISODE, not a capability.
+A harness that has only ever reported pass is a description. `verify-unknown-
+nodes.js` was proven able to fail by mutating **real product code** eight ways
+— each making a tool return `ok` while doing nothing — and all eight were
+caught. **Two survived a first pass**, and both were real holes:
 
-### What Track C changed, and what it deliberately did not
+- `set_persona_level` asked only whether the levels object stringified to
+  something containing the number it set. A default already held that value,
+  so a tool that set nothing passed. *"Something in this blob looks like what I
+  asked for" is a coincidence detector, not a read-back.* It now reads the
+  named trait before and after, targeting a value it did not already hold.
+- `okf_export` counted files under `Knowledge/` instead of reading the concept
+  back, so skipping one write left a sibling behind and the count still passed.
 
-- **The safety boundary did not move and could not have.** "Never solve or
-  bypass" is structural — no solver exists and a source assertion keeps it that
-  way. Detection quality sits above that boundary, so tightening it cannot open
-  a hole. The worst case of a miss is that MYTHOS keeps browsing a challenge
-  page without saying so, which is what already happened for every phrasing in
-  the MISSED list.
-- **No upstream markup was verified from this machine, and the code says so.**
-  Markers are labelled GROUNDED (seen in this repo's own vault — the recorded
-  incident reads `google.com/sorry/index?continue=`) or ADDITIVE (a distinctive
-  phrase no ordinary page carries, which at worst never fires). Do not write a
-  confident sentence about another vendor's DOM here.
-- **`focus_window` stays `warn`, on purpose.** The ladder is exhausted, Windows
-  refuses deliberately, and root `CLAUDE.md` forbids a fourth rung — now pinned
-  by a test asserting exactly three. It genuinely fails sometimes for a reason
-  nobody can fix; the failures are honest, not absent.
-- **`video call` stays `dark`**, which is the accurate claim: an empty tool list
-  makes a zero count a measured fact. The part worth pinning was the SUBSTITUTION
-  risk, not the absence — `phone_call` is the nearest thing to "call someone" and
-  is voice-withheld, which is why the recorded answer was an honest refusal.
-- The markers moved to `src/core/util/captcha-markers.js` because the file-size
-  ratchet refused the comment block. Move the code, do not raise the number.
+The design rule worth carrying: **real subsystems, never stubs.** Each factory
+takes a narrow ctx slice, so it would have been easy to hand each a stub and go
+green having measured the stub. The harness builds the real modules the way
+`main.js` does, over an `fs-store` in a temp sandbox, and the oracle is the
+vault file read back off disk.
 
-### What is left
+### What is left, and none of it is code
 
-- **Track A** — three operator minutes (O1 `node mythos/scripts/google-auth.js`,
-  the OCR hotkey keypress). Turns two nodes green.
+- **Track A** — three operator minutes: `node mythos/scripts/google-auth.js`,
+  and the OCR hotkey keypress. Turns two nodes green.
 - **Track E** — eight nodes needing a live microphone.
-- **Track F** — the `unknown` column (7, down from 18) plus the 11 nodes Track B
-  moved to `warn` on production evidence with no contract verification.
-  `scripts/verify-dark-nodes.js` is the shape to copy.
-- Still open from Track D, each with its reason in the map: `spotify_search`,
-  `Aether mesh`, `browser automation`, `cua-driver`, `ui_click`, and
-  `fabrication` at 67%.
-- Three standing advisories the label rule prints and does not gate, all correct
-  labels: `close_window`, `spotify_volume`, `list_folder` (#37 fixes the last).
+- **The 5 remaining `unknown` nodes are all single dispositions** —
+  `daily_plan` (needs a live planner), `set_wallpaper`, `installer`,
+  `security_scan`, `compose_email`. Each is NOT RUN for a written reason, not
+  for lack of a harness; closing them needs the operator, not a session.
+- Still open from earlier tracks, each with its reason in the map:
+  `spotify_search`, `Aether mesh`, `browser automation`, `cua-driver`,
+  `ui_click`, and `fabrication` at 67%.
+- **Two open questions this campaign deliberately did not answer:** which vault
+  root is canonical (BUG-384), and how the paid product handles the
+  non-commercial wake-word weights (step 6.5).
 
 ### Things that will cost you an hour each if nobody tells you
 
@@ -5130,32 +5120,37 @@ and `build-index --write` after any BUGS.md change.
 
 **3. Capture ONE TAP run** (`node --test --test-reporter=tap > file`) with
 long-form `TEMP`/`TMP` and ports from `pick-free-ports.js`, then pipe it into
-both `sync-test-count --write` and `--check`. It reads stdin, so the suite runs
-once instead of three times.
+both `sync-test-count --write` and `--check` — it reads stdin, so the suite
+runs once instead of three times.
 
-**4. Commit with `git commit -m ... -- <pathspec>`** — in that ORDER. Everything
-after `--` is a pathspec, so `git commit -- <paths> -m "msg"` feeds the message
-to git as a filename and fails with "did not match any file(s) known to git".
-Then demand an empty `git status --porcelain`.
+**4. `git commit -m ... -- <pathspec>`, in that ORDER.** Everything after `--`
+is a pathspec. Then demand an empty `git status --porcelain`.
 
 **5. `--next` reads BRANCH NAMES too.** Write the BUGS.md entry early.
 
 **6. Do not edit a tracked file while the suite is running.**
 
 **7. The file-size ratchet will refuse your fix, and it is usually right.**
-It refused four times across D/B/C. Move the code; do not raise the number.
+Move the code; do not raise the number.
 
-**8. TRACKED POWERSHELL MUST BE PURE ASCII.** `test/…` asserts it, and an em
-dash in a comment fails the suite. Same class as AD-7: what you type in prose
-is gated too.
+**8. Tracked PowerShell must be pure ASCII** — an em dash in a COMMENT fails
+the suite. And `ps-automation.ps1` has MIXED line endings, so single-line
+anchors always, in edits and in mutation harnesses.
 
-**9. `ps-automation.ps1` has MIXED line endings** (the file reports CRLF, and
-the region around `Handle-FocusWindow` is LF). Single-line anchors always.
+**9. A COVERAGE GUARD SCOPED TO "WHATEVER IS CURRENTLY BROKEN" ERODES AS YOU
+FIX THINGS.** BUG-386's first version selected nodes that were `unknown` or
+Track-B-`warn`; four went green and the scope fell below the guard's own
+minimum, so it failed against a BETTER map. Anchor scope on a stable marker
+(the ticket id in the evidence), so a tool stays covered after its node turns
+green.
 
 **10. THE MAP IS A CANVAS with no DOM element per node.** Searching the DOM
-reports all 91 missing and reads like a broken page. Drive it instead:
+reports all 91 missing and reads like a broken page. Drive it:
 `resize(); build(); place(); draw()`, then `getImageData` and count pixels
 against the palette in `:root`.
+
+**11. `node -e` in this shell eats backticks and backslashes**, and a stray
+`python - <<EOF` hangs on stdin for the full timeout. Write a script file.
 ### Standing constraints
 
 - **Two machines and sometimes two sessions share this repo.** Branch, PR,
