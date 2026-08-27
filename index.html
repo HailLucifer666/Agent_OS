@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6582,
+      "value": 6592,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -589,15 +589,15 @@
     {
       "c": "mem",
       "n": "documents",
-      "s": "dark",
+      "s": "warn",
       "tools": [
         "document_ingest",
         "document_list",
         "document_search",
         "document_answer"
       ],
-      "note": "Semantic document search over an ingested corpus. There is no corpus and no call has ever been made.",
-      "ev": "vault/Documents is empty. document_ingest / document_list / document_search / document_answer:\nzero calls ever, and all four are withheld from the voice surface."
+      "note": "document_ingest, document_list, document_search, document_answer. EXERCISED 2026-08-27 end to end on a real corpus. WARN because search was verified with an offline embedder, so ranking quality is still unmeasured.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) against a REAL corpus — 6 files from mythos/docs and mythos/Plans, which the work order names as real and always present. document_ingest: 6 files ingested, 26 chunks embedded for one plan alone. document_list: listed the corpus. document_search: 10 hits for a term known to be in the corpus, so an empty result would have been a real failure rather than a badly-chosen query. document_answer is a DISPOSITION — it needs a brain lane, i.e. spend. WHY WARN AND NOT OK: the embed lane was replaced with a deterministic offline word-bag so the harness measures the TOOLS rather than the provider. That proves the chunker, store, vector index and search path work end to end, and says nothing about ranking quality with real embeddings; closing it fully needs one run with ollama or mistral-embed live. Also recorded: the harness reported document_search as broken twice before reading the real contract — providers/embeddings.embed(text) returns { provider, dim, vec }, and vector-index add()/search() silently return false/[] for anything else."
     },
     {
       "c": "mem",
@@ -887,7 +887,7 @@
     {
       "c": "desk",
       "n": "file ops",
-      "s": "dark",
+      "s": "ok",
       "tools": [
         "create_folder",
         "move_file",
@@ -898,8 +898,8 @@
         "read_file",
         "write_file"
       ],
-      "note": "create_folder, move_file, copy_file, rename_file, delete_file, search_files. All present in code, none reachable by voice.",
-      "ev": "All six are in the withheld-74 list. create_folder has exactly 1 all-time call."
+      "note": "create_folder, move_file, copy_file, rename_file, delete_file, read_file, list_folder, open_folder. EXERCISED 2026-08-27: 7 of 8 verified against the real filesystem.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) by scripts/verify-dark-nodes.js --group=fileops, in a real temp sandbox, with the FILESYSTEM as the oracle rather than each tool's own ok flag: create_folder (directory exists on disk), copy_file (copy present with identical bytes), rename_file (old name gone, new name present), move_file (file at destination), read_file (returned the real bytes), list_folder (listed the sandbox), delete_file (file removed from disk) — 7 pass, 0 fail. open_folder is a DISPOSITION: it needs a desktop shell, and running it would pop a real Explorer window on the operator's screen rather than measure anything. This node was dark because nobody had ever called these tools, not because they were broken."
     },
     {
       "c": "web",
@@ -1185,27 +1185,27 @@
     {
       "c": "build",
       "n": "code search",
-      "s": "dark",
+      "s": "warn",
       "tools": [
         "index_project",
         "search_code",
         "revise_project"
       ],
-      "note": "index_project, search_code, revise_project. Zero calls ever, all withheld from voice.",
-      "ev": "Never exercised. In the withheld-74 list."
+      "note": "index_project, search_code, revise_project. EXERCISED 2026-08-27, including the BUG-368 oracle. WARN for the same offline-embedder caveat as documents.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5), and the oracle is the one the work order demands rather than \"it returned ok\". BUG-368 is why: an earlier index run put 94% of its budget into .venv and indexed none of MYTHOS's own source WHILE REPORTING SUCCESS. So index_project is judged on two things — the result must contain no .venv/node_modules content, and search_code must find a symbol that exists only in MYTHOS's own source. Both hold: index_project indexed src/core with no dependency-tree content in the result, and search_code found createEffectorHub inside src/core. revise_project is a DISPOSITION — it routes to the build engine and would write real project files, which a read-only harness must not do. WARN not OK: same offline-embedder caveat as documents — the pipeline is proved, the ranking is not."
     },
     {
       "c": "build",
       "n": "generators",
-      "s": "dark",
+      "s": "ok",
       "tools": [
         "generate_pdf",
         "generate_deck",
         "generate_spreadsheet",
         "generate_image"
       ],
-      "note": "generate_pdf, generate_deck, generate_spreadsheet, generate_image. Zero calls ever, all withheld from voice.",
-      "ev": "Never exercised. In the withheld-74 list."
+      "note": "generate_pdf, generate_deck, generate_spreadsheet, generate_image. EXERCISED 2026-08-27: 3 of 4 verified by magic bytes; image gen is a disposition, not a green.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) with ARTIFACT oracles, never the return value — a generator that returns ok:true has proved nothing. generate_pdf: a real PDF, %PDF- magic bytes, 16385 bytes, degraded:false (Chrome resolved here; the documented HTML degradation would have been reported as n/a, not as a pass). generate_spreadsheet: 6460 bytes, PK local-file header AND xl/workbook.xml inside the ZIP. generate_deck: 45407 bytes, PK header AND ppt/presentation.xml. generate_image is a DISPOSITION — it needs a keyed image lane and there is no free one under the no-spend decision, so it closes as a recorded non-change and never as a green. Worth recording: the harness first reported all three generators as FAILING because it read `.path` off the result when the field is `savedTo` — a harness bug that looks exactly like a product bug, which is why every verdict names the oracle it used."
     },
     {
       "c": "build",
@@ -1321,14 +1321,14 @@
     {
       "c": "dev",
       "n": "MCP bridge",
-      "s": "dark",
+      "s": "warn",
       "tools": [
         "mcp_list_servers",
         "mcp_list_tools",
         "mcp_call_tool"
       ],
-      "note": "mcp_list_servers, mcp_list_tools, mcp_call_tool. Zero calls in the entire history, all withheld from voice.",
-      "ev": "Never exercised. Only mythos/mcp/server.js exists."
+      "note": "mcp_list_servers, mcp_list_tools, mcp_call_tool. EXERCISED 2026-08-27. WARN because MCP is disabled here, so the tools answered honestly about an empty config rather than against a live server.",
+      "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5). mcp_list_servers answered truthfully about the real configuration — enabled:false, servers:[], plus a hint naming MCP_SERVERS in mythos/.env — which is a pass for honesty, and the honest answer for an unconfigured bridge is an empty list. mcp_list_tools REFUSED an unknown server with a reason rather than returning silently empty, which is the behaviour that matters. mcp_call_tool is a DISPOSITION and the work order says why: it is T3 and goalId-gated by the leash, and that refusal without a goal is CORRECT SECURITY POSTURE, not a gap — a harness that manufactured a goal to get past it would be measuring the wrong thing. WARN not OK: with MCP_SERVERS unset, nothing here exercised a real stdio server. Closing it needs one configured MCP server, which is an operator action and not a defect."
     },
     {
       "c": "dev",
@@ -3697,18 +3697,27 @@
           "fix": "Extraction moves to `src/core/util/youtube-id.js` and reads all nine shapes. It carries a",
           "verification": "``` node --test test/bug-381-youtube-id-and-typed-open-web-reasons.test.js before the fix : 11 tests, 9 pass, 2 fail (\"22 of 22 open_web failures carry no typed code\") after the fix : 17 tests, 17 pass, 0 fail file-size ratchet: from-dashboard.js 1418 (ceiling 1418) — at, never over mutations: 8 run across both files, 8 caught, both restored sha256-identical. Y1 restores the ORIGINAL four-shape regex -> 3 fail. That is the red-first proof for the extractor: the \"five shapes that were being missed\" assertion goes red against exactly the code that shipped before. Y2 host guard dropped -> the fake-id test catches it Y3 /live/ arm dropped -> the livestream shape catches it Y4 query-anywhere v= dropped -> the share-link shapes catch it C3 one failure loses its code -> the all-22-typed walk catches it ```"
         }
+      },
+      {
+        "n": 382,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "five dark nodes, 22 tools, zero recorded calls: a harness that judges on oracles, and three times it accused the product of its own bugs",
+        "detail": {
+          "verification": "``` node scripts/verify-dark-nodes.js 17 pass · 5 disp · 0 FAIL · exit 0 node --test test/bug-382-dark-node-harness.test.js 10 tests, 10 pass, 0 fail ``` The gate test asserts the"
+        }
       }
     ],
     "counts": {
       "verified": 29,
-      "fixed": 54,
+      "fixed": 55,
       "open": 10,
       "coded": 1,
       "diagnosed": 1,
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 229,
+    "total": 230,
     "openDeclared": [
       344,
       346,

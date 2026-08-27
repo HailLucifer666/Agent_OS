@@ -41,6 +41,105 @@ it is committed.
 
 ---
 
+## BUG-382 — five dark nodes, 22 tools, zero recorded calls: a harness that judges on oracles, and three times it accused the product of its own bugs (✅ EXERCISED 2026-08-27)
+
+**Status:** ✅ EXERCISED 2026-08-27. 1 new script, 1 new test file (10
+assertions). Track D-5. **No product defect found** — and that is the honest
+result for nodes that were unmeasured rather than broken.
+
+**Final measured run of `node scripts/verify-dark-nodes.js`: 17 pass, 5
+dispositions, 0 FAIL, exit 0.** All 22 tools accounted for.
+
+### Why a harness and not a fix
+
+Five map nodes were `dark`: `file ops`, `generators`, `documents`,
+`code search`, `MCP bridge` — 22 registered tools with **zero recorded calls
+between them**. Dark is not broken, it is unmeasured, and the work order is
+explicit that these "need a harness not a fix". A tool nobody has ever called has
+no evidence either way, and writing "probably fine" into the map would be exactly
+the dishonesty this campaign exists to remove.
+
+### The rule the harness runs on
+
+**Every check is an ORACLE, not a self-report.** A generator returning `ok:true`
+has proved nothing; a file whose first five bytes are `%PDF-` has proved
+something.
+
+| group | oracle | result |
+|---|---|---|
+| file ops | the filesystem, read back after each call | **7 pass**, 1 disposition (`open_folder` needs a desktop shell) |
+| generators | magic bytes — `%PDF-`, and the `PK\x03\x04` ZIP header plus `xl/workbook.xml` / `ppt/presentation.xml` | **3 pass** (PDF 16385 b real, xlsx 6460 b, pptx 45407 b), 1 disposition |
+| documents | a REAL corpus (6 files from `mythos/docs` + `Plans`), searched for a term known to be present | **3 pass** (26 chunks embedded, 10 hits), 1 disposition |
+| code search | the BUG-368 oracle: no `.venv`/`node_modules` in the result, AND a symbol found inside MYTHOS's own `src/core` | **2 pass**, 1 disposition |
+| MCP bridge | an unknown server must be REFUSED with a reason, not answered emptily | **2 pass**, 1 disposition |
+
+**The five dispositions, each with its reason in code:** `open_folder` (would pop
+a real Explorer window rather than measure anything), `generate_image` (needs a
+keyed image lane; no free one under the no-spend decision — so it closes as a
+disposition and *never* as a green), `document_answer` (needs a brain lane, i.e.
+spend), `revise_project` (routes to the build engine and would write real project
+files), and `mcp_call_tool` — which the work order itself says to record as
+**correct security posture**: it is T3 and goalId-gated by the leash, and a
+harness that manufactured a goal to get past it would be measuring the wrong
+thing.
+
+### THE FINDING THAT MATTERS MOST: the harness was wrong three times, and blamed the product every time
+
+| # | harness bug | what it reported |
+|---|---|---|
+| 1 | read `.path` off a generator result; the field is `savedTo` | three generators FAILING **while holding real artifacts on disk** |
+| 2 | returned an ARRAY of vectors from a single-in `embed(text)` | `document_search` broken |
+| 3 | returned a bare array where `{provider, dim, vec}` was required — `vector-index.add()` silently returns `false` without `.vec`, and `search()` returns `[]` unless `provider` and `dim` match | `document_search` AND `search_code` broken, zero hits for **every** query including `"the"` |
+
+All three drifted in the **fail-open direction**: what the harness could not do
+correctly, it reported as the code being broken. Each was fixed by reading the
+real contract instead of guessing at it. This is the "a model of a system is not
+the system" class, and it is why the script's standing rule is that every verdict
+names the oracle it used, and why a FAIL gets investigated before it is written
+into the map. Had any of those three been believed, this entry would have
+reported three fictional product defects.
+
+**Node statuses, honestly split:** `file ops` and `generators` → **ok**.
+`documents`, `code search` and `MCP bridge` → **warn**, and the caveats are real:
+the first two were verified with a deterministic **offline word-bag embedder** so
+the harness measures the tools rather than the provider, which proves the
+chunker, store, vector index and search path work end to end but says nothing
+about ranking quality with real embeddings; and `MCP bridge` ran with
+`MCP_SERVERS` unset, so nothing exercised a live stdio server. Map: **dark 7 → 2**.
+
+**Verification.**
+
+```
+node scripts/verify-dark-nodes.js
+  17 pass · 5 disp · 0 FAIL · exit 0
+
+node --test test/bug-382-dark-node-harness.test.js
+  10 tests, 10 pass, 0 fail
+```
+
+The gate test asserts the **harness** is trustworthy rather than re-asserting the
+tools: that `isPdf` rejects an HTML fallback and an empty buffer, that `isZip`
+rejects `PK\x05\x06` (an empty-archive end record, not a file entry), that the
+four verdicts are distinct so a disposition can never be counted as a pass, that
+a group exists per dark node, and that the FAIL path actually records a FAIL —
+because a harness whose failure path has never fired is one nobody should trust.
+
+**What this does NOT close.**
+
+- **Nothing here proves ranking quality** for `documents` or `code search`. One
+  run with ollama or mistral-embed live would.
+- **`MCP bridge` never reached a real server.** That needs one configured MCP
+  server, which is an operator action, not a defect.
+- `documents` and `code search` are **excluded from the suite test** on purpose —
+  `index_project` walks `src/core` and `document_ingest` chunks and embeds six
+  real files, which is right for a script and too slow for the suite. Stated
+  rather than hidden; they are covered by running the script.
+- **`open_folder`, `generate_image`, `document_answer`, `revise_project` and
+  `mcp_call_tool` were never executed.** Five of 22 tools remain unexercised by
+  deliberate choice, each with its reason recorded.
+
+---
+
 ## BUG-381 — the YouTube id extractor knew four URL shapes and missed five, including the /live/ path news streams use (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 1 new module, 1 file edited, 17 assertions,
