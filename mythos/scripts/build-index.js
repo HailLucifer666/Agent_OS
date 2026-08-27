@@ -20,14 +20,27 @@
  * Each splices its own key and preserves the others by spread, so the order
  * they run in does not matter and two sessions can own different halves.
  *
- * WHY THE STATUS COLUMN SAYS "unrecorded" SO OFTEN
+ * WHY THE STATUS COLUMN SAYS "unrecorded", AND WHY IT USED TO SAY IT 97 TIMES
+ * MORE THAN IT SHOULD HAVE
  *
- * Measured 2026-08-27: of the entries in BUGS.md, only about a quarter state a
- * status in a form a machine can read. The rest are a heading and prose. This
- * generator reports `unrecorded` for those rather than inferring `fixed`,
- * because an entry with no status is not evidence of closure — and a register
- * that guesses is worse than one that admits the gap. The count of unrecorded
- * entries is itself published, so the gap is visible rather than smoothed over.
+ * The claim that stood here — "only about a quarter state a status in a form a
+ * machine can read, the rest are a heading and prose" — was measured against the
+ * reader rather than against BUGS.md, and it was wrong. Of the 133 entries this
+ * file called unrecorded on 2026-08-27, 88 opened with a BOLD MARKER LINE
+ * (`**FIXED.**`, `**Fixed** by <sha>`, `**NOT done, and not attempted:**`) and 8
+ * more had an ordinary `**Status:**` line in a shape the regexes missed. That is
+ * simply the convention BUGS.md used before `**Status:**` existed. BUG-389 taught
+ * classify() to read it: 133 unrecorded became 36, with no entry that already had
+ * a status changing state.
+ *
+ * The refusal to guess is UNCHANGED and is the reason this is safe. Reading a
+ * status the author wrote in an older shape is reading; deriving one from a
+ * commit or a test file is not, and is still not done. Measured while fixing
+ * this: 75 of the no-status entries have a commit naming them, but BUG-051's
+ * only commit is `docs(bugs): file BUG-051..BUG-058` (the FILING commit) and
+ * BUG-059's matches name other bugs in their subject — so a commit-derived status
+ * would have closed bugs nobody fixed. An entry that states nothing is still
+ * `unrecorded`, the count is still published, and the gap stays visible.
  *
  * THE OPEN SET IS DERIVED FROM THE REGISTER SECTION, NOT FROM ABSENCE
  *
@@ -141,23 +154,102 @@ function excerpt(body) {
   return t.length > SECTION_CAP ? t.slice(0, SECTION_CAP).trim() + '…' : t;
 }
 
+// BUG-389 — THE OLDER ENTRIES DO STATE A STATUS; NOTHING WAS LOOKING FOR IT.
+//
+// This file's own header used to say the unrecorded entries were "a heading and
+// prose". Measured against all 133 of them: 88 open with a BOLD MARKER LINE —
+// `**FIXED.**`, `**Fixed** by <sha>`, `**NOT done, and not attempted:**` — which
+// is simply the convention BUGS.md used before `**Status:**` existed. Reading a
+// status the author wrote in an older shape is READING, not inferring, so the
+// refusal-to-guess rule below is untouched: an entry that states nothing is still
+// `unrecorded`.
+//
+// Q1 — WHAT ELSE MATCHES THIS? The reason these are anchored to the start of a
+// line and to `**`. `\bFIXED\b` appears somewhere in 100 of the 121, including
+// sentences about OTHER tickets' fixes and about things that were NOT fixed, so a
+// free-text search would have closed bugs on the strength of a cross-reference.
+// Two live traps this population actually contains, both pinned by tests:
+// BUG-098's `**NOT done, and not attempted:**` must read OPEN, not fixed, and
+// BUG-049's `**Not unit-testable.**` is not a status at all and must stay
+// unrecorded — which is why NOT- is matched against an explicit verb list rather
+// than as a prefix.
+const MARK = {
+  // Order matters: the negative is tested before the positive it contains.
+  notDone: /^\s*\*\*\s*NOT\s+(?:done|fixed|attempted|started|implemented)\b/im,
+  verified: /^\s*\*\*\s*(?:LIVE-?VERIFIED|VERIFIED)\b/im,
+  fixed: /^\s*\*\*\s*(?:FIXED|RESOLVED|SHIPPED|Fixed)\b/m,
+  coded: /^\s*\*\*\s*(?:🔧\s*)?CODED\b/im,
+  diagnosed: /^\s*\*\*\s*(?:🔍\s*)?(?:DIAGNOSED|MEASURED)\b/im,
+};
+
+// The `**Status:**` line, as WRITTEN rather than as hoped for. The old reader
+// required the marker to sit immediately after the colon, so BUG-011's
+// "**Status:** Fix 2 (param aliasing) ✅ VERIFIED · Fix 1 ... ✅ LIVE-VERIFIED"
+// — three separately verified fixes — was read as no status at all.
+function statusLine(body) {
+  const m = body.match(/\*\*Status:?\*\*:?([^\n\r]{0,300})/i);
+  return m ? m[1] : '';
+}
+
+// ONE status source per entry, chosen deterministically, and the order is the
+// whole safety property. An explicit `**Status:**` line is what the author wrote
+// as the status and always wins; a bold marker line is consulted ONLY when there
+// is no Status line at all.
+//
+// Q1 again, and this one bit during development: scanning the body for markers
+// regardless of a Status line reclassified three entries that were already being
+// read CORRECTLY. BUG-037 (`**Status:** ⚠️ MITIGATED`) and BUG-038 and BUG-367
+// (both `**Status:** ✅ FIXED`) each carry a later `**Not fixed in this pass:**`
+// or `**Not ...**` subsection, which is a scoped note about one PART of the work,
+// not the ticket's disposition. Reading it as the status turned two fixed bugs
+// and one verified bug back into open ones. A marker is only a status when it is
+// standing in for a Status line that does not exist.
+function firstMarkerLine(body) {
+  for (const line of body.split(/\r?\n/)) {
+    for (const [state, re] of Object.entries(MARK)) {
+      if (re.test(line)) return { state, line };
+    }
+  }
+  return null;
+}
+
 function classify(bug, openSet) {
   const t = bug.body.replace(/\s+/g, ' ');
   const h = bug.head;
+  const s = statusLine(bug.body);
+  const mark = s ? null : firstMarkerLine(bug.body);
   const say = (re) => re.test(t);
 
-  if (/duplicate of BUG/i.test(h) || /\*\*Status:\*\*[^.]{0,40}duplicate/i.test(t)) return 'duplicate';
+  // The 40-character window is deliberate and was widened to 300 once, which
+  // immediately misread BUG-001 ("✅ CLOSED via BUG-026's fix … live-verified
+  // working") as a duplicate because the word appeared much later in the line.
+  if (/duplicate of BUG/i.test(h) || /^[^.]{0,40}duplicate/i.test(s)) return 'duplicate';
+  // SUPERSEDED points at another entry, which is what `duplicate` already means
+  // here; inventing a seventh state would change the register's shape for two rows.
+  if (/^[^.]{0,40}SUPERSEDED/i.test(s) || /\bSUPERSEDED\b/.test(h)) return 'duplicate';
   if (openSet.has(bug.n)) return 'open';
+  if (mark && mark.state === 'notDone') return 'open';
 
+  // MITIGATED is a shipped change that bounds a defect it does not remove. It is
+  // closer to fixed than to anything else and is stated as a status by its author.
   const fixed = /✅/.test(h) || /\bFIXED\b/.test(h) || /\bRESOLVED\b/.test(h)
-    || /\*\*Status:\*\*\s*✅/.test(t) || /\*\*Status:\*\*[^.]{0,40}(FIXED|RESOLVED)/i.test(t);
+    || /✅/.test(s) || /\b(FIXED|RESOLVED|VERIFIED|MITIGATED|CLOSED)\b/i.test(s)
+    || (mark && (mark.state === 'fixed' || mark.state === 'verified'));
   if (fixed) {
     const proven = say(/mutation-proven/i) || say(/0 survived/i);
     const live = say(/live-?verified/i) && !say(/NOT (?:yet )?live-?verified/i);
     return (proven || live) ? 'verified' : 'fixed';
   }
-  if (/🔍/.test(h) || /\bMEASURED\b/.test(h) || /\bDIAGNOSED\b/.test(h)) return 'diagnosed';
-  if (/🔧/.test(h) || /\bCODED\b/.test(h)) return 'coded';
+  if (/🔍/.test(h) || /\bMEASURED\b/.test(h) || /\bDIAGNOSED\b/.test(h)
+    || /🔍/.test(s) || /\b(DIAGNOSED|MEASURED)\b/i.test(s)
+    || (mark && mark.state === 'diagnosed')) {
+    return 'diagnosed';
+  }
+  if (/🔧/.test(h) || /\bCODED\b/.test(h)
+    || /🔧/.test(s) || /\bCODED\b/i.test(s)
+    || (mark && mark.state === 'coded')) {
+    return 'coded';
+  }
   if (say(/\bFILED, NOT STARTED\b|\bNOT STARTED\b/i)) return 'open';
   return 'unrecorded';
 }
