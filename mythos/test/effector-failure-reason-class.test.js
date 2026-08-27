@@ -53,9 +53,10 @@ const { effectorFromTool } = require('../src/core/effectors/adapter');
 const { dispatchAction } = require('../src/core/effectors/dispatch-action');
 const { createEffectorHub } = require('../src/core/effectors/hub');
 const { computeEffectorTools, createInertCtx } = require('../scripts/sync-test-count.js');
-const { reasonText } = require('../src/core/util/reason-text');
+const { reasonText, DEAD_REASON_TEXT } = require('../src/core/util/reason-text');
 
-const EFFECTOR_DIR = path.join(__dirname, '..', 'src', 'core', 'effectors');
+const SRC_DIR = path.join(__dirname, '..', 'src');
+const EFFECTOR_DIR = path.join(SRC_DIR, 'core', 'effectors');
 
 // ---------------------------------------------------------------------------
 // What "a human can act on" means, as code rather than as prose.
@@ -64,7 +65,12 @@ const EFFECTOR_DIR = path.join(__dirname, '..', 'src', 'core', 'effectors');
 // is a check that information EXISTS. Every string below was observed in the
 // operator's real audit trail (%APPDATA%/MYTHOS/vault/Audit) on a fail row, and
 // each one told the reader nothing whatsoever about what went wrong.
-const DEAD_REASONS = new Set(['[object Object]', '{}', '[]', 'undefined', 'null', 'NaN']);
+// DERIVED, never re-typed. This was a second hand-written copy of the list in
+// util/reason-text.js — the "denylist where a rule belongs" shape: two lists
+// that must agree are two lists that will eventually disagree, and the one that
+// drifts is whichever nobody is looking at. reason-text.js owns the question
+// "is this text actually a reason?", so it owns the answer and this reads it.
+const DEAD_REASONS = DEAD_REASON_TEXT;
 
 function unreadable(reason) {
   if (reason === undefined) return 'the reason key is absent from the audit row';
@@ -170,6 +176,34 @@ const FAILURE_SHAPES = [
     fn: () => { throw { response: { status: 402, body: 'payment required' } }; },
     expectPreserved: '402',
   },
+  // The four below came from a hostile-input probe run AFTER the first version of
+  // this file was already green — the "friendly test data" class. The twelve
+  // shapes above are the ones I could imagine from reading the tree; these are
+  // the ones that embarrassed it. Three of fifteen probed shapes produced the
+  // bare token 'NaN', which is truthy, so it sailed through the mirror and became
+  // the operator's entire explanation.
+  {
+    label: 'ok:false with error: NaN — truthy after String(), still not a reason',
+    fn: () => ({ ok: false, error: NaN }),
+    namesTool: true,
+  },
+  {
+    label: 'ok:false with reason: NaN',
+    fn: () => ({ ok: false, reason: NaN }),
+    namesTool: true,
+  },
+  {
+    label: 'fn throws NaN',
+    fn: () => { throw NaN; },
+    namesTool: true,
+  },
+  {
+    label: 'fn throws null',
+    // reasonText(null) is '' by design (it means "no argument passed"), so this
+    // is the shape that most directly needs the door's own last resort.
+    fn: () => { throw null; },
+    namesTool: true,
+  },
 ];
 
 // Negative controls. A fix that made every failure readable by flattening them
@@ -206,6 +240,22 @@ const READABLE_CONTROLS = [
     label: 'a real Error message passes through byte-for-byte',
     fn: () => { throw new Error('Gmail fetch failed: invalid_grant: Bad Request'); },
     exact: 'Gmail fetch failed: invalid_grant: Bad Request',
+  },
+  // PINNED DELIBERATE NON-CHANGE. `0` and `false` are as useless as prose as
+  // 'NaN' is, and they are NOT rejected. The difference is that they are
+  // indistinguishable from a legitimate numeric error code or a meaningful flag,
+  // and a door that discards real information to tidy up its own output is worse
+  // than one that passes along a terse value. These two live here so the next
+  // reader does not "finish the job" by adding them to DEAD_REASON_TEXT.
+  {
+    label: 'error: 0 is passed through, NOT treated as a dead reason (by design)',
+    fn: () => ({ ok: false, error: 0 }),
+    exact: '0',
+  },
+  {
+    label: 'error: false is passed through, NOT treated as a dead reason (by design)',
+    fn: () => ({ ok: false, error: false }),
+    exact: 'false',
   },
 ];
 
@@ -272,21 +322,66 @@ async function auditRowFor(toolName, fn) {
 
 // ---------------------------------------------------------------------------
 describe('BUG-378 Part A — the choke point every tool failure passes through', () => {
-  it('every effector file registers through effectorFromTool, so the walk cannot be vacuous', () => {
+  it('every effector registered ANYWHERE under src/ goes through effectorFromTool', () => {
+    // THIS ASSERTION WAS REWRITTEN AFTER TWO PROBES DEFEATED ITS FIRST DRAFT.
+    //
+    // The first draft scanned only `src/core/effectors/` for the literal text
+    // `hub.register(`. Both probes passed — meaning the guard MISSED both — and
+    // each was an instance of the very class this file exists to close:
+    //
+    //   probe 1: `hub.register({id, invoke})` added to `src/main.js`, one
+    //            directory above the scan. Invisible. A smuggled effector is
+    //            dispatchable and never touches adapter.js.
+    //   probe 2: `const h = hub; h.register(rawEffector(...))` INSIDE the
+    //            scanned directory. Invisible, because the guard matched a
+    //            SPELLING (`hub.register`) instead of expressing a RULE.
+    //
+    // So: any receiver, and every .js file under src/. The set a guard must hold
+    // over is every file that comes after it, not the files that existed when it
+    // was written.
+    //
+    // Measured before widening so this cannot cry wolf: there are 30 `.register(`
+    // call sites under src/ and every one is either `effectorFromTool` or
+    // `registerNamed`. Zero false positives today.
     const offenders = [];
-    for (const file of fs.readdirSync(EFFECTOR_DIR).filter((f) => f.endsWith('.js'))) {
-      const src = fs.readFileSync(path.join(EFFECTOR_DIR, file), 'utf8');
-      for (const line of src.split(/\r?\n/)) {
-        // Comments discuss `hub.register(` freely; only real calls matter.
-        const code = line.replace(/\/\/.*$/, '');
-        if (!/\bhub\.register\s*\(/.test(code)) continue;
-        if (!/effectorFromTool/.test(code)) offenders.push(file + ': ' + line.trim());
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.name.endsWith('.js')) continue;
+        // Strip line comments first: several files discuss `hub.register(` in
+        // prose, and a guard that fires on a comment is a guard someone
+        // switches off.
+        const src = fs.readFileSync(full, 'utf8').replace(/\/\/[^\n]*/g, '');
+        // Scan CALL SITES, not lines. The line-based first draft would also have
+        // false-positived on the ordinary formatting
+        // `hub.register(\n  effectorFromTool(tool))`.
+        const re = /\.register\s*\(/g;
+        let m;
+        while ((m = re.exec(src)) !== null) {
+          // registerNamed is deliberately allowed, and this is the evidence
+          // rather than an assumption: verified 2026-08-27 in hub.js that
+          // `invoke()` resolves out of the `effectors` Map (hub.js:243) while
+          // `registerNamed` writes a separate `namedServices` Map (hub.js:105).
+          // A named service therefore cannot be reached by a tool call and
+          // produces no audit row. src/main.js registers three (the goals,
+          // kanban and pipeline bridges).
+          if (/registerNamed\s*\($/.test(src.slice(0, m.index + m[0].length))) continue;
+          const window = src.slice(m.index, m.index + 200);
+          if (!/effectorFromTool/.test(window)) {
+            offenders.push(path.relative(SRC_DIR, full).replace(/\\/g, '/')
+              + ': ' + window.split('\n').slice(0, 2).join(' ').trim().slice(0, 90));
+          }
+        }
       }
-    }
+    };
+    walk(SRC_DIR);
     assert.deepEqual(offenders, [],
-      'a direct hub.register() bypasses adapter.js, which is where the failure-reason '
-      + 'normalisation lives. Either route it through effectorFromTool() or extend this '
-      + 'walk to cover the new path — do not delete this assertion.');
+      'a register() call that does not go through effectorFromTool() bypasses '
+      + 'adapter.js, where the failure-reason normalisation lives. Either route it '
+      + 'through effectorFromTool(), or — if it genuinely is not a dispatch door, '
+      + 'the way registerNamed is not — allow it here WITH the evidence that '
+      + 'invoke() cannot reach it. Do not delete this assertion.');
   });
 
   it('the walk covers every tool sync-test-count counts (no silent under-coverage)', () => {

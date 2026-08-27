@@ -251,6 +251,108 @@ adapter.js restored sha256-identical after every one:
 
 ---
 
+### Follow-up, same day — the guard had two instances of the class it prevents
+
+(Part of the entry above. The heading deliberately does NOT repeat the number:
+`lint-bug-registry` counts headings as DECLARATIONS, so a second `## BUG-378`
+heading reads as a numbering collision and blocks every commit. It did, and this
+is the fix. Prose may cite the number freely — BUG-373 established that prose is
+not allocation.)
+
+`dabd702` shipped the class assertion. A review pass over that commit probed the
+**guard** rather than reading it, and the guard failed twice. Both are the
+"a guard that has the bug it prevents" shape, which is the highest-yield class
+precisely because a green guard feels like proof.
+
+**Hole 1 — the guard policed one directory and claimed to police the door.**
+Part A scanned only `src/core/effectors/`. Probe: add
+`hub.register({id:'smuggled_tool', invoke})` to **`src/main.js`**, one directory
+up. **`fail 0` — invisible.** A smuggled effector is dispatchable and never
+touches `adapter.js`, so the whole one-door premise silently stops holding.
+
+**Hole 2 — the guard matched a spelling, not a rule.** The pattern was the
+literal `hub.register(`. Probe: `const h = hub; h.register(rawEffector(...))`
+**inside the scanned directory**. **`fail 0` — invisible.**
+
+Fixed by making the assertion a rule: any receiver (`\.register\s*\(`), every
+`.js` file under `src/`, scanned at CALL SITES rather than per line — the
+line-based version would also have false-positived on the ordinary formatting
+`hub.register(\n  effectorFromTool(tool))`, which is now pinned by its own probe.
+Measured before widening so it cannot cry wolf: **30 `.register(` call sites
+under `src/`, every one either `effectorFromTool` or `registerNamed`, zero false
+positives.**
+
+`registerNamed` is allowed **with its evidence, not on assumption**: `invoke()`
+resolves out of the `effectors` Map (`hub.js:243`) while `registerNamed` writes a
+separate `namedServices` Map (`hub.js:105`), so a named service can never be
+reached by a tool call and never produces an audit row. `src/main.js` registers
+three (the goals, kanban and pipeline bridges).
+
+**Hole 3 — friendly test data.** The twelve failure shapes in `dabd702` were the
+ones I could imagine from reading the tree. A hostile-input probe of fifteen
+shapes found **three that produced the bare token `NaN`**: `{ok:false, error:
+NaN}`, `{ok:false, reason: NaN}` and `throw NaN`. `reasonText(NaN)` is
+`String(NaN)` → `'NaN'`, which is **truthy**, so it passed the
+`reason || noReasonGiven(...)` test and became the operator's entire explanation
+— a value already on this repo's own dead-literal list.
+
+**Hole 4 — a denylist where a rule belongs, in my own test.** The test hand-typed
+its own copy of the dead-literal list. Two lists that must agree are two lists
+that will disagree, and the one that drifts is whichever nobody is reading.
+
+**Fix.** `DEAD_REASON_TEXT` + `isDeadReasonText()` now live in
+`util/reason-text.js` — the module that owns "is this text actually a reason?" —
+and both `adapter.js` and the test read **that one set**. `adapter.js` gains
+`usableReason()`, which is `reasonText()` plus "and did it carry information",
+used at the door because here the answer is STORED as a standalone field rather
+than concatenated into a caller's own sentence. `reasonText()` itself is
+unchanged: verified byte-for-byte on seven inputs, and
+`test/util-reason-text.test.js` still passes, so no existing caller moves.
+
+**Deliberate non-change, pinned by two tests:** `'0'` and `'false'` are NOT
+treated as dead. They are as useless as prose as `'NaN'` is, but they are
+indistinguishable from a legitimate numeric error code or a meaningful flag, and
+a door that discards real information to tidy its own output is worse than one
+that passes along a terse value. Mutation N4 (adding `'0'` to the set) breaks
+those two tests, so the decision cannot drift silently.
+
+**Verification.**
+
+```
+node --test test/effector-failure-reason-class.test.js test/util-reason-text.test.js
+  36 tests, 36 pass, 0 fail, 0 skipped   (29 in the class file, up from 23)
+
+hostile-input probe, 15 shapes:
+  before: 3 of 15 produced a dead literal ('NaN')
+  after : 0 of 15
+
+guard probes:
+  P1 direct hub.register() in src/main.js   before: fail 0 (missed) -> after: CAUGHT
+  P2 renamed receiver in the effectors dir  before: fail 0 (missed) -> after: CAUGHT
+  P3 valid multi-line formatting            after: fail 0 (no false positive)
+
+full suite: 6562 tests / 6562 pass / 0 fail / 0 skipped  (green on the first run)
+lint-bug-registry: undeclared 130 / baseline 130
+build-capability-map --check / build-index --check : OK
+
+mutations: 12 run against adapter.js + reason-text.js, 12 caught, all three files
+restored sha256-identical. With P1/P2/P3 on the guard that is 14 probes, 14
+behaving correctly. The two that matter most:
+  N2  'NaN' removed from DEAD_REASON_TEXT -> 3 fail   (the DERIVED list is
+                                                       load-bearing, not decorative)
+  N4  '0' added to DEAD_REASON_TEXT       -> 1 fail   (the pinned non-change is
+                                                       genuinely locked)
+```
+
+**Still not closed.** Holes 1 and 3 are fragility, not observed live bugs: no
+effector in this tree registers outside the door today (grepped), and none is
+known to return `NaN`. Both are closed because a guard that only holds for the
+files that existed when it was written is not a guard, not because either was
+seen in the vault. `spotify_search` remains red and still needs the operator's
+desktop.
+
+---
+
 ## BUG-376 — the capability-map gate blocked every commit from any checkout without the live vault (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 1 test rewritten, 1 added, mutation-proven.

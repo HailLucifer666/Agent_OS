@@ -6,7 +6,7 @@
 // only the require path for tierOf changed to match Leash's real module location.
 
 const { tierOf } = require('../leash/tiers');
-const { reasonText } = require('../util/reason-text');
+const { reasonText, isDeadReasonText } = require('../util/reason-text');
 
 // BUG-378 (2026-08-27). THE ONE DOOR every tool failure leaves through.
 //
@@ -36,6 +36,24 @@ const { reasonText } = require('../util/reason-text');
 // two surfaces that never asked for a cap. Six keys is enough to recognise a
 // shape; the count tells the reader when there are more.
 var MAX_SHAPE_KEYS = 6;
+
+// reasonText() answers "what text can I get out of this?". This answers the
+// question the DOOR actually has: "did that text carry any information?" —
+// because here the answer is STORED as a standalone field, not concatenated into
+// a caller's own sentence, so a token like 'NaN' is worse than nothing. Returns
+// '' for a dead answer so the `||` below falls through to noReasonGiven().
+//
+// Found by hostile-input probe 2026-08-27, not by reading: `{ok:false,
+// error: NaN}` produced the string 'NaN', which is truthy, so the mirror
+// accepted it and the operator's entire explanation was three letters. Three of
+// fifteen probed shapes did this. FRAGILITY, NOT AN OBSERVED LIVE BUG — no
+// effector in this tree is known to return NaN — closed because a door that
+// substitutes a reason should not accept a token it would reject from anyone
+// else.
+function usableReason(raw) {
+  var text = reasonText(raw);
+  return isDeadReasonText(text) ? '' : text;
+}
 
 function noReasonGiven(toolName, result) {
   var keys;
@@ -125,7 +143,7 @@ function effectorFromTool(tool) {
             // "[object Object]"), and it is the same normaliser
             // dispatch-action.js and hub.js's reasonOf() already use — one
             // shared normaliser rather than a third local copy to drift.
-            var reason = reasonText(result.error) || reasonText(result.reason);
+            var reason = usableReason(result.error) || usableReason(result.reason);
             return Object.assign({}, result, {
               result: reason || noReasonGiven(tool.name, result),
             });
@@ -142,7 +160,7 @@ function effectorFromTool(tool) {
         // operator was told a tool failed with no reason at all. reasonText()
         // was extracted in B5 (2026-08-13) for precisely this and never reached
         // this line.
-        return { ok: false, result: reasonText(err) || noReasonGiven(tool.name, err) };
+        return { ok: false, result: usableReason(err) || noReasonGiven(tool.name, err) };
       }
     }
   };
