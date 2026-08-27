@@ -41,6 +41,74 @@ it is committed.
 
 ---
 
+## BUG-390 — three deferred tickets were tracked as nothing, and one entry wore another entry's status (✅ FIXED 2026-08-28, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-28. 11 assertions, 10 mutations all caught, source
+restored sha256-identical. **36 unrecorded → 28, and two false-positive classes
+removed.** Continues BUG-389 by the same method: read what the entries still
+marked `unrecorded` actually say.
+
+### Two more stated statuses nothing was reading
+
+- **`**OPEN. Deferred by design to merged-order step 8**` and `**OPEN,
+  UNDIAGNOSED …**`** — BUG-266, BUG-267 and BUG-268. This is the one that
+  matters: **an entry wrongly left unrecorded here is real work that nothing is
+  tracking.** All three go on to describe the fix that *would* close them, and
+  reading that description as the status is exactly how a deferred ticket
+  vanishes — so an OPEN marker now outranks any later `**Fix.**` section.
+- **Pointer-shape entries carry their status inline** as a bullet rather than a
+  heading: `- BUG-345 - adblock silence caveat. FIXED 639200c:`. BUG-345, 349
+  and 350 read this way.
+
+### The more important half: two ways it read the WRONG entry's status
+
+**BUG-273 was reading `verified` off a bullet nested inside it that was about
+BUG-345.** Large audit entries list their follow-ups as `- BUG-nnn` bullets, so
+the first one carrying the word FIXED became the parent's disposition. One
+ticket's status assigned to another, failing toward closing things nobody fixed.
+The bullet pattern is now built per entry and must name **that entry's own
+number**.
+
+**BUG-352 reads `**COUNTER FIXED 2026-08-27 (147 → 179, verified); the README
+catalog table and pie are NOT yet generated**`** — and the qualifier is on the
+bullet's *second* line. A line-by-line scan saw the FIXED and never reached it,
+closing a half-done ticket on the half that landed. Bullet patterns are now
+tested against the flattened entry, while the `**` markers stay line-anchored
+because that anchoring is what stops a mid-paragraph sentence being read as a
+status.
+
+### 28 remain, and they are the correct answer
+
+The last 28 (BUG-047…097, 230, 236, 253, 256, 272) state no status in any
+convention. They are narrative: `**Symptom.** / **Root cause.** / **Fix.**`,
+past tense, naming real code. **Three mechanical oracles were built to close
+them and all three were rejected for producing false positives**, which is worth
+recording so a fourth is not attempted blind:
+
+1. *Any commit naming the bug* — 75 of 121 matched, but BUG-051's only commit is
+   `docs(bugs): file BUG-051..BUG-058` (the commit that FILED it) and BUG-059's
+   matches name other bugs in their subject.
+2. *Any named artifact present in the tree* — 22 of 28 matched on tokens like
+   `timeout`, `flush`, `persona` and `createServer`, words that appear
+   everywhere. A guard passing vacuously.
+3. *A distinctive artifact co-located in the named file* — better, and still
+   wrong: BUG-049's `CHARACTER` matched `ps-automation.ps1` and BUG-093's
+   `ALIASES` matched `triage-drift.js`, neither of which is the file the fix
+   touched.
+
+**These need a person reading each entry against the code.** Writing 28 statuses
+from any of those oracles would be precisely the failure the register exists to
+prevent, and would be worse than the gap because it would carry generator
+authority.
+
+One measured detail for whoever does it: **BUG-051, 052 and 058 name artifacts
+that are genuinely absent (`HERMES_TEXT_BUILD_TIMEOUT_MS`), and that is not
+evidence they were never fixed** — Hermes-Agent was deleted wholesale on
+2026-08-22 when DeepSeek Harness replaced it. An absent artifact means the
+subsystem moved, not that the work did not happen.
+
+---
+
 ## BUG-389 — the ticket register called 133 entries "unrecorded" while 96 of them stated a status it never looked for (✅ FIXED 2026-08-28, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-28. 1 source file changed, 1 test file added (17
