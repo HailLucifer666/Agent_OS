@@ -68,7 +68,11 @@ const path = require('node:path');
 
 const MYTHOS_ROOT = path.join(__dirname, '..');
 const REPO_ROOT = path.join(MYTHOS_ROOT, '..');
-const MAP_FILE = path.join(REPO_ROOT, 'MYTHOS-CAPABILITY-MAP.html');
+// The single tracked surface at the repo root: capability map AND ticket
+// register in one page, both rendered from the one JSON island below.
+// Renamed from MYTHOS-CAPABILITY-MAP.html 2026-08-27 on the operator's ruling
+// that this repo tracks progress in a file, not in a published artifact.
+const MAP_FILE = path.join(REPO_ROOT, 'index.html');
 const ROADMAP_FILE = path.join(REPO_ROOT, 'ROADMAP.md');
 
 const ISLAND_OPEN = '<script type="application/json" id="map-data">';

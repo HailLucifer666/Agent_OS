@@ -4696,7 +4696,7 @@ Copy this to a fresh agent. It should need nothing else but this document and
 
 # CLOSURE CAMPAIGN (opened 2026-08-27)
 
-Everything on `MYTHOS-CAPABILITY-MAP.html` goes green, or gets a **recorded
+Everything on `index.html` (the capability map view) goes green, or gets a **recorded
 disposition**. Appended here rather than started as a fourth plan document: the
 three-document ceiling in root `CLAUDE.md` holds, and a campaign that lives in an
 untracked file is a campaign that gets lost.

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MYTHOS — Capability Map</title>
+<title>MYTHOS — Capability Map &amp; Ticket Register</title>
 <style>
   :root{
     --bg:#04060a; --bg2:#070b11; --grid:rgba(55,224,208,.05);
@@ -59,6 +59,61 @@
   .vital .l{font-family:var(--mono);font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-top:3px}
   .vital.ok .n{color:var(--ok)} .vital.fail .n{color:var(--fail)} .vital.warn .n{color:var(--warn)}
   .vital.unknown .n{color:var(--unknown)} .vital.dim .n{color:var(--dim)}
+
+  /* ---- view switcher + ticket register (one file, two views) ---- */
+  .tabs{display:flex;gap:2px;pointer-events:auto;margin-top:10px}
+  .tab{
+    font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    background:none;border:1px solid var(--line);color:var(--dim);padding:5px 13px;
+    cursor:pointer;border-radius:2px;
+  }
+  .tab[aria-selected="true"]{color:var(--bg);background:var(--accent);border-color:var(--accent)}
+  .tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  #register{
+    position:fixed;inset:0;z-index:5;overflow:auto;padding:132px 26px 80px;
+    background:linear-gradient(180deg,var(--bg2),var(--bg) 40%);
+  }
+  #register[hidden]{display:none}
+  .reg-wrap{max-width:1180px;margin:0 auto}
+  .reg-tools{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:18px}
+  .reg-search{
+    font-family:var(--mono);font-size:12px;background:rgba(255,255,255,.03);
+    border:1px solid var(--line);color:var(--ink);padding:7px 11px;border-radius:2px;min-width:230px;
+  }
+  .reg-search::placeholder{color:var(--dim)}
+  .fchip{
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+    background:none;border:1px solid var(--line);color:var(--dim);padding:4px 9px;
+    cursor:pointer;border-radius:2px;display:inline-flex;gap:7px;align-items:center;
+  }
+  .fchip .ct{font-variant-numeric:tabular-nums;opacity:.75}
+  .fchip[aria-pressed="false"]{opacity:.38}
+  .fchip .sw{width:8px;height:8px;border-radius:2px;display:inline-block}
+
+  .reg-tablewrap{overflow-x:auto}
+  .reg-table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:640px}
+  .reg-table th{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--dim);font-weight:500;text-align:left;padding:8px 12px;
+    border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg2);
+  }
+  .reg-table td{padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.045);vertical-align:top}
+  .reg-table tr:hover td{background:rgba(255,255,255,.025)}
+  .reg-id{font-family:var(--mono);font-weight:600;color:var(--accent);white-space:nowrap}
+  .reg-state{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+    padding:2px 7px;border-radius:2px;white-space:nowrap;
+  }
+  .reg-title{color:var(--ink);line-height:1.45}
+  .reg-shape{font-family:var(--mono);font-size:10px;color:var(--dim);white-space:nowrap}
+  .reg-note{
+    border:1px solid var(--line);border-left:3px solid var(--fail);border-radius:3px;
+    padding:14px 16px;margin-bottom:22px;color:var(--dim);font-size:13.5px;line-height:1.6;
+  }
+  .reg-note b{color:var(--ink)}
+  .reg-empty{padding:30px 12px;color:var(--dim);font-family:var(--mono);font-size:12px}
+  @media (max-width:720px){ #register{padding:150px 14px 60px} .reg-shape{display:none} }
   .vital .stamp{font-family:var(--mono);font-size:8px;letter-spacing:.1em;color:var(--dim);opacity:.7;margin-top:2px}
 
   /* ---- legend / filters ---- */
@@ -161,6 +216,10 @@
   <div class="brand">
     <h1>MY<b>THOS</b> &middot; CAPABILITY MAP</h1>
     <div class="sub" id="hdr-sub"></div>
+    <div class="tabs" role="tablist" aria-label="View">
+      <button class="tab" id="tab-map" role="tab" aria-selected="true" aria-controls="stage">Capability map</button>
+      <button class="tab" id="tab-reg" role="tab" aria-selected="false" aria-controls="register">Ticket register</button>
+    </div>
   </div>
   <div class="vitals" id="hdr-vitals"></div>
 </header>
@@ -195,6 +254,23 @@
 
 <div class="tip" id="tip"></div>
 
+<section id="register" hidden aria-labelledby="tab-reg">
+  <div class="reg-wrap">
+    <div class="reg-note" id="reg-note"></div>
+    <div class="reg-tools">
+      <input class="reg-search" id="reg-search" type="search" placeholder="filter by number or text" aria-label="Filter tickets">
+      <span id="reg-filters"></span>
+    </div>
+    <div class="reg-tablewrap">
+    <table class="reg-table">
+      <thead><tr><th style="width:5.5rem">Ticket</th><th style="width:8rem">Status</th><th>What it is</th><th style="width:7rem">Entry</th></tr></thead>
+      <tbody id="reg-body"></tbody>
+    </table>
+    </div>
+    <div class="reg-empty" id="reg-empty" hidden>Nothing matches that filter.</div>
+  </div>
+</section>
+
 <script>
 "use strict";
 
@@ -222,7 +298,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6521,
+      "value": 6531,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -1417,7 +1493,1388 @@
       "note": "Composes an email for review rather than sending one.",
       "ev": "No node existed for this capability until 2026-08-27, so no call count has ever been read for it. Status is unknown, not dark: dark is a measured claim (\"never exercised\") and nothing has measured these."
     }
-  ]
+  ],
+  "register": {
+    "bugs": [
+      {
+        "n": 1,
+        "shape": "entry",
+        "state": "verified",
+        "title": "Spotify play doesn't play the song"
+      },
+      {
+        "n": 2,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Text compose bar sends but reply never appears"
+      },
+      {
+        "n": 3,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Google News \"refused to connect\" in dashboard panel"
+      },
+      {
+        "n": 4,
+        "shape": "entry",
+        "state": "verified",
+        "title": "Music/media widget shows nothing when Spotify is playing"
+      },
+      {
+        "n": 5,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Floating news widgets cannot be closed"
+      },
+      {
+        "n": 6,
+        "shape": "entry",
+        "state": "verified",
+        "title": "YouTube embed shows \"Video unavailable\""
+      },
+      {
+        "n": 7,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "MYTHOS fabricates success (\"Playing X now\") when tools fail"
+      },
+      {
+        "n": 8,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`open_artifact` fails on voice channel (cortex channel works)"
+      },
+      {
+        "n": 9,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "No screenshot tool — cannot capture UI bugs as evidence"
+      },
+      {
+        "n": 10,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`ask_agent` not wired up — multi-agent dispatch broken"
+      },
+      {
+        "n": 11,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Browser automation offline / misconfigured"
+      },
+      {
+        "n": 12,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Approval popup on every action"
+      },
+      {
+        "n": 13,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Cortex stalls and effector flapping (healer can't fix)"
+      },
+      {
+        "n": 14,
+        "shape": "entry",
+        "state": "verified",
+        "title": "Memory pollution — `remember` auto-saves transcription noise"
+      },
+      {
+        "n": 15,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`identity-boundaries-malformed` — healer can't fix (9 occurrences)"
+      },
+      {
+        "n": 16,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Pipeline ships builds with `reviewStatus: \"failed\"`"
+      },
+      {
+        "n": 17,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Tool parameter schemas wrong / inconsistent (partially fixed)"
+      },
+      {
+        "n": 18,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`list_folder` of source dirs \"outside allowed folders\""
+      },
+      {
+        "n": 19,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Audit panel shows no audits"
+      },
+      {
+        "n": 20,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Voice pipeline picks up phantom background noise"
+      },
+      {
+        "n": 21,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "MYTHOS gives canned empathy instead of diagnosing problems"
+      },
+      {
+        "n": 22,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`identity.learn()` never populates learned preferences"
+      },
+      {
+        "n": 23,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Weather widget fails without resolved location"
+      },
+      {
+        "n": 24,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Calendar and Gmail integration never completed"
+      },
+      {
+        "n": 25,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Pipeline spec lost between capture and execute stages"
+      },
+      {
+        "n": 26,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Spotify play still doesn't start playback after the focus fix (BUG-001 follow-on)"
+      },
+      {
+        "n": 27,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Voice pipeline transcribes MYTHOS's own TTS output as user speech (audio feedback loop)"
+      },
+      {
+        "n": 28,
+        "shape": "entry",
+        "state": "verified",
+        "title": "`navigate` has no \"news\" route — MYTHOS opens the wrong panel or fails while claiming success"
+      },
+      {
+        "n": 29,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Orphaned browser-automation Chrome process keeps playing audio after MYTHOS + browser are fully closed"
+      },
+      {
+        "n": 30,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "\"Health alert: provider-down on mistral\" repeats in a loop"
+      },
+      {
+        "n": 31,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`spotify_play` crashes with `Cannot read properties of null (reading 'elements')`"
+      },
+      {
+        "n": 32,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`capture_screenshot` crashes with buffer type error"
+      },
+      {
+        "n": 33,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`open_folder` rejects `/vault/...` paths (leading-slash sandbox rejection)"
+      },
+      {
+        "n": 34,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Brain hallucinates `open_panel` tool (doesn't exist — should use `navigate`)"
+      },
+      {
+        "n": 35,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "Weather API — transient `fetch failed` (not a code bug)"
+      },
+      {
+        "n": 36,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "SMTC `media_status` fails — \"Failed to get session manager\""
+      },
+      {
+        "n": 37,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Concurrent sessions editing the same file can silently undo each other's verified fixes on `git pull`/fast-forward"
+      },
+      {
+        "n": 38,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`Handle-MediaStatus` hangs indefinitely when a track has album art (thumbnail extraction)"
+      },
+      {
+        "n": 47,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "\"It forgets what we were talking about\" (in-session)"
+      },
+      {
+        "n": 48,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Durable facts evicted by trivia (cross-session)"
+      },
+      {
+        "n": 49,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Replies feel like \"just another chatbot\""
+      },
+      {
+        "n": 50,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "`cortex.thought` had zero subscribers (no proactivity)"
+      },
+      {
+        "n": 51,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Builds shipped content from the engine the repo had already retired"
+      },
+      {
+        "n": 52,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Every text build silently ran on a 3-minute timeout"
+      },
+      {
+        "n": 53,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Built pages had no images, by construction"
+      },
+      {
+        "n": 54,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Installed skills reached builds only partly"
+      },
+      {
+        "n": 55,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "One chunk spoken twice: the \"5-6 word repetition\""
+      },
+      {
+        "n": 56,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "MYTHOS talks to itself: own TTS fed back into the Live mic"
+      },
+      {
+        "n": 57,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "The article copy was choosing the design system"
+      },
+      {
+        "n": 58,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Every build failed as \"hermes-agent not installed\" on a busy machine"
+      },
+      {
+        "n": 59,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Ad blocking silently gave up entirely, over a cosmetic-only API"
+      },
+      {
+        "n": 82,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-059] — MYTHOS went deaf; idle-timeout and session-max killed the reconnect path"
+      },
+      {
+        "n": 83,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-060] — two voices speaking simultaneously"
+      },
+      {
+        "n": 84,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-061] — the last word clipped on barge-in"
+      },
+      {
+        "n": 85,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-065] — Spotify played the wrong song while reporting success"
+      },
+      {
+        "n": 86,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-068] — an unverified outcome still reported `status:ok` on the fast path"
+      },
+      {
+        "n": 87,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-063] — \"spotify_play FAILED: spotify_play started\""
+      },
+      {
+        "n": 88,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-069] — the immune healer claimed to heal things it never touched"
+      },
+      {
+        "n": 89,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "/090/091 [source: BUG-072/073/074] — `ui_click`/`ui_type` target the right window, or say they cannot"
+      },
+      {
+        "n": 92,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-075] — YouTube belongs in the Electron app, not the dashboard widget"
+      },
+      {
+        "n": 93,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-076] — `status` kept dead-ending on `unknown-effector` even after being approved"
+      },
+      {
+        "n": 94,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-077] — `send_key` had no function-key row, so alt+F4 (\"close Spotify\") was unexpressible"
+      },
+      {
+        "n": 95,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "[source: BUG-078] — `spotify_volume` moves system volume, not Spotify's — ALREADY FIXED before this session"
+      },
+      {
+        "n": 96,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-080] — durable identity facts written from text nobody said"
+      },
+      {
+        "n": 97,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-079] — no local time anywhere in the Live prompt"
+      },
+      {
+        "n": 98,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "[source: BUG-081] — `spawnWebWidget` never dedupes, so surfaces stack"
+      },
+      {
+        "n": 167,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a hung pc-child left desktop control dead for the whole session — FIXED, LIVE-VERIFIED"
+      },
+      {
+        "n": 168,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the build engine was the one adapter nobody probed at boot — FIXED, LIVE-VERIFIED"
+      },
+      {
+        "n": 169,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the living-core widgets shipped invisible — FIXED, LIVE-VERIFIED (and the first fix was wrong)"
+      },
+      {
+        "n": 170,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "\"Reasoning:\" reached the operator, and one turn was silent — FIXED (unit), live gate NOT run"
+      },
+      {
+        "n": 171,
+        "shape": "entry",
+        "state": "verified",
+        "title": "Incidents/ was a dead drop, and logged one report twice — FIXED, LIVE-VERIFIED"
+      },
+      {
+        "n": 172,
+        "shape": "entry",
+        "state": "verified",
+        "title": "an empty recall reported success — FIXED, LIVE-VERIFIED (and live found a second defect)"
+      },
+      {
+        "n": 173,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "build verification hard-failed on library-driven motion — FIXED (unit); build oracle NOT re-run"
+      },
+      {
+        "n": 174,
+        "shape": "entry",
+        "state": "verified",
+        "title": "no way to refresh a page — FIXED, LIVE-VERIFIED"
+      },
+      {
+        "n": 175,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "\"Hey Jarvis\" did nothing for a week: the mel transform was missing — FIXED, MEASURED"
+      },
+      {
+        "n": 176,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the dashboard was cluttered, and its layout could never have been right — FIXED, LIVE-VERIFIED"
+      },
+      {
+        "n": 179,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "`mythos/.env` is the only config source, and it is not shipped"
+      },
+      {
+        "n": 180,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "three userData directories, no migration (the empty second brain)"
+      },
+      {
+        "n": 181,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a missing `boundaries.md` was read as a corrupt one (incident 3)"
+      },
+      {
+        "n": 182,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "models were delivered to a directory that does not ship (incident 4)"
+      },
+      {
+        "n": 183,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "92 tools declared to the Live model, regardless of whether they can run"
+      },
+      {
+        "n": 184,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the CDP poller logged a full stack every 15 seconds, forever"
+      },
+      {
+        "n": 185,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the full-session transcript rendered nothing over a 26-turn session"
+      },
+      {
+        "n": 186,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a toggle that could not toggle, and lied about its state"
+      },
+      {
+        "n": 187,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the key store was orphaned by the userData rename"
+      },
+      {
+        "n": 188,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Hermes was installed into the directory the updater deletes"
+      },
+      {
+        "n": 189,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the installer asked without ever looking at the disk"
+      },
+      {
+        "n": 190,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "effector catch blocks stringified a non-Error as \"[object Object]\""
+      },
+      {
+        "n": 191,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "recurring-failure anomalies rendered a blank trigger"
+      },
+      {
+        "n": 192,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a lost-transcript anomaly had no way to tell two different causes apart"
+      },
+      {
+        "n": 193,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "s2s-bridge.js's mic-suspend gate had no server-side trail"
+      },
+      {
+        "n": 194,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a healer row rendered as blank, and a cooldown read as \"unhandled\""
+      },
+      {
+        "n": 195,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a partial-success turn let a false claim survive next to one real success"
+      },
+      {
+        "n": 196,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the Live path never told the model its own claim was wrong"
+      },
+      {
+        "n": 197,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "an unanswered T3+ confirm expired silently, with no trace anywhere"
+      },
+      {
+        "n": 198,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a mic-suspend gate gave no visible sign it had suspended the mic"
+      },
+      {
+        "n": 199,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "nothing reacted to a lost-transcript anomaly while it was happening"
+      },
+      {
+        "n": 200,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "send_key aborted on a drifted caret instead of trying to recover it"
+      },
+      {
+        "n": 201,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "send_key('enter') had no WM_CHAR route, unlike ui_type's text path"
+      },
+      {
+        "n": 202,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "ctrl+s had no recovery path on an MSIX target, unlike every other route in this file"
+      },
+      {
+        "n": 203,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "spotify_play fell back to a blind keystroke guess after a REAL click failed"
+      },
+      {
+        "n": 204,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "whatsapp_send refused on a wrong conversation with no recovery"
+      },
+      {
+        "n": 205,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "no way to remove a WhatsApp contact without overwriting it"
+      },
+      {
+        "n": 206,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "forget_fact was a dead end on any paraphrased correction"
+      },
+      {
+        "n": 207,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "no automated guard against the BUG-171 class recurring"
+      },
+      {
+        "n": 208,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "camera_look's \"no vision brain\" was a wiring gap, not lane exhaustion"
+      },
+      {
+        "n": 209,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a dead vision lane looked identical to a slow one"
+      },
+      {
+        "n": 210,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "no way to pin the Live session's speech language"
+      },
+      {
+        "n": 211,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "no way to switch the Live voice back after trying another"
+      },
+      {
+        "n": 212,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a pipeline-injected notice wasn't explicitly owned as the model's own speech"
+      },
+      {
+        "n": 213,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "an aether-proxy bind failure had no recovery, ever"
+      },
+      {
+        "n": 214,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "reminder/timer times fell through on ordinary phrasing"
+      },
+      {
+        "n": 215,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "open_web reported success with zero verification"
+      },
+      {
+        "n": 216,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "no durable record of when MYTHOS first booted on this install"
+      },
+      {
+        "n": 217,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "log_incident could fire on the model's own initiative"
+      },
+      {
+        "n": 218,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Wave 1's \"loud\" confirm expiry wrote `tool:undefined` in production"
+      },
+      {
+        "n": 219,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Wave 3's ctrl+s escalation gate never fires on Win11's MSIX Notepad"
+      },
+      {
+        "n": 220,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "two of the six real leaked-reasoning texts still weren't caught"
+      },
+      {
+        "n": 221,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "`ui_type` aborted on an advisory UIA focus call, killing the very ladder built for MSIX Notepad"
+      },
+      {
+        "n": 222,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "`self_capabilities` was unreachable from voice, so \"what can you do?\" had no honest answer"
+      },
+      {
+        "n": 223,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a failure string shipped as `ok:true`: `close_window`'s dispatcher arm had no convention guard"
+      },
+      {
+        "n": 224,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "MYTHOS's own Live voice was fed back to Gemini's VAD, causing BOTH the interruptions and the clipped last word"
+      },
+      {
+        "n": 225,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "zombie-on-close / silent refusal to relaunch: zombie DORMANT and cause NOT identified; the silent-relaunch half FIXED 2026-08-14; the quit-seam defects FIXED 2026-08-17"
+      },
+      {
+        "n": 226,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "spoken failure messages were mojibaked because PowerShell 5.1 parses a BOM-less script as cp1252"
+      },
+      {
+        "n": 227,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "fresh-PC install fails with \"cannot be closed\": a 1-character MAX_PATH overflow"
+      },
+      {
+        "n": 228,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "four browser-ish tools, disambiguated only in prose: five identical refusals, and one fabricated browser launch"
+      },
+      {
+        "n": 229,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the operator's speech was thrown away by a 1.2 s ring against an 8 s gate"
+      },
+      {
+        "n": 230,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a pending tool ack was recorded as a FAILURE, and a completion claim over it was corrected as a lie"
+      },
+      {
+        "n": 231,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "WhatsApp read the composer before WebView2 had drawn it"
+      },
+      {
+        "n": 232,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "every vision call burned 8 seconds on two dead providers, and the cooldown that should have caught it could not see the failure"
+      },
+      {
+        "n": 233,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "every diagnostic field attached to an anomaly was discarded before it was stored"
+      },
+      {
+        "n": 234,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the health channel was carrying things that are not faults"
+      },
+      {
+        "n": 235,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a goal's entire budget was one planning call"
+      },
+      {
+        "n": 236,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Gmail: dead credentials, a dropped reason, and MYTHOS diagnosing it wrong out loud"
+      },
+      {
+        "n": 237,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "MYTHOS's apology became a project goal"
+      },
+      {
+        "n": 238,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "DEGRADED was a dead Google token being retried forever"
+      },
+      {
+        "n": 239,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the double voice: a third speech path with no Live guard"
+      },
+      {
+        "n": 240,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "kokoro-tts has never loaded in any packaged build"
+      },
+      {
+        "n": 241,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the HUD could never show \"speaking\""
+      },
+      {
+        "n": 242,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the mic gate's ring was derived from the wrong constant"
+      },
+      {
+        "n": 243,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "camera_look was confidently wrong and nothing could catch it"
+      },
+      {
+        "n": 244,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a build shipped fabricated content; the verifier caught it and was ignored"
+      },
+      {
+        "n": 245,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the build-engine probe proved nothing, and its heal could never fail"
+      },
+      {
+        "n": 246,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "\"Searching…\" was flagged as a lie, and it wasn't"
+      },
+      {
+        "n": 247,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "read_file resolved the vault against the wrong root"
+      },
+      {
+        "n": 248,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the immune explainer's 7-day episodic scan was the lag"
+      },
+      {
+        "n": 249,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "nothing learned in a session reached recall"
+      },
+      {
+        "n": 250,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Audit and Incidents rolled on UTC while Episodic rolled local"
+      },
+      {
+        "n": 251,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the Live voice path had no memory of the operator"
+      },
+      {
+        "n": 252,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the incident ledger and BUGS.md had no mechanical relationship"
+      },
+      {
+        "n": 253,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "28 untracked incidents, triaged"
+      },
+      {
+        "n": 254,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the operator's authored persona had never once reached the model"
+      },
+      {
+        "n": 255,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "think_deeply was reached for ten times in one conversation"
+      },
+      {
+        "n": 256,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a third of the operator's durable facts never reached the prompt"
+      },
+      {
+        "n": 257,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "151 anonymous socket errors in twelve minutes"
+      },
+      {
+        "n": 258,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "a \"live\" test that only lived on one machine: CI red for three days unnoticed"
+      },
+      {
+        "n": 259,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "an unref'd timeout timer that never fires: the SECOND cause of CI red"
+      },
+      {
+        "n": 260,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "announced build completions named their artifact \"[object Object]\""
+      },
+      {
+        "n": 261,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "open_folder's window oracle was a single coin-flip check, and \"pc-child not running\" was indistinguishable from \"no window\""
+      },
+      {
+        "n": 262,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "episodic→semantic distillation could never run: two dead gates, and every skip was silent"
+      },
+      {
+        "n": 263,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "ui_type's fields-absent fallback asserted \"text went elsewhere\" on a bare pid mismatch"
+      },
+      {
+        "n": 264,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "open_web had no honest in-tool route to the real browser"
+      },
+      {
+        "n": 265,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the voice-node-duplicate-identify anomaly re-alarmed on every reconnect bounce"
+      },
+      {
+        "n": 266,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "six skill names are hardcoded into prompts and are PHANTOM on a fresh clone"
+      },
+      {
+        "n": 267,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the Live/spoken path is told to call a tool it was never given"
+      },
+      {
+        "n": 268,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "Ctrl+Alt+X (screen text capture / OCR) does nothing"
+      },
+      {
+        "n": 269,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the global press-to-talk hotkey is intermittent"
+      },
+      {
+        "n": 270,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "first live voice session: utterances split mid-thought, and missed speech left zero evidence"
+      },
+      {
+        "n": 271,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "first Gemini Live voice session: a self-interrupting echo loop, phantom words from noise, and the evidence that was computed then thrown away"
+      },
+      {
+        "n": 272,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "BUG-271's live re-test: what the 20-minute session proved, what it broke, and the fix plan for all of it"
+      },
+      {
+        "n": 273,
+        "shape": "entry",
+        "state": "unrecorded",
+        "title": "the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust"
+      },
+      {
+        "n": 274,
+        "shape": "entry",
+        "state": "open",
+        "title": "dependency and licence remediation (PLANNED, NOT STARTED) — opened 2026-08-19"
+      },
+      {
+        "n": 275,
+        "shape": "entry",
+        "state": "open",
+        "title": "the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (FILED, NOT STARTED) — opened 2026-08-19"
+      },
+      {
+        "n": 276,
+        "shape": "entry",
+        "state": "open",
+        "title": "\"show me the news\" failed six ways, and only one of them was the model's fault (FILED, NOT STARTED) — opened 2026-08-19"
+      },
+      {
+        "n": 277,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "the audit reader froze harder the healthier the system got (FIXED 2026-08-19)"
+      },
+      {
+        "n": 278,
+        "shape": "entry",
+        "state": "coded",
+        "title": "BUG-273 C2 shipped, passed its tests, and never ran: the healer dropped the two fields it keyed on"
+      },
+      {
+        "n": 279,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "four assistant modules read as live machinery and had no consumers"
+      },
+      {
+        "n": 280,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "(second half) — a stale answer returned as a fresh one"
+      },
+      {
+        "n": 292,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "147 socket rejections, and nothing said which client"
+      },
+      {
+        "n": 293,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`open_web`'s failures were written from the resolver's point of view"
+      },
+      {
+        "n": 294,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "a live question could not reach a live source, and the one that answered had no date"
+      },
+      {
+        "n": 295,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "MYTHOS narrated the contents of a page it never read"
+      },
+      {
+        "n": 297,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "an unproven action was announced as a failure"
+      },
+      {
+        "n": 298,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "the HUD hammered a server that was refusing it, 147 times"
+      },
+      {
+        "n": 299,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "a four-character fragment could license a fabricated fact"
+      },
+      {
+        "n": 300,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the fabricated result was not only spoken, it was written down"
+      },
+      {
+        "n": 301,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the build engine was Electron, not node, so every real build died at 600s"
+      },
+      {
+        "n": 303,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the SSRF guard checked one address and connected to another"
+      },
+      {
+        "n": 304,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "the ship gate checked a filename, not a file"
+      },
+      {
+        "n": 305,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "the build engine's ten-minute failure was misdiagnosed, unlogged, and left running"
+      },
+      {
+        "n": 306,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "a failed save of your conversation history was completely silent"
+      },
+      {
+        "n": 307,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "the vault path helper kept nothing inside the vault"
+      },
+      {
+        "n": 308,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "an escaped error killed MYTHOS and wrote nothing anywhere"
+      },
+      {
+        "n": 322,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "the operator shouted and MYTHOS kept talking"
+      },
+      {
+        "n": 334,
+        "shape": "entry",
+        "state": "verified",
+        "title": "F — the event-loop starvation guard was a wall-clock throughput floor, so a busy host failed a correct fix"
+      },
+      {
+        "n": 344,
+        "shape": "pointer",
+        "state": "open",
+        "title": "websearch absence already announces its remedy at boot."
+      },
+      {
+        "n": 345,
+        "shape": "pointer",
+        "state": "unrecorded",
+        "title": "adblock silence caveat. FIXED 639200c: When browser_launch_debug starts"
+      },
+      {
+        "n": 346,
+        "shape": "pointer",
+        "state": "open",
+        "title": "wake-word suspended state must feed the re-arm ladder."
+      },
+      {
+        "n": 347,
+        "shape": "pointer",
+        "state": "open",
+        "title": "mute-listener needs an audible recovery. voice-loop.js refuses"
+      },
+      {
+        "n": 348,
+        "shape": "pointer",
+        "state": "open",
+        "title": "media_status reads ONE SMTC session (ps-automation.ps1"
+      },
+      {
+        "n": 349,
+        "shape": "pointer",
+        "state": "unrecorded",
+        "title": "see_and_click occluded-click refusal. FIXED 3ce6c8e:"
+      },
+      {
+        "n": 350,
+        "shape": "pointer",
+        "state": "unrecorded",
+        "title": "verifier retry-guidance mapping. FIXED 1adad59. Original: hard-fails cta/title-overlap killed most of the 11"
+      },
+      {
+        "n": 351,
+        "shape": "pointer",
+        "state": "open",
+        "title": "Aether proxy :4480 war. Healer playbook rebinds forever against"
+      },
+      {
+        "n": 352,
+        "shape": "pointer",
+        "state": "unrecorded",
+        "title": "catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);"
+      },
+      {
+        "n": 353,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "the implicit ui_type/ui_click target was process-wide and never expired, so an app MYTHOS opened for its own reasons silently became the thing you dictated into"
+      },
+      {
+        "n": 354,
+        "shape": "pointer",
+        "state": "open",
+        "title": "cua-driver shares pc-child's reject-on-timeout shape for"
+      },
+      {
+        "n": 356,
+        "shape": "pointer",
+        "state": "open",
+        "title": "LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js,"
+      },
+      {
+        "n": 357,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "MYTHOS said \"sent\" twice with no send behind it, and its own honesty detector never saw either claim"
+      },
+      {
+        "n": 358,
+        "shape": "entry",
+        "state": "diagnosed",
+        "title": "the procedural-skills layer has never fired once: 0 of 3,065 recorded actions carry a skillRef"
+      },
+      {
+        "n": 359,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "WhatsApp window resolution probed exactly once during a cold start, so approved sends failed for seconds-old timing, not capability"
+      },
+      {
+        "n": 360,
+        "shape": "entry",
+        "state": "verified",
+        "title": "(a) — SPA dot-path. every deep link in the HUD 404'd when the install path contained a dot-segment, while `/` kept working"
+      },
+      {
+        "n": 361,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the search chain paid a full timeout per call for providers that could not answer, and the daemon's own error report was parsed straight past"
+      },
+      {
+        "n": 362,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`search_files` spent its whole scan budget inside dependency trees and reported \"found nothing\" instead of \"gave up\""
+      },
+      {
+        "n": 363,
+        "shape": "entry",
+        "state": "duplicate",
+        "title": "duplicate of BUG-360 (a) (found independently the same day); the `{ root }` alternative, and why BUG-360's fix was kept"
+      },
+      {
+        "n": 365,
+        "shape": "entry",
+        "state": "verified",
+        "title": "web search had exactly ONE working provider, so spending its free quota was a cliff onto confident wrong answers"
+      },
+      {
+        "n": 366,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the capabilities manifest was corrected only when an adapter SUCCEEDED, so a failure could stay described as still-in-progress"
+      },
+      {
+        "n": 367,
+        "shape": "entry",
+        "state": "verified",
+        "title": "`attachMythos` had two failure messages for one contract, so a test asserting the hint passed or failed on a race"
+      },
+      {
+        "n": 368,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`index_project` indexed a Python virtualenv instead of MYTHOS, and reported success"
+      },
+      {
+        "n": 369,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a `tolerant` sync slot was skipped by `--write` as well as `--check`, so the README tests badge froze 297 behind"
+      },
+      {
+        "n": 370,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the capability map was hand-typed, so the surface the closure campaign is measured against could not be wrong out loud"
+      },
+      {
+        "n": 371,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the commit gate named the failing FILE and threw away the failing ASSERTION, so a blocked commit taught nothing"
+      },
+      {
+        "n": 372,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "`doctor.js` read the kokoro VOICE ID and called it a model, so a dead TTS rung reported \"No gaps\""
+      },
+      {
+        "n": 373,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a bug number MENTIONED in a commit message counted as CLAIMING it, so one sentence blocked every commit from a checkout"
+      },
+      {
+        "n": 374,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "BUG-360's outage was still reproducible through the documented override, and the guard against it was a tautology"
+      },
+      {
+        "n": 375,
+        "shape": "entry",
+        "state": "fixed",
+        "title": "a withheld phone tool blamed a missing handset when adb itself was unreachable"
+      },
+      {
+        "n": 376,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the capability-map gate blocked every commit from any checkout without the live vault"
+      }
+    ],
+    "counts": {
+      "verified": 26,
+      "fixed": 54,
+      "open": 10,
+      "coded": 1,
+      "diagnosed": 1,
+      "duplicate": 1,
+      "unrecorded": 133
+    },
+    "total": 226,
+    "openDeclared": [
+      344,
+      346,
+      347,
+      348,
+      351,
+      354,
+      356
+    ],
+    "pointerOnly": 11,
+    "generatedFrom": "BUGS.md"
+  }
 }
 </script>
 
@@ -1811,6 +3268,113 @@ window.addEventListener("resize", function(){ resize(); });
     }
     host.appendChild(el);
   });
+})();
+
+/* ============================================================
+   TICKET REGISTER — the second view over the same island.
+   Data comes from DATA.register, written by build-index.js. Nothing here
+   is hand-typed: the status words, the counts and the open set are all
+   read. A ticket whose entry states no machine-readable status renders as
+   "unrecorded" rather than being inferred closed — an entry with no status
+   is not evidence of closure, and 133 of them say nothing at all.
+   ============================================================ */
+(function(){
+  var REG = (DATA.register) || {bugs:[], counts:{}, total:0, openDeclared:[], pointerOnly:0};
+  var TONE = {
+    verified:  {c:"#3ddc97", bg:"rgba(61,220,151,.12)",  label:"verified"},
+    fixed:     {c:"#66d9c0", bg:"rgba(102,217,192,.10)", label:"fixed"},
+    open:      {c:"#ff5a61", bg:"rgba(255,90,97,.12)",   label:"open"},
+    coded:     {c:"#f2b23c", bg:"rgba(242,178,60,.12)",  label:"coded"},
+    diagnosed: {c:"#f2b23c", bg:"rgba(242,178,60,.12)",  label:"diagnosed"},
+    duplicate: {c:"#7d909c", bg:"rgba(125,144,156,.12)", label:"duplicate"},
+    unrecorded:{c:"#8a7cf0", bg:"rgba(138,124,240,.12)", label:"unrecorded"}
+  };
+  var ORDER = ["open","coded","diagnosed","unrecorded","fixed","verified","duplicate"];
+  var on = {}; ORDER.forEach(function(k){ on[k] = true; });
+  var q = "";
+
+  var note = document.getElementById("reg-note");
+  note.innerHTML = "";
+  var b1 = document.createElement("b");
+  b1.textContent = REG.total + " declared ticket numbers, " + (REG.counts.unrecorded || 0) + " with no recorded status.";
+  note.appendChild(b1);
+  note.appendChild(document.createTextNode(
+    " The open set is read from the OPEN WORK register section, not inferred from silence \u2014 " +
+    "absence of a status is not evidence of closure. " + REG.pointerOnly + " tickets exist only as a " +
+    "bullet with no heading, so they have no status field to fill, and most of the genuinely open " +
+    "work is that shape."));
+
+  var filters = document.getElementById("reg-filters");
+  ORDER.forEach(function(k){
+    var n = REG.counts[k] || 0;
+    var btn = document.createElement("button");
+    btn.className = "fchip"; btn.type = "button"; btn.setAttribute("aria-pressed","true");
+    btn.style.color = TONE[k].c; btn.style.borderColor = TONE[k].c;
+    var sw = document.createElement("span"); sw.className = "sw"; sw.style.background = TONE[k].c;
+    var tx = document.createElement("span"); tx.textContent = TONE[k].label;
+    var ct = document.createElement("span"); ct.className = "ct"; ct.textContent = n;
+    btn.appendChild(sw); btn.appendChild(tx); btn.appendChild(ct);
+    btn.addEventListener("click", function(){
+      on[k] = !on[k]; btn.setAttribute("aria-pressed", String(on[k])); draw();
+    });
+    filters.appendChild(btn);
+  });
+
+  var search = document.getElementById("reg-search");
+  search.addEventListener("input", function(){ q = search.value.trim().toLowerCase(); draw(); });
+
+  var tbody = document.getElementById("reg-body");
+  var empty = document.getElementById("reg-empty");
+
+  function draw(){
+    var rows = REG.bugs.filter(function(b){
+      if(!on[b.state]) return false;
+      if(!q) return true;
+      return String(b.n).indexOf(q) !== -1 || (b.title || "").toLowerCase().indexOf(q) !== -1;
+    });
+    /* open first, then by number descending: newest work at the top of each band */
+    rows.sort(function(a,b){
+      var d = ORDER.indexOf(a.state) - ORDER.indexOf(b.state);
+      return d !== 0 ? d : b.n - a.n;
+    });
+    tbody.textContent = "";
+    rows.forEach(function(b){
+      var tr = document.createElement("tr");
+      var td1 = document.createElement("td");
+      td1.className = "reg-id"; td1.textContent = "BUG-" + b.n;
+      var td2 = document.createElement("td");
+      var s = document.createElement("span");
+      s.className = "reg-state"; s.textContent = TONE[b.state].label;
+      s.style.color = TONE[b.state].c; s.style.background = TONE[b.state].bg;
+      td2.appendChild(s);
+      var td3 = document.createElement("td");
+      td3.className = "reg-title"; td3.textContent = b.title || "\u2014";
+      var td4 = document.createElement("td");
+      td4.className = "reg-shape"; td4.textContent = b.shape === "pointer" ? "bullet only" : "full entry";
+      tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3); tr.appendChild(td4);
+      tbody.appendChild(tr);
+    });
+    empty.hidden = rows.length > 0;
+  }
+  draw();
+
+  /* ---- view switcher ---- */
+  var tabMap = document.getElementById("tab-map");
+  var tabReg = document.getElementById("tab-reg");
+  var reg = document.getElementById("register");
+  var chrome = ["legend","hint","panel","tip"].map(function(id){ return document.getElementById(id); });
+
+  function show(which){
+    var isReg = which === "register";
+    reg.hidden = !isReg;
+    tabReg.setAttribute("aria-selected", String(isReg));
+    tabMap.setAttribute("aria-selected", String(!isReg));
+    cv.style.visibility = isReg ? "hidden" : "";
+    chrome.forEach(function(el){ if(el) el.style.display = isReg ? "none" : ""; });
+    if(!isReg) resize();
+  }
+  tabMap.addEventListener("click", function(){ show("map"); });
+  tabReg.addEventListener("click", function(){ show("register"); });
 })();
 
 build(); place(); resize();
