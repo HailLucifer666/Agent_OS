@@ -912,7 +912,17 @@ function Handle-FocusWindow($TargetPid) {
         $proc = Get-Process -Id $TargetPid -ErrorAction Stop
         $hwnd = $proc.MainWindowHandle
         if ($hwnd -eq [IntPtr]::Zero) {
-            return ('Process ' + $TargetPid + ' has no main window.')
+            # BUG-385: name the recovery, the way the stale-pid failure beside it
+            # already does. Measured over the union of both vaults, focus_window's
+            # six recorded failures are three classes: 3 stale pid, 2 of THIS one,
+            # 1 genuine foreground-lock. This was the only class that told the
+            # caller nothing to do next, so the model retries the same dead pid.
+            # `list_windows` is the right answer here for the same reason it is the
+            # right answer to a stale pid: it enumerates WINDOWED processes, so a
+            # pid missing from it settles the question. A process can be alive and
+            # have no window (a service, a tray-only app, a launcher stub that has
+            # already handed off) and no ladder rung can conjure one.
+            return ('Process ' + $TargetPid + ' has no main window, so nothing was focused. Call list_windows to get the pid of the window you want.')
         }
         # Restore if minimized, then bring to foreground
         [NativeInput]::ShowWindow($hwnd, [NativeInput]::SW_RESTORE) | Out-Null

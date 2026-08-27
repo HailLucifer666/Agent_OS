@@ -41,6 +41,124 @@ it is committed.
 
 ---
 
+## BUG-385 — the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text (🔧 CODED 2026-08-28)
+
+**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped
+as *"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder,
+video call having no tool)"*. All three are recorded. Two of them turned up a
+real defect on the way, and the CAPTCHA one is the serious entry here.
+
+### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions.
+
+The disposition itself needed nothing: `browser_check_captcha` already returns
+`ok` with `blocked: "captcha"` and a comment saying *"blocked, not failed:
+nothing went wrong, we have simply reached the line this system does not
+cross"*, `browser-obstacles.test.js` already pins the handover wording, and a
+source-shape assertion already fails if anyone adds a solver service. That is a
+complete disposition and it was complete before this ticket.
+
+**What was not right is what counts as a challenge.** `CAPTCHA_MARKERS` held
+two entries that identify a VENDOR rather than a challenge, and `looksLikeCaptcha`
+is fed the aria tree **plus `page.url()`**. Measured against the real function:
+
+```
+FLAGGED  ["cloudflare"]        https://developers.cloudflare.com/workers/
+FLAGGED  ["cloudflare"]        footer "Performance and security by Cloudflare"
+FLAGGED  ["cloudflare"]        a news article about a Cloudflare outage
+FLAGGED  ["cloudflare"]        https://www.cloudflarestatus.com/
+FLAGGED  ["security check"]    Google account "Security Checkup"
+FLAGGED  ["security check"]    a bank help page: "we run a security check on every login"
+
+false positives: 6 of 6 ordinary pages
+```
+
+**And the same run missed real challenge text**, because the markers are plain
+`includes()` substrings:
+
+```
+MISSED   "Verifying you are human. This may take a few seconds."
+         -- the marker is "verify you are human"; the page says "Verifying"
+MISSED   "Checking your browser before accessing"
+MISSED   ".../cdn-cgi/challenge-platform/..."
+MISSED   "Press and hold to confirm you are a human"
+```
+
+So the two broad markers did the **opposite** of their job: they fired on the
+brand name, which appears on a large fraction of the web, and missed the
+challenge, which is identified by its own distinctive text and path.
+
+**Why it is not cosmetic.** `browser_snapshot` runs the same matcher on EVERY
+snapshot and, on a hit, attaches `captchaDetected: true` and the note *"Do NOT
+try to solve or bypass it — ask the operator to complete it in the browser
+window."* On any Cloudflare-fronted page that instruction is false, and the
+model stops browsing to ask the operator to solve a challenge that is not there.
+
+**Fix — mostly a removal, and a rule instead of a brand list.** Bare `cloudflare`
+and bare `security check` are gone; a vendor's name is not a challenge.
+`verif(y|ying) … you are (a) human` is now stem-tolerant. Four distinctive
+markers are added, and the code says which are GROUNDED and which are not:
+`/sorry/` and `/sorry/index` come from **this repo's own vault** — the recorded
+incident reads `google.com/sorry/index?continue=…` — while
+`cdn-cgi/challenge-platform`, `checking your browser before accessing` and
+`press and hold` are phrases that no ordinary page carries, so at worst they
+change nothing. **No upstream markup was verified from this machine and the
+comment says so**, because a confident sentence about another vendor's DOM is
+exactly the kind of claim this repo has been wrong about before.
+
+**The safety boundary did not move and could not have.** "Never solve or bypass"
+is structural — there is no solver anywhere and a source assertion keeps it that
+way. Detection quality is an honesty property sitting above that boundary, so
+tightening it cannot open a hole; the worst case of a miss is that MYTHOS keeps
+browsing a challenge page without telling the operator, which is what already
+happens today for every phrasing in the MISSED list.
+
+### C-2 — `focus_window`: the ladder is exhausted, and the map described it wrongly
+
+The disposition holds and is binding in root `CLAUDE.md`: the escalation ladder
+(thread-attach → foreground-lock-timeout override → minimize/restore) is
+exhausted, Windows is refusing deliberately, and **no fourth rung may be added**.
+The lock-timeout override restores the system-wide setting in a `finally`, so it
+never leaks.
+
+**But the map row was wrong about the evidence.** It read *"Five of six failures
+are stale PIDs it created itself… One is a genuine OS refusal."* Re-derived from
+the union of both vaults, the six failures are **three** classes, not two:
+
+```
+3  stale pid        "Cannot focus PID 18832: ... That pid no longer exists,
+                     so nothing was focused. Call list_windows again"
+2  no main window   "Process 4420 has no main window."
+1  foreground lock  "...blocked by the OS foreground-lock; tried thread-attach,
+                     lock-timeout override and minimize/restore."
+```
+
+Two corrections. The count is 3/2/1, not 5/1. And *"stale PIDs it created
+itself"* is false for at least one of them — **the model asked to focus PID 1**,
+which `focus_window` never handed out.
+
+**One real gap, and it is one line.** The stale-pid failure names its recovery
+(`list_windows`); the no-main-window failure names none. `list_windows` is the
+right recovery there too — it enumerates windowed processes, so a pid absent
+from it is the answer. Fixed in `ps-automation.ps1` at both sites.
+
+### C-3 — video call: no tool exists, and nothing can stand in for one
+
+A disposition with nothing to fix. Verified across all **179** registered tools:
+nothing matches `/call|video|meet|zoom|facetime|dial|ring/` except `phone_call`
+(from-android.js, a VOICE call over the Android node), `cua_bring_to_front`,
+`mcp_call_tool` and `recall_memory` — none of which is a video call.
+
+**The substitution risk is the part worth pinning.** A model denied a tool does
+not always decline; it reaches for the nearest one, and `phone_call` is the
+nearest thing to "call someone". It is **withheld from the voice surface**
+(absent from `DEFAULT_ALLOWLIST`), so on the surface where the request was
+recorded it is not reachable at all — which is why the recorded answer was the
+honest *"I still cannot start a video call"* rather than a voice call presented
+as a video one. That is pinned by test, so promoting `phone_call` to voice later
+has to argue with this assertion first.
+
+---
+
 ## BUG-384 — every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong (🔧 CODED 2026-08-27)
 
 **Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped

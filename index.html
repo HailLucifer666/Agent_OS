@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6635,
+      "value": 6660,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -796,8 +796,8 @@
       ],
       "ok": 31,
       "f": 6,
-      "note": "Five of six failures are stale PIDs it created itself, and it says so precisely. One is a genuine OS refusal.",
-      "ev": "\"Cannot find a process with the process identifier 18832. That pid no longer exists. Call list_windows again.\"\n\"blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore.\""
+      "note": "DISPOSITION CLOSED 2026-08-28, and it stays warn on purpose: the escalation ladder is exhausted, Windows refuses deliberately, and no fourth rung may be added. Every failure now names a recovery.",
+      "ev": "DISPOSITION 2026-08-28 (Track C-2, BUG-385). THE PREVIOUS NOTE HERE WAS WRONG ABOUT ITS OWN EVIDENCE. It read \"Five of six failures are stale PIDs it created itself. One is a genuine OS refusal.\" Re-derived from the union of both vault roots, the six failures are THREE classes, not two: 3 stale pid (\"Cannot focus PID 18832: ... That pid no longer exists, so nothing was focused. Call list_windows again\"), 2 no-main-window (\"Process 4420 has no main window.\"), 1 foreground-lock (\"...blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore\"). Two corrections: the count is 3/2/1, and \"stale PIDs it created itself\" is false for at least one — the model asked to focus PID 1, which focus_window never handed out. THE DISPOSITION: the ladder (thread-attach, then a foreground-lock-timeout override that is restored in a finally so it never leaks a machine-wide setting, then minimize/restore) is exhausted. Root CLAUDE.md records that the question of whether the denial reproduces in real voice-driven use was CLOSED on 2026-08-17 and the answer is yes; the alternatives are unreliable or user-hostile. A test now asserts the ladder has EXACTLY three rungs, that the refusal names all three, and that the saved timeout is restored inside a finally. ONE REAL GAP FIXED: of the three failure classes, no-main-window was the only one that told the caller nothing to do next, so the model retries the same pid. It now names list_windows, for the same reason the stale-pid failure does — list_windows enumerates WINDOWED processes, so a pid missing from it settles the question. STAYS WARN because it genuinely fails sometimes, for a reason nobody can fix; the failures are honest, not absent."
     },
     {
       "c": "desk",
@@ -1014,12 +1014,12 @@
     {
       "c": "web",
       "n": "CAPTCHA wall",
-      "s": "fail",
+      "s": "ok",
       "tools": [
         "browser_check_captcha"
       ],
-      "note": "Google serves a CAPTCHA to the automated browser, which ends the run. It correctly refuses to solve it.",
-      "ev": "screen text read back: \"google.com/sorry/index?continue=...\"\nsee_and_click could not find \"I am not a robot\" and did not pretend to.",
+      "note": "browser_check_captcha. DISPOSITION CLOSED 2026-08-28: refusing is the correct behaviour and was already right. The DETECTOR was wrong in both directions and is fixed.",
+      "ev": "DISPOSITION 2026-08-28 (Track C-1, BUG-385). The node was labelled fail, and that described an EPISODE — a Google CAPTCHA ending a browsing run — not a broken capability. The tool works: 1 recorded call, 1 ok, 0 fail, and it deliberately returns ok even when blocked, with the code saying why: \"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\". The handover wording, the tier and a source assertion that no solver service is ever added were all already pinned by browser-obstacles.test.js. That is a complete disposition and it predates this ticket. WHAT WAS NOT RIGHT was what counts as a challenge. CAPTCHA_MARKERS carried bare `cloudflare` and bare `security check`, and looksLikeCaptcha is fed the aria tree PLUS page.url(). Measured against the real function: 6 of 6 ordinary pages flagged — developers.cloudflare.com, a footer reading \"Performance and security by Cloudflare\", a news article about a Cloudflare outage, cloudflarestatus.com, Google account Security Checkup, and a bank help page saying \"we run a security check on every login\". The same run MISSED \"Verifying you are human\" (the marker was \"verify you are human\" and includes() is a substring test), \"Checking your browser before accessing\", the cdn-cgi/challenge-platform path, and \"Press and hold to confirm you are a human\". So the two broad markers did the OPPOSITE of their job: they fired on the brand name, which is on a large fraction of the web, and missed the challenge. This was not cosmetic — browser_snapshot runs the same matcher on EVERY snapshot and attaches \"Do NOT try to solve or bypass it — ask the operator to complete it in the browser window\", so on any Cloudflare-fronted page the model stopped browsing to ask for a challenge that was not there. FIXED mostly by removal: a vendor name is not a marker. Now 0 false positives on 7 ordinary controls and 0 false negatives on 9 challenge shapes, 7 mutations all caught. The safety boundary did not move and could not have: \"never solve or bypass\" is structural (no solver exists, a source assertion keeps it so), and detection quality sits above that boundary.",
       "ok": 1,
       "f": 0
     },
@@ -1093,8 +1093,8 @@
       "s": "dark",
       "tools": [],
       "kind": "subsystem",
-      "note": "No tool exists. It said so plainly rather than faking it.",
-      "ev": "\"Even with context within the app, I still cannot start a video call.\"  Filed as a proposed goal.",
+      "note": "No tool exists, and nothing may quietly stand in for one. DISPOSITION CLOSED 2026-08-28: verified across all 179 registered tools, and the nearest substitute is pinned as voice-withheld.",
+      "ev": "DISPOSITION 2026-08-28 (Track C-3, BUG-385). Nothing to fix, and verified rather than assumed. Across all 179 registered tools nothing matches /video|facetime|meet|zoom/ at all; the only call-shaped verbs are phone_call (from-android.js, a VOICE call over the Android node), cua_bring_to_front, mcp_call_tool and recall_memory, none of which is a video call. Stays dark, which is the accurate claim: the node has an empty tool list, so a call count of zero is a measured fact rather than an absence of measurement. THE PART WORTH PINNING IS THE SUBSTITUTION RISK, not the absence. A model denied a tool does not always decline — it reaches for the nearest one, and on a \"call someone\" request phone_call is the nearest thing there is. It is WITHHELD from the voice surface (absent from DEFAULT_ALLOWLIST), so on the surface where the request was actually recorded it is unreachable, which is why the recorded answer was the honest \"Even with context within the app, I still cannot start a video call\" rather than a voice call presented as a video one. A test asserts both halves, so promoting phone_call to voice later has to argue with this assertion first.",
       "ok": 0,
       "f": 0
     },
@@ -3820,18 +3820,26 @@
         "title": "every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong",
         "detail": {},
         "excerpt": "**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped as \"six nodes whose LABEL is stale rather than whose capability is broken\". Measured against the live vault before writing anything, per the Track D finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43 (67%) disagree with the vault.** Eleven labels are contradicted by their own evidence. The six was itself a stale reading. ### Root cause — the map generates its frame and hand-carries its contents `build-capability-map.js` regenerates `vitals`, the tool-coverage cross-check and the `generated` stamp. It preserves each node's `s`, `ok`, `f`, `note` and `ev` as curated human text. That split is right for `note` and `ev` — a human decides what a node MEANS — and wrong for `ok`/`f`, which are not judgement at all. They are a count of rows in `vault/Audit/*.jsonl`, and nothing was counting…"
+      },
+      {
+        "n": 385,
+        "shape": "entry",
+        "state": "coded",
+        "title": "the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text",
+        "detail": {},
+        "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped as *\"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder, video call having no tool)\"*. All three are recorded. Two of them turned up a real defect on the way, and the CAPTCHA one is the serious entry here. ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions. The disposition itself needed nothing: `browser_check_captcha` already returns `ok` with `blocked: \"captcha\"` and a comment saying *\"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\"*, `browser-obstacles.test.js` already pins the handover wording, and a source-shape assertion already fails if anyone adds a solver service. That is a complete disposition and it was complete before this ticket. **What was not right is what counts as a challenge.** `CA…"
       }
     ],
     "counts": {
       "verified": 30,
       "fixed": 55,
       "open": 10,
-      "coded": 2,
+      "coded": 3,
       "diagnosed": 1,
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 232,
+    "total": 233,
     "openDeclared": [
       344,
       346,

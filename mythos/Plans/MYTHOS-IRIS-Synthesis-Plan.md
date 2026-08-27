@@ -4749,6 +4749,7 @@ Tick a row only when live-verified. **A tick that isn't pushed does not exist.**
 | D-5 | BUG-382 — the five dark nodes, exercised on oracles | **DONE** | 22 tools, 17 pass / 5 dispositions / 0 FAIL. **No product defect** — and the harness accused the product three times before it was right, each an oracle bug of its own. dark 7→2 | `e74e789` |
 | D-6 | BUG-383 — a fabricated FACT is not a fabricated ACTION | **DONE** | **6 of 10 singles were already closed and the map was stale**; 3 need an operator; 1 real. New evidence-gated `external-fact` category, catch rate **6/9 asserted as a literal**, 3 misses pinned, 0 false positives. 13 assertions, 6 mutations | `01c58f4` |
 | B | BUG-384 — the map hand-carried every per-node count, and **67% of them were wrong** | **DONE** | scoped as "six stale labels"; measured 43 of 91 nodes carrying a count, **29 disagreeing with the vault**, and **11** labels contradicted by their own evidence. Second finding, larger: `resolveVaultRoot()` returns the IN-REPO twin and reports `reachable:true` from it — that copy had never seen 21 tools, so a zero-claim gate reading it would fail OPEN. Counts now derive from every vault root, deduped by record id (1464 + 3183 rows, 1346 shared, union 3301). 32 assertions, 13 mutations all caught, 2 survived a first pass | (this commit) |
+| C | BUG-385 — three dispositions, and the CAPTCHA detector was inverted | **DONE** | the refusal policy was already right and already pinned; the DETECTOR flagged **6 of 6 ordinary pages** (developers.cloudflare.com, a "Performance and security by Cloudflare" footer, Google's Security Checkup) and MISSED the real challenge text, because two markers named a VENDOR and `includes()` is a substring test. Fixed mostly by removal: 0 FP on 7 controls, 0 FN on 9 challenge shapes. `focus_window`: ladder pinned at exactly 3 rungs, and the map's own note was wrong (3/2/1 classes, not 5/1). `video call`: no tool across all 179, and `phone_call` pinned voice-withheld. 30 assertions, 14 mutations all caught | (this commit) |
 | A3 | Incident drain: 34 untriaged → 0, by judgement (no writer loop) | open | — | — |
 | A5 | Merge/abandon the in-flight fix branches | open | — | — |
 | B1–B11 | Kill the 13 red nodes (B1 = BUG-356 dsh blocker, first) | open | — | — |
@@ -5012,8 +5013,9 @@ Picking those up here will produce work that cannot be finished.
 
 ## RESUME HERE
 
-**Position: TRACKS D AND B ARE COMPLETE.** Track D changed capabilities;
-Track B made the gauge stop lying. Both are pushed.
+**Position: TRACKS D, B AND C ARE COMPLETE.** D changed capabilities, B made
+the gauge stop lying, C recorded the three deliberate non-changes — and found a
+live defect inside one of them.
 
 ```
 main                       b04ec8e
@@ -5021,146 +5023,139 @@ PR #37  Track D-1  BUG-378   fix/bug-378-effector-error-shape      OPEN  (base m
 PR #38  Track D-2  BUG-379   fix/bug-379-aether-rebind-terminal    OPEN  (base main)
 PR #39  Track D-3..D-6       fix/track-d-remaining                 OPEN  (stacked on #38)
 PR #40  Track B    BUG-384   fix/bug-384-map-counts-from-vault     OPEN  (stacked on #39)
-suite                      6635 tests / 6635 pass / 0 fail / 0 skipped
+PR #41  Track C    BUG-385   fix/bug-385-track-c-dispositions      OPEN  (stacked on #40)
+suite                      6660 tests / 6660 pass / 0 fail / 0 skipped
 registry ratchet           130 / 130
-map                        91 nodes: 39 ok / 33 warn / 10 fail / 2 dark / 7 unknown
-next free BUG number       385
+map                        91 nodes: 40 ok / 33 warn / 9 fail / 2 dark / 7 unknown
+next free BUG number       386
 ```
 
-Merge order **#37 -> #38 -> #39 -> #40**. #37 and #38 both branch from `main`
-and touch `index.html`, so they conflict on the island; the code does not
-overlap. Resolve by taking both sets of node edits and then running
-`build-capability-map.js --write`, which rewrites every count from the vault
-anyway — so a botched count merge is self-healing now, and only the `s`,
-`note` and `ev` fields need care.
+Merge order **#37 -> #38 -> #39 -> #40 -> #41**. #37 and #38 both branch from
+`main` and touch `index.html`, so they conflict on the island; the code does
+not overlap. Since BUG-384 every count regenerates from the vault, so a botched
+count merge is self-healing — only `s`, `note` and `ev` need care.
 
-### THE FINDING OF TRACK B, and it subsumes Track D's
+### THE FINDING OF TRACK C — a disposition is where a bad guard hides best
 
-Track D ended by saying four of six items had named the wrong cause, and
-blamed a structural split: the map regenerates its frame and hand-carries its
-contents. Track B measured that claim instead of repeating it.
+**Track C was the safest-looking track in the campaign and it contained the
+sharpest live defect found so far.** Its three items were all "correct by
+design, just record it". Two were. The third was correct in the half everybody
+looks at and inverted in the half nobody does.
 
-**43 of 91 nodes carried a hand-typed `ok`/`f`. 29 of them — 67% — disagreed
-with the audit log.** `goals` was written 118/2 against a real 253/3. Eleven
-labels, not the six the track was scoped for, were contradicted by their own
-evidence. Two Track D dispositions had been reasoned about on sample sizes
-wrong by 2x (`ui_click`: "10 calls is too small to mean anything" — the real
-figure is 22) and by 30x (`cua-driver`: "the evidence is two boots" — 59
-recorded calls). Neither conclusion flips, and both were reached on figures
-the vault did not support.
+`browser_check_captcha`'s REFUSAL was right, and was already fully pinned: it
+returns `ok` when blocked, the code says why, the handover wording is asserted,
+and a source-shape test fails if anyone adds a solver. Recording that and moving
+on would have been defensible and would have missed everything.
 
-**THE SECOND FINDING IS BIGGER, AND IT WAS NOT ON ANY LIST.**
-`triage-incidents.js:resolveVaultRoot()` returns `MYTHOS_VAULT_ROOT` or falls
-back to the in-repo `mythos/vault`. No env var is set on the operator's
-machine, so **the fallback wins, and every vault-derived reading in this repo
-has been taken from the in-repo copy while reporting `reachable: true`** — a
-confident answer from the wrong source. Measured, one counter pointed at both:
+**What was never checked is what counts as a CAPTCHA.** `CAPTCHA_MARKERS` held
+bare `cloudflare` and bare `security check`, and the matcher is fed the aria
+tree PLUS `page.url()`:
 
 ```
-in-repo mythos/vault   34 files   1464 completions   newest 2026-08-25
-%APPDATA%/MYTHOS       40 files   3183 completions   newest 2026-08-26
-shared record ids 1346 · union 3301
+FLAGGED  ["cloudflare"]      https://developers.cloudflare.com/workers/
+FLAGGED  ["cloudflare"]      footer "Performance and security by Cloudflare"
+FLAGGED  ["security check"]  Google account "Security Checkup"
+   ... 6 of 6 ordinary pages
+
+MISSED   "Verifying you are human"   (the marker was "verify you are human")
+MISSED   "Checking your browser before accessing"
+MISSED   ".../cdn-cgi/challenge-platform/..."
 ```
 
-They are not stale-and-fresh, they are two populations — the batch launcher
-and the packaged Electron app write to different places. The in-repo copy has
-**never seen 21 tools at all** (`open_file`, `timer_add`, `think_deeply`,
-`camera_look`, `forget_fact`, `write_file`, `read_file`), and the packaged one
-has never seen the rows behind `missions` and `clipboard`. So a `dark`/
-`unknown` gate reading either root alone **fails OPEN** — it confirms a
-measured zero that the other root contradicts. Both `missions` and `clipboard`
-were found only because the counter reads both and dedupes by record id.
+The two broad markers did the OPPOSITE of their job — they fired on the brand
+name, which is on a large fraction of the web, and missed the challenge. And
+`browser_snapshot` runs the same matcher on EVERY snapshot, attaching *"Do NOT
+try to solve or bypass it — ask the operator to complete it"*, so on any
+Cloudflare-fronted page the model stopped browsing to ask for a challenge that
+was not there.
 
-**Which root is canonical is still an OPEN QUESTION and this work does not
-answer it.** Reading every root and deduping needs no ruling, and is strictly
-more truthful than either. Do not "fix" it by repointing `resolveVaultRoot()`:
-that also moves the incident-ledger reading, which is a separate decision.
+**The transferable rule: when you disposition something, name the two halves
+separately and check the one that is not the headline.** Here they were the
+POLICY (never solve) and the TRIGGER (what is a challenge). The policy is the
+part with the moral weight, so it is the part that gets reviewed, tested and
+commented — and the trigger sat behind it unexamined for as long as it existed.
+The same shape applies to every remaining "correct by design" claim.
 
-### What Track B did and deliberately did not do
+**Two smaller repeats of the Track B finding**, both in the map's own prose:
+`focus_window`'s note claimed *"five of six failures are stale PIDs it created
+itself"* — really three classes (3 stale pid, 2 no-main-window, 1 foreground
+lock), and at least one of the stale pids was **PID 1**, which `focus_window`
+never handed out. `CAPTCHA wall` was labelled `fail` when its one recorded call
+is an `ok`; the label described an EPISODE, not a capability.
 
-- Counts derive from `scripts/vault-tool-counts.js` on `--write`. **`--check`
-  still does not compare them** — they move every time MYTHOS runs a tool, and
-  a gate on them would block the first commit after every voice session.
-- **Only the falsifiable claim is a gate.** `dark` and `unknown` assert a fact
-  about the DATA, so a call count refutes them; that blocks `--write`. The
-  tempting mirror rule ("labelled ok, newest event a failure") is an advisory
-  and nothing more, because all three of its real hits were CORRECT labels:
-  `spotify_volume` failing honestly with Spotify not running, `close_window`
-  refusing a dead pid and naming `list_windows` as the recovery, and
-  `CAPTCHA wall`, whose `fail` is a deliberate refusal. A gate that reddens on
-  those is a gate somebody switches off.
-- **Eleven nodes left `unknown` for `warn`, and none for `ok`** — however
-  clean their record. `ok` here is the acceptance contract (live-verified,
-  regression test, mutation-proven) and a production call count is not that.
-  So the headline got worse and more truthful: unknown 18 -> 7, warn 22 -> 33.
-  Promoting them is Track F's job.
-- `open a file` and `timer_add` moved `fail` -> `ok`, each dated rather than
-  counted: `open_file`'s only failure is an honest not-found and its only
-  success carries `unverified:true`; `timer_add`'s two failures both predate
-  BUG-289 (2026-08-21) and both successes postdate it.
-- **`list_folder` was left alone** — PR #37 already corrects it, and fixing it
-  twice is a merge conflict for nothing.
-- **`ev` is still curated prose.** Every audit completion carries a `reason`,
-  so the evidence text could be generated too. That is a different change.
+### What Track C changed, and what it deliberately did not
+
+- **The safety boundary did not move and could not have.** "Never solve or
+  bypass" is structural — no solver exists and a source assertion keeps it that
+  way. Detection quality sits above that boundary, so tightening it cannot open
+  a hole. The worst case of a miss is that MYTHOS keeps browsing a challenge
+  page without saying so, which is what already happened for every phrasing in
+  the MISSED list.
+- **No upstream markup was verified from this machine, and the code says so.**
+  Markers are labelled GROUNDED (seen in this repo's own vault — the recorded
+  incident reads `google.com/sorry/index?continue=`) or ADDITIVE (a distinctive
+  phrase no ordinary page carries, which at worst never fires). Do not write a
+  confident sentence about another vendor's DOM here.
+- **`focus_window` stays `warn`, on purpose.** The ladder is exhausted, Windows
+  refuses deliberately, and root `CLAUDE.md` forbids a fourth rung — now pinned
+  by a test asserting exactly three. It genuinely fails sometimes for a reason
+  nobody can fix; the failures are honest, not absent.
+- **`video call` stays `dark`**, which is the accurate claim: an empty tool list
+  makes a zero count a measured fact. The part worth pinning was the SUBSTITUTION
+  risk, not the absence — `phone_call` is the nearest thing to "call someone" and
+  is voice-withheld, which is why the recorded answer was an honest refusal.
+- The markers moved to `src/core/util/captcha-markers.js` because the file-size
+  ratchet refused the comment block. Move the code, do not raise the number.
 
 ### What is left
 
 - **Track A** — three operator minutes (O1 `node mythos/scripts/google-auth.js`,
   the OCR hotkey keypress). Turns two nodes green.
-- **Track C** — three dispositions (CAPTCHA refusal, `focus_window`'s exhausted
-  ladder, video call having no tool). `CAPTCHA wall` now also carries a standing
-  advisory from the label rule; closing it as a disposition silences it.
 - **Track E** — eight nodes needing a live microphone.
-- **Track F** — the `unknown` column, now 7 rather than 18, plus the 11 nodes
-  Track B moved to `warn` with production evidence but no contract verification.
+- **Track F** — the `unknown` column (7, down from 18) plus the 11 nodes Track B
+  moved to `warn` on production evidence with no contract verification.
   `scripts/verify-dark-nodes.js` is the shape to copy.
 - Still open from Track D, each with its reason in the map: `spotify_search`,
   `Aether mesh`, `browser automation`, `cua-driver`, `ui_click`, and
   `fabrication` at 67%.
+- Three standing advisories the label rule prints and does not gate, all correct
+  labels: `close_window`, `spotify_volume`, `list_folder` (#37 fixes the last).
 
 ### Things that will cost you an hour each if nobody tells you
 
-**1. The pre-commit hook runs FOUR gates** plus `build-index --check`. Add or
-remove a registered tool and the commit is blocked until that tool is mapped to
-a node in `index.html`'s island.
+**1. The pre-commit hook runs FOUR gates** plus `build-index --check`.
 
 **2. Ordering: `sync-test-count --write` BEFORE `build-capability-map --write`,**
-and `build-index --write` after any BUGS.md change. Hit again in Track B: a new
-BUGS.md entry makes `test/…the real index.html` fail until the register is
-regenerated, which reads as a regression and is not.
+and `build-index --write` after any BUGS.md change.
 
-**3. Run the suite with long-form `TEMP`/`TMP` and free ports from
-`node scripts/pick-free-ports.js`,** or it measures `fail=1 skipped=1` on a clean
-tree and `sync-test-count --write` will record that red run as the baseline.
-Capture one TAP run (`--test-reporter=tap > file`) and pipe it into both
-`sync-test-count --write` and `--check`; it reads stdin, so the suite runs once
-instead of three times.
+**3. Capture ONE TAP run** (`node --test --test-reporter=tap > file`) with
+long-form `TEMP`/`TMP` and ports from `pick-free-ports.js`, then pipe it into
+both `sync-test-count --write` and `--check`. It reads stdin, so the suite runs
+once instead of three times.
 
-**4. Commit with `git commit -- <pathspec>`, then demand an empty
-`git status --porcelain`.** If you edited a file AFTER `git add`, re-add it.
+**4. Commit with `git commit -m ... -- <pathspec>`** — in that ORDER. Everything
+after `--` is a pathspec, so `git commit -- <paths> -m "msg"` feeds the message
+to git as a filename and fails with "did not match any file(s) known to git".
+Then demand an empty `git status --porcelain`.
 
 **5. `--next` reads BRANCH NAMES too.** Write the BUGS.md entry early.
-Renumber with `git reset --soft HEAD~1`, never `--amend`.
 
 **6. Do not edit a tracked file while the suite is running.**
 
 **7. The file-size ratchet will refuse your fix, and it is usually right.**
-Move the code; do not raise the number.
+It refused four times across D/B/C. Move the code; do not raise the number.
 
-**8. Multi-line anchors do not match — and the two files Track B touched have
-DIFFERENT line endings.** `build-capability-map.js` is CRLF, the new
-`vault-tool-counts.js` is LF. One mutation harness has to handle both, so use
-single-line anchors always.
+**8. TRACKED POWERSHELL MUST BE PURE ASCII.** `test/…` asserts it, and an em
+dash in a comment fails the suite. Same class as AD-7: what you type in prose
+is gated too.
 
-**9. A `sed` one-liner will eat your backslashes.** Editing the mutation
-harness with `sed` turned `/^mythos\//` into `/^mythos//` and the file stopped
-parsing. Use a real editor for anything containing an escape.
+**9. `ps-automation.ps1` has MIXED line endings** (the file reports CRLF, and
+the region around `Handle-FocusWindow` is LF). Single-line anchors always.
 
-**10. THE MAP IS A CANVAS. It has no DOM element per node.** Verifying it by
-looking for chips or nodes in the DOM returns "NOT FOUND" for every node and
-looks exactly like a broken page. Drive it instead: eval the inline scripts,
-call `resize(); build(); place(); draw(performance.now())`, then read the
-pixels back with `getImageData` and count them against the palette in `:root`.
+**10. THE MAP IS A CANVAS with no DOM element per node.** Searching the DOM
+reports all 91 missing and reads like a broken page. Drive it instead:
+`resize(); build(); place(); draw()`, then `getImageData` and count pixels
+against the palette in `:root`.
 ### Standing constraints
 
 - **Two machines and sometimes two sessions share this repo.** Branch, PR,
