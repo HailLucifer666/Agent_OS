@@ -41,6 +41,108 @@ it is committed.
 
 ---
 
+## BUG-377 — the capability map could not say which open tickets live inside a green node (✅ FIXED 2026-08-27)
+
+**Status:** ✅ FIXED 2026-08-27. 15 regression tests, 8 mutations, none survived.
+Operator-requested after a hand check found BUG-348 missing from the closure
+ledger.
+
+**Symptom.** The map's nodes are coloured by **call counts**, so `system volume`
+showed **105 ok / 0 fail** while `media_status` — the tool BUG-348 is about — sat
+inside it. The bug is precisely about a call that *succeeds* while answering the
+wrong question, so no count could ever reveal it. The same held for BUG-346 and
+BUG-347 inside the green `wake word` node. **"28 nodes green" never meant 28
+things finished.**
+
+**THE OBVIOUS DESIGN WAS MEASURED AND REFUTED FIRST.** Attaching a bug to a node
+by the tool names its BUGS.md entry mentions is elegant, needs no curation, and
+does not work. Measured against the real data before any of it was written:
+
+| problem | measurement |
+|---|---|
+| subsystem nodes have no tools | **19 of 91** — `wake word`, `Aether mesh`, `fabrication`, `TTS chain`, `pc-child`, `immune system`. BUG-346/347/351 would attach **nowhere** |
+| prose mentions tools it is not about | `web_search` collected **6** tickets, `open_web` **7**; BUG-275 is about fabrication and landed on `web_search` |
+| the status filter is a guess | **62 of 234** entries carry no machine-readable status; the join read **BUG-1 as open** and attached it to `spotify_play` |
+
+A mention is not a claim — the same lesson as BUG-373, one layer out. So
+`node.bugs` is hand-authored, exactly as `node.tools` already is, and **checked in
+both directions**. That is not a retreat from "no hand-typed number survives":
+that rule bans hand-typing what a machine *can* derive, such as test counts. This
+association measurably cannot be derived.
+
+**The two directions, mirroring the tool check that caught `open_file`:**
+
+1. every number a node names must be **declared** in BUGS.md — a typo or an
+   entry that was never written fails;
+2. every **open** bug must appear on **some** node — this is the direction that
+   stops a green node hiding a ticket, and the reason the feature exists.
+
+**Reading the registry the way it is actually written.** Two shapes had to be
+handled or the check would have been wrong rather than merely incomplete.
+Declarations come from headings **and** bullets, because 11 of the 12 genuinely
+open bugs are pointer-only bullets with no heading. And the open-set is read as
+**blocks**, not lines: a bullet's `FIXED` frequently sits on its *second* line, and
+judging by the first reported BUG-353 — fixed and merged — as open. I made exactly
+that mistake by hand earlier the same day and nearly reported a stale register.
+
+**Guard the guard.** An empty open-set satisfies the coverage direction for free,
+so the check would pass loudest at the moment it stopped working. A missing
+`## OPEN WORK` register, or a register that parses to zero open bugs, is a **loud
+failure** rather than silent success. Both are pinned by test, and mutations
+confirm both fail when the guard is removed.
+
+**Only BUGS.md is read — no vault, no git, no network.** BUG-376 is the
+cautionary tale: a field one machine could compute and another could not made
+`--check` unsatisfiable for every vault-less checkout. Verified rather than
+assumed: `--check` exits 0, and `--write` immediately afterwards reports *"island
+already current, nothing written"*, so no other checkout will want to rewrite the
+field.
+
+**Seeded mapping (8 assignments, 7 tickets).** BUG-351 is listed on **two** nodes
+deliberately — the port is Aether's, the forever-retry is the healer's playbook.
+A bug on several nodes is explicitly allowed, unlike a tool, which has one owner;
+forcing a single owner would make the map lie about scope, and the asymmetry with
+`checkIsland` is recorded in the code so it reads as a decision.
+
+| node | status | ticket |
+|---|---|---|
+| `system volume` | **ok** | BUG-348 |
+| `wake word` | **ok** | BUG-346 |
+| `STT / multilingual` | warn | BUG-347 |
+| `web_search` | warn | BUG-344 |
+| `cua-driver` | warn | BUG-354 |
+| `Aether mesh` · `immune system` | fail · warn | BUG-351 |
+| `fabrication` | fail | BUG-356 |
+
+**A FIXTURE NUMBER IS AN ALLOCATION, and it cost two commit attempts.** The
+first version of the test wrote invented ticket numbers as literals inside its
+fixture strings. `lint-bug-registry.js` scans tracked source for that token and
+counts every hit as a number IN USE, so four fake tickets were filed against the
+registry and the undeclared ratchet went to **132 against a baseline of 130**.
+Fixed by assembling the token at runtime rather than by widening a baseline.
+
+The second attempt failed for ONE cause producing TWO failures: a comment
+mentioning the 999 fixture heading by its prefixed name both re-counted 999 as
+in use AND made its adjudication stale, because that adjudication names the
+exact files permitted to mention it. The concurrent session hit the identical
+trap in the same hour from the other side. Prose about a ticket is not a claim
+on it — BUG-373's lesson, arriving a third time, in a third place.
+
+**What this does NOT do.** It does not colour a node by its tickets — a green
+node with an open bug still renders green, and only the field says otherwise;
+whether status should react is a rendering decision and the surface is owned by
+another session. It does not cover the **62 unknown-status entries**: they are
+excluded from the must-be-listed direction, because including them would have
+produced 62 blocked commits rather than one honest gap. And it does not make the
+registry able to answer "what is open" in general — only the dated `## OPEN WORK`
+register is parsed.
+
+**Files:** `mythos/scripts/build-capability-map.js` (397 → 554),
+`MYTHOS-CAPABILITY-MAP.html` (island: 8 `bugs` fields).
+**Test:** `mythos/test/bug-377-node-bug-coverage.test.js` (15 tests).
+
+---
+
 ## BUG-376 — the capability-map gate blocked every commit from any checkout without the live vault (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 1 test rewritten, 1 added, mutation-proven.

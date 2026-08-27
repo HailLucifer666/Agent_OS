@@ -222,7 +222,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6521,
+      "value": 6537,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -373,7 +373,10 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Detects anomalies and applies playbooks. One playbook looped on a port it can never bind.",
-      "ev": "healer aether-proxy-rebind -> bind-failed-again, repeated every few minutes:\nlisten EADDRINUSE 127.0.0.1:4480"
+      "ev": "healer aether-proxy-rebind -> bind-failed-again, repeated every few minutes:\nlisten EADDRINUSE 127.0.0.1:4480",
+      "bugs": [
+        351
+      ]
     },
     {
       "c": "cog",
@@ -391,7 +394,10 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Invented a model that does not exist and defended it when challenged. Filed, not started.",
-      "ev": "Claimed \"Claude Mythos 5\" leads the LiveBench coding board.  BUG-275 FILED, NOT STARTED\nAlso faked a 30-second timer count after timer_add failed."
+      "ev": "Claimed \"Claude Mythos 5\" leads the LiveBench coding board.  BUG-275 FILED, NOT STARTED\nAlso faked a 30-second timer count after timer_add failed.",
+      "bugs": [
+        356
+      ]
     },
     {
       "c": "mem",
@@ -558,7 +564,10 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Listens continuously and fires cleanly well above threshold.",
-      "ev": "detected at 0.9923 / 0.9881 / 0.9747 / 0.8082 against threshold 0.5, framesToFirstAudio 1"
+      "ev": "detected at 0.9923 / 0.9881 / 0.9747 / 0.8082 against threshold 0.5, framesToFirstAudio 1",
+      "bugs": [
+        346
+      ]
     },
     {
       "c": "sense",
@@ -603,7 +612,10 @@
       "tools": [],
       "kind": "subsystem",
       "note": "Replies in Bengali and Hindi were good. Transcription of the operator was not.",
-      "ev": "Bengali speech came back as Korean and Portuguese fragments: \"코다\", \"É. Que tu cobrou, não, Jadavpur\""
+      "ev": "Bengali speech came back as Korean and Portuguese fragments: \"코다\", \"É. Que tu cobrou, não, Jadavpur\"",
+      "bugs": [
+        347
+      ]
     },
     {
       "c": "voice",
@@ -790,7 +802,10 @@
       "ok": 117,
       "f": 10,
       "note": "Still warn on main, but for a different reason than in this audit. It is no longer 'only Wikipedia': exa-mcp answers again, and a second keyless provider plus an escalating per-provider cooldown are now merged to main. The remaining risk is quota, not deadness - two free tiers of ~150 and ~100 calls a day, both vendor claims since neither endpoint publishes a rate-limit header.",
-      "ev": "Measured 2026-08-26 through the shipping module: exa-mcp median 1634ms, you-mcp median 2621ms, 3 of 3 queries each answered. ddg-html is alive again too - 4 of 5 queries in ~1s, and its miss failed in 73ms rather than a 10s timeout - so it is intermittent, not dead as recorded here. Fix is MERGED to main as of 2026-08-26 (PR #26, merge 2c0a4e9). (BUG-361, BUG-365)"
+      "ev": "Measured 2026-08-26 through the shipping module: exa-mcp median 1634ms, you-mcp median 2621ms, 3 of 3 queries each answered. ddg-html is alive again too - 4 of 5 queries in ~1s, and its miss failed in 73ms rather than a 10s timeout - so it is intermittent, not dead as recorded here. Fix is MERGED to main as of 2026-08-26 (PR #26, merge 2c0a4e9). (BUG-361, BUG-365)",
+      "bugs": [
+        344
+      ]
     },
     {
       "c": "web",
@@ -1006,7 +1021,10 @@
       "ok": 105,
       "f": 0,
       "note": "set_volume, get_volume and media_key. Not one failure in 154 calls.",
-      "ev": "set_volume 68/0, get_volume 37/0, media_key 49/0, media_status 28/1"
+      "ev": "set_volume 68/0, get_volume 37/0, media_key 49/0, media_status 28/1",
+      "bugs": [
+        348
+      ]
     },
     {
       "c": "media",
@@ -1163,7 +1181,10 @@
         "cua_click"
       ],
       "note": "INTERMITTENT, newly observed 2026-08-26. Two live boots minutes apart on the same commit: one OFFLINE on a startup handshake that timed out with the child printing nothing at all, the next ONLINE. Not a regression and not healthy either - a startup race nothing reports, because it degrades gracefully so nothing downstream breaks. Undiagnosed.",
-      "ev": "Boot A: \"cua-driver: OFFLINE (cua-driver startup handshake timed out. The child printed nothing to stderr.)\" Boot B, same commit: \"cua-driver: ONLINE\". Silent stderr is the whole difficulty. Recorded as warn rather than fail because one run is not a mechanism - the first draft of this very node said REGRESSED off boot A alone."
+      "ev": "Boot A: \"cua-driver: OFFLINE (cua-driver startup handshake timed out. The child printed nothing to stderr.)\" Boot B, same commit: \"cua-driver: ONLINE\". Silent stderr is the whole difficulty. Recorded as warn rather than fail because one run is not a mechanism - the first draft of this very node said REGRESSED off boot A alone.",
+      "bugs": [
+        354
+      ]
     },
     {
       "c": "dev",
@@ -1195,7 +1216,10 @@
       "tools": [],
       "kind": "subsystem",
       "note": "The proxy cannot bind its port and the healer retried it in a loop. The .env says it is disabled; the running app started it anyway.",
-      "ev": "\"Aether scanner-proxy could not bind 127.0.0.1:4480 for node phone: listen EADDRINUSE\"  repeated for hours\nmythos/.env says AETHER_ENABLED=false -- config.json overrides it."
+      "ev": "\"Aether scanner-proxy could not bind 127.0.0.1:4480 for node phone: listen EADDRINUSE\"  repeated for hours\nmythos/.env says AETHER_ENABLED=false -- config.json overrides it.",
+      "bugs": [
+        351
+      ]
     },
     {
       "c": "dev",

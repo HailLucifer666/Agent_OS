@@ -70,6 +70,7 @@ const MYTHOS_ROOT = path.join(__dirname, '..');
 const REPO_ROOT = path.join(MYTHOS_ROOT, '..');
 const MAP_FILE = path.join(REPO_ROOT, 'MYTHOS-CAPABILITY-MAP.html');
 const ROADMAP_FILE = path.join(REPO_ROOT, 'ROADMAP.md');
+const BUGS_FILE = path.join(REPO_ROOT, 'BUGS.md');
 
 const ISLAND_OPEN = '<script type="application/json" id="map-data">';
 const ISLAND_CLOSE = '</script>';
@@ -305,6 +306,143 @@ function checkVitals(data, expected) {
 }
 
 // ---------------------------------------------------------------------------
+// BUG-377 — which tickets sit inside which node.
+//
+// WHY THIS IS CURATED AND NOT DERIVED, measured 2026-08-27 before it was built.
+// The obvious design is to attach a bug to a node by the TOOL NAMES its BUGS.md
+// entry mentions, since every node already carries a tool list. It was tried
+// against the real data and it fails three ways at once:
+//
+//   * 19 of 91 nodes have `tools: []` — wake word, Aether mesh, fabrication,
+//     TTS chain, pc-child, immune system. No tool name can ever attach to them,
+//     so the rule is silent on precisely the nodes it was wanted for: BUG-346
+//     and BUG-347 (wake word) and BUG-351 (Aether mesh) would land NOWHERE.
+//   * Prose mentions a tool for many reasons other than being about it.
+//     `web_search` collected six tickets and `open_web` seven; BUG-275 is about
+//     fabrication and attached to `web_search`. A mention is not a claim — the
+//     same lesson as BUG-373, one layer out.
+//   * Two thirds of the registry has no machine-readable status (62 of 234
+//     entries), so the join's own filter is a guess. It read BUG-1 as open and
+//     attached it to spotify_play.
+//
+// So `node.bugs` is hand-authored, exactly as `node.tools` already is, and
+// checked in BOTH directions by the code below. That is not a retreat from "no
+// hand-typed number survives": that rule bans hand-typing what a machine can
+// derive (test counts). This association measurably cannot be derived.
+
+// bugFacts — the two sets the checks need, read from BUGS.md only. No vault, no
+// git, no network, so every checkout computes the same answer. (BUG-376 is the
+// cautionary tale: a field one machine could compute and another could not made
+// --check unsatisfiable for every vault-less checkout.)
+function bugFacts(deps = {}) {
+  const text = deps.bugsText ?? fs.readFileSync(deps.bugsFile || BUGS_FILE, 'utf8');
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+
+  // DECLARED: the number is a known ticket, as either a heading or a bullet.
+  // Both shapes count — 11 of the 12 genuinely open bugs are pointer-only
+  // bullets with no heading, and a check that only read headings would call
+  // them undeclared.
+  //
+  // This is deliberately the PERMISSIVE UNION and is NOT a headline figure.
+  // lint-bug-registry.js reports `declaredCount: 227` where this set has 235,
+  // because that script answers "how many tickets are properly declared" under
+  // its own declaration rule, and this one answers "which numbers may a node
+  // cite without the gate objecting". Being over-inclusive here can only ever
+  // avoid a false failure; being under-inclusive would block commits over a
+  // ticket that plainly exists. So do not render this size anywhere as the
+  // registry's count — the registry owns that number.
+  const declared = new Set();
+  for (const line of lines) {
+    const m = /^#{2,4}\s.*?BUG-(\d+)\b/.exec(line) || /^- BUG-(\d+)\b/.exec(line);
+    if (m) declared.add(Number(m[1]));
+  }
+
+  // OPEN: read from the operator's open-work register, and read as BLOCKS. A
+  // bullet's "FIXED" often sits on its SECOND line, so judging a list item by
+  // its first line reports closed tickets as open — measured, on BUG-353.
+  let inRegister = false;
+  const open = new Set();
+  let registerFound = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^## OPEN WORK\b/.test(lines[i])) { inRegister = true; registerFound = true; continue; }
+    if (inRegister && /^## /.test(lines[i])) inRegister = false;
+    if (!inRegister) continue;
+    const m = /^- BUG-(\d+)\b/.exec(lines[i]);
+    if (!m) continue;
+    let block = lines[i];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^- |^#{2,4}\s/.test(lines[j])) break;
+      block += '\n' + lines[j];
+    }
+    if (!/\bFIXED\b/.test(block)) open.add(Number(m[1]));
+  }
+
+  return { declared, open, registerFound };
+}
+
+// checkBugs — mirrors checkIsland's two directions for tools, because the
+// failure it prevents is the same one: BUG-348 sits in `system volume`, a node
+// showing 105 ok / 0 fail, because nodes are coloured by CALL COUNTS and that
+// bug is about a call that succeeds while answering the wrong question. Without
+// the second direction, "28 nodes green" keeps meaning "28 things finished".
+function checkBugs(data, facts) {
+  const problems = [];
+  const nodes = data.nodes || [];
+  const { declared, open, registerFound } = facts.bugs;
+
+  // GUARD THE GUARD. An empty open-set satisfies the coverage direction for
+  // free, so the check would pass loudest at the moment it stopped working.
+  if (!registerFound) {
+    problems.push('BUGS.md has no "## OPEN WORK" register, so the open-bug set cannot be read '
+      + 'and the coverage check below would pass vacuously. Restore the register or update this check.');
+    return problems;
+  }
+  if (open.size === 0) {
+    problems.push('the open-bug register parsed to ZERO open bugs. That is either a genuine '
+      + 'empty backlog or a parser that has stopped matching; it must not be read as coverage.');
+    return problems;
+  }
+
+  const claimed = new Map(); // bug number -> [node names]
+  for (const n of nodes) {
+    if (n.bugs === undefined) continue;
+    if (!Array.isArray(n.bugs)) { problems.push(`node "${n.n}": bugs must be an array of numbers`); continue; }
+    for (const raw of n.bugs) {
+      if (!Number.isInteger(raw) || raw <= 0) {
+        problems.push(`node "${n.n}": bug "${raw}" is not a positive integer — write 348, not "BUG-348"`);
+        continue;
+      }
+      if (!claimed.has(raw)) claimed.set(raw, []);
+      claimed.get(raw).push(n.n);
+    }
+  }
+
+  // Direction 1: every number the map names must be a real ticket.
+  const unknown = [...claimed.keys()].filter((b) => !declared.has(b)).sort((a, b) => a - b);
+  if (unknown.length) {
+    problems.push(`the map names ${unknown.length} bug number(s) that are not declared in BUGS.md: `
+      + `${unknown.map((b) => 'BUG-' + b).join(', ')}. Either the number is wrong or the entry was never written.`);
+  }
+
+  // Direction 2: every OPEN ticket must be visible on some node. This is the
+  // direction that catches an open bug hiding inside a green node, and it is
+  // the one the tool check already earns its keep with.
+  const invisible = [...open].filter((b) => !claimed.has(b)).sort((a, b) => a - b);
+  if (invisible.length) {
+    problems.push(`${invisible.length} open bug(s) appear on no node, so the map cannot show the `
+      + `capability they affect as anything other than healthy: ${invisible.map((b) => 'BUG-' + b).join(', ')}. `
+      + 'Add each to the node whose capability it degrades.');
+  }
+
+  // Deliberately NOT checked: a bug listed on more than one node. Tools are
+  // one-tool-one-node because a tool has a single owner; a defect legitimately
+  // degrades several capabilities, and forcing a choice would make the map lie
+  // about scope. Recorded so the asymmetry with checkIsland reads as a decision.
+
+  return problems;
+}
+
+// ---------------------------------------------------------------------------
 
 function generate(deps = {}) {
   const html = deps.html ?? readMap(deps.mapFile);
@@ -313,6 +451,7 @@ function generate(deps = {}) {
     repo: deps.repo || repoFacts(deps),
     suite: deps.suite || suiteFacts(deps),
     vault: deps.vault || vaultFacts(deps),
+    bugs: deps.bugs || bugFacts(deps),
   };
   const vitals = buildVitals(data.vitals, facts, deps);
   // Two kinds, and they are not interchangeable. A MAPPING problem is a claim
@@ -321,7 +460,10 @@ function generate(deps = {}) {
   // visibly old. A STALE VITAL is the ordinary condition --write exists to
   // clear, so it must not block it — an earlier draft conflated the two and
   // the generator could never bootstrap its own vitals.
-  const mapping = checkIsland(data, facts);
+  // A bug-mapping problem is a MAPPING problem, not a stale vital: it is a claim
+  // the registry contradicts, only a human can resolve it, and stamping a fresh
+  // date onto a map that hides an open ticket is the failure being prevented.
+  const mapping = [...checkIsland(data, facts), ...checkBugs(data, facts)];
   const stale = checkVitals(data, vitals);
   const problems = [...mapping, ...stale];
 
@@ -370,6 +512,13 @@ function main(argv) {
       + 'The incident vital keeps its last stamp and renders stale — it is not zeroed.');
   }
 
+  const bugTotals = (result.data.nodes || []).reduce((acc, n) => {
+    for (const b of (n.bugs || [])) acc.add(b);
+    return acc;
+  }, new Set());
+  console.log(`build-capability-map: ${facts.bugs.open.size} open bug(s) in the register, `
+    + `${bugTotals.size} mapped onto nodes.`);
+
   const byStatus = {};
   for (const n of result.data.nodes) byStatus[n.s] = (byStatus[n.s] || 0) + 1;
   console.log(`build-capability-map: ${STATUSES.map((s) => `${s} ${byStatus[s] || 0}`).join(' · ')}`);
@@ -405,6 +554,8 @@ function main(argv) {
 }
 
 module.exports = {
+  bugFacts,
+  checkBugs,
   parseIsland, repoFacts, suiteFacts, vaultFacts, buildVitals,
   checkIsland, checkVitals, generate, main, STATUSES, ROADMAP_RE,
 };
