@@ -34,10 +34,29 @@ describe('lint-bug-registry — the numbers it reports', () => {
   const report = lint.buildReport();
 
   test('next-free skips the fixture, and is not 1000', () => {
-    assert.strictEqual(report.max, 367, 'the real maximum in use');
-    assert.strictEqual(report.nextFree, 368);
+    // Pinned to INVARIANTS, not to a snapshot. The first draft asserted
+    // `max === 367` and broke the same day, on the very next bug filed — a
+    // machine-state assertion wearing a correctness assertion's clothes, which
+    // is the failure mode this repo files under "machine-state tests look
+    // flaky". The three things that must actually hold:
+    assert.ok(report.max < 999,
+      `the maximum is ${report.max}; anything at or above 999 means the fake `
+      + '`## BUG-999` heading in triage-incidents.test.js has become live and '
+      + '632 numbers are about to be abandoned on a fixture');
+    // Near-tautological and kept knowingly: the script computes `max + 1`
+    // literally, so this line largely restates the implementation. It still
+    // catches next-free being rewired to something else, but the floor and the
+    // ceiling are the two assertions carrying real weight here.
+    assert.strictEqual(report.nextFree, report.max + 1,
+      'next-free is the successor of the maximum in use, never of the maximum DECLARED');
     assert.ok(!report.inUse.includes(999),
       'BUG-999 is a fake BUGS.md heading inside a test string, not a bug');
+    // A ratchet, so the assertion cannot go vacuous: numbers are only ever
+    // allocated, so the maximum can rise but must never fall. A drop means a
+    // number in use stopped being seen — the linter going blind, which looks
+    // exactly like a clean registry.
+    assert.ok(report.max >= 367,
+      `the maximum fell to ${report.max}; a number that was in use has stopped being counted`);
   });
 
   test('a bug whose only trace is its regression test still counts', () => {
@@ -196,14 +215,37 @@ describe('lint-bug-registry — the two git scopes do different jobs', () => {
       'the HEAD map must not be filled from --all — that is the mutation that survived');
   });
 
-  test('the ratchet reads HEAD only, so the gate cannot depend on what a machine fetched', () => {
-    // The undeclared count gates commits against a committed baseline. If it
-    // counted every ref, the same commit would pass for someone with fewer
-    // remote branches and fail for someone with more — the reading of "flaky"
-    // that gets a gate switched off.
+  test('the ratchet reads no ref at all, so the gate cannot depend on what a machine fetched', () => {
+    // REWRITTEN 2026-08-27 by BUG-373, and the invariant got STRONGER rather
+    // than weaker. This used to assert that a branch-only number raised the
+    // maximum without moving the ratchet, demonstrated through commit messages.
+    // Commit messages no longer feed the ratchet at all — prose is not
+    // allocation — so the old demonstration is impossible to write, and the
+    // property it protected now holds by construction: `undeclared` is derived
+    // from tracked source only and cannot vary with `git fetch`.
+    //
+    // The HEAD-versus-all distinction did not disappear, it MOVED, to the
+    // `--undeclared-in-commits` listing. It is asserted there, in
+    // bug-373-commit-prose-is-not-allocation.test.js, for the same reason it
+    // mattered here: two people at the same commit must see the same output.
     const report = lint.buildReport(fake({ head: [400], all: [400, 500] }));
-    assert.deepStrictEqual(report.undeclared, [400],
-      'the branch-only number must raise the maximum without moving the ratchet');
+    assert.deepStrictEqual(report.undeclared, [],
+      'numbers cited only in commit messages must not enter the ratchet, on either scope');
+    assert.strictEqual(report.max, 500,
+      'and the maximum must still see every ref — under-reporting it hands out a taken number');
+  });
+
+  test('the listing inherits the HEAD scoping the ratchet used to carry', () => {
+    // Why HEAD and not every ref: if the listing counted branches, the same
+    // commit would print one thing for someone with fewer remotes fetched and
+    // another for someone with more. That divergence is what gets a check
+    // called flaky and switched off — the reason the two scopes were split in
+    // the first place, now applied where commit messages still land.
+    const report = lint.buildReport(fake({ head: [400], all: [400, 500] }));
+    assert.deepStrictEqual(report.undeclaredInCommits, [400],
+      'the HEAD-cited number is listed; the branch-only 500 is not');
+    assert.ok(!report.undeclaredInCommits.includes(500),
+      'a number visible only because of what this machine fetched must not appear');
   });
 });
 
