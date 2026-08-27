@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6571,
+      "value": 6582,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -920,10 +920,10 @@
       "tools": [
         "open_web"
       ],
-      "ok": 131,
-      "f": 19,
-      "note": "Renders search, weather, flight and YouTube cards in the dashboard. Twelve distinct failure strings.",
-      "ev": "7 successful YouTube embeds including \"CNN News Central 8/20/26\".\n\"Found results but could not extract a YouTube video ID.\"\n\"open_web requires a type. Use one of: youtube|weather|search|flights|image|web.\""
+      "ok": 135,
+      "f": 25,
+      "note": "Renders search, weather, flight and YouTube cards. 17 distinct failure strings, now all typed with a machine-readable code. Five YouTube URL shapes were unreadable and now parse.",
+      "ev": "RE-MEASURED 2026-08-27 (BUG-381 / Track D-4) against the live vault: 135 ok / 25 fail, not 131/19 -- the map was stale AND under-counted the failures. 17 distinct failure strings, not twelve. Grouped by real cause: 9 correct refusals of a malformed call (no url / no type / no query), 10 where upstream genuinely returned nothing, 3 \"could not extract a YouTube video ID\", 3 provider fetch failures. So D-4's named cause is the SMALLEST of the four, but it was real: the extractor regex knew four YouTube URL shapes and missed five. Measured -- MISS on youtube.com/live/ID (a livestream, and the failing queries included \"CNN live news\", \"CNN news dashboard\" and \"today's news\"), MISS on watch?app=desktop&v=ID and watch?feature=share&v=ID (v had to be the FIRST query param, which a share sheet and a mobile redirect both break), MISS on youtube-nocookie.com/embed/ and on the legacy /v/ path. All five now read, extracted to util/youtube-id.js with a host guard so an unrelated URL containing an 11-char path segment cannot yield a fake id. Second half of D-4 also done: all 22 failure sites in the open_web handler now carry a typed `code` (bad-request / no-results / unplayable-results / provider-error, one per measured cause group) beside the unchanged prose, so a caller can finally branch. STILL WARN, not green: the extractor is unit-verified over the real URL shapes but no live search has been driven through it, and 84% (135/160) is not a green number even when most of the remainder is correct refusal."
     },
     {
       "c": "web",
@@ -1135,8 +1135,8 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Plays inside the dashboard when the video ID resolves. It often does not.",
-      "ev": "7 successful media-window opens; 54 calls hit the handler with a non-media type."
+      "note": "Plays inside the dashboard when the video ID resolves. The reason it often did not was one regex missing five URL shapes, including the /live/ path news streams use.",
+      "ev": "CAUSE IDENTIFIED AND FIXED 2026-08-27 (BUG-381 / Track D-4). \"It often does not [resolve]\" was true and the reason was one regex: the video-id extractor recognised watch?v=, youtu.be/, /embed/ and /shorts/ and MISSED /live/, /v/, youtube-nocookie.com/embed/, and any watch URL where v= was not the first query parameter. A news livestream is served from /live/, which is why news queries in particular failed to embed. Extraction now lives in util/youtube-id.js, reads all nine shapes, and refuses to invent an id for a non-YouTube host. The other half of the old evidence line -- \"54 calls hit the handler with a non-media type\" -- is NOT a defect: those are open_web calls for search/weather/flights/web cards, which never had a video to embed. STILL WARN pending one live embed of a /live/ URL; nothing here is verified against a running dashboard."
     },
     {
       "c": "build",
@@ -3687,10 +3687,20 @@
           "fix": "`providers/tts.js` — `probe()` returns `{ok, reason, ms}` instead of a boolean, consulting an optional `unavailableReason()` hook and keeping the thrown message when `isAvailable()` throws; `tts.unavailable` now logs `reason` and `ms`. `providers/kokoro-tts.js` — records the decline text (including on the sticky already-failed path, which `loadModel()`'s own `.catch()` can set without `isAvailable()` ever seeing the error) and exposes it. `isAvailable(): boolean` remains every provider's contract; the hook is additive, and a provider that does not implement it still gets its thrown message and its timing. Also added: an optional `providers` injection seam on `createTtsChain`, same reasoning as `routes/config.js`'s injectable `wakewordModelsDir`. Without it a test naming real rungs probes the",
           "verification": "``` node --test test/bug-380-tts-chain-says-why-a-rung-was-skipped.test.js before the fix : 6 tests, 0 pass, 6 fail after the fix : 9 tests, 9 pass, 0 fail mutations: 7 run across providers/tts.js and providers/kokoro-tts.js, 7 caught, both files restored sha256-identical. Three needed repair on a first pass: T1/T3 the harness reported TARGET ABSENT — the anchors used LF while the sources are CRLF, which is the harness correctly refusing to score a mutation that never applied K1 SURVIVED: every other case uses injected fake rungs, so kokoro's OWN reason was untested, and the first replacement assertion was ALSO vacuous — it matched the string `lastUnavailableReason =`, which survives `lastUnavailableReason = null`, i.e. survives the defect ```"
         }
+      },
+      {
+        "n": 381,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the YouTube id extractor knew four URL shapes and missed five, including the /live/ path news streams use",
+        "detail": {
+          "fix": "Extraction moves to `src/core/util/youtube-id.js` and reads all nine shapes. It carries a",
+          "verification": "``` node --test test/bug-381-youtube-id-and-typed-open-web-reasons.test.js before the fix : 11 tests, 9 pass, 2 fail (\"22 of 22 open_web failures carry no typed code\") after the fix : 17 tests, 17 pass, 0 fail file-size ratchet: from-dashboard.js 1418 (ceiling 1418) — at, never over mutations: 8 run across both files, 8 caught, both restored sha256-identical. Y1 restores the ORIGINAL four-shape regex -> 3 fail. That is the red-first proof for the extractor: the \"five shapes that were being missed\" assertion goes red against exactly the code that shipped before. Y2 host guard dropped -> the fake-id test catches it Y3 /live/ arm dropped -> the livestream shape catches it Y4 query-anywhere v= dropped -> the share-link shapes catch it C3 one failure loses its code -> the all-22-typed walk catches it ```"
+        }
       }
     ],
     "counts": {
-      "verified": 28,
+      "verified": 29,
       "fixed": 54,
       "open": 10,
       "coded": 1,
@@ -3698,7 +3708,7 @@
       "duplicate": 1,
       "unrecorded": 133
     },
-    "total": 228,
+    "total": 229,
     "openDeclared": [
       344,
       346,

@@ -41,6 +41,113 @@ it is committed.
 
 ---
 
+## BUG-381 — the YouTube id extractor knew four URL shapes and missed five, including the /live/ path news streams use (✅ FIXED 2026-08-27, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-27. 1 new module, 1 file edited, 17 assertions,
+8 mutations run and all 8 caught, both files restored sha256-identical.
+Track D-4, both halves.
+
+**Measured first, against the operator's live vault.** `open_web`: **160
+completed, 135 ok, 25 fail** — the map said 131/19, so it was stale *and* it
+under-counted the failures. **17 distinct failure strings, not the twelve** the
+work order expected. Grouped by real cause:
+
+| cause | count |
+|---|---|
+| a correct refusal of a malformed call (no url / no type / no query) | 9 |
+| upstream genuinely returned nothing for the query | 10 |
+| **"Found results but could not extract a YouTube video ID"** | **3** |
+| a provider fetch failure (weather) | 3 |
+
+So D-4's named cause is the **smallest of four**. It was still real, and the
+regex it lived in was why.
+
+### Root cause — four shapes recognised, five missed
+
+```
+MATCH  youtube.com/watch?v=ID        MISS  youtube.com/live/ID
+MATCH  youtu.be/ID                   MISS  youtube.com/watch?app=desktop&v=ID
+MATCH  youtube.com/shorts/ID         MISS  youtube.com/watch?feature=share&v=ID
+MATCH  m.youtube.com/watch?v=ID      MISS  youtube-nocookie.com/embed/ID
+                                     MISS  youtube.com/v/ID
+```
+
+Two of those misses explain the logged failures directly. **`/live/` is what a
+news livestream resolves to**, and the failing queries included "CNN live news",
+"CNN news dashboard" and "today's news". And `watch?v=` required `v` to be the
+**first** query parameter, so any URL carrying `app=desktop` or `feature=share`
+ahead of it — which is exactly what a share sheet or a mobile redirect produces —
+was unreadable.
+
+**Fix.** Extraction moves to `src/core/util/youtube-id.js` and reads all nine
+shapes. It carries a **host guard**: an unrelated URL containing an 11-character
+path segment (`example.com/live/dQw4w9WgXcQ`) returns null rather than a fake id,
+because a widened parser that invents an id would hand the media window a video
+that does not exist *and report success*.
+
+A module rather than a wider regex in place because **`from-dashboard.js` was at
+1417 lines against a ratchet ceiling of 1418** — one line of headroom. The
+ratchet was right again: a parser with nine cases belongs somewhere a test can
+reach without constructing a dashboard effector.
+
+### The other half — typed reasons
+
+"Twelve ways of saying no is twelve things a caller cannot branch on" — measured
+as seventeen. **All 22 failure sites in the `open_web` handler now carry a typed
+`code`**, one per measured cause group: `bad-request`, `no-results`,
+`unplayable-results`, `provider-error`. Four codes, coarse on purpose — a caller
+branches on what it can *do*, and there are four different things to do.
+
+`fail(reason, code)` is **additive**: the prose stays exactly where it was, in
+`.result`, because it is good prose and the voice layer speaks it. Every existing
+consumer is unaffected. Zero net lines added, so the file lands at exactly 1418.
+
+**Attack pass (Stage 3):**
+
+- *What else matches this?* The dangerous direction for a widened parser is
+  false positives, not misses — hence the host guard and the retained
+  `{11}` length, both mutation-proven. `youtube.com/results?search_query=`,
+  `/@CNN` and the bare domain all correctly return null.
+- *Does this hide evidence?* No. Codes are added beside the prose, never instead
+  of it, and a test pins that `result: reason` still holds.
+- *Is this constant correct?* The `{11}` id length is YouTube's actual id width;
+  relaxing it is mutation Y5 and is caught.
+- *Class:* the same family as the last three tickets, one level up — the reason
+  here was human-readable but not machine-classifiable, so a caller could not
+  branch on it.
+- *Deliberate non-change:* the prose of all 17 strings is untouched. Rewriting
+  them would be a spoken-output change dressed as a diagnostic improvement, and
+  several were themselves carefully-worded remedies from earlier tickets.
+
+**Verification.**
+
+```
+node --test test/bug-381-youtube-id-and-typed-open-web-reasons.test.js
+  before the fix : 11 tests, 9 pass, 2 fail
+                   ("22 of 22 open_web failures carry no typed code")
+  after  the fix : 17 tests, 17 pass, 0 fail
+file-size ratchet: from-dashboard.js 1418 (ceiling 1418) — at, never over
+
+mutations: 8 run across both files, 8 caught, both restored sha256-identical.
+  Y1 restores the ORIGINAL four-shape regex -> 3 fail. That is the red-first
+     proof for the extractor: the "five shapes that were being missed"
+     assertion goes red against exactly the code that shipped before.
+  Y2 host guard dropped        -> the fake-id test catches it
+  Y3 /live/ arm dropped        -> the livestream shape catches it
+  Y4 query-anywhere v= dropped -> the share-link shapes catch it
+  C3 one failure loses its code -> the all-22-typed walk catches it
+```
+
+**What this does NOT close.** Neither node goes green. The extractor is
+unit-verified across the real URL shapes but **no live search has been driven
+through it** — closing `YouTube embed` needs one live embed of a `/live/` URL on
+a running dashboard. And 135/160 is not a green number even though 19 of the 25
+failures are correct refusals or genuinely-empty upstream results. The remaining
+`open_web` prose is unchanged, so a caller that wants to branch should read `code`
+and not pattern-match the sentence.
+
+---
+
 ## BUG-380 — a TTS rung that declined said which, never why, so 15 seconds of silence a day was invisible (✅ FIXED 2026-08-27, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-27. 2 files edited, 9 assertions, 7 mutations run
