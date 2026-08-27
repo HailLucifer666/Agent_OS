@@ -246,7 +246,12 @@ function bulletMarks(n) {
   const id = '[-*]\\s*' + 'BUG-' + '0*' + n + '\\b';
   return {
     bulletPartial: new RegExp(`${id}[^\\n]*\\bFIXED\\b[^\\n]*\\bNOT\\s+yet\\b`, 'i'),
-    bulletFixed: new RegExp(`${id}[^\\n]*\\bFIXED\\b`, 'i'),
+    // SATISFIED reads the same as FIXED here, and for the same reason it was
+    // added to openSetFrom's closure vocabulary: BUG-344's bullet states
+    // "VERIFIED-SATISFIED 2026-08-24" and nothing could read it. Leaving it out
+    // would move that entry from wrongly-open to wrongly-unrecorded, which is
+    // trading one false report for another.
+    bulletFixed: new RegExp(`${id}[^\\n]*\\b(?:FIXED|SATISFIED)\\b`, 'i'),
   };
 }
 
@@ -320,7 +325,13 @@ function openSetFrom(text) {
   const set = new Set();
   for (const m of section.matchAll(/^[-*] BUG-(\d+)\b/gm)) {
     const block = blockAt(section, m.index).replace(/\s+/g, ' ');
-    if (/\bFIXED\b|\bRESOLVED\b|\bCLOSED\b/i.test(block)) continue;
+    // BUG-346 sweep: SATISFIED belongs in this vocabulary. BUG-344's bullet reads
+    // "VERIFIED-SATISFIED 2026-08-24: live boot logged websearch.not-installed
+    // with the remedy" — a closure stated in the register itself, which the
+    // register then went on reporting as open work for four days. Checked before
+    // adding: it is the only occurrence of the word in the section, and it is not
+    // negated, so this cannot close a bullet that says it was NOT satisfied.
+    if (/\bFIXED\b|\bRESOLVED\b|\bCLOSED\b|\bSATISFIED\b/i.test(block)) continue;
     set.add(+m[1]);
   }
   return { set, section: true };

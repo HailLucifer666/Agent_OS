@@ -925,7 +925,7 @@ function startWakeWord() {
         if (s === 'error') mic.setCaption('Wake word offline: ' + msg, 'error');
         // 'silent' is the new honest failure: armed, but no audio ever arrived.
         // It must NOT read as "listening" — that false reassurance is the bug.
-        if (s === 'silent') mic.setCaption('Wake word is not hearing anything — ' + msg, 'error');
+        if (s === 'silent') { mic.setCaption('Wake word is not hearing anything — ' + msg, 'error'); scheduleWakewordRearm('silent'); }
         if (s === 'degraded') mic.setCaption('Wake word: ' + msg, 'error');
       },
     });

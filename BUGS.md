@@ -16757,7 +16757,7 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   wakeword.js reports status 'degraded' on AudioContext suspend (~:349) but
   app.js invokes scheduleWakewordRearm (~:707) only on start/load failure.
   Sustained 'degraded'/'silent' should schedule re-arm; likeliest survivor
-  of "listener ceases spontaneously".
+  of "listener ceases spontaneously". **FIXED 2026-08-28 (BUG-346), mutation-proven — and BOTH halves of the description above are wrong, which is why the fix is narrower than it asks for.** (1) `silent` was ALREADY handled: it calls `stop()` and returns false, so `start()` resolves false and app.js's else-branch schedules the re-arm. (2) The OTHER `degraded` (`fallbackFired`) means the saved mic was missing and the system default was used — that detector IS listening, and re-arming it would tear down a working wake word on a healthy fallback, which is the opposite failure and strictly worse. THE REAL GAP was exactly one case: a context suspended AFTER a successful arm. It emitted `degraded`, called `resume()`, and if resume never won, nothing else happened — `running` stayed true, so `isRunning()` kept answering yes, the caption kept promising standby, and `scheduleWakewordRearm()` (which refuses to act on a detector it believes is live) could never fire, while `start()`'s else-branch had resolved true long before and never runs again. `wakeword.js` now gives a suspension a bounded `CONTEXT_RESUME_GRACE_MS` deadline, cancels it if the context recovers, and on expiry reports `silent` and calls `stop()` — which is what makes the ladder eligible. app.js schedules the re-arm on `silent` only, in one line, because it sits exactly on its file-size ratchet ceiling. 8 assertions, 9 mutations all caught. NOT CLOSED BY THIS: source-shape only — app.js cannot be required under `node --test`, so a real suspended device still needs the operator.
 - BUG-347 - mute-listener needs an audible recovery. voice-loop.js refuses
   transcription while _brainOnline is false (~:380) with no signal when it
   flips back; operator sees an armed mic that never reacts. Speak/caption
@@ -16793,7 +16793,7 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
 - BUG-351 - Aether proxy :4480 war. Healer playbook rebinds forever against
   an orphaned listener (bind-failed-again x336, Jul->Aug). Add terminal
   condition after N attempts -> OFFLINE + hint running a new
-  scripts/diagnose-aether-port.ps1 that names the squatter PID.
+  scripts/diagnose-aether-port.ps1 that names the squatter PID. **FIXED by BUG-379 (2026-08-27, mutation-proven).** Both halves shipped: `src/core/immune/aether-rebind.js` gives the playbook a terminal condition (three attempts, then OFFLINE with a spoken reason), and `src/core/util/port-holder.js` + `src/core/aether/bind-failure.js` name the process holding the port. **Two of this bullet's own claims were false and must not be inherited:** the healer did NOT rebind forever — the playbook ran ONCE ever, and the 336 records were 336 PROCESSES, one anomaly each from a whenReady() rejection arm; and no `diagnose-aether-port.ps1` was needed, because the diagnostic belongs in the bind path, not in a separate script.
 - BUG-352 - catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);
   the README catalog table and pie are NOT yet generated — see below.**
 

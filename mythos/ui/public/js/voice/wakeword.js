@@ -170,6 +170,63 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
   // Generous: ~18 frames (1280 samples / 80ms each) are expected in this window,
   // so zero means genuinely no audio rather than a slow machine.
   const FIRST_FRAME_TIMEOUT_MS = 3000;
+
+  // BUG-346 — HOW LONG A SUSPENDED CONTEXT MAY CLAIM TO BE LISTENING.
+  //
+  // A context suspended mid-session (OS device change, sleep/resume) already
+  // emitted 'degraded' and called resume(). If resume never wins, nothing else
+  // happened: `running` stayed true, so isRunning() kept answering yes, the
+  // caption kept promising standby, and app.js's re-arm ladder — which refuses
+  // to act on a detector it believes is live — could never fire. That is the
+  // "listener ceases spontaneously" shape the ticket describes.
+  //
+  // Q1 — WHAT ELSE MATCHES THIS? The ticket asks for re-arm on "sustained
+  // 'degraded'/'silent'", and BOTH halves of that are wrong, which is why this
+  // is scoped to the suspended-context case alone:
+  //   * the OTHER 'degraded' (fallbackFired) means the saved mic was missing and
+  //     the system default was used instead. That detector is LISTENING. Re-arming
+  //     it would tear down a working wake word on a healthy fallback.
+  //   * 'silent' at start time is ALREADY handled — it calls stop() and returns
+  //     false, so start() resolves false and app.js's else-branch schedules the
+  //     re-arm. Adding a second trigger there would consume a rung of a bounded
+  //     ladder for a case that is already covered.
+  // So the gap is exactly one: a context that goes suspended AFTER a successful
+  // arm and does not come back.
+  //
+  // 5s, because resume() after a device change resolves in well under a second
+  // when it is going to work at all; this is a deadline, not a retry budget.
+  //
+  // THE OTHER HALF OF THIS FIX LIVES IN app.js's onStatus, in one line, and the
+  // reason it is one line is worth knowing: app.js sits exactly on its
+  // file-size ratchet ceiling, so the rationale had to live where the behaviour
+  // does rather than beside the call. That line schedules a re-arm on 'silent'.
+  // It is safe against double-booking because scheduleWakewordRearm() refuses
+  // while the detector is live, and because stop() below runs first — a death
+  // AFTER a successful arm is invisible to start()'s else-branch, which resolved
+  // true long ago and never runs again.
+  const CONTEXT_RESUME_GRACE_MS = 5000;
+  let suspendTimer = null;
+
+  function clearSuspendGrace() {
+    if (suspendTimer) { clearTimeout(suspendTimer); suspendTimer = null; }
+  }
+
+  function armSuspendGrace() {
+    if (suspendTimer) return;                 // one deadline per suspension
+    suspendTimer = setTimeout(() => {
+      suspendTimer = null;
+      if (!running || !audioCtx) return;
+      if (audioCtx.state !== 'suspended') return;   // recovered; not our business
+      // Report it the same way a start-time failure reports itself, because it is
+      // the same fact — armed, receiving nothing — and stop() is what makes
+      // isRunning() false so the ladder is allowed to act.
+      status('silent',
+        'Wake word context stayed suspended for ' + (CONTEXT_RESUME_GRACE_MS / 1000)
+        + 's — not listening',
+        { ctxState: audioCtx.state, suspendedMidSession: true });
+      stop();
+    }, CONTEXT_RESUME_GRACE_MS);
+  }
   const METRICS_INTERVAL_MS = 5000;
 
   function status(kind, msg, data) { if (onStatus) onStatus(kind, msg, data); }
@@ -354,6 +411,11 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
       if (audioCtx.state === 'suspended') {
         status('degraded', 'Wake word stopped receiving audio (context suspended) — trying to resume', { ctxState: audioCtx.state });
         audioCtx.resume().catch(() => {});
+        armSuspendGrace();
+      } else if (audioCtx.state === 'running') {
+        // It came back on its own or the resume() above won. Nothing is wrong,
+        // so the grace timer must not go on to declare a live detector dead.
+        clearSuspendGrace();
       }
     });
     const source = audioCtx.createMediaStreamSource(stream);
@@ -456,6 +518,10 @@ export function createWakeWord({ threshold, onWake, onStatus }) {
     // BUG-150: the metrics interval must die with the detector, or it keeps
     // reporting "listening" for a detector that has released the microphone.
     if (metricsTimer) { clearInterval(metricsTimer); metricsTimer = null; }
+    // BUG-346: same discipline for the suspend deadline. A stopped detector that
+    // left this armed would fire status('silent') against a detector nobody has,
+    // and re-arm on top of a deliberate stop.
+    clearSuspendGrace();
     framesSeen = 0;
     framesAtLastReport = 0;
     peakScore = 0;
