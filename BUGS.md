@@ -222,6 +222,28 @@ BUG-390 added deliberately — but nothing stops the marker word itself coming f
 elsewhere. Of 243 entries the loose form matches three; only BUG-352's match is
 its own.
 
+### A third sighting, caused accidentally 2026-08-28 while writing BUG-278 up
+
+The bullet id anchor is `[-*]\s*BUG-0*<n>\b` — **an ASCII arrow satisfies it.**
+Writing `brain calls=1  <- BUG-278 measured 1` inside BUG-278's own entry made
+the `-` of `<-` read as a bullet marker; combined with `FIXED … NOT yet` text
+elsewhere in the same (flattened) body, `bulletPartial` matched and **BUG-278
+classified `open` immediately after being live-verified.** Nothing in the entry
+was a bullet.
+
+It took four wrong hypotheses to find, because every narrower check said no: no
+`**Status:**` line, no `**`-marker line, and a hand-written bullet test that
+*looked* negative but was itself malformed by backslashes lost through
+`bash → node -e`. The arrows were replaced with words. Two lessons worth keeping:
+
+- **The anchor is far looser than "a bullet".** Any `-` or `*` before a bug
+  number qualifies — arrows, dashes in prose, a hyphenated line break. The
+  tightening in step 3 should anchor on line-start too, not just on the
+  character.
+- **A negative result from a regex you just wrote is not evidence.** Both
+  malformed probes returned `false`, which reads identically to "the pattern does
+  not match". Test the probe against a case it MUST match before trusting a no.
+
 ### Why they are one ticket, and the order to fix them in
 
 **BUG-274 has no `**Status:**` line**, so `firstMarkerLine` runs and the loose
@@ -5115,7 +5137,72 @@ looks like a smaller suite. Here it is the deletion and nothing else: 5399 → 5
 
 ---
 
-## BUG-278 — BUG-273 C2 shipped, passed its tests, and never ran: the healer dropped the two fields it keyed on (🔧 CODED 2026-08-20, NOT live-verified)
+## BUG-278 — BUG-273 C2 shipped, passed its tests, and never ran: the healer dropped the two fields it keyed on (✅ LIVE-VERIFIED 2026-08-28)
+
+> ### ✅ LIVE-VERIFIED 2026-08-28, on a REAL fault, through the real sensor
+>
+> The "NOT live-verified" label was accurate about a real gap: the shipped test
+> wires the same four production modules but emits a **hand-built** anomaly. That
+> is deliberate and is what catches a field lost in transit — but it means
+> `gmail-sensor.js` itself had never been the thing under test, so nothing proved
+> the real sensor produces the payload the chain needs.
+>
+> **The fault became available: the operator's Google grant is genuinely expired**
+> (found the same day while live-verifying BUG-387 — `invalid_grant: Token has
+> been expired or revoked`). So the whole chain was driven end to end with the
+> real `.env`, the real `gmail_unread` effector, the real sensor, and the real
+> production wiring (bus → diagnostician → healer → explainer). Only the brain is
+> a stub, and it is deliberately **eager** — it proposes `probe_provider` for
+> anything, so "the brain was never asked" is the chain's restraint and not the
+> model's.
+>
+> ```
+> node scripts/verify-immune-reauth-chain.js
+> verify-immune-reauth-chain: PASS
+>   real gmail_unread: ok=false, invalid_grant: Token has been expired or revoked.
+>   polls=1  health.healed=1  brain calls=0  remedy="none"
+>   ok    a terminal auth fault reached the chain
+>   ok    needsOperator survived the healer
+>   ok    reason survived the healer
+>   ok    the brain was NOT asked for a remedy
+>   ok    the spoken line names the cause
+>   spoken: "One of my internal checks has no automatic fix: gmail-reauth-required
+>            in gmail. Reported reason: Gmail has stopped working and it will not
+>            recover on its own: the Google refresh token is expired or revoked…"
+> ```
+>
+> **Proven able to fail, and it reproduces the original measurement exactly.**
+> Deleting the two forwarded fields from `healer.js`'s `health.healed` emit —
+> sha256-verified to have applied, restored sha256-identical — turns four of the
+> five checks red and brings back the ticket's own numbers and its own quoted
+> sentence:
+>
+> ```
+> verify-immune-reauth-chain: FAIL
+>   polls=1  health.healed=1  brain calls=1        was 1 in BUG-278's own measurement
+>   FAIL  needsOperator survived the healer        BUG-278 recorded it absent
+>   FAIL  reason survived the healer               BUG-278 recorded it absent
+>   FAIL  the brain was NOT asked for a remedy     C2 intended 0
+>   FAIL  the spoken line names the cause
+>   spoken: "…gmail-reauth-required in gmail. I do not yet know the cause.
+>            This one needs your attention."       verbatim the string quoted above
+> ```
+>
+> The oracle ships as `mythos/scripts/verify-immune-reauth-chain.js`. **It refuses
+> to pass when the precondition is absent:** a healthy grant means no anomaly can
+> fire, which is correct behaviour and NOT evidence the fix works, so it exits
+> **2 (INCONCLUSIVE)** rather than 0 — distinct from PASS and FAIL. Reporting that
+> case green would be the same "gate passed on a metric it cannot read" failure
+> this ticket is an instance of.
+>
+> **Two probe artefacts on the way, recorded because each read exactly like a
+> healthy system.** (1) The sensor guards on `typeof gmailUnread !== 'function'`
+> and returns *before* incrementing `pollCount`, so a probe that omits the
+> effector reports `polls=0, events=0`. (2) A standalone script must call
+> `process.loadEnvFile()`; without it `gmail_unread` answers "Gmail is not
+> configured", which is not a terminal auth error, so no anomaly fires. Both
+> produced a confident zero. The script now prints the poll count and the direct
+> effector result so neither can hide again.
 
 **Found by measuring a session-audit finding instead of implementing it.** The 2026-08-20
 audit reported "the immune system proposed `probe_provider` against Gmail, and against an

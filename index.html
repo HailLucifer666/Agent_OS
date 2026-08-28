@@ -3298,10 +3298,10 @@
       {
         "n": 278,
         "shape": "entry",
-        "state": "coded",
+        "state": "verified",
         "title": "BUG-273 C2 shipped, passed its tests, and never ran: the healer dropped the two fields it keyed on",
         "detail": {},
-        "excerpt": "**Found by measuring a session-audit finding instead of implementing it.** The 2026-08-20 audit reported \"the immune system proposed `probe_provider` against Gmail, and against an empty target twice\". That is not a new defect — it is **BUG-273 C2 being inert**, one day after C2 shipped specifically to prevent it. ### Root cause 1 — the transport dropped the control fields (the real bug) C2 gave `sensors/gmail-sensor.js` two things: `needsOperator: true` (\"this fault is terminal and human-only, do not guess a mechanical remedy\") and a `reason` carrying the complete operator instruction. `immune/explainer.js` reads both. Between them sits `immune/healer.js`, whose `health.healed` emit forwarded only `playbookId/kind/target/outcome/detail/title/actions/sourceEventId`. `immune/diagnostician.js:57` does preserve the whole anomaly — under `evidence` — and the healer never forwarded `evidence`.…"
+        "excerpt": "> ### ✅ LIVE-VERIFIED 2026-08-28, on a REAL fault, through the real sensor > > The \"NOT live-verified\" label was accurate about a real gap: the shipped test > wires the same four production modules but emits a **hand-built** anomaly. That > is deliberate and is what catches a field lost in transit — but it means > `gmail-sensor.js` itself had never been the thing under test, so nothing proved > the real sensor produces the payload the chain needs. > > **The fault became available: the operator's Google grant is genuinely expired** > (found the same day while live-verifying BUG-387 — `invalid_grant: Token has > been expired or revoked`). So the whole chain was driven end to end with the > real `.env`, the real `gmail_unread` effector, the real sensor, and the real > production wiring (bus → diagnostician → healer → explainer). Only the brain is > a stub, and it is deliberately **eager** —…"
       },
       {
         "n": 279,
@@ -3931,10 +3931,10 @@
       }
     ],
     "counts": {
-      "verified": 58,
+      "verified": 59,
       "fixed": 170,
       "open": 6,
-      "coded": 5,
+      "coded": 4,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0
