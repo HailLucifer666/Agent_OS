@@ -8381,7 +8381,38 @@ Run: `node --test mythos/test/bug-019-audit-history.test.js` — **1/1 pass**
 ---
 
 ### BUG-020: Voice pipeline picks up phantom background noise
-**Status:** 🔧 CODED — mic-tuning still needs a live pass by the user
+**Status:** ✅ MECHANISM VERIFIED 2026-08-28 (5 assertions, 5 mutations all caught).
+Mic-tuning remains an operator activity — that is not a verification gap.
+
+> **The deliverable was untested for a year.** BUG-020 shipped "the four VAD
+> thresholds are `let`, and `createVoiceLoop`'s `vad` option overrides them per
+> instance". Measured 2026-08-28: six test files cover BUG-027's
+> `assistantSpeaking` gate in the same module and five mention the threshold
+> names, but **`grep 'vad: {' test/` returned nothing** — no test drove the
+> override at all, so the entire claim rested on reading the diff. That is the
+> inert-mechanism class: documented, plausible, unexercised.
+>
+> Now pinned by `test/bug-020-vad-thresholds-are-overridable.test.js`: all four
+> declared `let` and never `const`, `vad` present in the signature, **each
+> threshold actually assigned from its option behind a `typeof` check** (an
+> accepted-then-ignored option would pass the first two assertions), the override
+> block inside `createVoiceLoop` rather than at module scope, and the tuned
+> defaults pinned so a silent revert to the pre-BUG-020 numbers fails.
+>
+> **5 mutations, all 5 caught**, sha256-verified applied and restored identical:
+> `const` restored (2 red), `vad` dropped from the signature, one assignment
+> removed, the `typeof` guard stripped, and `SPEECH_RMS` reverted to its old 0.02.
+>
+> **Source-shape by necessity, and stated as such:** `voice-loop.js` is a browser
+> ES module that imports `mic-device.js` / `silero-vad.js` and touches
+> `navigator.mediaDevices`, so it cannot be `require`d under `node --test` — the
+> same constraint recorded for `app.js` in BUG-346. `bug-270-clip-drop-
+> observability.test.js` already reads this file as text for that reason.
+>
+> **What this does NOT claim:** that any particular threshold stops phantom noise
+> on the operator's microphone. That is tuning against one mic and one room, and
+> it is an operator activity, not an unverified fix. The fix was "tuning is
+> possible without editing source", and that is now proven.
 **Live-verify:** manual session + VAD constant tuning — see `docs/live-verification-runbook.md` §C4
 **Severity:** LOW | **Reported:** 07-12
 
@@ -8568,7 +8599,32 @@ This machine has a real, licensed Spotify Premium desktop install (`SpotifyAB.Sp
 ---
 
 ### BUG-027: Voice pipeline transcribes MYTHOS's own TTS output as user speech (audio feedback loop)
-**Status:** 🔧 CODED — manual live-conversation check still needed (no automated harness exists for this browser module, see below)
+**Status:** 🔧 CODED, and the "no automated harness exists" note below is now
+STALE — corrected 2026-08-28. The gate is exercised by 74 assertions across six
+files; what still needs speakers is hearing that the loop is gone, not the
+mechanism.
+
+> **Measured 2026-08-28, because the note below is a year old.** The
+> `assistantSpeaking` gate is no longer untestable: the barge-in work extracted
+> the decision into an exported pure function, `decideBargeIn({ level,
+> assistantSpeaking, bargeAboveCount, thresholds })` at `voice-loop.js:127`, and
+> **six test files drive it** — `barge-in-tier-ordering`,
+> `bug-272-barge-in-policy`, `bug-273-bleed-floor-dormant`,
+> `bug-274-barge-in-authorisation-is-deliverable`,
+> `bug-274-barge-in-floor-separates-populations`,
+> `bug-322-barge-in-sustain-counts-frames`. Re-run that day: **74 tests, 74 pass,
+> 0 fail.**
+>
+> So this entry is NOT in the state it describes. Kept at 🔧 CODED rather than
+> promoted, deliberately: what those 74 assertions prove is that the gate decides
+> correctly for a given input, and the original symptom was **audible** — MYTHOS's
+> own TTS transcribed as user speech through open-air speakers. Confirming that by
+> ear needs speakers, and no source assertion substitutes for it. The honest
+> correction is to the claim that nothing can be tested, not to the disposition.
+>
+> Related and already measured elsewhere: BUG-273's bleed-floor work established
+> that AEC does function and that the "room bleed" figure was measuring the
+> operator, so the acoustic half of this has had real attention since.
 **Live-verify:** manual voice session with open-air speakers — see `docs/live-verification-runbook.md` §C2
 **Severity:** HIGH (causes hallucinated/unrequested tool calls) | **Reported:** 2026-07-16 (live session)
 
