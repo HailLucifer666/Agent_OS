@@ -14725,7 +14725,7 @@ than the bug):
 all, so the only real proof is a fresh install on a stock Windows PC with
 `LongPathsEnabled` at its default `0`, onto a non-`C:` drive. Ships in 0.1.10.
 
-## BUG-228 — four browser-ish tools, disambiguated only in prose: five identical refusals, and one fabricated browser launch
+## BUG-228 — four browser-ish tools, disambiguated only in prose: five identical refusals, and one fabricated browser launch (✅ FIXED, and its last open note closed 2026-08-28)
 
 **The session.** 2026-08-14, live capability audit with an external auditor
 driving. The operator's own verdict, filed by MYTHOS as an incident:
@@ -14794,6 +14794,45 @@ verified red against the pre-fix source (6 failed).
 **Noted, NOT fixed:** `NO_EMBED_DOMAINS` lacks `openai.com` and `youtube.com`,
 so even a correctly-formed `url` would have tried to iframe a site that refuses
 framing. Separate, quieter failure.
+
+> ### ✅ THAT NOTE IS NOW CLOSED — 2026-08-28, 5 assertions, 5 mutations all caught
+>
+> **"Quieter" was the operative word.** `open_web` returned `ok`, the HUD rendered
+> a `web` card, and the operator saw a blank rectangle. Nothing failed, so nothing
+> was reported — the same shape as a fabricated success, one layer down, in a
+> session whose entire subject was fabricated success. Falling through to `newtab`
+> is the honest outcome and that branch already existed for eight other domains.
+>
+> Added `youtube.com`, `youtu.be` and `openai.com`. **`youtu.be` was not named by
+> the note and is included anyway**, because the membership test is
+> `host === d || host.endsWith('.' + d)` — `youtu.be` is a separate registrable
+> domain and would have walked straight past a `youtube.com` entry. Covering one
+> without the other is the half-covered list this repo keeps rediscovering.
+>
+> **The dedicated `youtube` TYPE is unaffected, and that is asserted rather than
+> assumed:** `t === 'youtube'` is handled in its own branch far above, resolving a
+> video id via `youtubeVideoId()` into a real `/embed/` URL. The test pins that
+> branch's existence AND that its index is lower than the deny list's, because
+> adding `youtube.com` to a deny list must not stop videos embedding.
+>
+> 5 mutations, each sha256-verified applied, restored sha256-identical: the whole
+> addition reverted (2 red), `youtu.be` dropped while keeping `youtube.com`,
+> `openai.com` dropped, the eight originals wiped, and the subdomain half of the
+> membership test removed.
+>
+> **Source-shape, and stated as such:** the list is a `var` inside `open_web`'s
+> closure with no export and no seam, and reaching it behaviourally means driving
+> the effector with an inert ctx — which BUG-352 measured as *throwing* on this
+> very module. The list's content is what rots; the loop around it does not.
+>
+> **Also corrected: this entry read `diagnosed` in the register, and it is
+> FIXED.** `build-index` classified it off the phrase `**Measured, not
+> inferred.**` — a statement of method, matched by
+> `MARK.diagnosed`'s `/^\s*\*\*\s*(?:🔍\s*)?(?:DIAGNOSED|MEASURED)\b/im`. The
+> ticket has a shipped fix and a 16-assertion regression suite
+> (`test/browser-intent-disambiguation.test.js`, re-run today: 16/16), so the
+> methodology sentence was outranking the work. Fourth stale-or-misread status
+> found in this file in one day, after BUG-352, BUG-274 and BUG-278.
 
 ## BUG-229 — the operator's speech was thrown away by a 1.2 s ring against an 8 s gate
 
