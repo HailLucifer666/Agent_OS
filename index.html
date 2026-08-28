@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6811,
+      "value": 6844,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3254,7 +3254,8 @@
         "detail": {
           "cause": "`unverified` carried two different epistemic states under one name: -",
           "fix": "is a latch, `createBrainRecoveryNotice()`, polled from the 100ms VAD tick the loop already runs — polled rather than pushed from app.js because the module that made the claim should be the one to take it back, and it already reads `_brainOnline()`. Three rules, each a way to get this wrong and each pinned by a test: (1) it retracts ONLY after a real refusal, so a brain that blips while nobody is speaking leaves no stale caption and gets no announcement — `_brainOnline` starts `true` in app.js, so a boot-time flip would otherwise announce an outage that never happened; (2) it fires ONCE per outage, because a plain `refused && online` test on a 100ms tick repaints ten times a second; (3) it re-arms, because a session can survive more than one outage.",
-          "limits": "the latch is unit-driven (voice-loop.js imports cleanly under bare node, so this is behaviour and not source shape), but the tick that calls it needs `getUserMedia`, so a real brain outage and recovery in a running HUD is still operator-verified. The wiring is pinned by source shape for that reason. ### Medium (each needs its own design pass) - BUG-348 - media_status reads ONE SMTC session (ps-automation.ps1 Handle-MediaStatus ~:4275, $sessionManager.GetCurrentSession()). Enumerate the SMTC sessions and report the primary owner; kills \"song playing but says paused\" when another app owns the session. **CORRECTION 2026-08-27 — the repair plan’s stated mechanism is FALSE and must not be inherited.** The plan says *\"a GetSessions() enumerator already exists in the same file at :1586 and is used by the per-app volume path — the fix is present and unused\"*. Read: the :1586 `GetSessions()` is a…"
+          "limits": "the latch is unit-driven (voice-loop.js imports cleanly under bare node, so this is behaviour and not source shape), but the tick that calls it needs `getUserMedia`, so a real brain outage and recovery in a running HUD is still operator-verified. The wiring is pinned by source shape for that reason. ### Medium (each needs its own design pass) - BUG-348 - media_status reads ONE SMTC session (ps-automation.ps1 Handle-MediaStatus ~:4275, $sessionManager.GetCurrentSession()). Enumerate the SMTC sessions and report the primary owner; kills \"song playing but says paused\" when another app owns the session. **CORRECTION 2026-08-27 — the repair plan’s stated mechanism is FALSE and must not be inherited.** The plan says *\"a GetSessions() enumerator already exists in the same file at :1586 and is used by the per-app volume path — the fix is present and unused\"*. Read: the :1586 `GetSessions()` is a…",
+          "verification": "33 assertions,"
         }
       },
       {
@@ -3494,10 +3495,12 @@
       {
         "n": 348,
         "shape": "pointer",
-        "state": "open",
+        "state": "verified",
         "title": "media_status reads ONE SMTC session (ps-automation.ps1",
-        "detail": {},
-        "excerpt": "media_status reads ONE SMTC session (ps-automation.ps1 Handle-MediaStatus ~:4275, $sessionManager.GetCurrentSession()). Enumerate the SMTC sessions and report the primary owner; kills \"song playing but says paused\" when another app owns the session. **CORRECTION 2026-08-27 — the repair plan’s stated mechanism is FALSE and must not be inherited.** The plan says *\"a GetSessions() enumerator already exists in the same file at :1586 and is used by the per-app volume path — the fix is present and unused\"*. Read: the :1586 `GetSessions()` is a C# `private static` inside `MythosAppVolume` that enumerates Windows AUDIO sessions via IMythosSessionManager2/GetSessionEnumerator (used only at :1610/:1631/:1664/:1696). That is a different API from WinRT SMTC which merely shares a method name, and it is not callable from PowerShell. The WinRT session manager's own GetSessions() appears NOWHERE in the…"
+        "detail": {
+          "verification": "33 assertions,",
+          "limits": "The multi-session paths were exercised with fabricated sessions, not live - the machine had exactly one real session, and the synthetic ones used to measure the premise were audible to the operator despite `Volume = 0.0` and were removed."
+        }
       },
       {
         "n": 349,
@@ -3900,18 +3903,16 @@
       }
     ],
     "counts": {
-      "verified": 50,
+      "verified": 51,
       "fixed": 168,
-      "open": 10,
+      "open": 9,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0
     },
     "total": 240,
-    "openDeclared": [
-      348
-    ],
+    "openDeclared": [],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
   }

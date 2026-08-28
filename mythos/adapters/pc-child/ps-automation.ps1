@@ -413,6 +413,152 @@ function Send-MediaKey($keyName) {
     return $null
 }
 
+# ---- SMTC session selection (BUG-348) ----
+#
+# ONE selector, shared by the read path (Handle-MediaStatus) and the control path
+# (Send-SmtcControl). The comment below already CLAIMED they used the same session;
+# they did not - both called $mgr.GetCurrentSession() independently, so a status
+# poll and the next transport press could act on different apps. Sharing the rule
+# is what makes that sentence true.
+#
+# EVERY LINE HERE EXISTS BECAUSE OF A MEASUREMENT, taken 2026-08-28 on Windows 11
+# with PowerShell 5.1 against real SMTC sessions, not from documentation:
+#
+#   * GetSessions() is SYNCHRONOUS. It is not an IAsyncOperation and must never be
+#     passed to Await-WinRTOperation. The expensive await the repair plan predicted
+#     does not exist.
+#   * $sessions.Count DOES NOT COUNT. The returned System.__ComObject exposes no
+#     bindable Count, so PowerShell member-enumerates and returns each element's own
+#     scalar Count: with three sessions it answered '1 1 1'. With exactly ONE session
+#     it answers 1, which is correct by accident - which is why a one-session machine
+#     cannot catch this. @(...).Length is the only reliable count.
+#   * $sessions[0] DOES NOT INDEX (PowerShell's scalar-index rule returns the
+#     collection), and GetAt() does not exist on the projection.
+#   * WORST, and the reason properties are read ONLY from a single session object:
+#     resolving a member name against the COLLECTION can blank that member for the
+#     REST OF THE RUNSPACE. Every session's SourceAppUserModelId then reads back as
+#     an empty string with no error and no exception. This script is spawned once at
+#     boot and lives for the whole MYTHOS session, so that would silently empty the
+#     media source until a restart.
+#   * GetCurrentSession() is NOT reference-equal to any element of GetSessions(), so
+#     'is the current session the playing one' cannot be asked by identity. Its
+#     playback status is read directly instead.
+
+# Always an ARRAY, never $null - callers take .Length on it.
+function Get-SmtcSessions($mgr) {
+    # The leading comma is LOAD-BEARING. PowerShell UNROLLS a returned collection,
+    # so a bare `return @()` hands the caller $null rather than an empty array -
+    # measured. $null.Length happens to be 0, so the promise in this comment would
+    # have been false while every caller kept working, until the first one did
+    # something an array supports and $null does not.
+    if (-not $mgr) { return ,@() }
+    try { return ,@($mgr.GetSessions()) } catch { return ,@() }
+}
+
+# '' rather than $null on failure, so a caller can compare without a null check. A
+# session can vanish between the enumeration and this read.
+function Get-SmtcPlaybackStatus($session) {
+    if (-not $session) { return '' }
+    try { return [string]$session.GetPlaybackInfo().PlaybackStatus } catch { return '' }
+}
+
+# Prefer what Windows calls 'current' WHEN IT IS PLAYING; otherwise the first session
+# that actually is; otherwise fall back to current.
+#
+# THIS IS NOT A CLAIM THAT GetCurrentSession() PICKS WRONGLY. Measured with three
+# concurrent sessions arranged so the newest was Paused and an older one Playing, it
+# returned the PLAYING one - so 'song playing but says paused' does not reproduce for
+# the reason the ticket gives, and today this selector agrees with Windows every time.
+# It ships anyway because GSMTC is a thin wrapper over the private
+# NowPlayingSessionManager and Microsoft documents NO selection rule at all: today's
+# preference is an observation of one Windows build, not a contract. This makes the
+# rule ours - explicit, shared by both call sites, and the same tomorrow.
+#
+# Only Playing wins. The enum also carries Closed, Opened, Changing and Stopped, each
+# documented with a single tautological sentence, and a ranking that promotes a state
+# nobody can define is guessing.
+function Get-PrimarySmtcSession($mgr) {
+    $script:LastSmtcSelectedBy = 'none'
+    $script:LastSmtcPlayingCount = 0
+    $current = $null
+    try { $current = $mgr.GetCurrentSession() } catch { $current = $null }
+
+    # FAST PATH. Windows' own pick is already playing, so there is nothing to
+    # correct and no enumeration is paid. media_status polls every 5 seconds.
+    if ((Get-SmtcPlaybackStatus $current) -eq 'Playing') {
+        $script:LastSmtcSelectedBy = 'current'
+        return $current
+    }
+
+    $playing = @()
+    foreach ($s in (Get-SmtcSessions $mgr)) {
+        if ((Get-SmtcPlaybackStatus $s) -eq 'Playing') { $playing += $s }
+    }
+    $script:LastSmtcPlayingCount = @($playing).Length
+
+    # THE OVERRIDE, and ONLY when exactly one session is playing.
+    #
+    # 'first playing session wins' does NOT deliver the invariant this ticket
+    # exists for. GetSessions() has no documented ordering, and the read path and
+    # the control path enumerate from TWO DIFFERENT manager instances - so with
+    # two sessions playing they could pick differently AT THE SAME INSTANT, not
+    # merely across time. Refusing to rank when there is no defensible answer is
+    # what makes both call sites agree by construction.
+    #
+    # An alphabetical tiebreak was considered and rejected: two concurrent
+    # sessions were measured reporting the SAME AppUserModelId ('powershell.exe',
+    # one Playing and one Paused), so a sort looks total and is not.
+    #
+    # The override is still a real trade rather than a free win: the operator can
+    # pick the current session by hand in the media flyout, and a muted background
+    # tab that merely reports Playing will outrank their deliberately paused
+    # player. SMTC exposes no audibility signal, so that cannot be filtered - only
+    # named, which is what selectedBy is for.
+    if ($script:LastSmtcPlayingCount -eq 1) {
+        $script:LastSmtcSelectedBy = 'playing-override'
+        return $playing[0]
+    }
+    if ($script:LastSmtcPlayingCount -gt 1) {
+        # Ambiguous. Keep today's answer and SAY it was ambiguous.
+        $script:LastSmtcSelectedBy = 'current-ambiguous'
+        return $current
+    }
+
+    if ($current) { $script:LastSmtcSelectedBy = 'current-idle' }
+    return $current
+}
+
+# The name a human reads. The old expression was -replace '^.*.', '' which is
+# GREEDY - it strips to the LAST dot, so every unpackaged app collapsed to the same
+# three letters and the media widget displayed the literal text 'via exe' for every
+# browser and every desktop player. Measured: msedge.exe / chrome.exe / vlc.exe all
+# became 'exe', and Spotify became 'SpotifyMusic_zpdnekdrzrea0!Spotify'.
+#
+# A packaged id is PackageFamilyName!ApplicationId, so the part after the final '!'
+# is the app. An unpackaged one is a bare executable file name. Both shapes were
+# measured live in a single enumeration.
+function Get-SmtcSourceName($appUserModelId) {
+    $s = [string]$appUserModelId
+    if (-not $s) { return '' }
+    if ($s.Contains('!')) {
+        $appId = $s.Substring($s.LastIndexOf('!') + 1)
+        # A packaged id is PackageFamilyName!ApplicationId, and the ApplicationId
+        # is usually the readable half - but a large number of MSIX apps ship the
+        # literal generic id 'App', which would make every one of them report the
+        # same useless word. Fall back to the package family name, minus the
+        # publisher hash after the final underscore.
+        if ((-not $appId) -or ($appId.ToLower() -eq 'app')) {
+            $s = $s.Substring(0, $s.IndexOf('!'))
+            if ($s.Contains('_')) { $s = $s.Substring(0, $s.LastIndexOf('_')) }
+        } else {
+            $s = $appId
+        }
+    }
+    if ($s.ToLower().EndsWith('.exe')) { $s = $s.Substring(0, $s.Length - 4) }
+    if ($s.Contains('.')) { $s = $s.Substring($s.LastIndexOf('.') + 1) }
+    return $s
+}
+
 # Drive transport (play/pause, next, previous) via the SAME SMTC session the
 # media_status read path uses. This controls the active media app directly and
 # does NOT depend on SendInput / foreground focus / integrity level - the
@@ -427,7 +573,7 @@ function Send-SmtcControl($action) {
         $mgrOp = $type::RequestAsync()
         $mgr = Await-WinRTOperation $mgrOp $type
         if (-not $mgr) { return 'Failed to get SMTC session manager' }
-        $session = $mgr.GetCurrentSession()
+        $session = Get-PrimarySmtcSession $mgr
         if (-not $session) { return 'No active media session' }
         $op = $null
         switch ($action) {
@@ -4270,21 +4416,33 @@ function Handle-MediaStatus {
         # instead of re-resolving it on every call.
         $type = $script:SmtcManagerType
         if (-not $type) {
-            # Type not available - likely older PowerShell/Windows
-            return @{ available = $false; error = 'SMTC API not available (requires Windows 10 1903+ and PowerShell 5.1+)' }
+            # BUG-348: a BARE STRING, because this is a FAILURE. This file's
+            # convention is hashtable = success, string = failure, and one hoisted
+            # gate before Write-Response turns a string into ok:false. Returning a
+            # hashtable here shipped the failure as ok:TRUE - so the route took its
+            # success branch and the media widget, which reads neither 'available'
+            # nor this 'error', drew a broken SMTC as an idle player. Being unable
+            # to tell is not the same as knowing nothing is playing.
+            return 'SMTC API not available (requires Windows 10 1903+ and PowerShell 5.1+)'
         }
 
         # Get the session manager
         $sessionManagerOp = $type::RequestAsync()
         $sessionManager = Await-WinRTOperation $sessionManagerOp $type
         if (-not $sessionManager) {
-            return @{ available = $true; playing = $false; error = 'Failed to get session manager' }
+            # BUG-348: string, not hashtable - see the note above.
+            return 'Failed to get the SMTC session manager'
         }
 
-        # Get current session
-        $currentSession = $sessionManager.GetCurrentSession()
+        # BUG-348: ONE shared selector, the same one Send-SmtcControl uses, so a
+        # status poll and the next transport press cannot act on different apps.
+        $allSessions = Get-SmtcSessions $sessionManager
+        $currentSession = Get-PrimarySmtcSession $sessionManager
         if (-not $currentSession) {
-            return @{ available = $true; playing = $false; source = 'none' }
+            # NOT a failure. Nothing playing is a true and useful answer, and
+            # turning it into ok:false would show the operator an error every time
+            # they are simply not listening to anything.
+            return @{ available = $true; playing = $false; source = 'none'; sessionCount = $allSessions.Length }
         }
 
         # Get playback info
@@ -4302,7 +4460,18 @@ function Handle-MediaStatus {
         $result = @{
             available = $true
             playing = $isPlaying
-            source = $currentSession.SourceAppUserModelId -replace '^.*\.', ''
+            # BUG-348: the greedy -replace that lived here turned every unpackaged
+            # app into the string 'exe'.
+            source = Get-SmtcSourceName $currentSession.SourceAppUserModelId
+            # The raw id, so a wrong pick is identifiable rather than merely wrong,
+            # and the count, so a pick made from several is visibly a choice.
+            sourceId = [string]$currentSession.SourceAppUserModelId
+            sessionCount = $allSessions.Length
+            # WHICH rule chose this session. 'playing-override' means MYTHOS is
+            # reporting a session Windows did not nominate - the one case where this
+            # fix can be the thing that is wrong.
+            selectedBy = [string]$script:LastSmtcSelectedBy
+            playingCount = [int]$script:LastSmtcPlayingCount
         }
 
         if ($mediaProps) {
@@ -4354,7 +4523,11 @@ function Handle-MediaStatus {
 
         return $result
     } catch {
-        return @{ available = $true; playing = $false; error = $_.Exception.Message }
+        # BUG-348: string, not hashtable. This branch used to ship a thrown SMTC
+        # read as ok:true with playing:$false, which is indistinguishable on the
+        # dashboard from a paused player. The message is kept verbatim - a failure
+        # whose cause is dropped is worse than the failure.
+        return ('media_status failed: ' + $_.Exception.Message)
     }
 }
 
