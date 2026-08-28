@@ -5472,6 +5472,46 @@ absent result — if so, H1's padding may be a *symptom* of this rather than a s
 fault, and fixing the ordering could reduce several items above. **Check this before
 treating H1-H5 as five independent bugs.**
 
+> ### ✅ H6 MEASURED 2026-08-28 — and the hypothesis is REFUTED. H1 and H2 get WORSE, not better.
+>
+> **Every spoken conclusion naming ranked models arrived AFTER its tool result was
+> already recorded.** Measured off `Episodic/2026-08-19.jsonl` by comparing each
+> conclusion's `ts` to the `ts` of the most recent tool result carrying ranking data:
+>
+> | spoken conclusion | result was in hand |
+> |---|---|
+> | *"Leaderboard search complete … Claude Mythos 5 is currently leading with Claude Fable 5 just behind, followed by GPT 5 6 Sol"* — **correct, three models** | **23.4s earlier** (web_search, 2,495 bytes) |
+> | *"top five stands thus: Claude Mythos 5, then Claude Fable 5, followed by GPT-5.6 Sol, **Claude Opus 5, and Gemini CLI**"* — **the H1 fabrication** | **79.6s earlier — the SAME 2,495-byte result** |
+> | *"Checked LiveBench ai leaderboard for coding … Top five currently stands thus"* — **the H3 misattribution** | **22.4s earlier** (web_search, 2,205 bytes) |
+>
+> **Reading `ts` as completion is verified, not assumed:** `dispatch-action.js` :87-103
+> `await`s `effectors.invoke()` and only then writes the episodic record with
+> `detail: result`, so the stamp is stamped after the result exists.
+>
+> **The sharpest fact in this whole ticket.** The correct three-model answer and the
+> fabricated five-model answer were produced from **the same 2,495-byte search result,
+> 56 seconds apart.** Nothing new arrived in between. What changed was the operator
+> restating the request — *"Yes, I asked you to give me the top five"* — and the count
+> came back satisfied. **So H1's own framing is confirmed exactly: asked for N and given
+> fewer, it manufactured the remainder.** It is not a race, not a partial result, and not
+> a symptom of H6.
+>
+> **What the 27 ack-deadline breaches really are.** They produce utterances like
+> *"Searching for…"* and *"Conducting live search now, Sir"*, which do precede their
+> results — **by design**, since that is what the 1500ms ack exists for. The original
+> note conflated that ACK with a CONCLUSION. Acks before results are correct; the
+> conclusions were all late, not early.
+>
+> **Consequence for the fix.** H1-H5 must be treated as independent, and the fix
+> direction is NOT ordering. The defect is **count-compliance beating source-fidelity**:
+> the model is willing to satisfy a requested item count from nothing rather than report
+> a shortfall. The narrowest useful change is to make "I found three, you asked for five"
+> a sayable, prompted-for outcome — the same shape as the evidence contract that
+> `NO_SUCCESS_CLAIM` and `UNVERIFIED_NO_PROOF_CLAIM` already enforce for tool outcomes
+> in `live-tool-adapter.js`, applied to counts. **H2 (defending the invention when
+> challenged) is the higher-severity half and is untouched by that**, since it happens
+> after the fabrication already exists.
+
 ### H7 (P2) — unprompted claims with no basis in the conversation
 
 Turn 22, unprompted: *"Caught another glitch, Sir; restored now, no data lost. Shall I
@@ -17415,13 +17455,20 @@ those records remain owed (this section is the index until then).
   and rationalises the inventions when challenged. Eight items (H1-H8), still
   NOT STARTED. **Declared here 2026-08-28 so its open state stops depending on
   the words "NOT STARTED" appearing somewhere in its own prose** — see BUG-394
-  for why that fallback is the only route it had. Two of its "check first" items
-  are now answered in the entry: H8 is narration-loss, not data-loss (the
-  outcome reaches the model's context and the ledger; only the spoken turn is
-  suppressed, and a push-based retry would worsen BUG-273 D3's measured 43%
-  system-initiated turns), and the evidence file the entry names is overwritten —
-  the whole 2026-08-19 session survives in
-  `%APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl` instead, with MYTHOS's own
-  words in `detail.reply` and tool results in `detail.result`. H6 (speaking a
-  conclusion before the tool result lands) is the one to measure next, because
-  the entry argues it may collapse H1-H5 into symptoms of one ordering fault.
+  for why that fallback is the only route it had. **All three of the entry's own
+  "check first" items are now answered inside it, and two of the three answers
+  went against the ticket:**
+  (1) the evidence file it names is overwritten — the whole 2026-08-19 session
+  survives in `%APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl` instead, with
+  MYTHOS's own words in `detail.reply` and tool results in `detail.result`, and
+  the truncated `summary` field must not be used for the diffs;
+  (2) H8 is narration-loss, not data-loss — the outcome reaches the model's
+  context and the ledger, only the spoken turn is suppressed, and a push-based
+  retry would worsen BUG-273 D3's measured 43% system-initiated turns;
+  (3) **H6 is REFUTED.** All three spoken conclusions landed 22-80 seconds AFTER
+  their tool result was recorded, and the correct three-model answer and the
+  fabricated five-model one came from the SAME 2,495-byte result 56 seconds
+  apart. H1-H5 are independent, the fix direction is not ordering, and the
+  defect is count-compliance beating source-fidelity.
+  **What is left is the actual repair**, H2 (defending an invention when
+  challenged) being the highest-severity half.
