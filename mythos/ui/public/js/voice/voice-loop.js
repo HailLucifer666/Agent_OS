@@ -17,6 +17,7 @@
 import { utterance, stopRequest, sendMessage } from '../ws.js';
 import { getMicDeviceId, setMicDeviceId, micErrorMessage, openMicWithFallback } from './mic-device.js';
 import { isVisionQuery } from './vision-trigger.js';
+import { encodeWav } from './wav.js';
 // Static import is cheap: silero-vad.js only DEFINES functions at module
 // scope — it fetches onnxruntime-web and the ONNX model lazily, inside
 // ensureLoaded(), which is only ever called when VAD_ENGINE==='silero'. A HUD
@@ -217,6 +218,33 @@ export function pickSpeechVoice(voices) {
   return null;
 }
 
+// BUG-347. The pre-flight refusal below was never taken back: setState() reaches
+// onState only and app.js's onVoiceState() never touches the caption, so
+// finishTurn()'s return to 'listening' leaves it on screen while the orb recovers
+// from the same broadcast — two indicators, and the stale one is the sentence
+// about voice that told the operator not to try again.
+// A LATCH, not a comparison: polled from the 100ms VAD tick, armed only by a REAL
+// refusal (so app.js's initially-true _brainOnline announces nothing at boot), and
+// it re-arms. Pure and exported for decideBargeIn()'s reason — the loop needs a
+// browser, this policy does not. Full argument in the BUG-347 test header.
+export const BRAIN_BACK_CAPTION = 'Brain is back online - say that again.';
+
+export function createBrainRecoveryNotice() {
+  let refused = false;
+  return {
+    // The operator spoke and was turned away. However many times that happens
+    // during one outage, it is one outage and earns one retraction.
+    refused() { refused = true; },
+    // The retraction line ONCE, on the first observation that the brain is back
+    // after a refusal. Null on every other call.
+    check(online) {
+      if (!refused || !online) return null;
+      refused = false;
+      return BRAIN_BACK_CAPTION;
+    },
+  };
+}
+
 export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity, brainOnline, vad }) {
   // BUG-020: optional per-instance VAD tuning overrides — partial overrides
   // only (unspecified fields keep the module-level defaults declared above).
@@ -259,6 +287,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   // D5: Track brain availability — set by app.js via entity-state subscription.
   // When false, voice commands skip transcription to avoid wasting API calls.
   let _brainOnline = typeof brainOnline === 'function' ? brainOnline : () => true;
+  const brainRecovery = createBrainRecoveryNotice();
   let currentAudio = null;   // in-flight TTS playback (barge-in target)
   let speakingText = '';     // spoken reply text — echo-guard reference (during playback)
   let lastSpokenText = '';   // what was just spoken — echo-guard reference (after playback ends)
@@ -379,6 +408,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     // D5: Pre-flight brain availability check — skip transcription if brain is known offline.
     if (!_brainOnline()) {
       caption('Brain is offline — voice processing unavailable.', 'error');
+      brainRecovery.refused();
       finishTurn();
       return;
     }
@@ -836,40 +866,6 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }
   }
 
-  // Encode a Float32Array of mono PCM into a WAV Blob (44-byte header + raw
-  // 16-bit PCM). No dependencies — pure byte manipulation. WAV is the simplest
-  // uncompressed audio format and is universally decodable by Whisper.
-  function encodeWav(samples, sampleRate) {
-    var buffer = new ArrayBuffer(44 + samples.length * 2);
-    var view = new DataView(buffer);
-    // RIFF header
-    writeString(view, 0, 'RIFF');
-    view.setUint32(4, 36 + samples.length * 2, true);
-    writeString(view, 8, 'WAVE');
-    // fmt chunk
-    writeString(view, 12, 'fmt ');
-    view.setUint32(16, 16, true);          // chunk size
-    view.setUint16(20, 1, true);           // audio format = PCM
-    view.setUint16(22, 1, true);           // mono
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true); // byte rate
-    view.setUint16(32, 2, true);           // block align
-    view.setUint16(34, 16, true);          // bits per sample
-    // data chunk
-    writeString(view, 36, 'data');
-    view.setUint32(40, samples.length * 2, true);
-    // PCM samples (float32 → int16)
-    var offset = 44;
-    for (var i = 0; i < samples.length; i++, offset += 2) {
-      var s = Math.max(-1, Math.min(1, samples[i]));
-      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    }
-    return buffer;
-  }
-
-  function writeString(view, offset, str) {
-    for (var i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-  }
 
   function stopRecording() {
     // Task 12: stamp BEFORE the async stop/transcribe/dispatch chain begins —
@@ -908,6 +904,10 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
 
   function vadTick() {
     if (!analyser) return;
+    // BUG-347: retract the refusal on the tick this loop already runs — see
+    // createBrainRecoveryNotice(). The latch makes it fire once.
+    const backOnline = brainRecovery.check(_brainOnline());
+    if (backOnline) caption(backOnline, 'info');
     const data = new Uint8Array(analyser.fftSize);
     analyser.getByteTimeDomainData(data);
     // RMS is always computed — it drives the visualizer regardless of engine,

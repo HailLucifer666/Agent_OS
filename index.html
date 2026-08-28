@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6786,
+      "value": 6799,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3253,8 +3253,8 @@
         "title": "the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust",
         "detail": {
           "cause": "`unverified` carried two different epistemic states under one name: -",
-          "fix": "New `adapters/dsh-agent/diagnosis.js`, split out because index.js sat EXACTLY on its 929-line size-ratchet ceiling and the fix could not be added there at all; it carries `timeoutDiagnosis` (moved), the new `exitDiagnosis`, and `withEvidence`, which finally gives `stderrText` a writer and adds `stdoutText`. stderr is quoted from the FRONT and stdout from the BACK, deliberately: an error states its cause in its first clause, while a truncated deliverable is identical to a complete one until its last characters — the first 600 chars of the failed digest build were an ordinary `:root` block and looked entirely healthy, so a head quote would have pointed away from the cause. The driver now reads `job.artifact`, unwraps the `{path}` form, and reports a done-with-no-artifact job as a finding instead of a blank line. 21 assertions, 23 mutations all caught, size ratchet 915 (was 929).",
-          "limits": "Which of blocked/aborted/max-tokens the failing turn hits is still unnamed, and dsh does not record it: its flushed session file under DSH_HOME holds only the session header, no turn/end event. Two attempts to force the silent shape synthetically failed — an oversized generation was politely refused by the model, and a page-sized build succeeded in 13s — so the shape belongs to the real prompt, not to size alone. What this buys is that the next occurrence names itself and quotes the tail of what was generated. Read that tail rather than re-deriving the cause."
+          "fix": "is a latch, `createBrainRecoveryNotice()`, polled from the 100ms VAD tick the loop already runs — polled rather than pushed from app.js because the module that made the claim should be the one to take it back, and it already reads `_brainOnline()`. Three rules, each a way to get this wrong and each pinned by a test: (1) it retracts ONLY after a real refusal, so a brain that blips while nobody is speaking leaves no stale caption and gets no announcement — `_brainOnline` starts `true` in app.js, so a boot-time flip would otherwise announce an outage that never happened; (2) it fires ONCE per outage, because a plain `refused && online` test on a 100ms tick repaints ten times a second; (3) it re-arms, because a session can survive more than one outage.",
+          "limits": "the latch is unit-driven (voice-loop.js imports cleanly under bare node, so this is behaviour and not source shape), but the tick that calls it needs `getUserMedia`, so a real brain outage and recovery in a running HUD is still operator-verified. The wiring is pinned by source shape for that reason. ### Medium (each needs its own design pass) - BUG-348 - media_status reads ONE SMTC session (ps-automation.ps1 Handle-MediaStatus ~:4275, $sessionManager.GetCurrentSession()). Enumerate the SMTC sessions and report the primary owner; kills \"song playing but says paused\" when another app owns the session. **CORRECTION 2026-08-27 — the repair plan’s stated mechanism is FALSE and must not be inherited.** The plan says *\"a GetSessions() enumerator already exists in the same file at :1586 and is used by the per-app volume path — the fix is present and unused\"*. Read: the :1586 `GetSessions()` is a…"
         }
       },
       {
@@ -3484,10 +3484,12 @@
       {
         "n": 347,
         "shape": "pointer",
-        "state": "open",
+        "state": "verified",
         "title": "mute-listener needs an audible recovery. voice-loop.js refuses",
-        "detail": {},
-        "excerpt": "mute-listener needs an audible recovery. voice-loop.js refuses transcription while _brainOnline is false (~:380) with no signal when it flips back; operator sees an armed mic that never reacts. Speak/caption one line on entity-state recovery."
+        "detail": {
+          "fix": "is a latch, `createBrainRecoveryNotice()`, polled from the 100ms VAD tick the loop already runs — polled rather than pushed from app.js because the module that made the claim should be the one to take it back, and it already reads `_brainOnline()`. Three rules, each a way to get this wrong and each pinned by a test: (1) it retracts ONLY after a real refusal, so a brain that blips while nobody is speaking leaves no stale caption and gets no announcement — `_brainOnline` starts `true` in app.js, so a boot-time flip would otherwise announce an outage that never happened; (2) it fires ONCE per outage, because a plain `refused && online` test on a 100ms tick repaints ten times a second; (3) it re-arms, because a session can survive more than one outage.",
+          "limits": "the latch is unit-driven (voice-loop.js imports cleanly under bare node, so this is behaviour and not source shape), but the tick that calls it needs `getUserMedia`, so a real brain outage and recovery in a running HUD is still operator-verified. The wiring is pinned by source shape for that reason."
+        }
       },
       {
         "n": 348,
@@ -3897,9 +3899,9 @@
       }
     ],
     "counts": {
-      "verified": 48,
+      "verified": 49,
       "fixed": 168,
-      "open": 12,
+      "open": 11,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
@@ -3907,7 +3909,6 @@
     },
     "total": 240,
     "openDeclared": [
-      347,
       348,
       354
     ],
