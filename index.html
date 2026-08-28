@@ -3901,19 +3901,29 @@
           "cause": "/",
           "fix": "`, past tense, naming real code. BUG-390 recorded three mechanical oracles built to close them and rejected for false positives."
         }
+      },
+      {
+        "n": 392,
+        "shape": "entry",
+        "state": "open",
+        "title": "a caller abort drops the provider cooldowns it had already earned, and says nothing (FILED 2026-08-28, OPEN)",
+        "detail": {},
+        "excerpt": "**Status:** OPEN — filed, reproduced, and deliberately not repaired. Found by the 2026-08-28 audit read of BUG-273. No test ships with this entry because no behaviour changed; the reproduction below is the deliverable. **A note the next filer needs, learned by this entry filing itself CLOSED.** The register classifier tests `/\\bFIXED\\b/i` against the heading and the `**Status:**` line and has no negation handling, so the words \"NOT FIXED\" read as FIXED. This entry was written with \"(FILED 2026-08-28, NOT FIXED)\" in its heading and came back from `build-index.js` as `fixed`. Say OPEN, and put the number in the OPEN WORK register — `openSet.has(n)` is checked before the fixed test and is the only statement of status that cannot be defeated by a word appearing elsewhere. **The defect.** `src/core/brain/chain.js:335` is the loop-top abort check: ```js if (signal && signal.aborted) { const e…"
       }
     ],
     "counts": {
       "verified": 53,
       "fixed": 169,
-      "open": 6,
+      "open": 7,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 240,
-    "openDeclared": [],
+    "total": 241,
+    "openDeclared": [
+      392
+    ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
   }
