@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6856,
+      "value": 6871,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3530,10 +3530,10 @@
       {
         "n": 352,
         "shape": "pointer",
-        "state": "open",
-        "title": "catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);",
+        "state": "fixed",
+        "title": "catalog truth. **BOTH HALVES FIXED 2026-08-27: the counter",
         "detail": {},
-        "excerpt": "catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified); the README catalog table and pie are NOT yet generated — see below.**"
+        "excerpt": "catalog truth. **BOTH HALVES FIXED 2026-08-27: the counter (147 -> 179, verified), and the README catalog table and pie, which are GENERATED from `computeEffectorTools().perFile` into the SYNC:EFFECTOR-CATALOG block — see Part 2 below. Status line corrected 2026-08-28 by BUG-393: for a day after the generator shipped this bullet went on denying that the catalog was generated, so the register reported closed work as open. Re-stating that old denial in its own words here re-tripped the half-done reader, which is why the wording avoids it.**"
       },
       {
         "n": 353,
@@ -3560,8 +3560,10 @@
         "shape": "pointer",
         "state": "verified",
         "title": "LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js,",
-        "detail": {},
-        "excerpt": "LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js, the promoted one-shot brief driver): the full pipeline now works up to the engine - real web_search returned five fresh dated AI headlines into the first generation (BUG-329 ordering proven live) - and then dsh exited 1 on mistral/codestral-latest after 72s with EMPTY stderr, so no artifact ships. MISTRAL_API_KEY is present in mythos/.env, so credentials are not the obvious cause; the harness swallowed its own error output. Next diagnostic: run the dsh CLI directly with a trivial task at log-level debug to surface the real failure (provider route? model id? cordon patch?), and consider teaching dsh-agent to capture child stderr instead of reporting null. Evidence: EVIDENCE lines + JOB failed line in the 2026-08-24 session log; runner kept at mythos/scripts/live-ai-digest-brief.js for re-runs. **FIXED 2026-08-28 (BUG-3…"
+        "detail": {
+          "fix": "New `adapters/dsh-agent/diagnosis.js`, split out because index.js sat EXACTLY on its 929-line size-ratchet ceiling and the fix could not be added there at all; it carries `timeoutDiagnosis` (moved), the new `exitDiagnosis`, and `withEvidence`, which finally gives `stderrText` a writer and adds `stdoutText`. stderr is quoted from the FRONT and stdout from the BACK, deliberately: an error states its cause in its first clause, while a truncated deliverable is identical to a complete one until its last characters — the first 600 chars of the failed digest build were an ordinary `:root` block and looked entirely healthy, so a head quote would have pointed away from the cause. The driver now reads `job.artifact`, unwraps the `{path}` form, and reports a done-with-no-artifact job as a finding instead of a blank line. 21 assertions, 23 mutations all caught, size ratchet 915 (was 929).",
+          "limits": "Which of blocked/aborted/max-tokens the failing turn hits is still unnamed, and dsh does not record it: its flushed session file under DSH_HOME holds only the session header, no turn/end event. Two attempts to force the silent shape synthetically failed — an oversized generation was politely refused by the model, and a page-sized build succeeded in 13s — so the shape belongs to the real prompt, not to size alone. What this buys is that the next occurrence names itself and quotes the tail of what was generated. Read that tail rather than re-deriving the cause."
+        }
       },
       {
         "n": 357,
@@ -3909,20 +3911,37 @@
         "title": "a caller abort drops the provider cooldowns it had already earned, and says nothing (FILED 2026-08-28, OPEN)",
         "detail": {},
         "excerpt": "**Status:** OPEN — filed, reproduced, and deliberately not repaired. Found by the 2026-08-28 audit read of BUG-273. No test ships with this entry because no behaviour changed; the reproduction below is the deliverable. **A note the next filer needs, learned by this entry filing itself CLOSED.** The register classifier tests `/\\bFIXED\\b/i` against the heading and the `**Status:**` line and has no negation handling, so the words \"NOT FIXED\" read as FIXED. This entry was written with \"(FILED 2026-08-28, NOT FIXED)\" in its heading and came back from `build-index.js` as `fixed`. Say OPEN, and put the number in the OPEN WORK register — `openSet.has(n)` is checked before the fixed test and is the only statement of status that cannot be defeated by a word appearing elsewhere. **The defect.** `src/core/brain/chain.js:335` is the loop-top abort check: ```js if (signal && signal.aborted) { const e…"
+      },
+      {
+        "n": 393,
+        "shape": "entry",
+        "state": "verified",
+        "title": "one OPEN WORK bullet produced two contradictory verdicts, and BUG-352 sat closed-and-open at once",
+        "detail": {},
+        "excerpt": "**Status:** ✅ FIXED 2026-08-28, mutation-proven. 1 source file changed, 1 test file added (13 assertions). Two defects, one code and one data, kept separate because each has its own red. ### The mechanism `scripts/build-index.js` reads an OPEN WORK register bullet **twice**, by two functions with two different rules, and nothing ever compared the answers: | reader | rule | |---|---| | `openSetFrom()` | declared-open vs explicitly-closed, by looking for `FIXED` / `RESOLVED` / `CLOSED` / `SATISFIED` anywhere in the bullet's block | | `classify()` | the entry's state, and for a pointer entry it reads the **same** bullet through `bulletPartial` — `FIXED … NOT yet` | **A half-done bullet says both words.** So `openSetFrom` saw `FIXED`, called the ticket closed and dropped it from the authoritative open set, while `classify` saw `FIXED … NOT yet` and called it open. One set of words, two dispo…"
+      },
+      {
+        "n": 394,
+        "shape": "entry",
+        "state": "open",
+        "title": "an entry can wear text that is not its own: the last entry swallows the whole register, and the bullet patterns read nested follow-ups (FILED 2026-08-28, OPEN)",
+        "detail": {},
+        "excerpt": "**Status:** OPEN — filed, measured, deliberately not repaired inside BUG-393's change. **Two mechanisms, ONE ticket, because they must be fixed together:** the parser fix is what exposes the pattern fix, and doing either alone reports a live licence ticket as done. ### Mechanism 1 — the last entry's body runs to end-of-file `parseBugs` ends an entry at the next `# BUG-` heading, and the final one at `text.length` (`scripts/build-index.js` :79): ```js const end = i + 1 \u003c marks.length ? marks[i + 1].at : text.length; ``` **BUG-273 is the last `## BUG-` heading in this file.** Everything after it — the entire `## OPEN WORK filed` register and its 14 bullets — is read as BUG-273's body. Its status is therefore computed partly from other tickets' bullets, and appending anything to the end of this file changes it. **That is not theoretical: it turned a test red on 2026-08-28 while BUG-273 itse…"
       }
     ],
     "counts": {
-      "verified": 53,
-      "fixed": 169,
+      "verified": 54,
+      "fixed": 170,
       "open": 7,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 241,
+    "total": 243,
     "openDeclared": [
-      392
+      392,
+      394
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"

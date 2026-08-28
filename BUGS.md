@@ -41,6 +41,218 @@ it is committed.
 
 ---
 
+## BUG-393 — one OPEN WORK bullet produced two contradictory verdicts, and BUG-352 sat closed-and-open at once (✅ FIXED 2026-08-28, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-28, mutation-proven. 1 source file changed, 1 test
+file added (13 assertions). Two defects, one code and one data, kept separate
+because each has its own red.
+
+### The mechanism
+
+`scripts/build-index.js` reads an OPEN WORK register bullet **twice**, by two
+functions with two different rules, and nothing ever compared the answers:
+
+| reader | rule |
+|---|---|
+| `openSetFrom()` | declared-open vs explicitly-closed, by looking for `FIXED` / `RESOLVED` / `CLOSED` / `SATISFIED` anywhere in the bullet's block |
+| `classify()` | the entry's state, and for a pointer entry it reads the **same** bullet through `bulletPartial` — `FIXED … NOT yet` |
+
+**A half-done bullet says both words.** So `openSetFrom` saw `FIXED`, called the
+ticket closed and dropped it from the authoritative open set, while `classify`
+saw `FIXED … NOT yet` and called it open. One set of words, two dispositions.
+
+Measured on the register's 13 bullets: **exactly one contradiction, BUG-352**,
+and the other 12 agree — so the signal is specific to the disagreement rather
+than to the method. That twelve-to-one split is the negative control.
+
+### Why the fix goes in this direction and not the other
+
+`openSetFrom` is aligned **to** `classify`. That is a one-way safety argument,
+not a coin toss: `openSetFrom` feeds an additive override (`if (openSet.has(n))
+return 'open'`), so teaching it to keep a half-done bullet open can only ever
+move an entry *toward* open. The opposite fix — teaching `classify` to honour the
+closure filter — would have closed a half-done ticket on the strength of the half
+that landed, which is exactly the failure BUG-390 built `bulletPartial` to stop.
+
+### The second defect, which is data, not code
+
+BUG-352's register bullet read `**COUNTER FIXED 2026-08-27 (147 → 179,
+verified); the README catalog table and pie are NOT yet generated — see
+below.**` — while its own Part 2 section, twenty lines below, read `**Part 2 —
+CLOSED 2026-08-27.**` **Both halves had shipped.** `README.md` carries the
+generated `SYNC:EFFECTOR-CATALOG` block and both `test/bug-352-*.test.js` files
+pass (21 assertions, re-run 2026-08-28). The bullet's head was never updated when
+the second half landed, so the register reported closed work as open for a day.
+
+That is now checked: a test compares the register's claim against the README
+artifact. It is scoped to the register section deliberately — **BUG-390's entry
+quotes BUG-352's old bullet verbatim as evidence for a different fix**, so a
+whole-file match would stay red forever and the only way to green it would be to
+destroy that evidence. A ticket's live claim lives in the register; a quote of an
+old claim is history.
+
+**A note worth keeping, because it caught the author.** The first corrected
+wording explained the old defect using the phrase "was not yet generated" — which
+re-tripped `bulletPartial` and left BUG-352 reading `open` after the correction.
+The cross-check found it immediately. Restating a stale claim inside the status
+that corrects it re-creates the stale claim.
+
+### The vacuous-guard half, which is how any of this was found
+
+`test/bug-389-…test.js`'s live check is `for (const n of openSet) …`. **A loop
+over an empty set is a green that asserts nothing.** On this branch the declared
+set still holds BUG-392, so the loop is live *today* — but it goes empty the
+moment BUG-392's bullet closes, which is what PR #56 does, and it was observed
+empty on that branch. The mechanism it protects survives in a fixture
+(`new Set([389])`), so coverage would not go to zero; the live-data cross-check
+would. **Every live-data assertion in the new file therefore asserts its
+population first** (`bulletNumbers.length >= 5`), so an empty register is a
+stated failure and not a silent pass.
+
+### Verification
+
+```
+node --test test/bug-393-one-bullet-two-verdicts.test.js
+    pre-fix   13 tests,  8 pass, 5 fail
+    post-fix  15 tests, 15 pass, 0 fail   (2 added by the mutation run)
+node --test  (full suite, long-form TEMP/TMP, ports from pick-free-ports.js)
+              6871 tests, 6871 pass, 0 fail, 0 skipped   (baseline 6856 + 15)
+node scripts/build-index.js --check            register matches BUGS.md, OK
+node scripts/sync-test-count.js --check        all tracked numbers match, OK
+node scripts/build-capability-map.js --check   map matches the code, OK
+```
+
+The 8 that passed pre-fix are the two CONTROLs (a plainly closed and a plainly
+open bullet, proving the rig can produce agreement), the closure-vocabulary
+cases, and the nested-number guard. A green result on any of the other five would
+have meant the test never reached the hazard.
+
+**Six mutations, each sha256-verified to have applied before its result was
+believed, each restored sha256-identical: 6 caught, 0 survived, 0 unscored.**
+Two of the fifteen assertions exist only because of that run, and neither hole
+was visible by reading:
+
+| # | mutation | result |
+|---|---|---|
+| M1 | the halfDone guard removed from `openSetFrom` — the defect itself | 4 red |
+| M2 | `bulletHalfDone` loose in segment one (id → closure word) | **survived the first run**, then 1 red |
+| M3 | its vocabulary narrowed to `FIXED` alone | 1 red |
+| M4 | the guard inverted | 8 red |
+| M5 | BUG-352's stale bullet head restored — the data half | 1 red |
+| M6 | `bulletHalfDone` loose in segment two (closure word → NOT-yet) | 1 red |
+
+**M2's survival is the finding worth keeping.** `bulletHalfDone` has two
+independently tight segments and the nested-number test exercised only the
+second, because its foreign bug number sits *after* `FIXED`. Loosening the first
+segment therefore changed behaviour with nothing watching, and the mutation that
+was written to prove the guard real proved instead that half of it was untested.
+M3 was predicted before running for the same shape of reason — every other case
+paired "NOT yet" with `FIXED`, so covering one closure word in four looked like
+coverage. **Two routes, one answer:** M1 turns both the fixture suite and the
+live-data cross-check red on the same change, and they agree.
+
+### NOT fixed by this, and measured rather than assumed
+
+**`bulletPartial` and `bulletFixed` are still loose, and that is filed as
+BUG-394.** Both run against a *flattened* block, so `[^\n]*` spans nested
+follow-up lines. On the real file the loose form matches **three** entries and
+two of them — BUG-273 and BUG-274 — match only because a nested `- BUG-nnn`
+follow-up says "NOT yet" about a *different* ticket. That is BUG-390's own defect
+(one entry wearing another's status) surviving inside the pattern built to fix
+it. It is not repaired here because **BUG-274 currently draws its `open` from
+that wrong match**: tightening `bulletPartial` without tightening `bulletFixed`
+in the same change would close a live licence ticket. BUG-273 is unaffected
+either way because it carries a `**Status:**` line, which outranks any marker.
+
+The new `bulletHalfDone` pattern used by `openSetFrom` **is** tight — no other
+bug number may sit between the id and the qualifier — and across the 13 register
+bullets the loose and tight forms agree exactly, so this call site pays nothing
+for being correct.
+
+---
+
+## BUG-394 — an entry can wear text that is not its own: the last entry swallows the whole register, and the bullet patterns read nested follow-ups (FILED 2026-08-28, OPEN)
+
+**Status:** OPEN — filed, measured, deliberately not repaired inside BUG-393's
+change. **Two mechanisms, ONE ticket, because they must be fixed together:** the
+parser fix is what exposes the pattern fix, and doing either alone reports a live
+licence ticket as done.
+
+### Mechanism 1 — the last entry's body runs to end-of-file
+
+`parseBugs` ends an entry at the next `# BUG-` heading, and the final one at
+`text.length` (`scripts/build-index.js` :79):
+
+```js
+const end = i + 1 < marks.length ? marks[i + 1].at : text.length;
+```
+
+**BUG-273 is the last `## BUG-` heading in this file.** Everything after it — the
+entire `## OPEN WORK filed` register and its 14 bullets — is read as BUG-273's
+body. Its status is therefore computed partly from other tickets' bullets, and
+appending anything to the end of this file changes it.
+
+**That is not theoretical: it turned a test red on 2026-08-28 while BUG-273
+itself never changed.** `bug-390`'s BUG-273 case stripped its Status line and
+classified the remainder, believing it was driving the nested-bullet id check. It
+was reading BUG-352's bullet out of the swallowed register, and passed only
+because that bullet said `FIXED … NOT yet`. Correcting BUG-352's wording removed
+the phrase and the guard failed. Rescoped to owned text in BUG-393; the
+swallowing is untouched.
+
+**Measured, not estimated.** Bounding an entry at the next top-level non-BUG
+`##` heading shrinks **18 of 243 entries**, several enormously — BUG-98 from
+124,030 to 5,498 characters, BUG-274 from 141,143 to 133,407, BUG-38 from 56,644
+to 4,652. **Four change state**, and this is the whole reason it is not done here:
+
+| entry | now | bounded | reading |
+|---|---|---|---|
+| BUG-274 | open | **verified** | **unacceptable** — a live licence ticket reported done |
+| BUG-98 | fixed | unrecorded | honest; its `fixed` was borrowed. Raises unrecorded 0 → 1 |
+| BUG-273 | verified | fixed | honest; it loses borrowed proof text |
+| BUG-38 | fixed | verified | its own text carries the proof |
+
+### Mechanism 2 — the bullet patterns span nested follow-ups
+
+`bulletMarks(n)` builds `bulletPartial` and `bulletFixed` with `[^` + `\n]*`
+between the id and the marker word, and both run against an already-flattened
+block, so the marker can be drawn from a nested `- BUG-nnn` follow-up about a
+different ticket. The pattern anchors its *start* on this entry's number — which
+BUG-390 added deliberately — but nothing stops the marker word itself coming from
+elsewhere. Of 243 entries the loose form matches three; only BUG-352's match is
+its own.
+
+### Why they are one ticket, and the order to fix them in
+
+**BUG-274 has no `**Status:**` line**, so `firstMarkerLine` runs and the loose
+`bulletPartial` matches — giving the right answer, `open`, from the wrong
+evidence. Tighten the patterns and that match disappears; `bulletFixed` (equally
+loose, matching for the same nested reason) wins and BUG-274 reads `fixed`. Bound
+the bodies and the same thing happens by a different route: the table above
+measures it as `verified`. **Either fix alone silently closes the licence
+ticket.**
+
+So, in order:
+
+1. **Give BUG-274 an explicit `**Status:**` line.** A Status line outranks every
+   marker, so this removes the dependence entirely. It is durable on its own and
+   worth doing first even if nothing else follows. Note while writing it that
+   `classify` has no route from the WORD `OPEN` on a Status line — the only paths
+   to `open` are the register, a bold marker, or `NOT STARTED` in the body — so
+   the line must not introduce a closure word and the body must keep saying
+   `NOT STARTED`. That missing route is arguably a third defect.
+2. Then bound the entry bodies, and inspect all four state changes by hand rather
+   than counting them.
+3. Then tighten both patterns together, using the tight form already proven as
+   `bulletHalfDone`.
+
+**Bounded, not urgent:** mechanism 2 needs an entry with no Status line whose
+nested follow-ups carry a marker word — today exactly one, and it currently reads
+correctly. Mechanism 1 is live on every run but only mis-states entries whose own
+text is silent.
+
+---
+
 ## BUG-392 — a caller abort drops the provider cooldowns it had already earned, and says nothing (FILED 2026-08-28, OPEN)
 
 **Status:** OPEN — filed, reproduced, and deliberately not repaired. Found by the
@@ -16960,8 +17172,14 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   an orphaned listener (bind-failed-again x336, Jul->Aug). Add terminal
   condition after N attempts -> OFFLINE + hint running a new
   scripts/diagnose-aether-port.ps1 that names the squatter PID. **FIXED by BUG-379 (2026-08-27, mutation-proven).** Both halves shipped: `src/core/immune/aether-rebind.js` gives the playbook a terminal condition (three attempts, then OFFLINE with a spoken reason), and `src/core/util/port-holder.js` + `src/core/aether/bind-failure.js` name the process holding the port. **Two of this bullet's own claims were false and must not be inherited:** the healer did NOT rebind forever — the playbook ran ONCE ever, and the 336 records were 336 PROCESSES, one anomaly each from a whenReady() rejection arm; and no `diagnose-aether-port.ps1` was needed, because the diagnostic belongs in the bind path, not in a separate script.
-- BUG-352 - catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);
-  the README catalog table and pie are NOT yet generated — see below.**
+- BUG-352 - catalog truth. **BOTH HALVES FIXED 2026-08-27: the counter
+  (147 -> 179, verified), and the README catalog table and pie, which are
+  GENERATED from `computeEffectorTools().perFile` into the
+  SYNC:EFFECTOR-CATALOG block — see Part 2 below. Status line corrected
+  2026-08-28 by BUG-393: for a day after the generator shipped this bullet went
+  on denying that the catalog was generated, so the register reported closed
+  work as open. Re-stating that old denial in its own words here re-tripped the
+  half-done reader, which is why the wording avoids it.**
 
   The counter was dropping 32 tools through two independent mechanisms, both
   swallowed by a bare `catch {}` in `computeEffectorCount()`:
@@ -17091,3 +17309,23 @@ those records remain owed (this section is the index until then).
   **LIVE MEASUREMENTS, all 2026-08-28 on mistral/codestral-latest:** trivial task exit 0; a write task under the read-only sandbox exit 0 with a spoken refusal (so the sandbox is not the cause); invalid MISTRAL_API_KEY exit 1 with the 401 ON STDERR (so the auth shape was never this bug); the digest brief **reproduced the reported failure exactly** — exit 1, stderr empty, and a real dark-theme HTML document sitting on stdout being discarded; and a second identical run of the same brief came back `done`. **The failure is intermittent, not a broken configuration.**
   **THE FIX.** New `adapters/dsh-agent/diagnosis.js`, split out because index.js sat EXACTLY on its 929-line size-ratchet ceiling and the fix could not be added there at all; it carries `timeoutDiagnosis` (moved), the new `exitDiagnosis`, and `withEvidence`, which finally gives `stderrText` a writer and adds `stdoutText`. stderr is quoted from the FRONT and stdout from the BACK, deliberately: an error states its cause in its first clause, while a truncated deliverable is identical to a complete one until its last characters — the first 600 chars of the failed digest build were an ordinary `:root` block and looked entirely healthy, so a head quote would have pointed away from the cause. The driver now reads `job.artifact`, unwraps the `{path}` form, and reports a done-with-no-artifact job as a finding instead of a blank line. 21 assertions, 23 mutations all caught, size ratchet 915 (was 929).
   **NOT CLOSED BY THIS.** Which of blocked/aborted/max-tokens the failing turn hits is still unnamed, and dsh does not record it: its flushed session file under DSH_HOME holds only the session header, no turn/end event. Two attempts to force the silent shape synthetically failed — an oversized generation was politely refused by the model, and a page-sized build succeeded in 13s — so the shape belongs to the real prompt, not to size alone. What this buys is that the next occurrence names itself and quotes the tail of what was generated. Read that tail rather than re-deriving the cause.
+
+### Filed 2026-08-28 (register-consistency sweep)
+
+- BUG-394 - an entry can wear text that is not its own, by two mechanisms that
+  have to be repaired together. (1) `parseBugs` ends the LAST `## BUG-` heading's
+  body at `text.length` (`mythos/scripts/build-index.js` :79), and that heading
+  is BUG-273 — so the whole `## OPEN WORK filed` register below it, these bullets
+  included, is read as BUG-273's body, and appending to the end of this file
+  changes BUG-273's status. Bounding entries at the next top-level non-BUG `##`
+  shrinks 18 of 243 entries (BUG-98 by 124,030 characters) and moves four states.
+  (2) `bulletMarks(n)` puts `[^` + `\n]*` between the bug id and the marker word
+  and runs it on a flattened block, so a nested `- BUG-nnn` follow-up about
+  another ticket supplies the marker; of 243 entries the loose form matches
+  three and only one match is its own. **Deliberately not repaired inside
+  BUG-393**, because BUG-274 has no `**Status:**` line and draws its `open` from
+  the wrong match: either repair alone reports a live licence ticket as done.
+  Order to work in, and step 1 is durable on its own — give BUG-274 an explicit
+  `**Status:**` line, then bound the bodies, then tighten both patterns using the
+  tight form already proven as `bulletHalfDone`. Full entry with the measurement
+  table is at the top of this file.
