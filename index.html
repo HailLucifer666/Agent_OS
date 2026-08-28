@@ -3837,10 +3837,10 @@
       {
         "n": 384,
         "shape": "entry",
-        "state": "coded",
+        "state": "verified",
         "title": "every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped as \"six nodes whose LABEL is stale rather than whose capability is broken\". Measured against the live vault before writing anything, per the Track D finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43 (67%) disagree with the vault.** Eleven labels are contradicted by their own evidence. The six was itself a stale reading. ### Root cause — the map generates its frame and hand-carries its contents `build-capability-map.js` regenerates `vitals`, the tool-coverage cross-check and the `generated` stamp. It preserves each node's `s`, `ok`, `f`, `note` and `ev` as curated human text. That split is right for `note` and `ev` — a human decides what a node MEANS — and wrong for `ok`/`f`, which are not judgement at all. They are a count of rows in `vault/Audit/*.jsonl`, and nothing was counting…"
+        "excerpt": "**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign Track B. The track was scoped as \"six nodes whose LABEL is stale rather than whose capability is broken\". **LIVE CROSS-CHECK 2026-08-28 — 62 of 62 nodes agree, exactly.** Running `build-capability-map --check` only proves the file matches the generator, which is the generator checking itself, so the counts were tallied a SECOND time by independent throwaway code reading `vault/Audit/*.jsonl` directly with its own de-duplication (74 audit files, 120 distinct tools). Summing per node over its `tools` array and comparing against the published `ok`/`f`: ``` nodes parsed from the map island with ok/f : 91 nodes comparable to an independent tally : 62 exact agreement : 62 of 62 ``` **Two routes, one answer.** Before this fix, 29 of the 43 hand-typed counts (67%) disagreed with the vault; there are now no hand-typed counts left to disagre…"
       },
       {
         "n": 385,
@@ -3930,10 +3930,10 @@
       }
     ],
     "counts": {
-      "verified": 55,
+      "verified": 56,
       "fixed": 170,
       "open": 7,
-      "coded": 7,
+      "coded": 6,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0

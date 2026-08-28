@@ -1177,8 +1177,33 @@ has to argue with this assertion first.
 
 ## BUG-384 — every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong (🔧 CODED 2026-08-27)
 
-**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped
+**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign Track B. The track was scoped
 as "six nodes whose LABEL is stale rather than whose capability is broken".
+
+**LIVE CROSS-CHECK 2026-08-28 — 62 of 62 nodes agree, exactly.** Running
+`build-capability-map --check` only proves the file matches the generator, which
+is the generator checking itself, so the counts were tallied a SECOND time by
+independent throwaway code reading `vault/Audit/*.jsonl` directly with its own
+de-duplication (74 audit files, 120 distinct tools). Summing per node over its
+`tools` array and comparing against the published `ok`/`f`:
+
+```
+nodes parsed from the map island with ok/f : 91
+nodes comparable to an independent tally   : 62
+exact agreement                            : 62 of 62
+```
+
+**Two routes, one answer.** Before this fix, 29 of the 43 hand-typed counts (67%)
+disagreed with the vault; there are now no hand-typed counts left to disagree, and
+the generated ones match a tally computed by different code. The generator also
+reports its own inputs on every run — *"node counts from 2 vault root(s), 3301
+completion(s), 1346 duplicate row(s) skipped"* — so the de-duplication is stated
+rather than implied.
+
+**What this does NOT prove:** the 29 nodes with no audit rows are uncomparable by
+construction, and `note`/`ev` remain curated human text by design, so a node can
+still carry a stale *sentence* beside a correct *count*. That is the residue the
+BUG-377 work (PR #36, currently unrebasable) was aimed at.
 Measured against the live vault before writing anything, per the Track D
 finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43
 (67%) disagree with the vault.** Eleven labels are contradicted by their own
