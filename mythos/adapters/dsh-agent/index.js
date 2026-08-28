@@ -11,7 +11,9 @@
 //   * `dsh --profile headless "<task>"` runs one fresh session and exits.
 //   * stdout carries the last non-empty assistant text.
 //   * exit 0 iff the final `turn/end` reason is `completed`, else 1.
-//   * stderr is EMPTY on success; a terminal error writes its code + message.
+//   * stderr is EMPTY on success; a terminal error writes its code + message —
+//     but ONLY for turn-end reason kind `error`. blocked/aborted/max-tokens
+//     exit 1 in silence, with the last assistant text on stdout (BUG-356).
 //   * no listening port is opened.
 //   * `dsh --version` prints the version and exits 0 — the probe.
 // Source: @deepseek-ai/dsh-headless/README.md and cordis.patch.yml.
@@ -47,6 +49,9 @@ var os = require('os');
 var { treeKill } = require('../command-runner');
 var { createLogger } = require('../../src/core/logger');
 var logger = createLogger(process.env.LOG_LEVEL || 'info');
+// The post-mortem layer: what a dead child process gets reported AS. Split out
+// for BUG-356 because this file sits on its size ratchet ceiling.
+var { timeoutDiagnosis, exitDiagnosis, withEvidence } = require('./diagnosis');
 
 // ---------------------------------------------------------------------------
 // Install location and version pin.
@@ -598,37 +603,6 @@ function spawnDsh(args, spawnOpts) {
   });
 }
 
-// What to say when the clock really does run out.
-//
-// BUG-305, second half. The old message asserted a cause: "in headless mode this
-// is the shape an unanswerable approval prompt takes". During BUG-301 that was
-// printed three times in one day and was wrong all three times — the engine had
-// crashed at load, and its stderr was sitting in the same error string, after
-// the guess. A theory that outranks the evidence next to it is worse than no
-// theory, because it stops the reader looking.
-//
-// So: the evidence first, the elapsed time, and the approval prompt offered as
-// one possibility only when there is nothing else to go on.
-function timeoutDiagnosis(ctx) {
-  var stderrText = String((ctx && ctx.stderr) || '').trim();
-  var stdoutText = String((ctx && ctx.stdout) || '').trim();
-  var lines = ['dsh produced no terminal turn within ' + ctx.timeoutMs + 'ms and was killed.'];
-  if (stderrText) {
-    lines.push('It did write to stderr, and that is the first thing to read: '
-      + JSON.stringify(stderrText.slice(0, 600)));
-  } else {
-    lines.push('Nothing on stderr, and nothing was killed early, so there is no crash to point at.');
-  }
-  lines.push('Partial stdout: ' + (stdoutText ? JSON.stringify(stdoutText.slice(0, 300)) : '(none)'));
-  lines.push('Model: ' + ctx.model + '.');
-  if (!stderrText) {
-    lines.push('With no output at all, one possibility is a permission or approval request with '
-      + 'nowhere to be answered in headless mode; another is a provider that accepted the '
-      + 'connection and never replied. Check the provider first — it is the cheaper test.');
-  }
-  return lines.join(' ');
-}
-
 // BUG-305, second loose end: record a failed task where somebody will find it.
 //
 // The three builds that died during BUG-301 appear NOWHERE in mythos-server.log.
@@ -651,6 +625,9 @@ function noteTaskFailure(err, ctx) {
     elapsedMs: typeof ctx.elapsedMs === 'number' ? ctx.elapsedMs : null,
     error: message.slice(0, 300),
     stderr: String(ctx.stderr || '').trim().slice(0, 600) || null,
+    // BUG-356: on four of dsh's five non-completed turn ends this is the only
+    // channel with anything in it, and it was never logged.
+    stdout: String(ctx.stdout || '').trim().slice(0, 600) || null,
   });
 }
 
@@ -832,39 +809,45 @@ async function runTask(prompt, opts) {
     // rather than being left to run to the timeout with the answer already on
     // its stderr.
     if (res.kind === 'fatal-stderr') {
-      throw new Error('dsh died at load after ' + res.ms + 'ms on ' + selected.laneProvider + '/'
+      throw withEvidence(new Error('dsh died at load after ' + res.ms + 'ms on ' + selected.laneProvider + '/'
         + selected.model + ' and was stopped rather than left to reach the ' + timeoutMs
         + 'ms timeout. ' + res.signature.why + ' stderr: '
-        + JSON.stringify(String(res.stderr || '').trim().slice(0, 600)));
+        + JSON.stringify(String(res.stderr || '').trim().slice(0, 600))), res);
     }
 
     if (res.kind === 'timeout') {
-      throw new Error(timeoutDiagnosis({
+      throw withEvidence(new Error(timeoutDiagnosis({
         timeoutMs: timeoutMs,
         model: selected.laneProvider + '/' + selected.model,
         stdout: res.stdout,
         stderr: res.stderr,
-      }));
+      })), res);
     }
 
     var stderrText = String(res.stderr || '').trim();
     // The exit code IS the oracle: 0 iff the final turn/end reason is
-    // `completed`. Keep stderr verbatim — a wrong classification that also
-    // swallows the diagnosis is worse than the original failure.
+    // `completed`. BUG-356: the exit code and stderr do NOT make the same cut —
+    // stderr is written only for reason kind `error`, while blocked, aborted,
+    // max-tokens and a missing reason all exit 1 in silence. This branch used to
+    // report that silence as "(stderr empty)" and drop stdout, which is the one
+    // stream dsh writes on every outcome. See ./diagnosis.js for the measurement.
     if (res.code !== 0) {
-      throw new Error('dsh exit ' + (res.code == null ? '?' : res.code)
-        + ' on ' + selected.laneProvider + '/' + selected.model
-        + (stderrText ? ': ' + stderrText.slice(0, 600) : ' (stderr empty)'));
+      throw withEvidence(new Error(exitDiagnosis({
+        code: res.code,
+        model: selected.laneProvider + '/' + selected.model,
+        stdout: res.stdout,
+        stderr: res.stderr,
+      })), res);
     }
     if (stderrText) {
       // Documented as empty on success. If it is not, the contract MOVED — say
       // so rather than returning content produced under unknown conditions.
-      throw new Error('dsh exited 0 but wrote to stderr, which its reference says is empty on '
-        + 'success; the CLI contract may have changed: ' + stderrText.slice(0, 600));
+      throw withEvidence(new Error('dsh exited 0 but wrote to stderr, which its reference says is empty on '
+        + 'success; the CLI contract may have changed: ' + stderrText.slice(0, 600)), res);
     }
     if (!String(res.stdout || '').trim()) {
-      throw new Error('dsh exited 0 with empty stdout on ' + selected.laneProvider + '/'
-        + selected.model);
+      throw withEvidence(new Error('dsh exited 0 with empty stdout on ' + selected.laneProvider
+        + '/' + selected.model), res);
     }
     lastTaskFailure = null;   // a real task succeeded — the only thing that clears it
     return String(res.stdout);
@@ -876,6 +859,7 @@ async function runTask(prompt, opts) {
       model: selected.laneProvider + '/' + selected.model,
       elapsedMs: Date.now() - taskStartedAt,
       stderr: err && err.stderrText,
+      stdout: err && err.stdoutText,
     });
     throw err;
   } finally {
@@ -918,6 +902,8 @@ module.exports = {
   fatalStderrSignature: fatalStderrSignature,
   FATAL_STDERR_SIGNATURES: FATAL_STDERR_SIGNATURES,
   timeoutDiagnosis: timeoutDiagnosis,
+  exitDiagnosis: exitDiagnosis,
+  withEvidence: withEvidence,
   noteTaskFailure: noteTaskFailure,
   requireCwd: requireCwd,
   resolveDshEntry: resolveDshEntry,

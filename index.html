@@ -343,18 +343,18 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6766,
+      "value": 6786,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-08-27"
+      "measuredAt": "2026-08-28"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-08-27"
+      "measuredAt": "2026-08-28"
     },
     "withheld": {
       "value": 64,
@@ -3252,7 +3252,9 @@
         "state": "open",
         "title": "the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust",
         "detail": {
-          "cause": "`unverified` carried two different epistemic states under one name: -"
+          "cause": "`unverified` carried two different epistemic states under one name: -",
+          "fix": "New `adapters/dsh-agent/diagnosis.js`, split out because index.js sat EXACTLY on its 929-line size-ratchet ceiling and the fix could not be added there at all; it carries `timeoutDiagnosis` (moved), the new `exitDiagnosis`, and `withEvidence`, which finally gives `stderrText` a writer and adds `stdoutText`. stderr is quoted from the FRONT and stdout from the BACK, deliberately: an error states its cause in its first clause, while a truncated deliverable is identical to a complete one until its last characters — the first 600 chars of the failed digest build were an ordinary `:root` block and looked entirely healthy, so a head quote would have pointed away from the cause. The driver now reads `job.artifact`, unwraps the `{path}` form, and reports a done-with-no-artifact job as a finding instead of a blank line. 21 assertions, 23 mutations all caught, size ratchet 915 (was 929).",
+          "limits": "Which of blocked/aborted/max-tokens the failing turn hits is still unnamed, and dsh does not record it: its flushed session file under DSH_HOME holds only the session header, no turn/end event. Two attempts to force the silent shape synthetically failed — an oversized generation was politely refused by the model, and a page-sized build succeeded in 13s — so the shape belongs to the real prompt, not to size alone. What this buys is that the next occurrence names itself and quotes the tail of what was generated. Read that tail rather than re-deriving the cause."
         }
       },
       {
@@ -3549,10 +3551,10 @@
       {
         "n": 356,
         "shape": "pointer",
-        "state": "open",
+        "state": "verified",
         "title": "LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js,",
         "detail": {},
-        "excerpt": "LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js, the promoted one-shot brief driver): the full pipeline now works up to the engine - real web_search returned five fresh dated AI headlines into the first generation (BUG-329 ordering proven live) - and then dsh exited 1 on mistral/codestral-latest after 72s with EMPTY stderr, so no artifact ships. MISTRAL_API_KEY is present in mythos/.env, so credentials are not the obvious cause; the harness swallowed its own error output. Next diagnostic: run the dsh CLI directly with a trivial task at log-level debug to surface the real failure (provider route? model id? cordon patch?), and consider teaching dsh-agent to capture child stderr instead of reporting null. Evidence: EVIDENCE lines + JOB failed line in the 2026-08-24 session log; runner kept at mythos/scripts/live-ai-digest-brief.js for re-runs."
+        "excerpt": "LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js, the promoted one-shot brief driver): the full pipeline now works up to the engine - real web_search returned five fresh dated AI headlines into the first generation (BUG-329 ordering proven live) - and then dsh exited 1 on mistral/codestral-latest after 72s with EMPTY stderr, so no artifact ships. MISTRAL_API_KEY is present in mythos/.env, so credentials are not the obvious cause; the harness swallowed its own error output. Next diagnostic: run the dsh CLI directly with a trivial task at log-level debug to surface the real failure (provider route? model id? cordon patch?), and consider teaching dsh-agent to capture child stderr instead of reporting null. Evidence: EVIDENCE lines + JOB failed line in the 2026-08-24 session log; runner kept at mythos/scripts/live-ai-digest-brief.js for re-runs. **FIXED 2026-08-28 (BUG-3…"
       },
       {
         "n": 357,
@@ -3895,9 +3897,9 @@
       }
     ],
     "counts": {
-      "verified": 47,
+      "verified": 48,
       "fixed": 168,
-      "open": 13,
+      "open": 12,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
@@ -3907,8 +3909,7 @@
     "openDeclared": [
       347,
       348,
-      354,
-      356
+      354
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
