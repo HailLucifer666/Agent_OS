@@ -41,6 +41,114 @@ it is committed.
 
 ---
 
+## BUG-392 — a caller abort drops the provider cooldowns it had already earned, and says nothing (FILED 2026-08-28, OPEN)
+
+**Status:** OPEN — filed, reproduced, and deliberately not repaired. Found by the
+2026-08-28 audit read of BUG-273. No test ships with this entry because no
+behaviour changed; the reproduction below is the deliverable.
+
+**A note the next filer needs, learned by this entry filing itself CLOSED.** The
+register classifier tests `/\bFIXED\b/i` against the heading and the `**Status:**`
+line and has no negation handling, so the words "NOT FIXED" read as FIXED. This
+entry was written with "(FILED 2026-08-28, NOT FIXED)" in its heading and came
+back from `build-index.js` as `fixed`. Say OPEN, and put the number in the OPEN
+WORK register — `openSet.has(n)` is checked before the fixed test and is the only
+statement of status that cannot be defeated by a word appearing elsewhere.
+
+**The defect.** `src/core/brain/chain.js:335` is the loop-top abort check:
+
+```js
+if (signal && signal.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; throw e; }
+```
+
+It throws straight out of the walk **without calling `settleDeferredTimeouts()`**.
+That function is where a timed-out attempt actually becomes a cooldown —
+`markCooldown(...)` plus `breaker.recordFailure()` — and where the deliberate
+shared-cause exemption reports itself, via a `[brain chain] whole-lane-timeout`
+warn and a `chain-whole-lane-timeout` health.anomaly.
+
+So on the abort exit every deferred cooldown is dropped, and dropped **silently**:
+no `markCooldown`, no `recordFailure`, no warn, no anomaly. A provider that just
+timed out is left uncooled and unrecorded, and nothing anywhere says a decision
+was made.
+
+**The comment above that function is also wrong, and says so in as many words.**
+`chain.js:271` reads *"Called on EVERY exit from the walk — success and exhaustion
+both"*. There are three exits, not two. It is called at `:388` (success) and `:452`
+(exhaustion) and not on the abort. The same comment records that the FIRST version
+of this fix ran settle only on the exhausted path and silently dropped the cooldown
+for every run that eventually answered — **this is that bug a third time, on the
+third exit.** Its own text calls that the common case.
+
+**REPRODUCED 2026-08-28** (deterministic, no network, no timing race). One provider
+times out so exactly ONE cooldown is deferred, which matters: `sharedCauseLikely`
+requires `deferredTimeoutCooldowns.length > 1`, so the exemption does NOT apply and
+the cooldown is genuinely owed. The first provider aborts the caller's signal from
+inside its own attempt-timeout handler, so the next loop-top check fires on a
+guaranteed schedule rather than a millisecond window:
+
+```
+zcode hangs past a 40ms attempt ceiling -> ONE deferred cooldown, genuinely owed
+
+A. CONTROL - no caller abort; groq answers, walk exits normally
+   outcome  : answered by groq
+   cooldowns: ["zcode:slow-one"]
+   warned   : (nothing)
+
+B. caller aborts as zcode times out; next loop-top check throws
+   outcome  : threw AbortError (aborted)
+   cooldowns: []   <-- DROPPED
+   warned   : (nothing)
+```
+
+Rig: stub `chain._internal.LANES` and `registry.chainFor` exactly as
+`test/chain-provider-breakers.test.js` does (entries are `{ provider, model }`, not
+`{ lane, model }` — `expand()` maps one to the other), first lane a promise that
+rejects on its `opts.signal` abort and calls the caller's `ac.abort()` first,
+second lane an immediate answer, `attemptTimeoutMs: 40`.
+
+**Why it is reachable in production.** `server/index.js` passes a caller `signal`
+into `voice-agent.js`, which passes it to `chain.complete`. Any caller-side
+cancellation — an outer timeout, a voice turn superseded by the next utterance, a
+closed socket — lands here. The window is wide whenever the per-attempt ceiling
+(`CHAIN_ATTEMPT_TIMEOUT_MS`) is below the caller's own, which is the configuration
+the per-attempt ceiling exists for.
+
+**Consequence.** A genuinely slow provider keeps its place at the head of the lane
+across aborted runs, so the next call pays its ceiling again. That is the exact
+all-day-outage shape B1 and C3 were written to stop, restored on one path — and
+because the drop is silent, the only symptom is latency nobody can attribute.
+
+**NOT MEASURED, and it should be before the fix is sized:** how often the abort exit
+is actually taken in a real session. Two candidate probes, both cheap: count
+`AbortError` throws out of `chain.complete` in `mythos-server.log`, and check the
+audit vault for turns that end without a provider outcome. **Do not fix this on the
+strength of the reasoning above alone** — this repo has recorded five tickets whose
+named cause was wrong, three of them in BUG-273 itself.
+
+**The fix is small and the shape is already decided by the other two exits:** settle
+before the throw. Two things to check while doing it, neither of them optional —
+`settleDeferredTimeouts()` is idempotent (`deferredSettled`), so calling it on a
+third path cannot double-charge; and `onAttempt(...)` at `:347` is NOT inside a
+`try`, so a throwing instrumentation callback takes the walk down with it, which is
+the same class of defect one line away.
+
+**READ THIS BEFORE FIXING IT — there is an adjacent ruling and it is deliberate.**
+`test/chain-provider-breakers.test.js:130-142` aborts a run with a SINGLE provider
+hanging and asserts `cooldowns.has(...) === false`, with the reason written out:
+*"penalising a provider for the caller changing its mind would evict healthy
+models"*. That is correct and must stay. **This ticket is about a different
+provider.** There, the provider was interrupted BY the abort and had earned
+nothing. Here, an EARLIER provider already blew its own per-attempt ceiling, on its
+own merits, before any abort existed — the cooldown was owed and then discarded by
+an unrelated event. A fix that simply cools down whatever was in flight at abort
+time breaks that ruling; the fix is to settle what was already deferred, and
+nothing else.
+
+**No existing test can see it.** `test/bug-273-c3-whole-lane-timeout.test.js` is
+pure source-shape regex over `chain.js`. The abort test above ranks exactly one
+provider, so there is nothing deferred to drop and it passes either way.
+
 ## BUG-391 — the last 28 entries recorded by hand, each against the artifact it names, and every citation re-checked by a test (✅ FIXED 2026-08-28)
 
 **Status:** ✅ FIXED 2026-08-28. **unrecorded 28 → 0.** Every entry in the register
@@ -16952,6 +17060,13 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   instructions or persist approved declarative specs through the validated
   dynamic.js pipeline.
 
+- BUG-392 - a caller abort drops the provider cooldowns it had already earned,
+  and drops them silently. `brain/chain.js:334` throws AbortError out of the walk
+  without calling `settleDeferredTimeouts()`, so a timed-out provider is left
+  uncooled with no `markCooldown`, no `breaker.recordFailure`, no warn and no
+  `chain-whole-lane-timeout` anomaly. The comment at `:271` claims settle runs on
+  "EVERY exit from the walk" and there are three exits, not two. Reproduced
+  deterministically 2026-08-28; full entry and rig at the top of this file.
 ### Registry hygiene carried from the audit
 
 BUGS.md headers stop at BUG-322; BUG-323..342 live in commit messages and
