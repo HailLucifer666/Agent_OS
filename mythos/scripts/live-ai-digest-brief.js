@@ -80,8 +80,28 @@ const TIMEOUT_MS = Number(process.argv[2]) || 900000;
   });
 
   console.log('JOB ' + job.status + (job.error ? ' error=' + job.error : ''));
-  const artifact = job.artifactPath || (job.result && job.result.artifactPath) || '';
-  console.log('ARTIFACT ' + artifact);
+  // BUG-356. This line read `job.artifactPath || job.result?.artifactPath`, and
+  // NEITHER PROPERTY EXISTS — build-runner.js declares the field as `artifact`
+  // (:154) and assigns it there (:489); `artifactPath` and `result` appear
+  // nowhere on a job record in this repo. So the EVIDENCE line this driver was
+  // built to print was empty on every run, success and failure alike, and it
+  // printed empty rather than complaining. That is where BUG-356's headline
+  // "so no artifact ships" came from: a fail-open oracle reporting on itself.
+  // Measured 2026-08-28 — a `done` run printed `ARTIFACT ` while
+  // vault/builds/pipeline/ai-news-digest-landing-page.html sat on disk.
+  //
+  // `artifact` is a string OR a {path} record, exactly as announcer.js:108
+  // already handles; anything else must never be stringified into the evidence
+  // block as "[object Object]".
+  const raw = job.artifact;
+  const artifact = raw && typeof raw === 'object' ? raw.path : raw;
+  if (job.status === 'done' && !artifact) {
+    // A done job with nothing to point at is a finding, not a blank line.
+    console.log('ARTIFACT MISSING — job is done but carries no artifact: '
+      + JSON.stringify(Object.keys(job)));
+  } else {
+    console.log('ARTIFACT ' + (artifact || ''));
+  }
   console.log('SEARCH-CALLS ' + searchCalls.length);
   process.exit(0);
 })().catch((e) => { console.error('RUNNER-FAIL', e.message); process.exit(1); });
