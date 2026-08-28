@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6871,
+      "value": 6877,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3845,10 +3845,11 @@
       {
         "n": 385,
         "shape": "entry",
-        "state": "coded",
+        "state": "verified",
         "title": "the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text",
-        "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped as *\"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder, video call having no tool)\"*. All three are recorded. Two of them turned up a real defect on the way, and the CAPTCHA one is the serious entry here. ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions. The disposition itself needed nothing: `browser_check_captcha` already returns `ok` with `blocked: \"captcha\"` and a comment saying *\"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\"*, `browser-obstacles.test.js` already pins the handover wording, and a source-shape assertion already fails if anyone adds a solver service. That is a complete disposition and it was complete before this ticket. **What was not right is what counts as a challenge.** `CA…"
+        "detail": {
+          "limits": "the true-positive half is still only covered by phrase > markers whose upstream markup is unverified, so a challenge that words itself > differently is still missed. That is unchanged by this fix and is the residue to > attack next — ideally by capturing a real challenge page's aria tree, which needs > a challenge to actually appear. ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions. The disposition itself needed nothing: `browser_check_captcha` already returns `ok` with `blocked: \"captcha\"` and a comment saying *\"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\"*, `browser-obstacles.test.js` already pins the handover wording, and a source-shape assertion already fails if anyone adds a solver service. That is a complete disposition and it was complete before this ticket."
+        }
       },
       {
         "n": 386,
@@ -3930,10 +3931,10 @@
       }
     ],
     "counts": {
-      "verified": 56,
+      "verified": 57,
       "fixed": 170,
       "open": 7,
-      "coded": 6,
+      "coded": 5,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0

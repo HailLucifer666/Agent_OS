@@ -44,10 +44,36 @@
 // is structural — there is no solver anywhere and a source assertion below keeps
 // it that way. Detection quality sits above that boundary, so tightening it
 // cannot open a hole.
+// BUG-385 follow-up, 2026-08-28 — VERIFIED FROM THIS MACHINE against the live
+// widget, which is what the ADDITIVE warning above asks for. Bare `turnstile` is
+// REMOVED, because it was still doing exactly what bare `cloudflare` did:
+//
+//   - It fires on prose. Real page text fetched from developers.cloudflare.com
+//     that day carries "TURNSTILE / Verify visitors without CAPTCHA", so the
+//     FIRST page this ticket names as a false positive still matched after the
+//     original fix. Measured: `looksLikeCaptcha` returned ['turnstile'].
+//   - It cannot see the real widget. A live Turnstile page
+//     (demo.turnstile.workers.dev) identifies the widget ONLY as class
+//     `cf-turnstile`, input `cf-turnstile-response` and script
+//     `challenges.cloudflare.com/turnstile/v0/api.js` — and this matcher is fed
+//     the ARIA TREE plus `page.url()`, which contains no CSS classes and no
+//     subresource URLs. That page's aria tree carried no widget marker at all;
+//     the only "turnstile" in it was the page TITLE and a GitHub link.
+//
+// So the marker could only ever have matched the vendor being discussed, never
+// the widget being present. A real Cloudflare challenge stays double-covered
+// without it: by the phrase 'verifying you are human' and by the URL path
+// 'cdn-cgi/challenge-platform', both already below.
+//
+// `recaptcha` and `hcaptcha` are DELIBERATELY KEPT. reCAPTCHA renders an iframe
+// whose accessible title is "reCAPTCHA", which a real aria tree DOES carry — so
+// unlike Turnstile they can match a present widget. That asymmetry was NOT
+// verified from this machine, so they are left alone rather than removed by
+// analogy; per the ADDITIVE rule above, do not write a confident sentence about
+// another vendor's DOM without looking at it.
 const CAPTCHA_MARKERS = [
-  'recaptcha',                        // widget name
-  'hcaptcha',                         // widget name
-  'turnstile',                        // widget name
+  'recaptcha',                        // widget name — see note above, aria-visible
+  'hcaptcha',                         // widget name — see note above, aria-visible
   'are you a robot',
   'i am not a robot',
   'verify you are human',

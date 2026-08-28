@@ -1059,10 +1059,57 @@ needs pc-child online, and five nodes are single dispositions.
 
 ## BUG-385 — the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text (🔧 CODED 2026-08-28)
 
-**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped
-as *"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder,
-video call having no tool)"*. All three are recorded. Two of them turned up a
-real defect on the way, and the CAPTCHA one is the serious entry here.
+**Status:** ✅ LIVE-VERIFIED 2026-08-28, and the live pass found the fix
+incomplete — see the follow-up box below. Closure-campaign **Track C**, which was
+scoped as *"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted
+ladder, video call having no tool)"*. All three are recorded. Two of them turned
+up a real defect on the way, and the CAPTCHA one is the serious entry here.
+
+> ### ⚠️ LIVE PASS 2026-08-28 — the first page this ticket names as a false positive STILL fired
+>
+> Verified against **real page text fetched from a live browser**, which is what
+> this module's own ADDITIVE rule asks for and what the original fix could not do.
+> Five of the six named pages are genuinely clean; **`developers.cloudflare.com`
+> was not.** It advertises *"TURNSTILE / Verify visitors without CAPTCHA"* in
+> ordinary prose, so `looksLikeCaptcha` returned `['turnstile']`.
+>
+> That matters because `browser_snapshot` runs this matcher on **every** snapshot
+> and on a hit tells the model not to solve or bypass the challenge and to ask the
+> operator to complete it. On Cloudflare's own docs the model therefore stops
+> browsing to ask for a challenge that does not exist — the exact defect this
+> ticket exists to remove, surviving inside one of its own six examples.
+>
+> **And the marker could never have caught the real widget.** A live Turnstile
+> page (`demo.turnstile.workers.dev`) identifies the widget only as class
+> `cf-turnstile`, input `cf-turnstile-response`, and script
+> `challenges.cloudflare.com/turnstile/v0/api.js`. **This matcher is fed the ARIA
+> TREE plus `page.url()`** — no CSS classes, no subresource URLs. That page's aria
+> tree carried no widget marker at all; its only "turnstile" text was the page
+> TITLE and a GitHub link. So bare `turnstile` matched the vendor being *discussed*
+> and never the widget being *present*: all cost, no cover.
+>
+> **Fixed by removing it.** A real Cloudflare challenge stays **double-covered**
+> without it — by the phrase `verifying you are human` and by the URL path
+> `cdn-cgi/challenge-platform`, both already in the list and both asserted in the
+> new test.
+>
+> **`recaptcha` and `hcaptcha` are deliberately KEPT, and that disposition is
+> pinned by a test.** reCAPTCHA renders an iframe whose accessible title is
+> "reCAPTCHA", which an aria tree *does* carry, so unlike Turnstile they can match
+> a present widget. **That asymmetry was not verified from this machine**, so they
+> are left alone rather than removed by analogy — the module's own rule is not to
+> write a confident sentence about another vendor's DOM without looking at it.
+>
+> Regression test: `test/bug-385-captcha-marker-matches-widget-not-vendor.test.js`
+> (6 assertions, fixtures are **captured** text rather than invented shapes).
+> Mutation: restoring `turnstile` turns **3** of them red, sha256-verified to have
+> applied and restored identical. Suite 6877/6877/0/0.
+>
+> **Not closed by this:** the true-positive half is still only covered by phrase
+> markers whose upstream markup is unverified, so a challenge that words itself
+> differently is still missed. That is unchanged by this fix and is the residue to
+> attack next — ideally by capturing a real challenge page's aria tree, which needs
+> a challenge to actually appear.
 
 ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions.
 
