@@ -1259,6 +1259,7 @@ async function readScreenRegions(target) {
 }
 
 const { matchRegions, centreOf } = require('./see-and-click-match.js');
+const { settleForChange } = require('./see-and-click-settle.js');
 
 function reasonOf(res) {
   const r = res && res.result;
@@ -1377,21 +1378,21 @@ async function see_and_click({ text, occurrence, expect, pid }) {
   // Re-read the screen — if nothing changed, the click hit nothing that mattered.
   // Same scope as the first read, or "did anything change?" would be comparing two
   // different rectangles.
-  const after = await readScreenRegions(scope);
-  if (!after.ok) {
-    return evidence.unverified(
-      { ok: true, result: { clicked: target.text, x: point.x, y: point.y } },
-      'clicked "' + target.text + '" but the screen could not be re-read afterwards, so I cannot confirm anything happened');
-  }
-  if (expect && after.text.toLowerCase().includes(String(expect).trim().toLowerCase())) {
-    return ok({ clicked: target.text, x: point.x, y: point.y, evidence: 'ocr', confirmed: String(expect) });
-  }
-  if (after.text !== before.text) {
-    return ok({ clicked: target.text, x: point.x, y: point.y, evidence: 'ocr', note: 'the screen changed after the click' });
-  }
-  return evidence.unverified(
-    { ok: true, result: { clicked: target.text, x: point.x, y: point.y } },
-    'clicked "' + target.text + '" but the screen reads exactly the same afterwards, so I cannot tell that anything happened');
+  //
+  // BUG-396: that re-read used to happen ONCE, immediately, giving the UI no time
+  // to repaint — so a click that HAD worked read back "exactly the same" and the
+  // operator was told to play the video by hand. Bounded poll now. The budget, the
+  // false-positive trade it buys, and why `attempts` is reported live in there.
+  const settled = await settleForChange({
+    read: () => readScreenRegions(scope), beforeText: before.text, expect: expect,
+  });
+  const seen = { clicked: target.text, x: point.x, y: point.y, attempts: settled.attempts };
+  if (settled.kind === 'expected') return ok(Object.assign({ evidence: 'ocr', confirmed: String(expect) }, seen));
+  if (settled.kind === 'changed') return ok(Object.assign({ evidence: 'ocr', note: 'the screen changed after the click' }, seen));
+  return evidence.unverified({ ok: true, result: seen }, 'clicked "' + target.text + '" but '
+    + (settled.kind === 'unreadable'
+      ? 'the screen could not be re-read afterwards, so I cannot confirm anything happened'
+      : 'the screen reads exactly the same afterwards, so I cannot tell that anything happened'));
 }
 
 // ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----
