@@ -278,9 +278,8 @@ function matches(playbook, diagnosis) {
   return matchClause(playbook.when.target, diagnosis.target);
 }
 
-// $-prefixed string args resolve against the diagnosis via dotted path, e.g.
-// '$target' -> diagnosis.target. None of the SEED_PLAYBOOKS above use this — it
-// exists for future playbooks and is covered by a dedicated unit test.
+// $-prefixed string args resolve via dotted path: '$target' -> diagnosis.target.
+// provider-down uses it; this said "None of the SEED_PLAYBOOKS use this" until 08-28.
 function getPath(obj, dottedPath) {
   return dottedPath.split('.').reduce(function(acc, key) {
     return acc && typeof acc === 'object' ? acc[key] : undefined;
@@ -596,6 +595,8 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
         if (!result || !result.ok) { outcome = 'error'; detail = result; break; }
         detail = result.result;
       }
+      // BUG-234 audit read: healed:false is not 'applied'. See its test header.
+      if (outcome === 'applied' && detail && detail.healed === false) outcome = 'acknowledged';
     } catch (err) {
       outcome = 'error';
       detail = { error: err.message };

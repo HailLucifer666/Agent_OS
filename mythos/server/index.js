@@ -4501,7 +4501,7 @@ function createServer(deps) {
       // intentional throttling, not a fix that failed — labeling it
       // 'unhandled' alongside real no-match/error outcomes made a healthy
       // suppression look like a problem the healer gave up on.
-      const label = actuallyHealed ? 'healed' : (p.outcome === 'cooldown' ? 'cooldown' : 'unhandled');
+      const label = actuallyHealed ? 'healed' : (p.outcome === 'cooldown' ? 'cooldown' : (p.outcome === 'acknowledged' ? 'acknowledged' : 'unhandled'));
       memory.episodic.write({
         kind: 'anomaly', channel: 'immune',
         summary: label + ': ' + (p.kind || 'unknown') + ' — ' + (p.target || ''),

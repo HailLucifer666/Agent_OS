@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6844,
+      "value": 6856,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -2890,11 +2890,12 @@
       {
         "n": 234,
         "shape": "entry",
-        "state": "open",
+        "state": "fixed",
         "title": "the health channel was carrying things that are not faults",
         "detail": {
           "symptom": "68 heal → `no-match` records against 6 applied. At one point 15 `live-reconnect-failed` inside 30 seconds (12:29:51 → 12:30:21), one every ~2 s, each getting a full diagnose → heal → announce → two-episodic-writes round trip. Three separate causes wearing one coat, and the plan's reading of the first was",
-          "verification": "`test/health-channel-non-faults.test.js`, 13 tests (8 red pre-fix), plus the updated BUG-170 test asserting the strip moved channel rather than disappeared."
+          "verification": "`test/health-channel-non-faults.test.js`, 13 tests (8 red pre-fix), plus the updated BUG-170 test asserting the strip moved channel rather than disappeared. **Status: FIXED — audit-read 2026-08-28. All five shipped changes were re-opened and confirmed in today's code, and the closing scope paragraph below was found to have been REVERSED the next day.** **Claim 1's wording is loose and worth correcting: `ALLOWED_EVENTS` is a TEST-SIDE conformance allowlist (`test/event-name-conformance.test.js:242`), not a runtime registry.** The event is emitted at `live-session.js:340` and the conformance guard passes 3/3. Claims 2-5 verified at `live-tool-adapter.js:642` (`!entry.started`), `healer.js` (`when: { kind: 'provider-down' }`, `provider: '$target'`, `cooldownMs: 60000` unchanged), the retitled `provider re-probe after a reported outage` with its id deliberately unchanged, and the `outcome ==…",
+          "limits": "whether any of the four conditions deserves a REAL remedy is untouched — they are still acknowledged and still not fixed."
         }
       },
       {
@@ -3249,7 +3250,7 @@
       {
         "n": 273,
         "shape": "entry",
-        "state": "open",
+        "state": "verified",
         "title": "the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust",
         "detail": {
           "cause": "`unverified` carried two different epistemic states under one name: -",
@@ -3279,8 +3280,8 @@
       {
         "n": 276,
         "shape": "entry",
-        "state": "open",
-        "title": "\"show me the news\" failed six ways, and only one of them was the model's fault (FILED, NOT STARTED) — opened 2026-08-19",
+        "state": "verified",
+        "title": "\"show me the news\" failed six ways, and only one of them was the model's fault — opened 2026-08-19",
         "detail": {
           "verification": ". The exemption is one `except:` clause carrying the whole recovery path, and a capability refactor could have dropped it without a single test going red — which is how a recoverable 13-tool outage becomes a permanent one. Pinned in `test/bug-276-f1-browser-recovery-tool-survives-offline.test.js` (5/5), built from F1's own log excerpt (the 13 tool names verbatim) and driving the real `buildCapabilitySnapshot` from an adapter reporting `OFFLINE` rather than a hand-written `{browserOnline:false}` — the builder resolves an *unreadable* adapter to `true`, so a hand-written fixture could have passed while withholding nothing. Includes that as an explicit negative control. Mutation-proven: removing the `except` clause → 2 fail; stripping `browser_launch_debug` out of the reason string → 1 fail. Both restored byte-identical."
         }
@@ -3903,9 +3904,9 @@
       }
     ],
     "counts": {
-      "verified": 51,
-      "fixed": 168,
-      "open": 9,
+      "verified": 53,
+      "fixed": 169,
+      "open": 6,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,

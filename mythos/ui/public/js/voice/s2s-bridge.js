@@ -756,11 +756,11 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // Q5 — do not fix this on the strength of that reasoning. The ONE number that
     // separates "the gate silenced the bleed" from "the gate passed all of it" is how
     // many flushed frames it actually zeroed, and nothing has ever reported it. So
-    // this pass counts and reports, and changes nothing. Note in advance that the
-    // obvious remedy — raise the gate floor toward 0.123 — walks into the same
-    // overlap A1 just backed out of, since operator speech measured 0.0395-0.069,
-    // BELOW the bleed. If this measurement confirms the burst, the fix is to stop
-    // replaying frames the policy never believed, not to pick another scalar.
+    // this pass counts and reports, and changes nothing.
+    // MEASURED 2026-08-19 AND THE HYPOTHESIS ABOVE IS REFUTED: 771 frames replayed,
+    // 695 ZEROED; worst case 25 frames, not 133. NOTHING HERE IS PENDING - the remedy
+    // it names must NOT be built. BUG-388 later showed the 0.123 "bleed" was the
+    // OPERATOR'S OWN voice. The symptom is carried by BUG-274/BUG-388, not here.
     let flushedZeroed = 0;
     for (const frame of held) {
       try {

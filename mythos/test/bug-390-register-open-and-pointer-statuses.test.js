@@ -115,7 +115,24 @@ describe('BUG-390 — against the real BUGS.md', () => {
   });
 
   it('BUG-273 does not inherit a status from the bullets nested inside it', () => {
-    assert.notEqual(states.get(273), 'verified',
+    // RE-SCOPED 2026-08-28. This asserted `states.get(273) !== 'verified'`, which
+    // was an OUTCOME standing in for a MECHANISM: it read as a pass only while
+    // BUG-273 happened to be open. An audit read then fixed BUG-273 and gave it a
+    // real `**Status:**` line, and this guard went red against a CORRECT register
+    // — the same erosion this repo has recorded before, where fixing the thing a
+    // guard was scoped to shrinks it below its own floor.
+    //
+    // What it is actually for is the id check: a bullet about BUG-345 nested
+    // inside BUG-273's body must not classify BUG-273. So drive THAT — strip
+    // BUG-273's own Status line and confirm the nested bullets alone do not make
+    // it verified.
+    const bug = bugs.find((b) => b.n === 273);
+    assert.ok(bug, 'BUG-273 must still parse');
+    assert.match(bug.body, /\*\*Status:\*\*/, 'and it must still carry its own Status line');
+    const withoutStatus = Object.assign({}, bug, {
+      body: bug.body.split(/\r?\n/).filter((l) => !/\*\*Status:\*\*/.test(l)).join('\n'),
+    });
+    assert.notEqual(classify(withoutStatus, openSet), 'verified',
       'BUG-273 read verified off BUG-345\'s bullet before the id check');
   });
 

@@ -109,9 +109,24 @@ describe('B3.2 the provider-down playbook follows the provider that actually fai
     bus.emit('health.diagnosed', { kind: 'provider-down', target: 'groq' });
     await sleep(10);
     const outcomes = bus.emitted.filter((e) => e.type === 'health.healed').map((e) => e.payload.outcome);
-    assert.ok(outcomes.includes('cooldown') || outcomes.includes('heal-failed'),
-      'three providers flapping must not become three remediations a second — the match widened, '
-      + 'the cooldown and recurrence ceilings did not; got ' + JSON.stringify(outcomes));
+    // MEASURED BY MUTATION 2026-08-28. This asserted
+    //   outcomes.includes('cooldown') || outcomes.includes('heal-failed')
+    // and setting the provider-down playbook's own cooldownMs from 60000 to 0 -
+    // the exact bound BUG-234 promised not to widen - left this file AND
+    // immune.test.js at 72/72 green. rotate-nim-key carries verifyMs, so the
+    // second diagnosis lands in the recurrence branch and returns 'heal-failed'
+    // WITHOUT EVER CONSULTING cooldownMs. The disjunction accepted that, so the
+    // one ceiling this test is named for had no guard at all.
+    //
+    // The fix is to DELETE the disjunct, not to add anything. Re-measured after
+    // the change: cooldown-only leaves the clean suite at 72/72 and takes the
+    // mutant to fail=1. An attempt to assert "exactly one applied outcome"
+    // instead was wrong and went red on correct code - the real sequence here is
+    // ["cooldown","cooldown"], because the playbook is already on cooldown when
+    // this case starts.
+    assert.ok(outcomes.includes('cooldown'),
+      'the second diagnosis must be suppressed BY THE COOLDOWN — naming heal-failed as an '
+      + 'acceptable alternative is what let a cooldown of 0 pass; got ' + JSON.stringify(outcomes));
     healer.stop();
   });
 });
