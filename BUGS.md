@@ -8429,7 +8429,31 @@ Mic-tuning remains an operator activity — that is not a verification gap.
 ---
 
 ### BUG-021: MYTHOS gives canned empathy instead of diagnosing problems
-**Status:** 🔧 CODED — prompt rule added, manual conversation testing needed
+**Status:** 🔧 CODED — the rule's CONTENT is test-covered; what needs real
+conversations is the model's behaviour, and that is the honest remainder.
+
+> **Checked 2026-08-28, and unlike BUG-020 and BUG-029 this deliverable was NOT
+> untested.** Those two turned out to have shipped mechanisms with no guard at
+> all; this one does not. `test/voice-agent-tools.test.js` (79 assertions, all
+> passing) pins the FRUSTRATION RULE's content directly:
+>
+> - it is **scoped** to frustration at MYTHOS, not general venting — asserting
+>   both `frustration AT YOU OR THE SYSTEM` and the `Venting about the world`
+>   carve-out, so a later edit cannot quietly widen it back;
+> - it **never forces a status probe**, and forbids speaking working notes aloud
+>   — written from a real operator incident on 2026-08-04, where MYTHOS cut the
+>   operator off mid-sentence to read out goal counts, job ids and even its own
+>   instruction scaffold. The probe is opt-in now, and the test slices the rule
+>   block CRLF-tolerantly so it cannot accidentally swallow later rules.
+>
+> **So the verification note below is right, and slightly undersells itself.**
+> There is indeed no automated way to verify an LLM's future decision-making from
+> a static prompt string — but the string itself, its scope and its prohibitions
+> are pinned. What remains is behavioural: does the model actually obey it. Per
+> this repo's own standing lesson, **a prompt instruction obeyed once is not a
+> mechanism** (measured: obeyed 1 of 3 times in an earlier campaign), so that
+> needs at least three real voice conversations. Kept at 🔧 CODED for exactly
+> that reason, not because nothing is tested.
 **Severity:** LOW | **Reported:** 07-12
 
 **Symptom:** When user expressed deep frustration ("you are not working as expected"), MYTHOS repeated "You seem frustrated, what's not working?" verbatim three times — no actual diagnosis, templated empathy.
