@@ -41,6 +41,87 @@ it is committed.
 
 ---
 
+## BUG-396 — `see_and_click` clicked the video, then measured the screen too early and told the operator it had failed (✅ FIXED 2026-08-28, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-28. One new module,
+`mythos/src/core/effectors/see-and-click-settle.js`, plus the block in
+`from-pc.js` that consumes it. 18 assertions, 11 mutations all caught.
+
+Found from the operator's own live session, not from a code read. The operator's
+words were *"It can't even play the first video on YouTube. Basics."*
+
+### The mechanism
+
+`see_and_click`'s oracle is right and its timing was wrong. It samples the screen,
+clicks, re-reads, and calls an identical read "the click hit nothing that
+mattered". That re-read happened **once, immediately, with no settle time.**
+
+Measured from `vault/Episodic/2026-08-28.jsonl`, lines 40-45:
+
+| time | event |
+|---|---|
+| 21:10:24.216 | `screen_look` → YouTube homepage, target video located |
+| 21:10:25.690 | `see_and_click` → clicked at 605,715, **unverified** |
+
+**1,474 ms for the whole call** — one full-desktop OCR read, the match, the click,
+and a second full-desktop OCR read. So the verifying read began roughly 700 ms
+after the click. A browser navigating to a watch page does not repaint inside that
+window. The click had worked; the measurement had not.
+
+What the operator then heard: *"I clicked on the video, Sir, but I'm afraid I
+can't visually confirm that it started playing. Would you mind trying to play it
+manually?"* An honest sentence about a dishonest measurement, which from the
+operator's chair is indistinguishable from the tool being broken.
+
+### Why no previous entry covers it
+
+`from-pc.js`'s own comment records the history as *"see_and_click is 3 ok / 8 fail
+and every failure is grounding, never the click (click_at is 1 ok / 0 fail
+all-time)"*. This failure is neither grounding nor click. **It is the ORACLE
+failing** — a third category that had never been observed, because the two reads
+had never been separated by a slow enough UI to expose the gap.
+
+### The class
+
+Time-of-check to time-of-use. `before` is sampled, the world is changed, and
+`after` is sampled at a moment of the *code's* choosing rather than the *world's*.
+
+### The fix
+
+A bounded poll: three post-click looks, 500 ms apart, exiting the moment the
+screen differs or `expect` appears. A screen that has already changed costs
+exactly one read and zero waits, so no fast UI pays for the slow one.
+
+**The bound is the interesting half, and it is deliberately low.** Widening the
+window also widens the window in which an *unrelated* repaint — a clock, a
+notification, MYTHOS's own animating HUD on an unscoped whole-desktop read —
+satisfies `after.text !== beforeText` and converts a dead click into a claimed
+success. That is a false positive, which is strictly worse than the false negative
+being fixed. So `'changed'` keeps its weak wording, only `expect` reports
+`confirmed`, and the constant is pinned by a test so raising it is a reviewed
+edit rather than a drift.
+
+`attempts` is now reported on every outcome including the unverified one: "I looked
+three times across three seconds and it never moved" and "I looked once" support
+the same sentence with very different amounts of evidence.
+
+### Noted, NOT fixed — two things standing next to this
+
+1. **The call carried no `pid`, so both reads were whole-desktop.** The OCR sample
+   in that same log line proves the cost: it contains `"e @ MYTHOS"` and this
+   repo's own version string, i.e. MYTHOS reading its own HUD, which is precisely
+   what BUG-108 threaded `pid` through to prevent. Nothing makes the model pass
+   it. Separate ticket, separate fix — a prompt or schema change, not this one.
+2. **Chrome was showing "Restore pages? Chrome didn't shut down correctly."** in
+   that same OCR sample, because `Start Agent OS.bat` force-kills the browser on
+   the next launch. A dialog over the page is its own click hazard and is a
+   launcher problem, not an effector one.
+
+Neither is speculative and neither is repaired here; both are recorded so the next
+session does not rediscover them as new.
+
+---
+
 ## BUG-395 — the registry scanner read `BUG-0` as a ticket, so a commit message that quoted the id PATTERN broke the gate (✅ FIXED 2026-08-28)
 
 **Status:** ✅ FIXED 2026-08-28. One regex triple in
