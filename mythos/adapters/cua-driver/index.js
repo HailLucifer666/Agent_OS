@@ -34,6 +34,23 @@ const RING_BUFFER_MAX_LINES = 100;
 const MAX_RESTART_ATTEMPTS = 2;
 const RESTART_BACKOFF_MS = [2000, 5000];
 const COMMAND_TIMEOUT_MS = 15000;
+// BUG-354, mirroring BUG-335 in pc-child. A call that INJECTS INPUT and outlives
+// the caller's patience gets the driver KILLED: a driver mid-SendInput cannot be
+// told to abandon the input, so killing it is the only way to stop the action
+// landing after the caller was already told it failed. Read-only calls keep
+// today's behaviour - a slow tree read changes nothing in the world, and killing
+// the driver for one trades a harmless wait for a dead surface.
+//
+// `bring_to_front` is deliberately NOT here. It moves foreground focus, so it is
+// not read-only, but it injects nothing and is idempotent: running it twice
+// leaves the same window in front. The set is input injection, not side effects.
+const INPUT_INJECTING_TOOLS = new Set(['click']);
+// Timeout-kills draw their OWN budget and never the crash budget above
+// (MAX_RESTART_ATTEMPTS = 2, spent from the `exit` handler). Without the split,
+// two wedged clicks would leave desktop automation permanently OFFLINE - a dead
+// surface traded for a double-click bug, which is the worse of the two.
+const MAX_TIMEOUT_RESTARTS = 3;
+const TIMEOUT_RESTART_WINDOW_MS = 10 * 60 * 1000;
 const STARTUP_TIMEOUT_MS = 5000;
 const BINARY_NAME = 'cua-driver';
 
@@ -60,6 +77,26 @@ let restartAttempts = 0;
 let intentionalShutdown = false;
 let restartTimer = null;
 let notInstalled = false; // ENOENT on spawn — stop retrying a binary that isn't there
+let timeoutRestartTimes = [];   // Date.now() stamps of recent timeout-kills (BUG-354 budget)
+let skipCrashBudget = false;    // set by a timeout-kill so `exit` does not spend restartAttempts
+// WHY THIS EXISTS AND pc-child NEEDS NO EQUIVALENT: pc-child restarts from an
+// explicit scheduleRestart() call, so simply not calling it is enough. THIS
+// adapter restarts from its `exit` handler, so a kill schedules a restart all by
+// itself. Without this flag the budget-exhausted branch below set state OFFLINE
+// and then its OWN kill brought the driver back ONLINE a few milliseconds later -
+// a guard undone by its own action, and it announced the offline state first so
+// the logs read as if it had held. Copying BUG-335's SHAPE without checking this
+// adapter's restart MECHANISM is what produced it.
+let noRestartAfterKill = false;
+let timedOutIds = new Set();    // ids whose caller has already given up (late-response bell)
+// Test seams, mirroring pc-child's. Production passes none of them.
+let spawnImpl = null;
+let commandTimeoutMs = COMMAND_TIMEOUT_MS;
+let restartBackoffMs = RESTART_BACKOFF_MS;
+// A seam because the real window is ten minutes: without it no test can prove
+// that stamps EXPIRE, and a budget that never forgets is a budget that offlines
+// the surface after three timeouts spread across a whole day.
+let timeoutRestartWindowMs = TIMEOUT_RESTART_WINDOW_MS;
 
 // Pending JSON-RPC requests, keyed by id (unlike pc-child's single-in-flight
 // command queue, MCP's stdio transport is message-id addressed, so simple
@@ -109,6 +146,15 @@ function handleStdoutChunk(chunk) {
       commandInFlight = null;
       resolve(msg);
       processQueue();
+    } else if (msg && msg.id !== undefined && timedOutIds.has(msg.id)) {
+      // BUG-354: the answer to a call whose caller already gave up. Matching is
+      // by id, so it cannot be misattributed to the NEXT command - but dropping
+      // it silently into the ring buffer is how "the click did land, late" stays
+      // invisible. Only read-only calls reach here: a timed-out input-injecting
+      // call kills the driver, so its late answer has nowhere to come from.
+      timedOutIds.delete(msg.id);
+      log.warn('cua-driver.late-completion', { id: msg.id, isError: !!(msg.result && msg.result.isError) });
+      pushRingLine(`[cua-driver] late completion for id ${msg.id} (caller already gave up)`);
     } else {
       pushRingLine(line); // notification or out-of-band message
     }
@@ -133,19 +179,91 @@ function recentStderr(maxLines = 20) {
 }
 
 // ---- JSON-RPC dispatch (one in flight at a time, like pc-child) ----
+
+// A timeout and a tool error both surface as ok:false, and from-cua.js answered
+// both by clicking again. The flag is how a caller tells 'the driver refused' from
+// 'the driver never answered and may still be working'.
+function timeoutError(message) {
+  const err = new Error(message);
+  err.timedOut = true;
+  return err;
+}
+
+// Kill the live child WITHOUT spending the crash budget. The `exit` handler is
+// what restarts, so the flag has to be set before the process dies.
+function killLiveChild(opts) {
+  skipCrashBudget = true;
+  noRestartAfterKill = !!(opts && opts.noRestart);
+  const proc = child;
+  if (!proc) return;
+  try {
+    if (process.platform === 'win32' && proc.pid && proc.kill === undefined) {
+      require('child_process').execFile('taskkill', ['/PID', String(proc.pid), '/T', '/F']);
+    } else {
+      proc.kill('SIGTERM');
+    }
+  } catch (_) { /* best-effort */ }
+  // A real child emits 'exit' asynchronously and the handler below restarts it.
+  // A fake one in a test may not, so nothing here depends on the event firing.
+  if (proc.emit && proc.exitCode === undefined && !proc.__exitEmitted) {
+    proc.__exitEmitted = true;
+    setImmediate(() => proc.emit('exit', null, 'SIGTERM'));
+  }
+}
 function processQueue() {
   if (commandInFlight || commandQueue.length === 0 || !child) return;
 
   const { request, resolve, reject } = commandQueue.shift();
-  commandInFlight = { id: request.id, resolve: resolve, reject: reject, timer: null };
+  const id = request.id;
+  // The tool name lives in the MCP params, not the JSON-RPC method - every tool
+  // call is method 'tools/call'. Reading `method` here would classify a click as
+  // read-only and defeat the whole split.
+  const toolName = (request.method === 'tools/call' && request.params && request.params.name) || null;
+  commandInFlight = { id: id, resolve: resolve, reject: reject, timer: null };
 
   const timer = setTimeout(() => {
-    if (commandInFlight === null) return;
+    if (commandInFlight === null || commandInFlight.id !== id) return;
     const rejectFn = commandInFlight.reject;
+    const touchesWorld = toolName !== null && INPUT_INJECTING_TOOLS.has(toolName);
+    log.warn('cua-driver.command-timeout', { tool: toolName, id, touchesWorld, timeoutMs: commandTimeoutMs, queueDepth: commandQueue.length });
     commandInFlight = null;
-    rejectFn(new Error('cua-driver command timed out'));
+    timedOutIds.add(id);
+    if (!touchesWorld) {
+      rejectFn(timeoutError('cua-driver command timed out'));
+      processQueue();
+      return;
+    }
+    // BUG-354: the driver cannot be told to abandon input it is mid-way through
+    // sending - kill it so the action cannot land after the caller was told it
+    // failed. Its restarts draw their own budget, never the crash budget.
+    const now = Date.now();
+    timeoutRestartTimes = timeoutRestartTimes.filter((stamp) => now - stamp < timeoutRestartWindowMs);
+    if (timeoutRestartTimes.length >= MAX_TIMEOUT_RESTARTS) {
+      killLiveChild({ noRestart: true });
+      state = 'OFFLINE';
+      hint = 'cua-driver exceeded the command-timeout restart budget ('
+        + MAX_TIMEOUT_RESTARTS + ' input-injecting timeouts in '
+        + Math.round(timeoutRestartWindowMs / 60000) + ' minutes). Re-probe health before retrying.';
+      log.warn('cua-driver.timeout-budget-exhausted', {});
+      // BUG-355's lesson is that rejecting only the in-flight command strands
+      // every caller already queued behind it. pc-child needed an explicit drain
+      // here; THIS adapter does not, and the difference is worth stating because
+      // an explicit one looks like diligence: the killLiveChild() above makes the
+      // child emit 'exit', and that handler already rejects commandQueue and
+      // empties it. A drain added here as well is unreachable — by the time this
+      // branch runs there is either a live child (killed, so exit drains) or the
+      // child already died (its exit already drained). Code no test can justify
+      // is code the next reader has to re-derive, so it is not here. The
+      // queued-callers-settle property is pinned by the BUG-355 test regardless
+      // of which mechanism delivers it.
+      rejectFn(timeoutError(hint));
+      return;
+    }
+    timeoutRestartTimes.push(now);
+    killLiveChild();
+    rejectFn(timeoutError('cua-driver command timed out; the driver was restarted so it cannot execute late'));
     processQueue();
-  }, COMMAND_TIMEOUT_MS);
+  }, commandTimeoutMs);
   commandInFlight.timer = timer;
 
   try {
@@ -182,7 +300,12 @@ async function invoke(toolName, args) {
     const result = resp.result || {};
     return { ok: !result.isError, result };
   } catch (err) {
-    return { ok: false, result: err.message };
+    // The flag rides out with the failure. Without it a caller sees only
+    // ok:false and cannot tell a refusal from a driver that never answered and
+    // may still be mid-click (BUG-354).
+    const out = { ok: false, result: err.message };
+    if (err && err.timedOut) out.timedOut = true;
+    return out;
   }
 }
 
@@ -193,7 +316,9 @@ function spawnChild() {
 
   let proc;
   try {
-    proc = spawn(resolveBinary(), ['mcp'], { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    proc = spawnImpl
+      ? spawnImpl(resolveBinary(), ['mcp'])
+      : spawn(resolveBinary(), ['mcp'], { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
     state = 'OFFLINE';
     hint = `Failed to spawn ${BINARY_NAME}: ${err.message}`;
@@ -231,20 +356,37 @@ function spawnChild() {
       state = 'OFFLINE';
       return;
     }
+    if (noRestartAfterKill) {
+      // The timeout budget is spent. Stay down and KEEP the hint that says why -
+      // coming back up here is what made the exhausted branch a no-op.
+      noRestartAfterKill = false;
+      skipCrashBudget = false;
+      state = 'OFFLINE';
+      return;
+    }
     if (code === 0) {
       state = 'OFFLINE';
       return;
     }
-    pushRingLine(`[cua-driver] exited unexpectedly (code=${code}, signal=${signal})`);
+    if (!skipCrashBudget) pushRingLine(`[cua-driver] exited unexpectedly (code=${code}, signal=${signal})`);
 
-    if (notInstalled || restartAttempts >= MAX_RESTART_ATTEMPTS) {
+    // BUG-354: a timeout-kill is not a crash and must not spend the crash
+    // budget. Two wedged clicks would otherwise offline desktop automation for
+    // good. Its own budget was already charged at the kill site.
+    const wasTimeoutKill = skipCrashBudget;
+    skipCrashBudget = false;
+    if (!wasTimeoutKill && (notInstalled || restartAttempts >= MAX_RESTART_ATTEMPTS)) {
       state = 'OFFLINE';
       hint = hint || 'cua-driver exceeded restart budget.';
       return;
     }
+    if (wasTimeoutKill && notInstalled) {
+      state = 'OFFLINE';
+      return;
+    }
 
-    const backoffMs = RESTART_BACKOFF_MS[restartAttempts] || RESTART_BACKOFF_MS[RESTART_BACKOFF_MS.length - 1];
-    restartAttempts += 1;
+    const backoffMs = restartBackoffMs[restartAttempts] || restartBackoffMs[restartBackoffMs.length - 1];
+    if (!wasTimeoutKill) restartAttempts += 1;
     log.warn('cua-driver.restarting', { attempt: restartAttempts, backoffMs });
     state = 'STARTING';
     clearRestartTimer();
@@ -293,7 +435,8 @@ function spawnChild() {
   }, STARTUP_TIMEOUT_MS);
 }
 
-function startCuaDriver() {
+function startCuaDriver(opts) {
+  const o = opts || {};
   intentionalShutdown = false;
   restartAttempts = 0;
   notInstalled = false;
@@ -301,6 +444,16 @@ function startCuaDriver() {
   commandQueue = [];
   commandInFlight = null;
   stdoutBuf = '';
+  timeoutRestartTimes = [];
+  skipCrashBudget = false;
+  noRestartAfterKill = false;
+  timedOutIds = new Set();
+  // Test seams, mirroring pc-child's. main.js calls this with no arguments, so
+  // production always gets the real spawn and the real 15s timeout.
+  spawnImpl = typeof o.spawnImpl === 'function' ? o.spawnImpl : null;
+  commandTimeoutMs = typeof o.commandTimeoutMs === 'number' ? o.commandTimeoutMs : COMMAND_TIMEOUT_MS;
+  restartBackoffMs = Array.isArray(o.restartBackoffMs) ? o.restartBackoffMs : RESTART_BACKOFF_MS;
+  timeoutRestartWindowMs = typeof o.timeoutRestartWindowMs === 'number' ? o.timeoutRestartWindowMs : TIMEOUT_RESTART_WINDOW_MS;
 
   try {
     spawnChild();

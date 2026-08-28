@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6799,
+      "value": 6811,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3545,10 +3545,11 @@
       {
         "n": 354,
         "shape": "pointer",
-        "state": "open",
+        "state": "verified",
         "title": "cua-driver shares pc-child's reject-on-timeout shape for",
-        "detail": {},
-        "excerpt": "cua-driver shares pc-child's reject-on-timeout shape for cua_click (adapters/cua-driver/index.js :146) with no kill/budget split. Mirror BUG-335's toucher/looker split with its own budget; honest verified:false reporting lowers harm meanwhile."
+        "detail": {
+          "limits": "a real wedged click has not been observed — the timeout paths are driven by an injected fake driver, because making the live binary hang for 15 seconds on demand is not something this session could arrange. What is proven live is that the changed adapter still drives the real binary."
+        }
       },
       {
         "n": 356,
@@ -3899,9 +3900,9 @@
       }
     ],
     "counts": {
-      "verified": 49,
+      "verified": 50,
       "fixed": 168,
-      "open": 11,
+      "open": 10,
       "coded": 8,
       "diagnosed": 2,
       "duplicate": 2,
@@ -3909,8 +3910,7 @@
     },
     "total": 240,
     "openDeclared": [
-      348,
-      354
+      348
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
