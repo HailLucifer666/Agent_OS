@@ -41,6 +41,71 @@ it is committed.
 
 ---
 
+## BUG-395 — the registry scanner read `BUG-0` as a ticket, so a commit message that quoted the id PATTERN broke the gate (✅ FIXED 2026-08-28)
+
+**Status:** ✅ FIXED 2026-08-28. One regex triple in
+`mythos/scripts/lint-bug-registry.js`. Found by the suite going red on `main`
+minutes after BUG-278 merged, and caused by that merge.
+
+### The mechanism
+
+`ANY_REF_RE` was `/BUG-(\d+)/g`, so **`BUG-0` parsed as ticket number 0.** Bug
+numbers start at 1, so no such ticket can exist — but `BUG-0` is exactly how this
+repo writes the id *pattern* in prose. `bulletMarks()` in `build-index.js` builds
+its anchor as `'BUG-' + '0*' + n`, and BUG-278's commit message (`bec26d1`)
+quotes that literal while explaining the very anchor it tripped:
+
+```
+The bullet id anchor is `[-*]\s*BUG-0*<n>\b` and AN ASCII ARROW SATISFIES IT
+```
+
+The scanner read `BUG-0`, added 0 to `undeclaredInCommits`, and
+`test/bug-373-*.test.js`'s *"the six measured commit-only numbers are named, not
+counted"* failed with `bad entry 0` — a full-suite failure on `main` produced
+entirely by a sentence in a commit message.
+
+**Same class as the comment `bulletMarks` already carries from the other side:**
+*"a pattern that matches ids must not itself look like one"*. That warning is
+about writing the pattern; this is about **reading** it. The fix belongs in the
+scanner, because the next session will write `BUG-0*` again the moment it
+discusses the anchor.
+
+### The fix, and the wrong version of it that was caught first
+
+`/BUG-(0*[1-9]\d*)/` — optional padding, then a non-zero digit. `BUG-047` still
+captures `047` (which `+n` reads as 47) while `BUG-0` and `BUG-000` match nothing.
+
+**The first draft was `[1-9]\d*` and it was wrong.** This repo writes zero-padded
+ids throughout — `BUG-001` … `BUG-097` are real, and grep finds them across
+BUGS.md, `src/`, `test/` and `scripts/` — so requiring a non-zero *first*
+character would have silently stopped matching about a hundred genuine
+references. That is a far worse defect than the phantom it fixes, **and it would
+have been invisible**: the undeclared ratchet would simply have got smaller,
+which reads as an improvement. Caught by checking whether padded ids were real
+before shipping, not by a test.
+
+### Verified
+
+```
+node scripts/lint-bug-registry.js       382 in use, 243 declared, undeclared 130/130
+node --test test/bug-373-*.test.js test/lint-bug-registry.test.js   28 pass, 0 fail
+node --test  (full suite)               6890 tests, 6890 pass, 0 fail, 0 skipped
+```
+
+`undeclaredInCommits` now reads `[43,44,45,132,145,318,377]` — every entry a
+plausible ticket number, no 0.
+
+### Not fixed by this
+
+The `undeclaredInCommits` list is **seven** numbers while the assertion that
+walks it is still named *"the six measured commit-only numbers"*. The assertion
+does not check the count, so the name is merely stale rather than wrong, and
+BUG-377's arrival in the list is a consequence of PR #36 existing rather than of
+this change. Renaming it is a separate, cosmetic edit and is deliberately not
+bundled here.
+
+---
+
 ## BUG-393 — one OPEN WORK bullet produced two contradictory verdicts, and BUG-352 sat closed-and-open at once (✅ FIXED 2026-08-28, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-28, mutation-proven. 1 source file changed, 1 test

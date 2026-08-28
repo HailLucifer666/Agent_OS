@@ -72,9 +72,31 @@ const BUGS_FILE = path.join(REPO_ROOT, 'BUGS.md');
 // it also retired two adjudications (BUG-083, BUG-084) that existed only to
 // suppress this same shape — structure doing the work a hand-written exception
 // list was doing before.
-const HEADING_DECLARATION_RE = /^#{1,6} BUG-(\d+)\b/gm;
-const LIST_DECLARATION_RE = /^- BUG-(\d+)\b/gm;
-const ANY_REF_RE = /BUG-(\d+)/g;
+// BUG-395: `[1-9]` on the leading digit, not `\d`. Ticket numbers start at 1, so
+// `BUG-0` is never a citation — but it IS how this repo writes the id PATTERN in
+// prose. `bulletMarks()` in build-index.js builds its anchor as
+// `'BUG-' + '0*' + n`, and a commit message that quotes that literal
+// (`BUG-0*<n>`) made the scanner report a phantom ticket **0**, which then failed
+// `bug-373`'s "the six measured commit-only numbers are named, not counted"
+// assertion with `bad entry 0`. Measured 2026-08-28: it reached `main` in commit
+// `bec26d1`, whose message explains the very pattern it tripped.
+//
+// This is the same class the comment on `bulletMarks` already warns about from
+// the other side — "a pattern that matches ids must not itself look like one" —
+// and the fix belongs here rather than in prose, because the next session will
+// write `BUG-0*` again the moment it discusses the anchor.
+//
+// `0*[1-9]\d*` and NOT `[1-9]\d*`, which was the first draft and was WRONG: this
+// repo writes zero-padded ids everywhere (`BUG-001` … `BUG-097` are real, and
+// `grep` finds them across BUGS.md, src, test and scripts), so requiring a
+// non-zero FIRST character would have silently stopped matching about a hundred
+// genuine references — a far worse defect than the phantom it fixes, and
+// invisible because the ratchet would simply have got smaller. The rule is
+// "optional padding, then a non-zero digit": `BUG-047` still captures `047`,
+// which `+n` reads as 47, while `BUG-0` and `BUG-000` match nothing.
+const HEADING_DECLARATION_RE = /^#{1,6} BUG-(0*[1-9]\d*)\b/gm;
+const LIST_DECLARATION_RE = /^- BUG-(0*[1-9]\d*)\b/gm;
+const ANY_REF_RE = /BUG-(0*[1-9]\d*)/g;
 
 /**
  * Numbers that look wrong to the checks above and are not. Each entry states
