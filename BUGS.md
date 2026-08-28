@@ -5360,20 +5360,53 @@ All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 i
 
 ---
 
-## BUG-275 — the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (FILED, NOT STARTED) — opened 2026-08-19
+## BUG-275 — the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19
 
 **Reported by the operator, 2026-08-19, from a live voice conversation: "it hallucinates".
 Filed for later, deliberately not fixed in the same session.**
 
-**Evidence is complete and reproducible without another session.** The whole conversation
-is preserved at `%APPDATA%\MYTHOS\vault\Conversation\session.json` (26 turns), and it
-contains BOTH the raw `web_search` results MYTHOS received AND what it then said about
-them. So every item below is a diff between a tool result and a spoken claim — no
-inference, no "it felt wrong". Turn numbers refer to the index in that file. Cross-refs in
-the server log for the same run (`pid=22112`, boot 08:25:23Z).
+> ### ⚠️ THE FILE THIS TICKET TELLS YOU TO READ IS GONE. Re-measured 2026-08-28.
+>
+> **`vault\Conversation\session.json` is a SINGLE-SESSION file that is overwritten.**
+> It now holds **2 turns from 2026-08-27, in 350 bytes**. The 26-turn conversation this
+> entire ticket is built on is not in it, and following the instruction below as written
+> leads to an empty file and then — against the ticket's own advice — to re-running the
+> conversation.
+>
+> **The evidence is NOT lost. It moved, and it is better than the ticket claims.** All of
+> it is in **`%APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl`** (667 records):
+>
+> - **231 `kind:"conversation"` records, and each one holds BOTH halves of an exchange.**
+>   `detail.text` is what the operator said and **`detail.reply` is MYTHOS's own spoken
+>   text, in full**. `detail.role` reads `"user"` on all 231 — that is the record's
+>   subject, not its only content, and reading it as "no assistant text was kept" is
+>   wrong. Also present per record: `turnId`, `transport`, `actions`.
+> - **213 `kind:"action"` records carrying `detail.result`** — the raw tool results,
+>   including the `web_search` snippets every H-item diffs against.
+>
+> **Do NOT run the diffs against the `summary` field.** `summary` is a truncated
+> projection (`"User: … | MYTHOS: …"`, median 117 characters) and it cuts the
+> fabrications off mid-sentence — H2's rationalisation is visibly clipped at *"not the
+> a"*. Two of the ticket's key quotes (`Claude Opus 1`, `81.1`) are **absent from
+> `summary` and present in `detail`**. A conclusion drawn from `summary` is a conclusion
+> drawn from a projection of the evidence.
+>
+> **Verified, not assumed:** all **13** strings this ticket quotes verbatim were searched
+> for and all 13 were found — `benchlm`, `81.1`, `Gemini CLI`, `How is Gemini CLI`,
+> `access method`, `livebench`, `Agentic Coding`, `Claude Opus 5`, `Claude Opus 1`,
+> `GLM 5`, `think_deeply`, `Nvidia`, `Kimi`. `Audit/2026-08-19.jsonl` (493 records) is a
+> useful cross-check for tool ARGS and tier decisions but its `outcome` is `null` on the
+> rows sampled, so **Audit alone cannot supply the results half of any diff**.
+>
+> Turn numbers below refer to the deleted file and no longer resolve. Match on the quoted
+> text instead.
 
-**Do not begin by re-running the conversation.** The comparison that matters is already on
-disk. Read the file first.
+**Every item below is a diff between a tool result and a spoken claim** — no inference,
+no "it felt wrong". Cross-refs in the server log for the same run (`pid=22112`, boot
+08:25:23Z).
+
+**Do not begin by re-running the conversation.** The comparison that matters is still on
+disk, at the path in the box above.
 
 ### H1 (P0) — invented list entries to satisfy a requested count
 
@@ -5489,7 +5522,36 @@ belongs with H6 (speaking before the result arrives): both are the tool-result n
 path racing the conversation, and together they are a better explanation of the operator's
 experience than "the model makes things up".
 
-**Check first:** whether a suppressed `late-outcome` is retried, queued, or lost. If lost,
+> **H8's "check first" is ANSWERED, 2026-08-28, by reading the source. It is
+> narration-loss, NOT data-loss, and the difference changes what should be built.**
+>
+> `reportLateOutcome` (`src/core/voice/live-tool-adapter.js` ~:920) does three things with
+> an outcome: pushes it to `liveTurnActions`, records it in `recentActionLedger`, and calls
+> `sendSystemNotice` → `liveSession.sendText`. **The text therefore reaches the model's
+> context and is kept in the ledger.** What Gemini kills when the operator is already
+> talking is the model's *spoken turn*, not the injected input. So the outcome is not lost
+> from the conversation — only from the operator's ears.
+>
+> **Nothing re-narrates it.** `recentActionLedger` is written by four paths (:619, :959,
+> :1084, :1134) and read at exactly **one** place — :1313/:1314, feeding
+> `detectUnbackedClaims`, the honesty detector. It is an evidence store for checking
+> claims, not a retry queue. There is no requeue, no deferral, no "say this at the next
+> gap".
+>
+> **And a push-based fix is the wrong direction.** BUG-273 D3 measured 26 of 61 turns
+> (43%) as `systemInitiated` in the "rambling on by yourself" session; re-injecting
+> suppressed narrations would raise that. Suppressing a remark while the operator is
+> speaking is correct behaviour. Because the outcome IS in context, the model can answer
+> when asked — so the honest design is pull-based, and the gap worth closing is that
+> nothing tells the operator an answer is waiting.
+>
+> **Not split out of this ticket**, then: it is not the data-loss bug the note
+> hypothesised. What survives of H8 is its second half, unchanged — H6 and H8 together
+> (the narration path racing the conversation) remain a better explanation of the
+> operator's experience than "the model makes things up", and H6 is still unmeasured.
+
+**Original note, kept because its instinct was right even though the disposition changed.**
+Check whether a suppressed `late-outcome` is retried, queued, or lost. If lost,
 that is a data-loss bug rather than a hallucination one, and it should be split out of this
 ticket with its own number.
 
@@ -17348,3 +17410,18 @@ those records remain owed (this section is the index until then).
   `**Status:**` line, then bound the bodies, then tighten both patterns using the
   tight form already proven as `bulletHalfDone`. Full entry with the measurement
   table is at the top of this file.
+
+- BUG-275 - the voice assistant fabricates leaderboard facts, invents sources,
+  and rationalises the inventions when challenged. Eight items (H1-H8), still
+  NOT STARTED. **Declared here 2026-08-28 so its open state stops depending on
+  the words "NOT STARTED" appearing somewhere in its own prose** — see BUG-394
+  for why that fallback is the only route it had. Two of its "check first" items
+  are now answered in the entry: H8 is narration-loss, not data-loss (the
+  outcome reaches the model's context and the ledger; only the spoken turn is
+  suppressed, and a push-based retry would worsen BUG-273 D3's measured 43%
+  system-initiated turns), and the evidence file the entry names is overwritten —
+  the whole 2026-08-19 session survives in
+  `%APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl` instead, with MYTHOS's own
+  words in `detail.reply` and tool results in `detail.result`. H6 (speaking a
+  conclusion before the tool result lands) is the one to measure next, because
+  the entry argues it may collapse H1-H5 into symptoms of one ordering fault.

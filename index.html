@@ -3273,9 +3273,9 @@
         "n": 275,
         "shape": "entry",
         "state": "open",
-        "title": "the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (FILED, NOT STARTED) — opened 2026-08-19",
+        "title": "the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19",
         "detail": {},
-        "excerpt": "**Reported by the operator, 2026-08-19, from a live voice conversation: \"it hallucinates\". Filed for later, deliberately not fixed in the same session.** **Evidence is complete and reproducible without another session.** The whole conversation is preserved at `%APPDATA%\\MYTHOS\\vault\\Conversation\\session.json` (26 turns), and it contains BOTH the raw `web_search` results MYTHOS received AND what it then said about them. So every item below is a diff between a tool result and a spoken claim — no inference, no \"it felt wrong\". Turn numbers refer to the index in that file. Cross-refs in the server log for the same run (`pid=22112`, boot 08:25:23Z). **Do not begin by re-running the conversation.** The comparison that matters is already on disk. Read the file first. ### H1 (P0) — invented list entries to satisfy a requested count The operator asked for a **top five**. The only ranking data any…"
+        "excerpt": "**Reported by the operator, 2026-08-19, from a live voice conversation: \"it hallucinates\". Filed for later, deliberately not fixed in the same session.** > ### ⚠️ THE FILE THIS TICKET TELLS YOU TO READ IS GONE. Re-measured 2026-08-28. > > **`vault\\Conversation\\session.json` is a SINGLE-SESSION file that is overwritten.** > It now holds **2 turns from 2026-08-27, in 350 bytes**. The 26-turn conversation this > entire ticket is built on is not in it, and following the instruction below as written > leads to an empty file and then — against the ticket's own advice — to re-running the > conversation. > > **The evidence is NOT lost. It moved, and it is better than the ticket claims.** All of > it is in **`%APPDATA%\\MYTHOS\\vault\\Episodic\\2026-08-19.jsonl`** (667 records): > > - **231 `kind:\"conversation\"` records, and each one holds BOTH halves of an exchange.** > `detail.text` is what the ope…"
       },
       {
         "n": 276,
@@ -3940,6 +3940,7 @@
     },
     "total": 243,
     "openDeclared": [
+      275,
       392,
       394
     ],
