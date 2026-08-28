@@ -273,7 +273,14 @@ async function cua_click(params) {
 
   var clickArgs = { pid: p.pid, window_id: coerceWindowId(p.window_id), element_index: p.element_index };
   var r = await cuaDriver.invoke('click', clickArgs);
-  if ((!r || !r.ok) && p.foreground !== false) {
+  // BUG-354: NOT on a timeout. The escalation was written for Chromium dropping a
+  // background click, which the driver reports fast and structured
+  // (background_unavailable). A 15-second silence is a different animal: the first
+  // click may still be executing inside the wedged driver, so a second one is a
+  // guaranteed double-fire rather than a recovery. `timedOut` is how the adapter
+  // tells the two apart - before it existed both arrived as a bare ok:false and
+  // this line answered a timeout by clicking again.
+  if ((!r || !r.ok) && !(r && r.timedOut) && p.foreground !== false) {
     // Retry in foreground delivery mode — Chromium sometimes drops background clicks.
     r = await cuaDriver.invoke('click', Object.assign({}, clickArgs, { delivery_mode: 'foreground' }));
   }
