@@ -568,8 +568,8 @@ function buildTools(ctx) {
         if (host === 'news.google.com' || host === 'www.news.google.com') {
           return openWebResult({ widgetType: 'news', title: title || 'Google News' });
         }
-        var NO_EMBED_DOMAINS = ['google.com','facebook.com','twitter.com','x.com',
-          'instagram.com','github.com','linkedin.com','reddit.com'];
+        var NO_EMBED_DOMAINS = ['google.com','facebook.com','twitter.com','x.com', // BUG-228: youtu.be needs
+          'instagram.com','github.com','linkedin.com','reddit.com','youtube.com','youtu.be','openai.com']; // its own entry — see BUGS.md
         for (var d = 0; d < NO_EMBED_DOMAINS.length; d++) {
           if (host === NO_EMBED_DOMAINS[d] || host.endsWith('.' + NO_EMBED_DOMAINS[d])) {
             return openWebResult({ widgetType: 'newtab', url: url, title: title || parsed.hostname });
