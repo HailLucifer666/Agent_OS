@@ -6036,9 +6036,43 @@ still needs a signal the log does not carry.
 
 ---
 
-## BUG-274 — dependency and licence remediation (PLANNED, NOT STARTED) — opened 2026-08-19
+## BUG-274 — dependency and licence remediation (OPEN on T3 only; T1, T2, T4, T5 shipped) — opened 2026-08-19
 
-**Status:** OPEN — planned, NOT STARTED. Blocked on an operator/legal decision, not on engineering. **BUG-394 step 1, 2026-08-28:** this line exists so the entry no longer draws its `open` state from a nested bullet about another ticket — measured that day, `bulletPartial` matched this entry only because a follow-up bullet said "NOT yet" about a different number, and tightening that pattern without this line would have reported a live licence ticket as done. The line is deliberately word-free of every closure and state token `classify` reads, and it is declared in the OPEN WORK register as well, so neither route stands alone.
+**Status:** OPEN, and open on **exactly one item**. Corrected 2026-08-28.
+
+> ### ⚠️ The old status line said "planned, NOT STARTED". That was FALSE, and it was written the same day it was corrected.
+>
+> A session added `**Status:** OPEN — planned, NOT STARTED` on 2026-08-28 as
+> BUG-394 step 1 (see below), taking "NOT STARTED" from the heading without
+> checking it against the tree. **Four of the six items had already shipped, with
+> tests**, and this is the third stale-status defect found in this file in one day
+> — after BUG-352 and BUG-278. Measured before rewriting:
+>
+> | item | state | evidence |
+> |---|---|---|
+> | **T1** promote Kokoro in the TTS chain | ✅ **shipped** | `config/voice-defaults.js` returns `gemini,kokoro,edge,piper` (and `kokoro,edge,piper` with no Google key), with the licence reasoning inline. Guard: `test/bug-274-permissive-tts-first.test.js:57` |
+> | **T2** correct the stale Piper licence claim | ✅ **shipped** | `providers/piper-tts.js:14` — "LICENCE NOTE CORRECTED 2026-08-19 (BUG-274 T2)", listing archived-upstream / GPL-3.0 fork / per-voice models. Guard: same file `:112-121`, which fails if the text claims MIT or "usable in a product that is sold" |
+> | **T3** own the wake-word weights | 🔒 **the only open item** | CC BY-NC-SA 4.0 weights. A lawyer's call, which this repo's CLAUDE.md forbids a session from writing |
+> | **T4** AEC3, then full duplex | ✅ substantially shipped | `bug-274-echo-cancellation-readback`, `-t4-engine-attribution`, `-barge-in-authorisation-is-deliverable`, `-barge-in-floor-separates-populations`, `-local-flush-does-not-stop-the-turn` |
+> | **T5** UIA `Invoke` no-ops under pc-child | ✅ shipped | `test/bug-274-uia-context-probe.test.js` |
+> | **T6** WhatsApp | ⏸ deferred by the operator, 2026-08-19 | unchanged |
+>
+> **Why the wrong status mattered.** "NOT STARTED" on a ticket whose engineering
+> is four-fifths done invites someone to redo shipped work, and it hid that the
+> remaining blocker is **narrow and specific** — not "a dependency sweep" but one
+> licence decision about one set of weights. The register entry now says so.
+>
+> **The `open` classification is unaffected and correct:** T3 is genuinely open,
+> and the entry is declared in the OPEN WORK register, so `openSet` decides it
+> rather than any marker in the prose.
+
+**BUG-394 step 1, 2026-08-28 — why this Status line exists at all.** Before it,
+the entry drew its `open` state from a nested bullet about a *different* ticket:
+`bulletPartial` matched here only because a follow-up bullet said "NOT yet" about
+another number, so tightening that pattern without this line would have reported
+a live licence ticket as done. The line is deliberately free of every closure and
+state token `classify` reads, and the entry is declared in the register as well,
+so neither route stands alone.
 
 A verified sweep of 15 capability areas (stars, licence and last-push read from the GitHub
 API, not from articles) produced five items worth implementing and a much longer list of
@@ -17889,12 +17923,14 @@ those records remain owed (this section is the index until then).
   **What is left is the actual repair**, H2 (defending an invention when
   challenged) being the highest-severity half.
 
-- BUG-274 - dependency and licence remediation. Five implementable items plus a
-  much longer "change nothing" list; the sweep is done, the work is NOT STARTED.
-  Blocked on an operator/legal decision (notably the CC BY-NC-SA wake-word
-  weights), not on engineering. **Declared here 2026-08-28 as BUG-394 step 1:**
-  measured that day, this entry drew its `open` state from a nested bullet about
-  a DIFFERENT ticket, so tightening the marker patterns without declaring it
-  would have reported a live licence ticket as done. It now has an explicit
-  `**Status:**` line as well, so neither route stands alone. Full entry, with the
-  15-area sweep and the verified upstream licence findings, is at the top.
+- BUG-274 - dependency and licence remediation. **OPEN ON ONE ITEM ONLY, and
+  the earlier "NOT STARTED" reading was false — corrected 2026-08-28.** T1
+  (Kokoro ahead of edge/piper in the TTS chain) and T2 (the stale Piper licence
+  claim) are shipped WITH guard tests; T4 (AEC3/full-duplex) and T5 (UIA Invoke
+  under pc-child) are substantially shipped across seven bug-274 test files; T6
+  is deferred by the operator. **What remains is T3 alone: who owns the
+  CC BY-NC-SA 4.0 wake-word weights in a product that is sold.** That is a
+  lawyer's call and this repo's CLAUDE.md forbids a session writing one, so no
+  amount of engineering closes it. Declared here as BUG-394 step 1 so the state
+  does not rest on a nested bullet about another ticket. Full entry, with the
+  per-item evidence table, is at the top of this file.
