@@ -41,6 +41,246 @@ it is committed.
 
 ---
 
+## BUG-393 — one OPEN WORK bullet produced two contradictory verdicts, and BUG-352 sat closed-and-open at once (✅ FIXED 2026-08-28, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-28, mutation-proven. 1 source file changed, 1 test
+file added (13 assertions). Two defects, one code and one data, kept separate
+because each has its own red.
+
+### The mechanism
+
+`scripts/build-index.js` reads an OPEN WORK register bullet **twice**, by two
+functions with two different rules, and nothing ever compared the answers:
+
+| reader | rule |
+|---|---|
+| `openSetFrom()` | declared-open vs explicitly-closed, by looking for `FIXED` / `RESOLVED` / `CLOSED` / `SATISFIED` anywhere in the bullet's block |
+| `classify()` | the entry's state, and for a pointer entry it reads the **same** bullet through `bulletPartial` — `FIXED … NOT yet` |
+
+**A half-done bullet says both words.** So `openSetFrom` saw `FIXED`, called the
+ticket closed and dropped it from the authoritative open set, while `classify`
+saw `FIXED … NOT yet` and called it open. One set of words, two dispositions.
+
+Measured on the register's 13 bullets: **exactly one contradiction, BUG-352**,
+and the other 12 agree — so the signal is specific to the disagreement rather
+than to the method. That twelve-to-one split is the negative control.
+
+### Why the fix goes in this direction and not the other
+
+`openSetFrom` is aligned **to** `classify`. That is a one-way safety argument,
+not a coin toss: `openSetFrom` feeds an additive override (`if (openSet.has(n))
+return 'open'`), so teaching it to keep a half-done bullet open can only ever
+move an entry *toward* open. The opposite fix — teaching `classify` to honour the
+closure filter — would have closed a half-done ticket on the strength of the half
+that landed, which is exactly the failure BUG-390 built `bulletPartial` to stop.
+
+### The second defect, which is data, not code
+
+BUG-352's register bullet read `**COUNTER FIXED 2026-08-27 (147 → 179,
+verified); the README catalog table and pie are NOT yet generated — see
+below.**` — while its own Part 2 section, twenty lines below, read `**Part 2 —
+CLOSED 2026-08-27.**` **Both halves had shipped.** `README.md` carries the
+generated `SYNC:EFFECTOR-CATALOG` block and both `test/bug-352-*.test.js` files
+pass (21 assertions, re-run 2026-08-28). The bullet's head was never updated when
+the second half landed, so the register reported closed work as open for a day.
+
+That is now checked: a test compares the register's claim against the README
+artifact. It is scoped to the register section deliberately — **BUG-390's entry
+quotes BUG-352's old bullet verbatim as evidence for a different fix**, so a
+whole-file match would stay red forever and the only way to green it would be to
+destroy that evidence. A ticket's live claim lives in the register; a quote of an
+old claim is history.
+
+**A note worth keeping, because it caught the author.** The first corrected
+wording explained the old defect using the phrase "was not yet generated" — which
+re-tripped `bulletPartial` and left BUG-352 reading `open` after the correction.
+The cross-check found it immediately. Restating a stale claim inside the status
+that corrects it re-creates the stale claim.
+
+### The vacuous-guard half, which is how any of this was found
+
+`test/bug-389-…test.js`'s live check is `for (const n of openSet) …`. **A loop
+over an empty set is a green that asserts nothing.** On this branch the declared
+set still holds BUG-392, so the loop is live *today* — but it goes empty the
+moment BUG-392's bullet closes, which is what PR #56 does, and it was observed
+empty on that branch. The mechanism it protects survives in a fixture
+(`new Set([389])`), so coverage would not go to zero; the live-data cross-check
+would. **Every live-data assertion in the new file therefore asserts its
+population first** (`bulletNumbers.length >= 5`), so an empty register is a
+stated failure and not a silent pass.
+
+### Verification
+
+```
+node --test test/bug-393-one-bullet-two-verdicts.test.js
+    pre-fix   13 tests,  8 pass, 5 fail
+    post-fix  15 tests, 15 pass, 0 fail   (2 added by the mutation run)
+node --test  (full suite, long-form TEMP/TMP, ports from pick-free-ports.js)
+              6871 tests, 6871 pass, 0 fail, 0 skipped   (baseline 6856 + 15)
+node scripts/build-index.js --check            register matches BUGS.md, OK
+node scripts/sync-test-count.js --check        all tracked numbers match, OK
+node scripts/build-capability-map.js --check   map matches the code, OK
+```
+
+The 8 that passed pre-fix are the two CONTROLs (a plainly closed and a plainly
+open bullet, proving the rig can produce agreement), the closure-vocabulary
+cases, and the nested-number guard. A green result on any of the other five would
+have meant the test never reached the hazard.
+
+**Six mutations, each sha256-verified to have applied before its result was
+believed, each restored sha256-identical: 6 caught, 0 survived, 0 unscored.**
+Two of the fifteen assertions exist only because of that run, and neither hole
+was visible by reading:
+
+| # | mutation | result |
+|---|---|---|
+| M1 | the halfDone guard removed from `openSetFrom` — the defect itself | 4 red |
+| M2 | `bulletHalfDone` loose in segment one (id → closure word) | **survived the first run**, then 1 red |
+| M3 | its vocabulary narrowed to `FIXED` alone | 1 red |
+| M4 | the guard inverted | 8 red |
+| M5 | BUG-352's stale bullet head restored — the data half | 1 red |
+| M6 | `bulletHalfDone` loose in segment two (closure word → NOT-yet) | 1 red |
+
+**M2's survival is the finding worth keeping.** `bulletHalfDone` has two
+independently tight segments and the nested-number test exercised only the
+second, because its foreign bug number sits *after* `FIXED`. Loosening the first
+segment therefore changed behaviour with nothing watching, and the mutation that
+was written to prove the guard real proved instead that half of it was untested.
+M3 was predicted before running for the same shape of reason — every other case
+paired "NOT yet" with `FIXED`, so covering one closure word in four looked like
+coverage. **Two routes, one answer:** M1 turns both the fixture suite and the
+live-data cross-check red on the same change, and they agree.
+
+### NOT fixed by this, and measured rather than assumed
+
+**`bulletPartial` and `bulletFixed` are still loose, and that is filed as
+BUG-394.** Both run against a *flattened* block, so `[^\n]*` spans nested
+follow-up lines. On the real file the loose form matches **three** entries and
+two of them — BUG-273 and BUG-274 — match only because a nested `- BUG-nnn`
+follow-up says "NOT yet" about a *different* ticket. That is BUG-390's own defect
+(one entry wearing another's status) surviving inside the pattern built to fix
+it. It is not repaired here because **BUG-274 currently draws its `open` from
+that wrong match**: tightening `bulletPartial` without tightening `bulletFixed`
+in the same change would close a live licence ticket. BUG-273 is unaffected
+either way because it carries a `**Status:**` line, which outranks any marker.
+
+The new `bulletHalfDone` pattern used by `openSetFrom` **is** tight — no other
+bug number may sit between the id and the qualifier — and across the 13 register
+bullets the loose and tight forms agree exactly, so this call site pays nothing
+for being correct.
+
+---
+
+## BUG-394 — an entry can wear text that is not its own: the last entry swallows the whole register, and the bullet patterns read nested follow-ups (FILED 2026-08-28, OPEN)
+
+**Status:** OPEN — filed, measured, deliberately not repaired inside BUG-393's
+change. **Two mechanisms, ONE ticket, because they must be fixed together:** the
+parser fix is what exposes the pattern fix, and doing either alone reports a live
+licence ticket as done.
+
+### Mechanism 1 — the last entry's body runs to end-of-file
+
+`parseBugs` ends an entry at the next `# BUG-` heading, and the final one at
+`text.length` (`scripts/build-index.js` :79):
+
+```js
+const end = i + 1 < marks.length ? marks[i + 1].at : text.length;
+```
+
+**BUG-273 is the last `## BUG-` heading in this file.** Everything after it — the
+entire `## OPEN WORK filed` register and its 14 bullets — is read as BUG-273's
+body. Its status is therefore computed partly from other tickets' bullets, and
+appending anything to the end of this file changes it.
+
+**That is not theoretical: it turned a test red on 2026-08-28 while BUG-273
+itself never changed.** `bug-390`'s BUG-273 case stripped its Status line and
+classified the remainder, believing it was driving the nested-bullet id check. It
+was reading BUG-352's bullet out of the swallowed register, and passed only
+because that bullet said `FIXED … NOT yet`. Correcting BUG-352's wording removed
+the phrase and the guard failed. Rescoped to owned text in BUG-393; the
+swallowing is untouched.
+
+**Measured, not estimated.** Bounding an entry at the next top-level non-BUG
+`##` heading shrinks **18 of 243 entries**, several enormously — BUG-98 from
+124,030 to 5,498 characters, BUG-274 from 141,143 to 133,407, BUG-38 from 56,644
+to 4,652. **Four change state**, and this is the whole reason it is not done here:
+
+| entry | now | bounded | reading |
+|---|---|---|---|
+| BUG-274 | open | **verified** | **unacceptable** — a live licence ticket reported done |
+| BUG-98 | fixed | unrecorded | honest; its `fixed` was borrowed. Raises unrecorded 0 → 1 |
+| BUG-273 | verified | fixed | honest; it loses borrowed proof text |
+| BUG-38 | fixed | verified | its own text carries the proof |
+
+### Mechanism 2 — the bullet patterns span nested follow-ups
+
+`bulletMarks(n)` builds `bulletPartial` and `bulletFixed` with `[^` + `\n]*`
+between the id and the marker word, and both run against an already-flattened
+block, so the marker can be drawn from a nested `- BUG-nnn` follow-up about a
+different ticket. The pattern anchors its *start* on this entry's number — which
+BUG-390 added deliberately — but nothing stops the marker word itself coming from
+elsewhere. Of 243 entries the loose form matches three; only BUG-352's match is
+its own.
+
+### Why they are one ticket, and the order to fix them in
+
+**BUG-274 has no `**Status:**` line**, so `firstMarkerLine` runs and the loose
+`bulletPartial` matches — giving the right answer, `open`, from the wrong
+evidence. Tighten the patterns and that match disappears; `bulletFixed` (equally
+loose, matching for the same nested reason) wins and BUG-274 reads `fixed`. Bound
+the bodies and the same thing happens by a different route: the table above
+measures it as `verified`. **Either fix alone silently closes the licence
+ticket.**
+
+So, in order:
+
+1. **✅ DONE 2026-08-28 — give BUG-274 an explicit `**Status:**` line.** Shipped for
+   BUG-274 **and** BUG-275, and both are now declared in the OPEN WORK register too,
+   so neither rests on a single route. **Proven, not asserted:** simulating step 3's
+   tightening against `HEAD` and against the working tree shows BUG-274 as
+   `hasStatusLine=false, declaredInRegister=false, tightFixed=true` before —
+   i.e. it WOULD have read closed the moment the patterns were tightened — and
+   protected on both routes after. The wrong nested `bulletFixed` match still
+   exists; it can simply no longer reach the disposition. **Step 3 is therefore
+   unblocked.** The original note, kept because its reasoning is the reason this
+   was done first: a Status line outranks every
+   marker, so this removes the dependence on another ticket's text. It is durable
+   on its own and worth doing first even if nothing else follows.
+
+   **Measured 2026-08-28, and it corrects the obvious version of this advice.**
+   `classify` has **no route from the WORD `OPEN` on a Status line** — the only
+   paths to `open` are the register, a bold marker, or `NOT STARTED` anywhere in
+   the body. So a Status line saying `OPEN` is *decorative*: it would silence the
+   wrong marker and leave the real route as `NOT STARTED` in the body, which is
+   the ticket's own text and therefore an improvement, but not a clean fix. Say
+   that plainly rather than claiming the Status line closed the hole.
+
+   **And do not fix the missing route with a bare word match.** Of 243 entries,
+   exactly two carry `OPEN` somewhere in a Status line while classifying closed —
+   **BUG-93 (`fixed`) and BUG-276 (`verified`)** — in both cases incidentally,
+   inside a longer line that states `FIXED`. A naive `/\bOPEN\b/` on the Status
+   line would flip two correctly-closed entries to open. The route has to be
+   position-anchored the way the duplicate check already is (`^[^.]{0,40}`), not a
+   bare word test.
+
+   **Who else depends on the fallback:** five entries reach `open` from outside
+   the register, and **none of them has a Status line**. BUG-266/267/268 use bold
+   `**OPEN**` markers and carry no `NOT STARTED` at all; **BUG-274 and BUG-275
+   both rest on `NOT STARTED` appearing somewhere in their body**, so an editorial
+   rewrite of either entry's prose can silently unrecord it. BUG-275 deserves the
+   same Status line as BUG-274 and for the same reason.
+2. Then bound the entry bodies, and inspect all four state changes by hand rather
+   than counting them.
+3. Then tighten both patterns together, using the tight form already proven as
+   `bulletHalfDone`.
+
+**Bounded, not urgent:** mechanism 2 needs an entry with no Status line whose
+nested follow-ups carry a marker word — today exactly one, and it currently reads
+correctly. Mechanism 1 is live on every run but only mis-states entries whose own
+text is silent.
+
+---
+
 ## BUG-392 — a caller abort drops the provider cooldowns it had already earned, and says nothing (✅ FIXED 2026-08-28)
 
 **Status:** ✅ FIXED 2026-08-28, mutation-proven (5/5 caught, 0 unscored), suite
@@ -632,11 +872,39 @@ inference, so it was corrected rather than worked around.
 
 ---
 
-## BUG-387 — `doctor` reported the Google grant OK for three weeks while 88 calls failed on it (🔧 CODED 2026-08-28)
+## BUG-387 — `doctor` reported the Google grant OK for three weeks while 88 calls failed on it (✅ LIVE-VERIFIED 2026-08-28)
 
-**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New
+**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign **Track A**. New
 `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions,
 9 mutations all caught.
+
+**LIVE RUN, both halves, 2026-08-28 — and the fix caught a real dead grant.**
+This ticket shipped its own oracle, so verification needed no voice session and no
+operator: running the two commands IS the verification.
+
+```
+$ node scripts/verify-google-grant.js
+verify-google-grant: INVALID
+  The Google grant is dead: invalid_grant: Token has been expired or revoked. —
+  this is NOT a network problem and will not recover on its own ... run
+  `node scripts/google-auth.js` and put the new GOOGLE_REFRESH_TOKEN in
+  mythos/.env. If this recurs roughly every 7 days, re-authorising alone will NOT
+  fix it: an OAuth consent screen with external user type and publishing status
+  "Testing" is issued refresh tokens that expire in 7 days. Publish the app
+  first ... and only then re-authorise. Do not retry.
+
+$ node scripts/doctor.js
+  OK    Gmail / Calendar sensors    configured: GOOGLE_CLIENT_ID,
+        GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN — present, but validity NOT
+        checked here: run `node scripts/verify-google-grant.js`
+```
+
+That is exactly the two behaviours the ticket was written to produce. The checker
+names the cause, distinguishes it from a network fault, and carries the 7-day
+Testing-mode trap; and **`doctor` no longer converts presence into validity** —
+the defect this entry is named for. **The operator's Google grant is dead right
+now**, which is why Gmail has been failing, and re-authorising needs the consent
+screen published FIRST or the new token expires the same way within 7 days.
 
 **This does NOT close Track A's two nodes.** They need three operator minutes
 and no session can supply them. What it removes is the reason those three
@@ -896,10 +1164,57 @@ needs pc-child online, and five nodes are single dispositions.
 
 ## BUG-385 — the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text (🔧 CODED 2026-08-28)
 
-**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped
-as *"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder,
-video call having no tool)"*. All three are recorded. Two of them turned up a
-real defect on the way, and the CAPTCHA one is the serious entry here.
+**Status:** ✅ LIVE-VERIFIED 2026-08-28, and the live pass found the fix
+incomplete — see the follow-up box below. Closure-campaign **Track C**, which was
+scoped as *"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted
+ladder, video call having no tool)"*. All three are recorded. Two of them turned
+up a real defect on the way, and the CAPTCHA one is the serious entry here.
+
+> ### ⚠️ LIVE PASS 2026-08-28 — the first page this ticket names as a false positive STILL fired
+>
+> Verified against **real page text fetched from a live browser**, which is what
+> this module's own ADDITIVE rule asks for and what the original fix could not do.
+> Five of the six named pages are genuinely clean; **`developers.cloudflare.com`
+> was not.** It advertises *"TURNSTILE / Verify visitors without CAPTCHA"* in
+> ordinary prose, so `looksLikeCaptcha` returned `['turnstile']`.
+>
+> That matters because `browser_snapshot` runs this matcher on **every** snapshot
+> and on a hit tells the model not to solve or bypass the challenge and to ask the
+> operator to complete it. On Cloudflare's own docs the model therefore stops
+> browsing to ask for a challenge that does not exist — the exact defect this
+> ticket exists to remove, surviving inside one of its own six examples.
+>
+> **And the marker could never have caught the real widget.** A live Turnstile
+> page (`demo.turnstile.workers.dev`) identifies the widget only as class
+> `cf-turnstile`, input `cf-turnstile-response`, and script
+> `challenges.cloudflare.com/turnstile/v0/api.js`. **This matcher is fed the ARIA
+> TREE plus `page.url()`** — no CSS classes, no subresource URLs. That page's aria
+> tree carried no widget marker at all; its only "turnstile" text was the page
+> TITLE and a GitHub link. So bare `turnstile` matched the vendor being *discussed*
+> and never the widget being *present*: all cost, no cover.
+>
+> **Fixed by removing it.** A real Cloudflare challenge stays **double-covered**
+> without it — by the phrase `verifying you are human` and by the URL path
+> `cdn-cgi/challenge-platform`, both already in the list and both asserted in the
+> new test.
+>
+> **`recaptcha` and `hcaptcha` are deliberately KEPT, and that disposition is
+> pinned by a test.** reCAPTCHA renders an iframe whose accessible title is
+> "reCAPTCHA", which an aria tree *does* carry, so unlike Turnstile they can match
+> a present widget. **That asymmetry was not verified from this machine**, so they
+> are left alone rather than removed by analogy — the module's own rule is not to
+> write a confident sentence about another vendor's DOM without looking at it.
+>
+> Regression test: `test/bug-385-captcha-marker-matches-widget-not-vendor.test.js`
+> (6 assertions, fixtures are **captured** text rather than invented shapes).
+> Mutation: restoring `turnstile` turns **3** of them red, sha256-verified to have
+> applied and restored identical. Suite 6877/6877/0/0.
+>
+> **Not closed by this:** the true-positive half is still only covered by phrase
+> markers whose upstream markup is unverified, so a challenge that words itself
+> differently is still missed. That is unchanged by this fix and is the residue to
+> attack next — ideally by capturing a real challenge page's aria tree, which needs
+> a challenge to actually appear.
 
 ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions.
 
@@ -1014,8 +1329,33 @@ has to argue with this assertion first.
 
 ## BUG-384 — every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong (🔧 CODED 2026-08-27)
 
-**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped
+**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign Track B. The track was scoped
 as "six nodes whose LABEL is stale rather than whose capability is broken".
+
+**LIVE CROSS-CHECK 2026-08-28 — 62 of 62 nodes agree, exactly.** Running
+`build-capability-map --check` only proves the file matches the generator, which
+is the generator checking itself, so the counts were tallied a SECOND time by
+independent throwaway code reading `vault/Audit/*.jsonl` directly with its own
+de-duplication (74 audit files, 120 distinct tools). Summing per node over its
+`tools` array and comparing against the published `ok`/`f`:
+
+```
+nodes parsed from the map island with ok/f : 91
+nodes comparable to an independent tally   : 62
+exact agreement                            : 62 of 62
+```
+
+**Two routes, one answer.** Before this fix, 29 of the 43 hand-typed counts (67%)
+disagreed with the vault; there are now no hand-typed counts left to disagree, and
+the generated ones match a tally computed by different code. The generator also
+reports its own inputs on every run — *"node counts from 2 vault root(s), 3301
+completion(s), 1346 duplicate row(s) skipped"* — so the de-duplication is stated
+rather than implied.
+
+**What this does NOT prove:** the 29 nodes with no audit rows are uncomparable by
+construction, and `note`/`ev` remain curated human text by design, so a node can
+still carry a stale *sentence* beside a correct *count*. That is the residue the
+BUG-377 work (PR #36, currently unrebasable) was aimed at.
 Measured against the live vault before writing anything, per the Track D
 finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43
 (67%) disagree with the vault.** Eleven labels are contradicted by their own
@@ -5234,20 +5574,55 @@ All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 i
 
 ---
 
-## BUG-275 — the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (FILED, NOT STARTED) — opened 2026-08-19
+## BUG-275 — the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19
+
+**Status:** OPEN — the repair is NOT STARTED. All three of this entry's own "check first" items were answered 2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted) and the findings are in the sections below. **BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the words "NOT STARTED" appearing somewhere in its prose, so an editorial rewrite could have silently unrecorded it. H2 — defending an invention when challenged — is the highest-severity half.
 
 **Reported by the operator, 2026-08-19, from a live voice conversation: "it hallucinates".
 Filed for later, deliberately not fixed in the same session.**
 
-**Evidence is complete and reproducible without another session.** The whole conversation
-is preserved at `%APPDATA%\MYTHOS\vault\Conversation\session.json` (26 turns), and it
-contains BOTH the raw `web_search` results MYTHOS received AND what it then said about
-them. So every item below is a diff between a tool result and a spoken claim — no
-inference, no "it felt wrong". Turn numbers refer to the index in that file. Cross-refs in
-the server log for the same run (`pid=22112`, boot 08:25:23Z).
+> ### ⚠️ THE FILE THIS TICKET TELLS YOU TO READ IS GONE. Re-measured 2026-08-28.
+>
+> **`vault\Conversation\session.json` is a SINGLE-SESSION file that is overwritten.**
+> It now holds **2 turns from 2026-08-27, in 350 bytes**. The 26-turn conversation this
+> entire ticket is built on is not in it, and following the instruction below as written
+> leads to an empty file and then — against the ticket's own advice — to re-running the
+> conversation.
+>
+> **The evidence is NOT lost. It moved, and it is better than the ticket claims.** All of
+> it is in **`%APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl`** (667 records):
+>
+> - **231 `kind:"conversation"` records, and each one holds BOTH halves of an exchange.**
+>   `detail.text` is what the operator said and **`detail.reply` is MYTHOS's own spoken
+>   text, in full**. `detail.role` reads `"user"` on all 231 — that is the record's
+>   subject, not its only content, and reading it as "no assistant text was kept" is
+>   wrong. Also present per record: `turnId`, `transport`, `actions`.
+> - **213 `kind:"action"` records carrying `detail.result`** — the raw tool results,
+>   including the `web_search` snippets every H-item diffs against.
+>
+> **Do NOT run the diffs against the `summary` field.** `summary` is a truncated
+> projection (`"User: … | MYTHOS: …"`, median 117 characters) and it cuts the
+> fabrications off mid-sentence — H2's rationalisation is visibly clipped at *"not the
+> a"*. Two of the ticket's key quotes (`Claude Opus 1`, `81.1`) are **absent from
+> `summary` and present in `detail`**. A conclusion drawn from `summary` is a conclusion
+> drawn from a projection of the evidence.
+>
+> **Verified, not assumed:** all **13** strings this ticket quotes verbatim were searched
+> for and all 13 were found — `benchlm`, `81.1`, `Gemini CLI`, `How is Gemini CLI`,
+> `access method`, `livebench`, `Agentic Coding`, `Claude Opus 5`, `Claude Opus 1`,
+> `GLM 5`, `think_deeply`, `Nvidia`, `Kimi`. `Audit/2026-08-19.jsonl` (493 records) is a
+> useful cross-check for tool ARGS and tier decisions but its `outcome` is `null` on the
+> rows sampled, so **Audit alone cannot supply the results half of any diff**.
+>
+> Turn numbers below refer to the deleted file and no longer resolve. Match on the quoted
+> text instead.
 
-**Do not begin by re-running the conversation.** The comparison that matters is already on
-disk. Read the file first.
+**Every item below is a diff between a tool result and a spoken claim** — no inference,
+no "it felt wrong". Cross-refs in the server log for the same run (`pid=22112`, boot
+08:25:23Z).
+
+**Do not begin by re-running the conversation.** The comparison that matters is still on
+disk, at the path in the box above.
 
 ### H1 (P0) — invented list entries to satisfy a requested count
 
@@ -5313,6 +5688,84 @@ absent result — if so, H1's padding may be a *symptom* of this rather than a s
 fault, and fixing the ordering could reduce several items above. **Check this before
 treating H1-H5 as five independent bugs.**
 
+> ### ✅ H6 MEASURED 2026-08-28 — and the hypothesis is REFUTED. H1 and H2 get WORSE, not better.
+>
+> **Every spoken conclusion naming ranked models arrived AFTER its tool result was
+> already recorded.** Measured off `Episodic/2026-08-19.jsonl` by comparing each
+> conclusion's `ts` to the `ts` of the most recent tool result carrying ranking data:
+>
+> | spoken conclusion | result was in hand |
+> |---|---|
+> | *"Leaderboard search complete … Claude Mythos 5 is currently leading with Claude Fable 5 just behind, followed by GPT 5 6 Sol"* — **correct, three models** | **23.4s earlier** (web_search, 2,495 bytes) |
+> | *"top five stands thus: Claude Mythos 5, then Claude Fable 5, followed by GPT-5.6 Sol, **Claude Opus 5, and Gemini CLI**"* — **the H1 fabrication** | **79.6s earlier — the SAME 2,495-byte result** |
+> | *"Checked LiveBench ai leaderboard for coding … Top five currently stands thus"* — **the H3 misattribution** | **22.4s earlier** (web_search, 2,205 bytes) |
+>
+> **Reading `ts` as completion is verified, not assumed:** `dispatch-action.js` :87-103
+> `await`s `effectors.invoke()` and only then writes the episodic record with
+> `detail: result`, so the stamp is stamped after the result exists.
+>
+> **The sharpest fact in this whole ticket.** The correct three-model answer and the
+> fabricated five-model answer were produced from **the same 2,495-byte search result,
+> 56 seconds apart.** Nothing new arrived in between. What changed was the operator
+> restating the request — *"Yes, I asked you to give me the top five"* — and the count
+> came back satisfied. **So H1's own framing is confirmed exactly: asked for N and given
+> fewer, it manufactured the remainder.** It is not a race, not a partial result, and not
+> a symptom of H6.
+>
+> **What the 27 ack-deadline breaches really are.** They produce utterances like
+> *"Searching for…"* and *"Conducting live search now, Sir"*, which do precede their
+> results — **by design**, since that is what the 1500ms ack exists for. The original
+> note conflated that ACK with a CONCLUSION. Acks before results are correct; the
+> conclusions were all late, not early.
+>
+> ### The detection route, measured 2026-08-28 — and the obvious approach is CLOSED
+>
+> Before writing a prompt contract, the existing honesty detector was measured
+> against the real utterance. `detectUnbackedClaims` returned **`[]` for the H1
+> fabrication in BOTH states** — search succeeded and search failed. Two
+> independent reasons, and only one is fixable:
+>
+> 1. **The `backed` short-circuit** (`voice/claim-check.js` :271):
+>    `const backed = gate.some((tool) => successfulTools.has(tool)); if (backed) continue;`
+>    A gateTool that SUCCEEDED backs every external-fact claim in the reply
+>    regardless of its content, and exits before any shape is consulted. In the
+>    real session `web_search` had succeeded 79.6s earlier, so **this is what
+>    actually hid H1.** It is deliberate — the file's own F1b lesson is that
+>    without it the detector tells the assistant to retract statements it had just
+>    earned — so **extending this detector is not the route to H1.** Catching H1
+>    needs a mechanism that compares claim CONTENT to result CONTENT, which is not
+>    what this detector is.
+> 2. **A missing shape, now fixed.** `ellipticalRe` claims to cover "a ranking or
+>    superlative" and covered `leads|tops|ranks|beats|outperforms|is the
+>    best/fastest/…` — but **not an enumerated ranking**, which is how a top-N
+>    answer is actually spoken. So the one shape the operator complained about was
+>    the one shape absent, and the category stayed silent even with the search
+>    failed. `\btop\s+(?:\d+|two|…|ten)\b` added.
+>
+> **What that fix does and does not buy.** It closes the ADJACENT case — an
+> enumerated ranking spoken when the fact-finding tool did NOT succeed, which is
+> H6's shape and was equally invisible. **It does not catch H1**, and the
+> disposition is pinned by a test that asserts the succeeded-search case still
+> returns nothing, so a later change cannot quietly "fix" H1 by breaking F1b.
+> Noise stays bounded by the category's `re: null`, which a mutation confirms.
+>
+> Regression test: `test/bug-275-enumerated-ranking-is-a-claim-shape.test.js`
+> (6 assertions, real utterance from the vault, plus the bound that bare "top" —
+> "top priority", "top of the hour" — is not a claim shape). **4 mutations, all 4
+> caught, 0 unscored**, source restored sha256-identical; one earlier attempt
+> scored TARGET ABSENT through lost backslashes and was **not** counted as caught.
+> Suite 6883/6883/0/0.
+>
+> **Consequence for the fix.** H1-H5 must be treated as independent, and the fix
+> direction is NOT ordering. The defect is **count-compliance beating source-fidelity**:
+> the model is willing to satisfy a requested item count from nothing rather than report
+> a shortfall. The narrowest useful change is to make "I found three, you asked for five"
+> a sayable, prompted-for outcome — the same shape as the evidence contract that
+> `NO_SUCCESS_CLAIM` and `UNVERIFIED_NO_PROOF_CLAIM` already enforce for tool outcomes
+> in `live-tool-adapter.js`, applied to counts. **H2 (defending the invention when
+> challenged) is the higher-severity half and is untouched by that**, since it happens
+> after the fabrication already exists.
+
 ### H7 (P2) — unprompted claims with no basis in the conversation
 
 Turn 22, unprompted: *"Caught another glitch, Sir; restored now, no data lost. Shall I
@@ -5363,7 +5816,36 @@ belongs with H6 (speaking before the result arrives): both are the tool-result n
 path racing the conversation, and together they are a better explanation of the operator's
 experience than "the model makes things up".
 
-**Check first:** whether a suppressed `late-outcome` is retried, queued, or lost. If lost,
+> **H8's "check first" is ANSWERED, 2026-08-28, by reading the source. It is
+> narration-loss, NOT data-loss, and the difference changes what should be built.**
+>
+> `reportLateOutcome` (`src/core/voice/live-tool-adapter.js` ~:920) does three things with
+> an outcome: pushes it to `liveTurnActions`, records it in `recentActionLedger`, and calls
+> `sendSystemNotice` → `liveSession.sendText`. **The text therefore reaches the model's
+> context and is kept in the ledger.** What Gemini kills when the operator is already
+> talking is the model's *spoken turn*, not the injected input. So the outcome is not lost
+> from the conversation — only from the operator's ears.
+>
+> **Nothing re-narrates it.** `recentActionLedger` is written by four paths (:619, :959,
+> :1084, :1134) and read at exactly **one** place — :1313/:1314, feeding
+> `detectUnbackedClaims`, the honesty detector. It is an evidence store for checking
+> claims, not a retry queue. There is no requeue, no deferral, no "say this at the next
+> gap".
+>
+> **And a push-based fix is the wrong direction.** BUG-273 D3 measured 26 of 61 turns
+> (43%) as `systemInitiated` in the "rambling on by yourself" session; re-injecting
+> suppressed narrations would raise that. Suppressing a remark while the operator is
+> speaking is correct behaviour. Because the outcome IS in context, the model can answer
+> when asked — so the honest design is pull-based, and the gap worth closing is that
+> nothing tells the operator an answer is waiting.
+>
+> **Not split out of this ticket**, then: it is not the data-loss bug the note
+> hypothesised. What survives of H8 is its second half, unchanged — H6 and H8 together
+> (the narration path racing the conversation) remain a better explanation of the
+> operator's experience than "the model makes things up", and H6 is still unmeasured.
+
+**Original note, kept because its instinct was right even though the disposition changed.**
+Check whether a suppressed `late-outcome` is retried, queued, or lost. If lost,
 that is a data-loss bug rather than a hallucination one, and it should be split out of this
 ticket with its own number.
 
@@ -5403,6 +5885,8 @@ still needs a signal the log does not carry.
 ---
 
 ## BUG-274 — dependency and licence remediation (PLANNED, NOT STARTED) — opened 2026-08-19
+
+**Status:** OPEN — planned, NOT STARTED. Blocked on an operator/legal decision, not on engineering. **BUG-394 step 1, 2026-08-28:** this line exists so the entry no longer draws its `open` state from a nested bullet about another ticket — measured that day, `bulletPartial` matched this entry only because a follow-up bullet said "NOT yet" about a different number, and tightening that pattern without this line would have reported a live licence ticket as done. The line is deliberately word-free of every closure and state token `classify` reads, and it is declared in the OPEN WORK register as well, so neither route stands alone.
 
 A verified sweep of 15 capability areas (stars, licence and last-push read from the GitHub
 API, not from articles) produced five items worth implementing and a much longer list of
@@ -17054,7 +17538,7 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   **THE OVERRIDE FIRES ONLY WHEN EXACTLY ONE SESSION IS PLAYING.** "First playing session wins" does not deliver the invariant this ticket exists for: `GetSessions()` has no documented ordering, and the read path and the control path enumerate from TWO DIFFERENT manager instances - so with two playing they could pick differently AT THE SAME INSTANT, not merely across time. Ambiguity keeps today's answer and is REPORTED (`current-ambiguous`). An alphabetical tiebreak was considered and rejected because two concurrent sessions were measured reporting the SAME AppUserModelId (`powershell.exe`, one Playing and one Paused) - a sort that looks total and is not.
   **FOUR POWERSHELL/COM TRAPS were measured, and every one would have broken an obvious-looking fix:** (1) `$sessions.Count` DOES NOT COUNT - it member-enumerates and answered `1 1 1` for three sessions, and a correct-looking `1` for one, which is exactly how a single-session machine manufactures a false premise; (2) `$sessions[0]` does not index and `GetAt()` does not exist on the projection; (3) **resolving a member name against the COLLECTION can blank that member for the REST OF THE RUNSPACE** - every session's `SourceAppUserModelId` then reads back empty, silently, and pc-child is spawned once at boot, so one such line would empty the media source until MYTHOS restarts; (4) `GetCurrentSession()` is NOT reference-equal to any element of `GetSessions()`, so "is the current session the playing one" cannot be asked by identity. A fifth was found by a test: `return @()` COLLAPSES TO `$null` in PowerShell, so the helper that promised "always an array" was returning `$null` and only working because `$null.Length` happens to be 0. Fixed with `return ,@()`.
   **VERIFICATION.** 33 assertions, **29 mutations all caught**. The selection functions are extracted from the real script by name and executed in a fresh powershell.exe against FABRICATED sessions - behavioural, not source-shape, and machine-independent, because a real-SMTC test asserts on whatever happens to be playing and would fail for good on any other machine. Plus a `Parser::ParseFile` check and a brace-balance check. Suite 6844/6844/0/0; all 39 neighbouring PowerShell guards still green. LIVE through the real script: `source` is now `"Spotify"` (was `SpotifyMusic_zpdnekdrzrea0!Spotify`), `sourceId`/`sessionCount`/`playingCount`/`selectedBy` all present, `available:true` preserved for `verify-bug-001-spotify-play.js:147`'s oracle, and a CJK track title survived the UTF-8/`\uXXXX` escaping intact.
-  **NOT CLOSED BY THIS.** The multi-session paths were exercised with fabricated sessions, not live - the machine had exactly one real session, and the synthetic ones used to measure the premise were audible to the operator despite `Volume = 0.0` and were removed. **A DECISION REMAINS YOURS:** in the override case MYTHOS's play/pause deliberately stops agreeing with the physical media key, which still drives whatever Windows calls "current" - two "pause" gestures on one machine will do different things, and nothing tells the user. Also unfixed and adjacent: the transport path computes an honest `via` field saying whether SMTC or VK injection was used, and the widget discards it, so a silent degradation to the fragile SendInput path is invisible on the dashboard.
+  **NOT CLOSED BY THIS.** The multi-session paths were exercised with fabricated sessions, not live - the machine had exactly one real session, and the synthetic ones used to measure the premise were audible to the operator despite `Volume = 0.0` and were removed. **A DECISION REMAINS YOURS:** in the override case MYTHOS's play/pause deliberately stops agreeing with the physical media key, which still drives whatever Windows calls "current" - two "pause" gestures on one machine will do different things, and nothing tells the user. Also unfixed and adjacent: the transport path computes an honest `via` field saying whether SMTC or VK injection was used, and the widget discards it, so a silent degradation to the fragile SendInput path is invisible on the dashboard. **MEASURED 2026-08-28, and the premise holds but the severity is lower than it reads.** Scanned all 81 Episodic/Audit vault files: transport results carry via=smtc 40 times, via=vkey 68, and **via=vkey-fallback 6 times** — so the degraded path is genuinely reachable, not hypothetical. Nothing reads the field: the only node-side readers of a .via are from-app-reply.js:150 and from-pc.js:281, both a DIFFERENT via (message-box and document freshness), and the HUD media widget's `via ${sourceName}` at ui/public/js/widgets/kinds/media.js:134 is the SOURCE name, not the transport. So a degradation today would be invisible on the dashboard AND unlogged. **The caveat that stops this being called a live defect:** all 6 fallback events are dated 2026-07-29, a month BEFORE this ticket rewrote the SMTC session selection, and one of them records `smtc:"True"` alongside `via:"vkey-fallback"` — SMTC reporting success while the code still injected a key. That shape would be a double-send, but it cannot be attributed to the current branch from pre-rewrite records. Re-measure against a post-2026-08-27 occurrence before designing anything; if the fallback has not fired since the rewrite, surfacing the field is the whole job.
 - BUG-349 - see_and_click occluded-click refusal. FIXED 3ce6c8e:
 - BUG-350 - verifier retry-guidance mapping. FIXED 1adad59. Original: hard-fails cta/title-overlap killed most of the 11
   failed builds (design/verify.js :167-169,:236-247). Keep rules HARD
@@ -17065,8 +17549,14 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   an orphaned listener (bind-failed-again x336, Jul->Aug). Add terminal
   condition after N attempts -> OFFLINE + hint running a new
   scripts/diagnose-aether-port.ps1 that names the squatter PID. **FIXED by BUG-379 (2026-08-27, mutation-proven).** Both halves shipped: `src/core/immune/aether-rebind.js` gives the playbook a terminal condition (three attempts, then OFFLINE with a spoken reason), and `src/core/util/port-holder.js` + `src/core/aether/bind-failure.js` name the process holding the port. **Two of this bullet's own claims were false and must not be inherited:** the healer did NOT rebind forever — the playbook ran ONCE ever, and the 336 records were 336 PROCESSES, one anomaly each from a whenReady() rejection arm; and no `diagnose-aether-port.ps1` was needed, because the diagnostic belongs in the bind path, not in a separate script.
-- BUG-352 - catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);
-  the README catalog table and pie are NOT yet generated — see below.**
+- BUG-352 - catalog truth. **BOTH HALVES FIXED 2026-08-27: the counter
+  (147 -> 179, verified), and the README catalog table and pie, which are
+  GENERATED from `computeEffectorTools().perFile` into the
+  SYNC:EFFECTOR-CATALOG block — see Part 2 below. Status line corrected
+  2026-08-28 by BUG-393: for a day after the generator shipped this bullet went
+  on denying that the catalog was generated, so the register reported closed
+  work as open. Re-stating that old denial in its own words here re-tripped the
+  half-done reader, which is why the wording avoids it.**
 
   The counter was dropping 32 tools through two independent mechanisms, both
   swallowed by a bare `catch {}` in `computeEffectorCount()`:
@@ -17204,3 +17694,55 @@ those records remain owed (this section is the index until then).
   **LIVE MEASUREMENTS, all 2026-08-28 on mistral/codestral-latest:** trivial task exit 0; a write task under the read-only sandbox exit 0 with a spoken refusal (so the sandbox is not the cause); invalid MISTRAL_API_KEY exit 1 with the 401 ON STDERR (so the auth shape was never this bug); the digest brief **reproduced the reported failure exactly** — exit 1, stderr empty, and a real dark-theme HTML document sitting on stdout being discarded; and a second identical run of the same brief came back `done`. **The failure is intermittent, not a broken configuration.**
   **THE FIX.** New `adapters/dsh-agent/diagnosis.js`, split out because index.js sat EXACTLY on its 929-line size-ratchet ceiling and the fix could not be added there at all; it carries `timeoutDiagnosis` (moved), the new `exitDiagnosis`, and `withEvidence`, which finally gives `stderrText` a writer and adds `stdoutText`. stderr is quoted from the FRONT and stdout from the BACK, deliberately: an error states its cause in its first clause, while a truncated deliverable is identical to a complete one until its last characters — the first 600 chars of the failed digest build were an ordinary `:root` block and looked entirely healthy, so a head quote would have pointed away from the cause. The driver now reads `job.artifact`, unwraps the `{path}` form, and reports a done-with-no-artifact job as a finding instead of a blank line. 21 assertions, 23 mutations all caught, size ratchet 915 (was 929).
   **NOT CLOSED BY THIS.** Which of blocked/aborted/max-tokens the failing turn hits is still unnamed, and dsh does not record it: its flushed session file under DSH_HOME holds only the session header, no turn/end event. Two attempts to force the silent shape synthetically failed — an oversized generation was politely refused by the model, and a page-sized build succeeded in 13s — so the shape belongs to the real prompt, not to size alone. What this buys is that the next occurrence names itself and quotes the tail of what was generated. Read that tail rather than re-deriving the cause.
+
+### Filed 2026-08-28 (register-consistency sweep)
+
+- BUG-394 - an entry can wear text that is not its own, by two mechanisms that
+  have to be repaired together. (1) `parseBugs` ends the LAST `## BUG-` heading's
+  body at `text.length` (`mythos/scripts/build-index.js` :79), and that heading
+  is BUG-273 — so the whole `## OPEN WORK filed` register below it, these bullets
+  included, is read as BUG-273's body, and appending to the end of this file
+  changes BUG-273's status. Bounding entries at the next top-level non-BUG `##`
+  shrinks 18 of 243 entries (BUG-98 by 124,030 characters) and moves four states.
+  (2) `bulletMarks(n)` puts `[^` + `\n]*` between the bug id and the marker word
+  and runs it on a flattened block, so a nested `- BUG-nnn` follow-up about
+  another ticket supplies the marker; of 243 entries the loose form matches
+  three and only one match is its own. **Deliberately not repaired inside
+  BUG-393**, because BUG-274 has no `**Status:**` line and draws its `open` from
+  the wrong match: either repair alone reports a live licence ticket as done.
+  Order to work in, and step 1 is durable on its own — give BUG-274 an explicit
+  `**Status:**` line, then bound the bodies, then tighten both patterns using the
+  tight form already proven as `bulletHalfDone`. Full entry with the measurement
+  table is at the top of this file.
+
+- BUG-275 - the voice assistant fabricates leaderboard facts, invents sources,
+  and rationalises the inventions when challenged. Eight items (H1-H8), still
+  NOT STARTED. **Declared here 2026-08-28 so its open state stops depending on
+  the words "NOT STARTED" appearing somewhere in its own prose** — see BUG-394
+  for why that fallback is the only route it had. **All three of the entry's own
+  "check first" items are now answered inside it, and two of the three answers
+  went against the ticket:**
+  (1) the evidence file it names is overwritten — the whole 2026-08-19 session
+  survives in `%APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl` instead, with
+  MYTHOS's own words in `detail.reply` and tool results in `detail.result`, and
+  the truncated `summary` field must not be used for the diffs;
+  (2) H8 is narration-loss, not data-loss — the outcome reaches the model's
+  context and the ledger, only the spoken turn is suppressed, and a push-based
+  retry would worsen BUG-273 D3's measured 43% system-initiated turns;
+  (3) **H6 is REFUTED.** All three spoken conclusions landed 22-80 seconds AFTER
+  their tool result was recorded, and the correct three-model answer and the
+  fabricated five-model one came from the SAME 2,495-byte result 56 seconds
+  apart. H1-H5 are independent, the fix direction is not ordering, and the
+  defect is count-compliance beating source-fidelity.
+  **What is left is the actual repair**, H2 (defending an invention when
+  challenged) being the highest-severity half.
+
+- BUG-274 - dependency and licence remediation. Five implementable items plus a
+  much longer "change nothing" list; the sweep is done, the work is NOT STARTED.
+  Blocked on an operator/legal decision (notably the CC BY-NC-SA wake-word
+  weights), not on engineering. **Declared here 2026-08-28 as BUG-394 step 1:**
+  measured that day, this entry drew its `open` state from a nested bullet about
+  a DIFFERENT ticket, so tightening the marker patterns without declaring it
+  would have reported a live licence ticket as done. It now has an explicit
+  `**Status:**` line as well, so neither route stands alone. Full entry, with the
+  15-area sweep and the verified upstream licence findings, is at the top.

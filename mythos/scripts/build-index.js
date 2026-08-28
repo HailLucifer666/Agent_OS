@@ -252,6 +252,31 @@ function bulletMarks(n) {
     // would move that entry from wrongly-open to wrongly-unrecorded, which is
     // trading one false report for another.
     bulletFixed: new RegExp(`${id}[^\\n]*\\b(?:FIXED|SATISFIED)\\b`, 'i'),
+    // BUG-393 — the same half-done shape as bulletPartial, for openSetFrom, and
+    // deliberately TIGHTER in two ways.
+    //
+    // Wider closure vocabulary, because openSetFrom's filter closes on any of
+    // FIXED/RESOLVED/CLOSED/SATISFIED; a pattern meant to hold that filter back
+    // must recognise every word the filter acts on, or it holds back one case in
+    // four.
+    //
+    // And `(?:(?!BUG-\d)[^\n])*` rather than `[^\n]*`, so no OTHER bug number may
+    // sit between this bullet's id and its qualifier. These patterns run against
+    // a FLATTENED block, so `[^\n]*` spans nested follow-up lines — and measured
+    // on the real file, bulletPartial's loose form matches BUG-273 and BUG-274
+    // only because a nested `- BUG-nnn` follow-up says "NOT yet" about a
+    // different ticket. That is BUG-390's defect (one entry wearing another's
+    // status) surviving in the pattern built to fix it. It is NOT repaired here:
+    // BUG-274 currently draws its `open` from that wrong match, so tightening
+    // bulletPartial without tightening bulletFixed alongside it would close a
+    // live licence ticket. Filed as BUG-394. Across the 13 register bullets the
+    // loose and tight forms agree exactly, so this call site pays nothing for
+    // being correct.
+    bulletHalfDone: new RegExp(
+      `${id}(?:(?!BUG-\\d)[^\\n])*\\b(?:FIXED|RESOLVED|CLOSED|SATISFIED)\\b`
+      + '(?:(?!BUG-\\d)[^\\n])*\\bNOT\\s+yet\\b',
+      'i',
+    ),
   };
 }
 
@@ -331,8 +356,22 @@ function openSetFrom(text) {
     // register then went on reporting as open work for four days. Checked before
     // adding: it is the only occurrence of the word in the section, and it is not
     // negated, so this cannot close a bullet that says it was NOT satisfied.
-    if (/\bFIXED\b|\bRESOLVED\b|\bCLOSED\b|\bSATISFIED\b/i.test(block)) continue;
-    set.add(+m[1]);
+    // BUG-393 — a half-done bullet states BOTH halves, so the closure filter and
+    // classify's bulletPartial read one set of words and reached two verdicts:
+    // this filter saw FIXED and dropped the ticket from the authoritative open
+    // set, while classify saw "FIXED ... NOT yet" and called it open. Nothing
+    // compared them, and BUG-352 sat contradicting itself for a day.
+    //
+    // The alignment is one-way on purpose. openSetFrom is an ADDITIVE override
+    // (`if (openSet.has(n)) return 'open'` below), so keeping a half-done bullet
+    // in the set can only move an entry toward open. Teaching classify to honour
+    // the closure filter instead would have closed a half-done ticket on the
+    // strength of the half that landed — precisely the failure bulletPartial was
+    // built to stop.
+    const n = +m[1];
+    const halfDone = bulletMarks(n).bulletHalfDone.test(block);
+    if (!halfDone && /\bFIXED\b|\bRESOLVED\b|\bCLOSED\b|\bSATISFIED\b/i.test(block)) continue;
+    set.add(n);
   }
   return { set, section: true };
 }

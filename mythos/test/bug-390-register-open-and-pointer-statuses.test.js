@@ -110,8 +110,24 @@ describe('BUG-390 — against the real BUGS.md', () => {
     }
   });
 
-  it('BUG-352 is open — half of it is explicitly not done', () => {
-    assert.equal(states.get(352), 'open');
+  it('a half-done bullet reads open — the mechanism, on a fixture', () => {
+    // RE-SCOPED 2026-08-28 by BUG-393. This asserted `states.get(352) === 'open'`
+    // against the live file, which was an OUTCOME standing in for a MECHANISM: it
+    // passed only while BUG-352 happened to be half-done. Both halves of BUG-352
+    // then shipped, its bullet was corrected, and this guard went red against a
+    // CORRECT register — the same erosion the neighbouring BUG-273 case records,
+    // and the second instance of it in this one file.
+    //
+    // What it is for is the partial marker: FIXED on one half plus NOT-yet on the
+    // other is open work. Drive that, on text this test owns.
+    const md = '- BUG-390 - catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);\n'
+      + '  the README catalog table and pie are NOT yet generated.**\n';
+    assert.equal(stateOf(md), 'open',
+      'a bullet stating one half FIXED and the other NOT yet is still open work');
+    // And the adjacent case that must keep passing, or the guard has no bounds:
+    // the same bullet with no qualifier is closed, not open.
+    const done = '- BUG-390 - catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified).**\n';
+    assert.notEqual(stateOf(done), 'open');
   });
 
   it('BUG-273 does not inherit a status from the bullets nested inside it', () => {
@@ -126,14 +142,30 @@ describe('BUG-390 — against the real BUGS.md', () => {
     // inside BUG-273's body must not classify BUG-273. So drive THAT — strip
     // BUG-273's own Status line and confirm the nested bullets alone do not make
     // it verified.
-    const bug = bugs.find((b) => b.n === 273);
-    assert.ok(bug, 'BUG-273 must still parse');
-    assert.match(bug.body, /\*\*Status:\*\*/, 'and it must still carry its own Status line');
-    const withoutStatus = Object.assign({}, bug, {
-      body: bug.body.split(/\r?\n/).filter((l) => !/\*\*Status:\*\*/.test(l)).join('\n'),
-    });
-    assert.notEqual(classify(withoutStatus, openSet), 'verified',
-      'BUG-273 read verified off BUG-345\'s bullet before the id check');
+    // RE-SCOPED AGAIN 2026-08-28 by BUG-393, and this time for a sharper reason
+    // than erosion: the previous version was MEASURING THE WRONG ARTIFACT.
+    //
+    // It stripped BUG-273's Status line and classified the remainder — but
+    // BUG-273 is the LAST `## BUG-` heading in BUGS.md, and parseBugs ends the
+    // final entry at `text.length` (build-index.js :79). So its "body" swallows
+    // the whole OPEN WORK register that follows it, and the markers this
+    // assertion read belonged to BUG-352's bullet, not to BUG-273. It passed only
+    // because that bullet said "FIXED ... NOT yet"; correcting BUG-352's text
+    // turned it red while BUG-273 itself never changed. The swallowing is real and
+    // filed as BUG-394 with the measurement (18 entries, 4 state changes).
+    //
+    // Driven on owned text instead, so it tests the id check and nothing else.
+    assert.ok(bugs.find((b) => b.n === 273), 'BUG-273 must still parse');
+    const nested = HEAD + '**Symptom.** The audit listed its follow-ups as bullets.\n\n'
+      + '- BUG-345 - adblock silence caveat. FIXED 639200c: append a spoken caveat.\n'
+      + '- BUG-346 - wake-word re-arm ladder. FIXED 2026-08-28, mutation-proven.\n';
+    assert.notEqual(stateOfN(nested, 390), 'verified',
+      'a parent must not read verified off bullets that name other tickets');
+    // Positive control, or the assertion above passes for any input at all.
+    const own = HEAD + '**Symptom.** It broke.\n\n'
+      + '- BUG-390 - this very ticket. FIXED 639200c, mutation-proven.\n';
+    assert.equal(stateOfN(own, 390), 'verified',
+      'a bullet naming its OWN number must still be read');
   });
 
   it('the unrecorded count keeps falling and does not regress', () => {

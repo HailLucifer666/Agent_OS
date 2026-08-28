@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6863,
+      "value": 6890,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3273,9 +3273,9 @@
         "n": 275,
         "shape": "entry",
         "state": "open",
-        "title": "the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (FILED, NOT STARTED) — opened 2026-08-19",
+        "title": "the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19",
         "detail": {},
-        "excerpt": "**Reported by the operator, 2026-08-19, from a live voice conversation: \"it hallucinates\". Filed for later, deliberately not fixed in the same session.** **Evidence is complete and reproducible without another session.** The whole conversation is preserved at `%APPDATA%\\MYTHOS\\vault\\Conversation\\session.json` (26 turns), and it contains BOTH the raw `web_search` results MYTHOS received AND what it then said about them. So every item below is a diff between a tool result and a spoken claim — no inference, no \"it felt wrong\". Turn numbers refer to the index in that file. Cross-refs in the server log for the same run (`pid=22112`, boot 08:25:23Z). **Do not begin by re-running the conversation.** The comparison that matters is already on disk. Read the file first. ### H1 (P0) — invented list entries to satisfy a requested count The operator asked for a **top five**. The only ranking data any…"
+        "excerpt": "**Status:** OPEN — the repair is NOT STARTED. All three of this entry's own \"check first\" items were answered 2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted) and the findings are in the sections below. **BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the words \"NOT STARTED\" appearing somewhere in its prose, so an editorial rewrite could have silently unrecorded it. H2 — defending an invention when challenged — is the highest-severity half. **Reported by the operator, 2026-08-19, from a live voice conversation: \"it hallucinates\". Filed for later, deliberately not fixed in the same session.** > ### ⚠️ THE FILE THIS TICKET TELLS YOU TO READ IS GONE. Re-measured 2026-08-28. > > **`vault\\Conversation\\session.json` is a SINGLE-SESSION file that is overwritten.** > It now holds **2 turns from 2026-08-27, in 350 bytes**. The 26-turn conver…"
       },
       {
         "n": 276,
@@ -3530,10 +3530,10 @@
       {
         "n": 352,
         "shape": "pointer",
-        "state": "open",
-        "title": "catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified);",
+        "state": "fixed",
+        "title": "catalog truth. **BOTH HALVES FIXED 2026-08-27: the counter",
         "detail": {},
-        "excerpt": "catalog truth. **COUNTER FIXED 2026-08-27 (147 -> 179, verified); the README catalog table and pie are NOT yet generated — see below.**"
+        "excerpt": "catalog truth. **BOTH HALVES FIXED 2026-08-27: the counter (147 -> 179, verified), and the README catalog table and pie, which are GENERATED from `computeEffectorTools().perFile` into the SYNC:EFFECTOR-CATALOG block — see Part 2 below. Status line corrected 2026-08-28 by BUG-393: for a day after the generator shipped this bullet went on denying that the catalog was generated, so the register reported closed work as open. Re-stating that old denial in its own words here re-tripped the half-done reader, which is why the wording avoids it.**"
       },
       {
         "n": 353,
@@ -3560,8 +3560,10 @@
         "shape": "pointer",
         "state": "verified",
         "title": "LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js,",
-        "detail": {},
-        "excerpt": "LIVE-RUN BLOCKER (found 2026-08-24 by scripts/live-ai-digest-brief.js, the promoted one-shot brief driver): the full pipeline now works up to the engine - real web_search returned five fresh dated AI headlines into the first generation (BUG-329 ordering proven live) - and then dsh exited 1 on mistral/codestral-latest after 72s with EMPTY stderr, so no artifact ships. MISTRAL_API_KEY is present in mythos/.env, so credentials are not the obvious cause; the harness swallowed its own error output. Next diagnostic: run the dsh CLI directly with a trivial task at log-level debug to surface the real failure (provider route? model id? cordon patch?), and consider teaching dsh-agent to capture child stderr instead of reporting null. Evidence: EVIDENCE lines + JOB failed line in the 2026-08-24 session log; runner kept at mythos/scripts/live-ai-digest-brief.js for re-runs. **FIXED 2026-08-28 (BUG-3…"
+        "detail": {
+          "fix": "New `adapters/dsh-agent/diagnosis.js`, split out because index.js sat EXACTLY on its 929-line size-ratchet ceiling and the fix could not be added there at all; it carries `timeoutDiagnosis` (moved), the new `exitDiagnosis`, and `withEvidence`, which finally gives `stderrText` a writer and adds `stdoutText`. stderr is quoted from the FRONT and stdout from the BACK, deliberately: an error states its cause in its first clause, while a truncated deliverable is identical to a complete one until its last characters — the first 600 chars of the failed digest build were an ordinary `:root` block and looked entirely healthy, so a head quote would have pointed away from the cause. The driver now reads `job.artifact`, unwraps the `{path}` form, and reports a done-with-no-artifact job as a finding instead of a blank line. 21 assertions, 23 mutations all caught, size ratchet 915 (was 929).",
+          "limits": "Which of blocked/aborted/max-tokens the failing turn hits is still unnamed, and dsh does not record it: its flushed session file under DSH_HOME holds only the session header, no turn/end event. Two attempts to force the silent shape synthetically failed — an oversized generation was politely refused by the model, and a page-sized build succeeded in 13s — so the shape belongs to the real prompt, not to size alone. What this buys is that the next occurrence names itself and quotes the tail of what was generated. Read that tail rather than re-deriving the cause."
+        }
       },
       {
         "n": 357,
@@ -3835,18 +3837,19 @@
       {
         "n": 384,
         "shape": "entry",
-        "state": "coded",
+        "state": "verified",
         "title": "every per-node call count on the capability map was hand-typed, and 29 of the 43 that carried one were wrong",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-08-27. Closure-campaign Track B. The track was scoped as \"six nodes whose LABEL is stale rather than whose capability is broken\". Measured against the live vault before writing anything, per the Track D finding: **43 of 91 nodes carry a hand-typed ok/fail count, and 29 of those 43 (67%) disagree with the vault.** Eleven labels are contradicted by their own evidence. The six was itself a stale reading. ### Root cause — the map generates its frame and hand-carries its contents `build-capability-map.js` regenerates `vitals`, the tool-coverage cross-check and the `generated` stamp. It preserves each node's `s`, `ok`, `f`, `note` and `ev` as curated human text. That split is right for `note` and `ev` — a human decides what a node MEANS — and wrong for `ok`/`f`, which are not judgement at all. They are a count of rows in `vault/Audit/*.jsonl`, and nothing was counting…"
+        "excerpt": "**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign Track B. The track was scoped as \"six nodes whose LABEL is stale rather than whose capability is broken\". **LIVE CROSS-CHECK 2026-08-28 — 62 of 62 nodes agree, exactly.** Running `build-capability-map --check` only proves the file matches the generator, which is the generator checking itself, so the counts were tallied a SECOND time by independent throwaway code reading `vault/Audit/*.jsonl` directly with its own de-duplication (74 audit files, 120 distinct tools). Summing per node over its `tools` array and comparing against the published `ok`/`f`: ``` nodes parsed from the map island with ok/f : 91 nodes comparable to an independent tally : 62 exact agreement : 62 of 62 ``` **Two routes, one answer.** Before this fix, 29 of the 43 hand-typed counts (67%) disagreed with the vault; there are now no hand-typed counts left to disagre…"
       },
       {
         "n": 385,
         "shape": "entry",
-        "state": "coded",
+        "state": "verified",
         "title": "the CAPTCHA detector flagged 6 of 6 ordinary pages and missed the real challenge text",
-        "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track C**, which was scoped as *\"three dispositions (CAPTCHA refusal, `focus_window`'s exhausted ladder, video call having no tool)\"*. All three are recorded. Two of them turned up a real defect on the way, and the CAPTCHA one is the serious entry here. ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions. The disposition itself needed nothing: `browser_check_captcha` already returns `ok` with `blocked: \"captcha\"` and a comment saying *\"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\"*, `browser-obstacles.test.js` already pins the handover wording, and a source-shape assertion already fails if anyone adds a solver service. That is a complete disposition and it was complete before this ticket. **What was not right is what counts as a challenge.** `CA…"
+        "detail": {
+          "limits": "the true-positive half is still only covered by phrase > markers whose upstream markup is unverified, so a challenge that words itself > differently is still missed. That is unchanged by this fix and is the residue to > attack next — ideally by capturing a real challenge page's aria tree, which needs > a challenge to actually appear. ### C-1 — the refusal policy was already right. The DETECTOR was wrong in both directions. The disposition itself needed nothing: `browser_check_captcha` already returns `ok` with `blocked: \"captcha\"` and a comment saying *\"blocked, not failed: nothing went wrong, we have simply reached the line this system does not cross\"*, `browser-obstacles.test.js` already pins the handover wording, and a source-shape assertion already fails if anyone adds a solver service. That is a complete disposition and it was complete before this ticket."
+        }
       },
       {
         "n": 386,
@@ -3859,10 +3862,10 @@
       {
         "n": 387,
         "shape": "entry",
-        "state": "coded",
+        "state": "verified",
         "title": "`doctor` reported the Google grant OK for three weeks while 88 calls failed on it",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions, 9 mutations all caught. **This does NOT close Track A's two nodes.** They need three operator minutes and no session can supply them. What it removes is the reason those three minutes kept not happening. ### The defect, measured live on this machine ``` $ node mythos/scripts/doctor.js OK Gmail / Calendar sensors configured: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN ``` At that same moment, from the vault: **88 `invalid_grant` failures across 60 separate bursts between 2026-08-06 and 2026-08-26**, every one of them saying the refresh token is expired or revoked. The single check an operator runs to answer *\"is my Gmail set up?\"* was answering **yes** about the exact thing that was broken. **The class is an existence check standing…"
+        "excerpt": "**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign **Track A**. New `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions, 9 mutations all caught. **LIVE RUN, both halves, 2026-08-28 — and the fix caught a real dead grant.** This ticket shipped its own oracle, so verification needed no voice session and no operator: running the two commands IS the verification. ``` $ node scripts/verify-google-grant.js verify-google-grant: INVALID The Google grant is dead: invalid_grant: Token has been expired or revoked. — this is NOT a network problem and will not recover on its own ... run `node scripts/google-auth.js` and put the new GOOGLE_REFRESH_TOKEN in mythos/.env. If this recurs roughly every 7 days, re-authorising alone will NOT fix it: an OAuth consent screen with external user type and publishing status \"Testing\" is issued refresh tokens that expire in 7 days. Publi…"
       },
       {
         "n": 388,
@@ -3909,19 +3912,39 @@
         "title": "a caller abort drops the provider cooldowns it had already earned, and says nothing",
         "detail": {},
         "excerpt": "**Status:** ✅ FIXED 2026-08-28, mutation-proven (5/5 caught, 0 unscored), suite 6863/6863/0/0. **The mechanism was exactly as filed. The reachability was not, and the ticket's own instruction to measure before sizing the fix is what caught it.** 7 assertions in `test/bug-392-abort-drops-earned-cooldowns.test.js`. ### The reachability claim was wrong, and this is now a LATENT defect The entry below says *\"the window is wide whenever the per-attempt ceiling (`CHAIN_ATTEMPT_TIMEOUT_MS`) is below the caller's own, which is the configuration the per-attempt ceiling exists for.\"* Measured, that configuration is not shipped and the window is not wide. Three probes: | probe | result | |---|---| | the entry's probe 1 — `AbortError` out of `chain.complete` in `%APPDATA%/MYTHOS/mythos-server.log` (28,952 lines, 2026-08-10…27) | **0 — and the probe cannot work.** `brain/index.js:220` converts the Ab…"
+      },
+      {
+        "n": 393,
+        "shape": "entry",
+        "state": "verified",
+        "title": "one OPEN WORK bullet produced two contradictory verdicts, and BUG-352 sat closed-and-open at once",
+        "detail": {},
+        "excerpt": "**Status:** ✅ FIXED 2026-08-28, mutation-proven. 1 source file changed, 1 test file added (13 assertions). Two defects, one code and one data, kept separate because each has its own red. ### The mechanism `scripts/build-index.js` reads an OPEN WORK register bullet **twice**, by two functions with two different rules, and nothing ever compared the answers: | reader | rule | |---|---| | `openSetFrom()` | declared-open vs explicitly-closed, by looking for `FIXED` / `RESOLVED` / `CLOSED` / `SATISFIED` anywhere in the bullet's block | | `classify()` | the entry's state, and for a pointer entry it reads the **same** bullet through `bulletPartial` — `FIXED … NOT yet` | **A half-done bullet says both words.** So `openSetFrom` saw `FIXED`, called the ticket closed and dropped it from the authoritative open set, while `classify` saw `FIXED … NOT yet` and called it open. One set of words, two dispo…"
+      },
+      {
+        "n": 394,
+        "shape": "entry",
+        "state": "open",
+        "title": "an entry can wear text that is not its own: the last entry swallows the whole register, and the bullet patterns read nested follow-ups (FILED 2026-08-28, OPEN)",
+        "detail": {},
+        "excerpt": "**Status:** OPEN — filed, measured, deliberately not repaired inside BUG-393's change. **Two mechanisms, ONE ticket, because they must be fixed together:** the parser fix is what exposes the pattern fix, and doing either alone reports a live licence ticket as done. ### Mechanism 1 — the last entry's body runs to end-of-file `parseBugs` ends an entry at the next `# BUG-` heading, and the final one at `text.length` (`scripts/build-index.js` :79): ```js const end = i + 1 \u003c marks.length ? marks[i + 1].at : text.length; ``` **BUG-273 is the last `## BUG-` heading in this file.** Everything after it — the entire `## OPEN WORK filed` register and its 14 bullets — is read as BUG-273's body. Its status is therefore computed partly from other tickets' bullets, and appending anything to the end of this file changes it. **That is not theoretical: it turned a test red on 2026-08-28 while BUG-273 itse…"
       }
     ],
     "counts": {
-      "verified": 54,
-      "fixed": 169,
+      "verified": 58,
+      "fixed": 170,
       "open": 6,
-      "coded": 8,
+      "coded": 5,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 241,
-    "openDeclared": [],
+    "total": 243,
+    "openDeclared": [
+      274,
+      275,
+      394
+    ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
   }
