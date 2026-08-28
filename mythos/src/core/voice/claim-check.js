@@ -194,6 +194,26 @@ const CLAIM_CATEGORIES = [
       '\\b(?:is|are|was|sits\\s+at|stands\\s+at)\\s+(?:currently\\s+)?[-+]?\\d[\\d,.]*\\s*(?:%|percent|degrees|c\\b|f\\b|km|miles|mph|kph|dollars|usd|inr)',
       // "the current/latest X is Y"
       '\\bthe\\s+(?:current|latest|most\\s+recent)\\s+\\w+\\s+is\\b',
+      // BUG-275 H1 — an ENUMERATED ranking: "top five stands thus: A, then B".
+      // Added 2026-08-28 after measuring the real fabrication against this
+      // detector: the H1 utterance matched NONE of the shapes above, so the
+      // category stayed silent even with the search FAILED. A "top N" assertion
+      // is a ranking, which is the first shape this list claims to cover, and it
+      // was simply missing.
+      //
+      // This does NOT catch H1 itself and is not offered as doing so. In that
+      // session `web_search` SUCCEEDED, so the `backed` short-circuit below exits
+      // before any shape is consulted — deliberately, per the F1b lesson, and
+      // that gap is recorded in the BUG-275 entry rather than papered over here.
+      // What this closes is the adjacent case: an enumerated ranking spoken when
+      // the fact-finding tool did NOT succeed, which is H6's shape and was
+      // equally invisible.
+      //
+      // Noise bound, the same one the category already relies on: `re` is null,
+      // so nothing here can fire unless a gateTool was attempted and came back
+      // unproven. An over-fire is one honest notice; a miss is a fabricated
+      // ranking spoken as fact.
+      '\\btop\\s+(?:\\d+|two|three|four|five|six|seven|eight|nine|ten)\\b',
     ].join('|'), 'i'),
   },
 ];

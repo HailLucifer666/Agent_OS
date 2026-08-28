@@ -5613,6 +5613,44 @@ treating H1-H5 as five independent bugs.**
 > note conflated that ACK with a CONCLUSION. Acks before results are correct; the
 > conclusions were all late, not early.
 >
+> ### The detection route, measured 2026-08-28 — and the obvious approach is CLOSED
+>
+> Before writing a prompt contract, the existing honesty detector was measured
+> against the real utterance. `detectUnbackedClaims` returned **`[]` for the H1
+> fabrication in BOTH states** — search succeeded and search failed. Two
+> independent reasons, and only one is fixable:
+>
+> 1. **The `backed` short-circuit** (`voice/claim-check.js` :271):
+>    `const backed = gate.some((tool) => successfulTools.has(tool)); if (backed) continue;`
+>    A gateTool that SUCCEEDED backs every external-fact claim in the reply
+>    regardless of its content, and exits before any shape is consulted. In the
+>    real session `web_search` had succeeded 79.6s earlier, so **this is what
+>    actually hid H1.** It is deliberate — the file's own F1b lesson is that
+>    without it the detector tells the assistant to retract statements it had just
+>    earned — so **extending this detector is not the route to H1.** Catching H1
+>    needs a mechanism that compares claim CONTENT to result CONTENT, which is not
+>    what this detector is.
+> 2. **A missing shape, now fixed.** `ellipticalRe` claims to cover "a ranking or
+>    superlative" and covered `leads|tops|ranks|beats|outperforms|is the
+>    best/fastest/…` — but **not an enumerated ranking**, which is how a top-N
+>    answer is actually spoken. So the one shape the operator complained about was
+>    the one shape absent, and the category stayed silent even with the search
+>    failed. `\btop\s+(?:\d+|two|…|ten)\b` added.
+>
+> **What that fix does and does not buy.** It closes the ADJACENT case — an
+> enumerated ranking spoken when the fact-finding tool did NOT succeed, which is
+> H6's shape and was equally invisible. **It does not catch H1**, and the
+> disposition is pinned by a test that asserts the succeeded-search case still
+> returns nothing, so a later change cannot quietly "fix" H1 by breaking F1b.
+> Noise stays bounded by the category's `re: null`, which a mutation confirms.
+>
+> Regression test: `test/bug-275-enumerated-ranking-is-a-claim-shape.test.js`
+> (6 assertions, real utterance from the vault, plus the bound that bare "top" —
+> "top priority", "top of the hour" — is not a claim shape). **4 mutations, all 4
+> caught, 0 unscored**, source restored sha256-identical; one earlier attempt
+> scored TARGET ABSENT through lost backslashes and was **not** counted as caught.
+> Suite 6883/6883/0/0.
+>
 > **Consequence for the fix.** H1-H5 must be treated as independent, and the fix
 > direction is NOT ordering. The defect is **count-compliance beating source-fidelity**:
 > the model is willing to satisfy a requested item count from nothing rather than report
