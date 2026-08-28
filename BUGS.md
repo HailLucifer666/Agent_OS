@@ -4772,7 +4772,9 @@ archiving that day is an operator call, not a session's.
 
 ---
 
-## BUG-276 — "show me the news" failed six ways, and only one of them was the model's fault (FILED, NOT STARTED) — opened 2026-08-19
+## BUG-276 — "show me the news" failed six ways, and only one of them was the model's fault — opened 2026-08-19
+
+**Status:** FIXED, audit-read 2026-08-28. F1 pinned (environment), F2 closed by BUG-280, F3 and F4 coded, F5 and F6 handed to BUG-275 which is still open. The heading said "(FILED, NOT STARTED)" until 2026-08-28 and that was wrong — see the audit-read block at the end of this entry.
 
 **Operator, 2026-08-19: "Every time how do you manage to fuck things up?" / "you keep doing
 cannot do basic stuff" / "Which was working before".** They are right that it failed. The
@@ -5006,6 +5008,16 @@ prevented most of what was experienced. **One real code defect** (F2, Wikipedia 
 defects** (F5, F6) belong with BUG-275 and share its root cause. Do not start by rewriting
 the browser stack — establish which failures survive a debuggable browser and a paid
 provider first.
+
+**Status: audit-read 2026-08-28 — "(FILED, NOT STARTED)" IN THE HEADING IS WRONG.** Four of the six are closed or materially defanged, three of them recorded inside this ticket's own body as CODED and one closed elsewhere without the ticket being told.
+
+- **F1 — environment, not code. Regression-pinned** (`bug-276-f1-...` 5/5, mutation-proven). Operator action stands: start a debuggable browser. Q8 (the frozen mid-session capability snapshot) deliberately not fixed.
+- **F2 — CLOSED BY BUG-280, not by anything filed here.** Its own example is covered: `"CNN live news"` is time-sensitive and Wikipedia OpenSearch results carry no `published`, so `succeed()` attaches `STALE_SOURCE_CAUTION` telling the model it cannot show the results are current and must not infer an answer. The residual — an irrelevant fuzzy match on a TIMELESS query — carries a dated **deliberate non-change (2026-08-26)** in `web-search.js` with a test that predates the attempt ("an encyclopaedia answering an encyclopaedia question is not a defect") and two reasons, the stronger being that a caution keyed on "the rest of the chain is down" fires on every timeless query on a degraded machine, which is the over-warning that trains an operator to ignore cautions.
+- **F3 — CODED 2026-08-24**, mutation-proven, still NOT live-verified.
+- **F4 — CODED 2026-08-20.** Operator actions stand (`EXA_API_KEY` is currently the only route to a working general-web provider from this host).
+- **F5 and F6 — belong to BUG-275, which is still open.** They are narration defects with a shared root cause and should be worked there, not here.
+
+All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 is nothing: the code halves are done, F2 is closed elsewhere, and the two remaining failures have a live home in BUG-275.**
 
 ---
 
@@ -14123,6 +14135,8 @@ after this, the field is being dropped upstream of the subscriber, not in it.
 
 ## BUG-234 — the health channel was carrying things that are not faults
 
+**Status:** FIXED 2026-08-14, audit-read and re-verified 2026-08-28. All five shipped changes confirmed in today's code. The closing "Not done, deliberately" paragraph was REVERSED the next day by `ad6ad33` and the harm it predicted was live until 2026-08-28 — see the audit-read block at the end of this entry.
+
 **Symptom.** 68 heal → `no-match` records against 6 applied. At one point 15
 `live-reconnect-failed` inside 30 seconds (12:29:51 → 12:30:21), one every ~2 s,
 each getting a full diagnose → heal → announce → two-episodic-writes round trip.
@@ -14188,6 +14202,26 @@ line; the correct outcome for a non-fault is not raised at all.
 **Regression test**: `test/health-channel-non-faults.test.js`, 13 tests (8 red
 pre-fix), plus the updated BUG-170 test asserting the strip moved channel rather
 than disappeared.
+
+**Status: FIXED — audit-read 2026-08-28. All five shipped changes were re-opened and confirmed in today's code, and the closing scope paragraph below was found to have been REVERSED the next day.**
+
+**Claim 1's wording is loose and worth correcting: `ALLOWED_EVENTS` is a TEST-SIDE conformance allowlist (`test/event-name-conformance.test.js:242`), not a runtime registry.** The event is emitted at `live-session.js:340` and the conformance guard passes 3/3. Claims 2-5 verified at `live-tool-adapter.js:642` (`!entry.started`), `healer.js` (`when: { kind: 'provider-down' }`, `provider: '$target'`, `cooldownMs: 60000` unchanged), the retitled `provider re-probe after a reported outage` with its id deliberately unchanged, and the `outcome === 'no-match'` damping with `suppressedCount`.
+
+**THE "Not done, deliberately" PARAGRAPH BELOW IS FALSE, AND WAS FALSIFIED ONE DAY LATER BY `ad6ad33` (2026-08-15) — in exactly the direction it warned about.** That commit added four acknowledge-only playbooks whose own header states the motive verbatim ("26 anomalies in the 2026-08-14 session reached no-match, and four kinds account for all of the recurring ones"), and the last of them is for `live-tool-outcome-late-for-turn` — the very kind BUG-234 chose to KEEP on the health channel rather than match. The action is written to be honest and returns `healed: false`.
+
+**That honesty reached nobody. Measured 2026-08-28 by driving the real bus -> healer -> announcer chain**, all four spoke aloud:
+
+> Self-healed: a Live turn that arrived with no operator transcript. Trigger: live-turn-no-user-transcript. Action taken: acknowledge.
+
+and `server/index.js`'s `actuallyHealed = p.outcome === 'applied'` put `healed: true` in the anomaly log and wrote an episodic row labelled `healed:<kind>`. **That is the same defect the server's own comment records fixing once already** ("36 such no-match pairs were found in the episodic logs, each claiming a fix that never happened") — re-created by a route that fix cannot see. `grep -rn "\.healed\b" src/ server/ ui/` found NO READER; the field was inert, the same dead-field shape as BUG-356's `err.stderrText`. The project memory `no-playbook-is-not-unhandled` predicted it in as many words: "An acknowledge playbook is not free — it speaks a falsehood."
+
+**FIXED at the source rather than at the two consumers:** an action reporting `healed: false` now resolves as `acknowledged`, not `applied`. Both liars already test for `applied`, so both stop lying, and the dead field finally has a reader. `server/index.js` labels it `acknowledged` rather than `unhandled` — the anomalies WERE recognised, so `unhandled` would be a second, smaller falsehood. Re-measured on the same chain: all four still MATCH (F8's cost saving is preserved), and nothing is spoken.
+
+**AND THE CEILING GUARD NEVER GUARDED.** `test/health-channel-non-faults.test.js`'s "the widening does not raise the ceilings" asserted `outcomes.includes('cooldown') || outcomes.includes('heal-failed')`. Setting the provider-down playbook's own `cooldownMs` from 60000 to 0 — the exact bound this ticket promised not to widen — left that file AND `immune.test.js` at 72/72 green, because `rotate-nim-key` carries `verifyMs`, so the second diagnosis lands in the recurrence branch and returns `heal-failed` WITHOUT EVER CONSULTING `cooldownMs`. **The `||` was the whole problem**; deleting the disjunct makes the mutant fail.
+
+**One more false comment corrected:** `healer.js` said "None of the SEED_PLAYBOOKS use this" about `$target` — untrue the day this ticket's own widening shipped.
+
+12 assertions in `test/bug-234-acknowledge-is-not-a-heal.test.js`, 12 mutations all caught. **NOT CLOSED BY THIS:** whether any of the four conditions deserves a REAL remedy is untouched — they are still acknowledged and still not fixed.
 
 ## BUG-235 — a goal's entire budget was one planning call
 
@@ -15908,6 +15942,8 @@ deadlines clean for launch_app.
   misquote) — no repro mechanism yet.
 ## BUG-273 — the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust
 
+**Status:** FIXED, audit-read 2026-08-28. Every fix is in the code at a named line and the 21 `bug-273-*.test.js` files pass 175/175. The one "REMAINING" P0 was refuted by the measurement this ticket commissioned and must not be built — see the audit-read block before "Verification for the next live session".
+
 **B1, A1 and A2's measurement SHIPPED IN CODE 2026-08-18** (`7eb3920` unverified
 narration, `33090e1` the dormant bleed floor, `8d61547` the verifier's dead
 criterion, plus the release-flush measurement). Suite 4975/4975/0 fail/0 skipped.
@@ -16705,6 +16741,14 @@ adding a third voice for one condition is what W6 spent a wave undoing. A guard 
 now derives the real emitted kinds from source and fails on any future phantom.
 
 ### Verification for the next live session
+
+**Status: FIXED — audit-read 2026-08-28.** Every fix this ticket claims is in the code today at a named line and its 21 `bug-273-*.test.js` files pass 175/175 with zero skips. D3 and D4 are DONE despite sitting under "REMAINING", and B3 (flagged "next") landed too.
+
+**The one REMAINING P0 must never be built.** A2's "stop replaying frames the policy never believed" was refuted by the measurement this ticket itself commissioned (2026-08-19: 771 frames replayed, 695 ZEROED, worst case 25 frames rather than the predicted 133) and its premise was refuted again later — **BUG-388 showed the 0.123 "bleed" the reasoning rests on was the OPERATOR'S OWN VOICE, not assistant audio.** A2's remaining SYMPTOM (self-interruption) is real and is carried by the barge-in work (BUG-274, BUG-388), not here.
+
+**The ticket's own 2026-08-19 instruction was NOT obeyed until now:** "its existing prose in `s2s-bridge.js` must not be read as a pending remedy." That block still named the remedy as pending work nine days later. Corrected in place, with the refutation and BUG-388's correction stated where the reasoning is, and pinned by a test.
+
+**FOUND BY THE AUDIT, NOT FIXED HERE — filed for a decision.** `brain/chain.js:334` throws `AbortError` out of the walk WITHOUT calling `settleDeferredTimeouts()`, so a run that times an attempt out and is then aborted by the caller drops the cooldown entirely and silently — no `markCooldown`, no `breaker.recordFailure`, no warn, no `chain-whole-lane-timeout`. Reproduced with 3 providers, `attemptTimeoutMs: 30` and an abort at 45ms: `cooldowns = []`. It is the same class as C3's own confessed first- version bug, and no existing test can see it — `test/bug-273-c3-whole-lane-timeout.test.js` is pure source-shape regex. **This is new work, not an audit correction, and it needs its own ticket.**
 
 `node mythos/scripts/verify-voice-session.js <log>` prints every criterion green
 or red, and as of this entry the self-interruption line actually measures
