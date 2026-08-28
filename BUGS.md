@@ -8657,7 +8657,54 @@ mechanism.
 ---
 
 ### BUG-029: Orphaned browser-automation Chrome process keeps playing audio after MYTHOS + browser are fully closed
-**Status:** 🔧 CODED (2026-07-17, hardened 2026-07-19 Phase 3) — mitigation shipped + hardened. `adapters/browser-agent/index.js` writes the launched browser's PID to `mythos/.browser-agent.pid` on launch (cleared on clean close/disconnect); `Start Agent OS.bat` kills any PID found in that file (with `/T` for the tree) before booting. **Phase 3 hardening (2026-07-19):** (a) the pidfile now ALSO covers `from-browser.js` `browser_launch_debug`'s detached spawn (previously the orphan gap — those browsers didn't write the pidfile, so `.bat` cleanup missed them); (b) the `.bat` now verifies the PID's command line contains `MYTHOS` or `chrome-debug-profile` before tree-killing — belt-and-suspenders so a wrong PID in the file can't close the operator's own Chrome. The proper D-07 graceful-shutdown fix and a live reproduction remain open.
+**Status:** ✅ MECHANISM VERIFIED 2026-08-28 — 6 assertions, 6 mutations all caught.
+Originally 🔧 CODED (2026-07-17, hardened 2026-07-19 Phase 3) — mitigation shipped + hardened.
+
+> **A HIGH-severity mitigation with zero tests, for thirteen months.** Measured
+> 2026-08-28: `grep -rl "browser-agent.pid" test/` returned **nothing**. Four
+> pieces have to hold together and three of them can rot independently and
+> silently, so `test/bug-029-orphan-browser-pidfile.test.js` now pins all four.
+>
+> **The load-bearing one, and the reason this is worth a test at all:**
+> `from-browser.js:1091` calls the recorder behind `typeof
+> browserAgent.recordLaunchedPid === 'function'`. **Renaming or dropping that
+> export turns the call into a silent no-op and reopens the Phase 3 orphan gap
+> with nothing anywhere failing.** Mutation M1 does exactly that and is caught.
+>
+> **6 mutations, all 6 caught**, each sha256-verified applied, all three files
+> restored sha256-identical:
+>
+> | # | mutation | file |
+> |---|---|---|
+> | M1 | `recordLaunchedPid` renamed — the guarded call no-ops | adapter |
+> | M2 | the clean-close `unlinkSync` removed — every boot tree-kills a dead PID | adapter |
+> | M3 | the detached spawn stops recording its PID — the Phase 3 gap reopened | effector |
+> | M4 | the tree-kill moved BEFORE the provenance branch | launcher |
+> | M5 | the operator-protecting skip message deleted | launcher |
+> | M6 | provenance reverted to `wmic`, removed from Windows 11 | launcher |
+>
+> **M4 and M6 are the safety half.** A stale or hand-edited pidfile must never
+> make the launcher `taskkill /F /T` an unrelated process, so the test asserts
+> the kill sits *inside* the provenance-OK branch by index comparison — checking
+> the tokens merely exist would be satisfied by an unconditional kill, which is
+> the defect. M6 matters because a reverted `wmic` call returns nothing on
+> Windows 11, which fails toward *skip* — quietly leaving the orphan alive, i.e.
+> the original symptom, rather than killing the wrong thing.
+>
+> **Claim (a) below was checked and is TRUE.** It reads oddly — `from-browser.js`
+> contains no reference to the pidfile path — because it calls the adapter's
+> exported function by name instead. Two greps said otherwise before the right
+> one was run; recorded so the next reader does not repeat them.
+>
+> **Source-shape, deliberately.** `recordLaunchedPid` writes to a path from a
+> module constant with no injectable seam, and the file is gitignored operator
+> state — calling it here would overwrite the operator's live pidfile, which is
+> the destructive-test pattern BUG-346's wakeword race is the standing example of.
+> Presence and wiring are asserted; `fs.writeFileSync` is not what rots.
+>
+> **NOT closed by this:** no real orphaned Chrome was spawned and killed, so the
+> `taskkill` itself is unexercised end to end. That needs the repro — leave a
+> browser-automation Chrome running, close everything, and boot. `adapters/browser-agent/index.js` writes the launched browser's PID to `mythos/.browser-agent.pid` on launch (cleared on clean close/disconnect); `Start Agent OS.bat` kills any PID found in that file (with `/T` for the tree) before booting. **Phase 3 hardening (2026-07-19):** (a) the pidfile now ALSO covers `from-browser.js` `browser_launch_debug`'s detached spawn (previously the orphan gap — those browsers didn't write the pidfile, so `.bat` cleanup missed them); (b) the `.bat` now verifies the PID's command line contains `MYTHOS` or `chrome-debug-profile` before tree-killing — belt-and-suspenders so a wrong PID in the file can't close the operator's own Chrome. The proper D-07 graceful-shutdown fix and a live reproduction remain open.
 **Severity:** HIGH (survives full app shutdown, invisible in Task Manager, only recoverable by restarting) | **Reported:** 2026-07-16 (live session)
 
 **Symptom:** A YouTube video MYTHOS opened for "news" kept playing audio in the background after the user closed the browser window AND closed the terminal running `start.bat`. Checked Task Manager — nothing obviously identifiable was running. Only fix was to run `start.bat` again, reopen the HUD, and ask MYTHOS by voice to close the news panel — which worked.

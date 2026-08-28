@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6895,
+      "value": 6901,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -1955,9 +1955,10 @@
       {
         "n": 29,
         "shape": "entry",
-        "state": "coded",
+        "state": "verified",
         "title": "Orphaned browser-automation Chrome process keeps playing audio after MYTHOS + browser are fully closed",
         "detail": {
+          "limits": "no real orphaned Chrome was spawned and killed, so the > `taskkill` itself is unexercised end to end. That needs the repro — leave a > browser-automation Chrome running, close everything, and boot. `adapters/browser-agent/index.js` writes the launched browser's PID to `mythos/.browser-agent.pid` on launch (cleared on clean close/disconnect); `Start Agent OS.bat` kills any PID found in that file (with `/T` for the tree) before booting.",
           "symptom": "A YouTube video MYTHOS opened for \"news\" kept playing audio in the background after the user closed the browser window AND closed the terminal running `start.bat`. Checked Task Manager — nothing obviously identifiable was running. Only fix was to run `start.bat` again, reopen the HUD, and ask MYTHOS by voice to close the news panel — which worked. **Root cause (two candidate mechanisms, not yet isolated by live reproduction):** 1. **Windows SIGINT/SIGTERM delivery gap (already documented elsewhere in this codebase).** `main.js:541-542` wires `process.on('SIGINT'/'SIGTERM', stopRunningLoops)`, which calls `pcChild.shutdownPcChild()` and `browserAgent.disconnect()` (`main.js:524-525`). But `main.js`'s own comment block (lines 493-495) already documents that a watched-directory handle can block `child.kill('SIGINT'/'SIGTERM')` from ever reaching `process.on()` on Windows — the same known ga…",
           "fix": "This is the real-world symptom of the already-tracked",
           "files": "`mythos/src/main.js` (lines 493-495, 520-542, `stopRunningLoops`), `mythos/adapters/browser-agent/index.js` (`launchLocal`, `disconnect`, `writeBrowserPidFile`, new `findChromePidByUserDataDir`) — cross-reference `D-07` in the roadmap table below. ---"
@@ -3939,10 +3940,10 @@
       }
     ],
     "counts": {
-      "verified": 59,
+      "verified": 60,
       "fixed": 172,
       "open": 6,
-      "coded": 3,
+      "coded": 2,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0
