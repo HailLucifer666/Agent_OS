@@ -3861,10 +3861,10 @@
       {
         "n": 387,
         "shape": "entry",
-        "state": "coded",
+        "state": "verified",
         "title": "`doctor` reported the Google grant OK for three weeks while 88 calls failed on it",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions, 9 mutations all caught. **This does NOT close Track A's two nodes.** They need three operator minutes and no session can supply them. What it removes is the reason those three minutes kept not happening. ### The defect, measured live on this machine ``` $ node mythos/scripts/doctor.js OK Gmail / Calendar sensors configured: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN ``` At that same moment, from the vault: **88 `invalid_grant` failures across 60 separate bursts between 2026-08-06 and 2026-08-26**, every one of them saying the refresh token is expired or revoked. The single check an operator runs to answer *\"is my Gmail set up?\"* was answering **yes** about the exact thing that was broken. **The class is an existence check standing…"
+        "excerpt": "**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign **Track A**. New `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions, 9 mutations all caught. **LIVE RUN, both halves, 2026-08-28 — and the fix caught a real dead grant.** This ticket shipped its own oracle, so verification needed no voice session and no operator: running the two commands IS the verification. ``` $ node scripts/verify-google-grant.js verify-google-grant: INVALID The Google grant is dead: invalid_grant: Token has been expired or revoked. — this is NOT a network problem and will not recover on its own ... run `node scripts/google-auth.js` and put the new GOOGLE_REFRESH_TOKEN in mythos/.env. If this recurs roughly every 7 days, re-authorising alone will NOT fix it: an OAuth consent screen with external user type and publishing status \"Testing\" is issued refresh tokens that expire in 7 days. Publi…"
       },
       {
         "n": 388,
@@ -3930,10 +3930,10 @@
       }
     ],
     "counts": {
-      "verified": 54,
+      "verified": 55,
       "fixed": 170,
       "open": 7,
-      "coded": 8,
+      "coded": 7,
       "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0

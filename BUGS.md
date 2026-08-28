@@ -767,11 +767,39 @@ inference, so it was corrected rather than worked around.
 
 ---
 
-## BUG-387 — `doctor` reported the Google grant OK for three weeks while 88 calls failed on it (🔧 CODED 2026-08-28)
+## BUG-387 — `doctor` reported the Google grant OK for three weeks while 88 calls failed on it (✅ LIVE-VERIFIED 2026-08-28)
 
-**Status:** 🔧 CODED 2026-08-28. Closure-campaign **Track A**. New
+**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign **Track A**. New
 `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions,
 9 mutations all caught.
+
+**LIVE RUN, both halves, 2026-08-28 — and the fix caught a real dead grant.**
+This ticket shipped its own oracle, so verification needed no voice session and no
+operator: running the two commands IS the verification.
+
+```
+$ node scripts/verify-google-grant.js
+verify-google-grant: INVALID
+  The Google grant is dead: invalid_grant: Token has been expired or revoked. —
+  this is NOT a network problem and will not recover on its own ... run
+  `node scripts/google-auth.js` and put the new GOOGLE_REFRESH_TOKEN in
+  mythos/.env. If this recurs roughly every 7 days, re-authorising alone will NOT
+  fix it: an OAuth consent screen with external user type and publishing status
+  "Testing" is issued refresh tokens that expire in 7 days. Publish the app
+  first ... and only then re-authorise. Do not retry.
+
+$ node scripts/doctor.js
+  OK    Gmail / Calendar sensors    configured: GOOGLE_CLIENT_ID,
+        GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN — present, but validity NOT
+        checked here: run `node scripts/verify-google-grant.js`
+```
+
+That is exactly the two behaviours the ticket was written to produce. The checker
+names the cause, distinguishes it from a network fault, and carries the 7-day
+Testing-mode trap; and **`doctor` no longer converts presence into validity** —
+the defect this entry is named for. **The operator's Google grant is dead right
+now**, which is why Gmail has been failing, and re-authorising needs the consent
+screen published FIRST or the new token expires the same way within 7 days.
 
 **This does NOT close Track A's two nodes.** They need three operator minutes
 and no session can supply them. What it removes is the reason those three
