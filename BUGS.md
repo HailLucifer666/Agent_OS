@@ -41,10 +41,115 @@ it is committed.
 
 ---
 
-## BUG-392 — a caller abort drops the provider cooldowns it had already earned, and says nothing (FILED 2026-08-28, OPEN)
+## BUG-392 — a caller abort drops the provider cooldowns it had already earned, and says nothing (✅ FIXED 2026-08-28)
 
-**Status:** OPEN — filed, reproduced, and deliberately not repaired. Found by the
-2026-08-28 audit read of BUG-273. No test ships with this entry because no
+**Status:** ✅ FIXED 2026-08-28, mutation-proven (5/5 caught, 0 unscored), suite
+6863/6863/0/0. **The mechanism was exactly as filed. The reachability was not, and
+the ticket's own instruction to measure before sizing the fix is what caught it.**
+7 assertions in `test/bug-392-abort-drops-earned-cooldowns.test.js`.
+
+### The reachability claim was wrong, and this is now a LATENT defect
+
+The entry below says *"the window is wide whenever the per-attempt ceiling
+(`CHAIN_ATTEMPT_TIMEOUT_MS`) is below the caller's own, which is the configuration
+the per-attempt ceiling exists for."* Measured, that configuration is not shipped
+and the window is not wide. Three probes:
+
+| probe | result |
+|---|---|
+| the entry's probe 1 — `AbortError` out of `chain.complete` in `%APPDATA%/MYTHOS/mythos-server.log` (28,952 lines, 2026-08-10…27) | **0 — and the probe cannot work.** `brain/index.js:220` converts the AbortError to `{ content: null, aborted: true }` and logs nothing; and `voice-agent.js` passes no `onAttemptEnd`, so voice-lane attempts leave no `*.attempt` line either. All 59 `aborted` lines in that log are `timedOut:true` — attempts that hit their OWN ceiling, on the vision and reasoning lanes. **The one path that can hit this bug is the one path with no attempt telemetry.** |
+| the entry's probe 2 — audit vault turns ending without a provider outcome | **not answerable.** 0 of 780,450 records carry a `provider` field at all. Incidentally: 8 records with `actor:"voice"` against 863 `voice-live`, so the classic voice path is barely exercised. |
+| a third probe, added because the first two are blind — every `.think()` call site in the tree | **38 parsed; exactly ONE passes a caller `signal`** (`voice/voice-agent.js:413`), and it does **not** override `attemptTimeoutMs`. |
+
+So on the only path where a caller signal exists, the per-attempt ceiling and the
+caller's own ceiling are **both 30000ms** (`chain.js` `ATTEMPT_TIMEOUT_MS` default;
+`.env:182` leaves the override commented out), and the caller's timer is armed
+**first** — `server/index.js:3300`, before the memory-recall work that precedes
+`handleUtterance`. The caller therefore aborts before any attempt can reach its own
+ceiling, `attemptTimedOut` stays false, nothing is ever deferred, and nothing is
+dropped. `deep-think.js:113` and `vision-call.js:133` DO lower `attemptTimeoutMs`
+but pass no signal, so the abort exit is unreachable from them.
+
+**Precondition for it to be live:** an operator lowers `CHAIN_ATTEMPT_TIMEOUT_MS`
+below the voice turn's 30s ceiling. `schema.js:553` supports that down to 1000.
+Fixed anyway, because it is the third instance of one invariant — not because a
+session was observed losing a cooldown.
+
+### The fix
+
+`settleDeferredTimeouts()` before the abort throw, and nothing else — the shape the
+entry prescribes. It settles only what was ALREADY deferred, so the adjacent ruling
+at `chain-provider-breakers.test.js:130-142` (a provider interrupted BY the abort
+earns nothing) survives untouched: the discriminator is `attemptTimedOut`, set only
+by the chain's own timer, so a provider killed by the caller never enters
+`deferredTimeoutCooldowns` and settling cannot reach it. That non-change is pinned
+by its own test.
+
+Two things the entry told the fixer to check, both real:
+
+1. **The settle is wrapped, because it could have destroyed the AbortError.**
+   `settleDeferredTimeouts` guards its own `bus.emit`, but `breaker.recordFailure()`
+   reaches an **unguarded** `bus.emit` at `immune/breakers.js:136`. A throwing
+   `health.anomaly` subscriber would have replaced the caller's AbortError with its
+   own error, so the turn would lose the reason it ended. It now fails open loudly:
+   the abort propagates unchanged and the swallowed cause is named in a warn.
+   **Bounded residual, deliberately not fixed here:** such a throw mid-loop leaves
+   the remaining deferred cooldowns unapplied while `deferredSettled` is already
+   true, so they are lost. Needs a throwing subscriber; different ticket.
+2. **`onAttempt(...)` was fixed too — it is the same class one line away.** This
+   file states the invariant about itself twice ("Telemetry must never be able to
+   break the chain walk it is measuring") and wraps `reportSkip` and
+   `reportAttemptEnd`. `onAttempt` was the one callback left bare, and in production
+   it is `bus.emit('brain-spend', ...)`, so one throwing subscriber killed the turn
+   with an error naming neither the chain nor the subscriber. Pre-fix the new test
+   for it failed at `chain.js:347:20`, exactly where the entry predicted.
+
+### The class, and the guard that outlives this entry
+
+This is the same omission for the **third** time on the **third** exit. The comment
+above `settleDeferredTimeouts` asserted full coverage — *"Called on EVERY exit from
+the walk — success and exhaustion both"* — and that sentence was already false when
+it was written, because the abort exit existed and was not counted. Prose is what
+failed here, so the replacement is executable: the test file counts the
+`return`/`throw` exits inside `complete()` and fails when a new one appears without
+a settle. Mutation M4 added a fourth exit and the guard caught it; M3 removed the
+*exhaustion* settle and it caught that too, so it is measuring settles rather than
+passing vacuously.
+
+### Verification
+
+```
+node --test test/bug-392-abort-drops-earned-cooldowns.test.js   pre-fix:  7 tests, 2 pass, 4 fail
+                                                               post-fix: 7 tests, 7 pass, 0 fail
+node --test (full suite)                                        6863 pass, 0 fail, 0 skipped
+mutations                                                       5 applied (sha-verified), 5 caught, 0 unscored
+```
+
+The 2 tests that passed pre-fix are the two that must: the CONTROL (proving the rig
+genuinely defers an owed cooldown, so the reproduction is not passing because
+nothing matched) and the DISPOSITION PIN (the adjacent ruling, unchanged by design).
+
+**NOT live-verified, and it cannot be from here — the register's `verified` state
+rests on the mutation proof alone.** No live session was observed dropping a
+cooldown, because on shipped defaults none can. The fix is proven against the
+mechanism, not against an incident. To make it live-observable an operator would
+have to set `CHAIN_ATTEMPT_TIMEOUT_MS` to something like 5000 and abandon a voice
+turn mid-walk. A healthy result afterwards is unchanged voice behaviour with no new
+`settle-on-abort failed` warns; that warn appearing means a `health.anomaly`
+subscriber is throwing and item 1's residual has become real.
+
+**What the original filing got right, and it is most of it:** the mechanism, the
+three exits, the wrong comment, the idempotency of `deferredSettled`, the
+`onAttempt` hazard, the adjacent ruling that had to survive, and the deterministic
+rig — the reproduction below was reused almost verbatim as the test's harness.
+
+---
+
+**Original filing, 2026-08-28, kept verbatim below.** Its reachability paragraph is
+superseded by the measurement above.
+
+**Status at filing:** OPEN — filed, reproduced, and deliberately not repaired. Found
+by the 2026-08-28 audit read of BUG-273. No test ships with this entry because no
 behaviour changed; the reproduction below is the deliverable.
 
 **A note the next filer needs, learned by this entry filing itself CLOSED.** The
@@ -17067,6 +17172,14 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   `chain-whole-lane-timeout` anomaly. The comment at `:271` claims settle runs on
   "EVERY exit from the walk" and there are three exits, not two. Reproduced
   deterministically 2026-08-28; full entry and rig at the top of this file.
+  **FIXED 2026-08-28**, mutation-proven 5/5, suite 6863/6863/0/0. Settle before the
+  throw, plus the `onAttempt` parity gap one line away, plus an executable exit-count
+  guard so a fourth exit cannot be added silently. **The filed reachability claim was
+  measured and refuted:** exactly one call site in the tree passes a caller signal
+  and it does not lower `attemptTimeoutMs`, so on shipped defaults the caller aborts
+  before any attempt reaches its own ceiling and nothing is ever deferred to drop.
+  Latent, not live; precondition is `CHAIN_ATTEMPT_TIMEOUT_MS` set below 30000.
+  Both probes the entry named are structurally blind — see the entry.
 ### Registry hygiene carried from the audit
 
 BUGS.md headers stop at BUG-322; BUG-323..342 live in commit messages and
