@@ -235,12 +235,31 @@ ticket.**
 So, in order:
 
 1. **Give BUG-274 an explicit `**Status:**` line.** A Status line outranks every
-   marker, so this removes the dependence entirely. It is durable on its own and
-   worth doing first even if nothing else follows. Note while writing it that
-   `classify` has no route from the WORD `OPEN` on a Status line — the only paths
-   to `open` are the register, a bold marker, or `NOT STARTED` in the body — so
-   the line must not introduce a closure word and the body must keep saying
-   `NOT STARTED`. That missing route is arguably a third defect.
+   marker, so this removes the dependence on another ticket's text. It is durable
+   on its own and worth doing first even if nothing else follows.
+
+   **Measured 2026-08-28, and it corrects the obvious version of this advice.**
+   `classify` has **no route from the WORD `OPEN` on a Status line** — the only
+   paths to `open` are the register, a bold marker, or `NOT STARTED` anywhere in
+   the body. So a Status line saying `OPEN` is *decorative*: it would silence the
+   wrong marker and leave the real route as `NOT STARTED` in the body, which is
+   the ticket's own text and therefore an improvement, but not a clean fix. Say
+   that plainly rather than claiming the Status line closed the hole.
+
+   **And do not fix the missing route with a bare word match.** Of 243 entries,
+   exactly two carry `OPEN` somewhere in a Status line while classifying closed —
+   **BUG-93 (`fixed`) and BUG-276 (`verified`)** — in both cases incidentally,
+   inside a longer line that states `FIXED`. A naive `/\bOPEN\b/` on the Status
+   line would flip two correctly-closed entries to open. The route has to be
+   position-anchored the way the duplicate check already is (`^[^.]{0,40}`), not a
+   bare word test.
+
+   **Who else depends on the fallback:** five entries reach `open` from outside
+   the register, and **none of them has a Status line**. BUG-266/267/268 use bold
+   `**OPEN**` markers and carry no `NOT STARTED` at all; **BUG-274 and BUG-275
+   both rest on `NOT STARTED` appearing somewhere in their body**, so an editorial
+   rewrite of either entry's prose can silently unrecord it. BUG-275 deserves the
+   same Status line as BUG-274 and for the same reason.
 2. Then bound the entry bodies, and inspect all four state changes by hand rather
    than counting them.
 3. Then tighten both patterns together, using the tight form already proven as
