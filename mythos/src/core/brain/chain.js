@@ -269,12 +269,21 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
   let nonTimeoutFailures = 0;
   let anyAttemptSucceeded = false;
 
-  // Settle the deferred timeout cooldowns. Called on EVERY exit from the walk —
-  // success and exhaustion both — because the first version only ran it on the
-  // exhausted path, which silently dropped the cooldown for every run that
-  // eventually got an answer. That is the common case, so it disabled B1's fix
-  // almost entirely: caught by chain-provider-breakers.test.js's very first
-  // assertion, not by anything written for C3.
+  // Settle the deferred timeout cooldowns. There are THREE exits from the walk and
+  // it is called on all of them: success (~line 430), caller abort (~line 375) and
+  // exhaustion (~line 500). This comment used to say "EVERY exit — success and
+  // exhaustion both", and that was already wrong when it was written: the abort exit
+  // existed, was not counted, and dropped its cooldowns in silence for as long as
+  // the sentence stood (BUG-392, 2026-08-28). The count is spelled out here rather
+  // than asserted in prose because prose is what failed. If you add a fourth exit,
+  // settle on it — bug-392-abort-drops-earned-cooldowns.test.js counts the exits in
+  // this function and fails when a new one appears without a settle.
+  //
+  // History, which is why the count matters: the FIRST version ran it only on the
+  // exhausted path, silently dropping the cooldown for every run that eventually got
+  // an answer. That is the common case, so it disabled B1's fix almost entirely —
+  // caught by chain-provider-breakers.test.js's very first assertion, not by
+  // anything written for C3. Twice is a class, so the guard is now executable.
   //
   // anyAttemptSucceeded is part of the discriminator, and the reason is the whole
   // argument of this fix read backwards: the exemption exists because nine
@@ -332,7 +341,55 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
 
   for (const { lane, model } of attempts) {
     // B4: Use AbortError name so downstream catch blocks recognize it as a caller abort.
-    if (signal && signal.aborted) { const e = new Error('aborted'); e.name = 'AbortError'; throw e; }
+    //
+    // BUG-392 (2026-08-28): this exit used to throw WITHOUT settling, so every
+    // cooldown a provider had already earned on its own merits was discarded, and
+    // discarded in silence — no markCooldown, no recordFailure, no
+    // whole-lane-timeout warn, no health.anomaly. THIS IS THE SAME OMISSION FOR THE
+    // THIRD TIME: the first version of settleDeferredTimeouts ran only on the
+    // exhausted path, the second added success, and the comment written then
+    // ("Called on EVERY exit from the walk") was already false because this exit
+    // existed and was not counted. See settleDeferredTimeouts above.
+    //
+    // WHAT THIS DOES **NOT** DO, and must not. It settles only what was ALREADY
+    // deferred; it does not cool down the attempt the abort interrupted.
+    // chain-provider-breakers.test.js:130-142 rules that a caller changing its mind
+    // says nothing about the provider it interrupted, and that ruling stands. The
+    // discriminator is attemptTimedOut, set by OUR timer at line ~365 and never by
+    // the caller's signal: a provider killed by the caller never sets it, so it
+    // never enters deferredTimeoutCooldowns and settling cannot reach it. When both
+    // timers fire in the same tick the outcome follows whichever setTimeout ran
+    // first, which is the honest answer for a genuinely simultaneous case.
+    //
+    // DOES THIS HIDE EVIDENCE? It could have. settleDeferredTimeouts guards its own
+    // bus.emit, but breaker.recordFailure() reaches an UNGUARDED bus.emit at
+    // immune/breakers.js:136, so a throwing health.anomaly subscriber would replace
+    // the AbortError with its own error and the caller would lose the reason its
+    // turn ended. The settle is therefore wrapped and fails open LOUDLY: the abort
+    // still propagates unchanged, and the swallowed cause is named. Residual, NOT
+    // fixed here because it needs a throwing subscriber and is a different ticket:
+    // such a throw mid-loop leaves the remaining deferred cooldowns unapplied while
+    // deferredSettled is already true, so they are dropped for good.
+    //
+    // REACHABILITY, measured 2026-08-28 — LATENT, not live, and the filed ticket's
+    // "the window is wide" was wrong. Exactly one call site in the tree passes a
+    // caller signal to brain.think (voice/voice-agent.js:413) and it does not
+    // override attemptTimeoutMs, so the per-attempt ceiling and the voice turn's own
+    // ceiling are both 30000ms and the caller's timer is armed FIRST (server/
+    // index.js:3300, before the memory-recall work). The caller therefore aborts
+    // before any attempt can reach its own ceiling, attemptTimedOut stays false, and
+    // nothing is ever deferred to drop. It becomes live when an operator lowers
+    // CHAIN_ATTEMPT_TIMEOUT_MS below the caller's budget, which schema.js:553
+    // supports down to 1000.
+    if (signal && signal.aborted) {
+      try {
+        settleDeferredTimeouts();
+      } catch (settleErr) {
+        console.warn('[brain chain] settle-on-abort failed, cooldowns for this run were not recorded: '
+          + String(settleErr && settleErr.message || settleErr).slice(0, 200));
+      }
+      const e = new Error('aborted'); e.name = 'AbortError'; throw e;
+    }
     if (isCooling(lane, model)) { reportSkip(lane, model, 'cooldown'); continue; }
     // Skip lanes whose provider isn't configured (e.g. GROQ_API_KEY not set).
     if (LANES[lane] && typeof LANES[lane].isAvailable === 'function' && !LANES[lane].isAvailable()) continue;
@@ -344,7 +401,17 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
       reportSkip(lane, model, 'breaker-open');
       continue;
     }
-    if (onAttempt) onAttempt({ provider: lane, model });
+    // BUG-392 (2026-08-28), the parity gap one line from the abort exit. This file
+    // states the invariant about itself twice — "Telemetry must never be able to
+    // break the chain walk it is measuring" — and wraps reportSkip and
+    // reportAttemptEnd accordingly. onAttempt was the only instrumentation callback
+    // left bare, and in production it is bus.emit('brain-spend', ...) from
+    // brain/index.js, so one throwing subscriber killed the whole turn with an error
+    // naming neither the chain nor the subscriber. Same swallow, same comment, so
+    // the three callbacks can be reasoned about as one rule instead of two-and-a-half.
+    if (onAttempt) {
+      try { onAttempt({ provider: lane, model }); } catch (_) { /* instrumentation only */ }
+    }
     const attemptStartedAt = Date.now();
     // Declared out here, not inside the try below: the catch block has to be able
     // to tell "this attempt hit ITS OWN timeout" apart from a provider error, and

@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6883,
+      "value": 6890,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3908,10 +3908,10 @@
       {
         "n": 392,
         "shape": "entry",
-        "state": "open",
-        "title": "a caller abort drops the provider cooldowns it had already earned, and says nothing (FILED 2026-08-28, OPEN)",
+        "state": "verified",
+        "title": "a caller abort drops the provider cooldowns it had already earned, and says nothing",
         "detail": {},
-        "excerpt": "**Status:** OPEN — filed, reproduced, and deliberately not repaired. Found by the 2026-08-28 audit read of BUG-273. No test ships with this entry because no behaviour changed; the reproduction below is the deliverable. **A note the next filer needs, learned by this entry filing itself CLOSED.** The register classifier tests `/\\bFIXED\\b/i` against the heading and the `**Status:**` line and has no negation handling, so the words \"NOT FIXED\" read as FIXED. This entry was written with \"(FILED 2026-08-28, NOT FIXED)\" in its heading and came back from `build-index.js` as `fixed`. Say OPEN, and put the number in the OPEN WORK register — `openSet.has(n)` is checked before the fixed test and is the only statement of status that cannot be defeated by a word appearing elsewhere. **The defect.** `src/core/brain/chain.js:335` is the loop-top abort check: ```js if (signal && signal.aborted) { const e…"
+        "excerpt": "**Status:** ✅ FIXED 2026-08-28, mutation-proven (5/5 caught, 0 unscored), suite 6863/6863/0/0. **The mechanism was exactly as filed. The reachability was not, and the ticket's own instruction to measure before sizing the fix is what caught it.** 7 assertions in `test/bug-392-abort-drops-earned-cooldowns.test.js`. ### The reachability claim was wrong, and this is now a LATENT defect The entry below says *\"the window is wide whenever the per-attempt ceiling (`CHAIN_ATTEMPT_TIMEOUT_MS`) is below the caller's own, which is the configuration the per-attempt ceiling exists for.\"* Measured, that configuration is not shipped and the window is not wide. Three probes: | probe | result | |---|---| | the entry's probe 1 — `AbortError` out of `chain.complete` in `%APPDATA%/MYTHOS/mythos-server.log` (28,952 lines, 2026-08-10…27) | **0 — and the probe cannot work.** `brain/index.js:220` converts the Ab…"
       },
       {
         "n": 393,
@@ -3931,9 +3931,9 @@
       }
     ],
     "counts": {
-      "verified": 57,
+      "verified": 58,
       "fixed": 170,
-      "open": 7,
+      "open": 6,
       "coded": 5,
       "diagnosed": 2,
       "duplicate": 2,
@@ -3943,7 +3943,6 @@
     "openDeclared": [
       274,
       275,
-      392,
       394
     ],
     "pointerOnly": 11,
