@@ -234,7 +234,16 @@ ticket.**
 
 So, in order:
 
-1. **Give BUG-274 an explicit `**Status:**` line.** A Status line outranks every
+1. **✅ DONE 2026-08-28 — give BUG-274 an explicit `**Status:**` line.** Shipped for
+   BUG-274 **and** BUG-275, and both are now declared in the OPEN WORK register too,
+   so neither rests on a single route. **Proven, not asserted:** simulating step 3's
+   tightening against `HEAD` and against the working tree shows BUG-274 as
+   `hasStatusLine=false, declaredInRegister=false, tightFixed=true` before —
+   i.e. it WOULD have read closed the moment the patterns were tightened — and
+   protected on both routes after. The wrong nested `bulletFixed` match still
+   exists; it can simply no longer reach the disposition. **Step 3 is therefore
+   unblocked.** The original note, kept because its reasoning is the reason this
+   was done first: a Status line outranks every
    marker, so this removes the dependence on another ticket's text. It is durable
    on its own and worth doing first even if nothing else follows.
 
@@ -5362,6 +5371,8 @@ All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 i
 
 ## BUG-275 — the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19
 
+**Status:** OPEN — the repair is NOT STARTED. All three of this entry's own "check first" items were answered 2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted) and the findings are in the sections below. **BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the words "NOT STARTED" appearing somewhere in its prose, so an editorial rewrite could have silently unrecorded it. H2 — defending an invention when challenged — is the highest-severity half.
+
 **Reported by the operator, 2026-08-19, from a live voice conversation: "it hallucinates".
 Filed for later, deliberately not fixed in the same session.**
 
@@ -5631,6 +5642,8 @@ still needs a signal the log does not carry.
 ---
 
 ## BUG-274 — dependency and licence remediation (PLANNED, NOT STARTED) — opened 2026-08-19
+
+**Status:** OPEN — planned, NOT STARTED. Blocked on an operator/legal decision, not on engineering. **BUG-394 step 1, 2026-08-28:** this line exists so the entry no longer draws its `open` state from a nested bullet about another ticket — measured that day, `bulletPartial` matched this entry only because a follow-up bullet said "NOT yet" about a different number, and tightening that pattern without this line would have reported a live licence ticket as done. The line is deliberately word-free of every closure and state token `classify` reads, and it is declared in the OPEN WORK register as well, so neither route stands alone.
 
 A verified sweep of 15 capability areas (stars, licence and last-push read from the GitHub
 API, not from articles) produced five items worth implementing and a much longer list of
@@ -17282,7 +17295,7 @@ TEMP/TMP long-form before spawning MYTHOS or the suite.
   **THE OVERRIDE FIRES ONLY WHEN EXACTLY ONE SESSION IS PLAYING.** "First playing session wins" does not deliver the invariant this ticket exists for: `GetSessions()` has no documented ordering, and the read path and the control path enumerate from TWO DIFFERENT manager instances - so with two playing they could pick differently AT THE SAME INSTANT, not merely across time. Ambiguity keeps today's answer and is REPORTED (`current-ambiguous`). An alphabetical tiebreak was considered and rejected because two concurrent sessions were measured reporting the SAME AppUserModelId (`powershell.exe`, one Playing and one Paused) - a sort that looks total and is not.
   **FOUR POWERSHELL/COM TRAPS were measured, and every one would have broken an obvious-looking fix:** (1) `$sessions.Count` DOES NOT COUNT - it member-enumerates and answered `1 1 1` for three sessions, and a correct-looking `1` for one, which is exactly how a single-session machine manufactures a false premise; (2) `$sessions[0]` does not index and `GetAt()` does not exist on the projection; (3) **resolving a member name against the COLLECTION can blank that member for the REST OF THE RUNSPACE** - every session's `SourceAppUserModelId` then reads back empty, silently, and pc-child is spawned once at boot, so one such line would empty the media source until MYTHOS restarts; (4) `GetCurrentSession()` is NOT reference-equal to any element of `GetSessions()`, so "is the current session the playing one" cannot be asked by identity. A fifth was found by a test: `return @()` COLLAPSES TO `$null` in PowerShell, so the helper that promised "always an array" was returning `$null` and only working because `$null.Length` happens to be 0. Fixed with `return ,@()`.
   **VERIFICATION.** 33 assertions, **29 mutations all caught**. The selection functions are extracted from the real script by name and executed in a fresh powershell.exe against FABRICATED sessions - behavioural, not source-shape, and machine-independent, because a real-SMTC test asserts on whatever happens to be playing and would fail for good on any other machine. Plus a `Parser::ParseFile` check and a brace-balance check. Suite 6844/6844/0/0; all 39 neighbouring PowerShell guards still green. LIVE through the real script: `source` is now `"Spotify"` (was `SpotifyMusic_zpdnekdrzrea0!Spotify`), `sourceId`/`sessionCount`/`playingCount`/`selectedBy` all present, `available:true` preserved for `verify-bug-001-spotify-play.js:147`'s oracle, and a CJK track title survived the UTF-8/`\uXXXX` escaping intact.
-  **NOT CLOSED BY THIS.** The multi-session paths were exercised with fabricated sessions, not live - the machine had exactly one real session, and the synthetic ones used to measure the premise were audible to the operator despite `Volume = 0.0` and were removed. **A DECISION REMAINS YOURS:** in the override case MYTHOS's play/pause deliberately stops agreeing with the physical media key, which still drives whatever Windows calls "current" - two "pause" gestures on one machine will do different things, and nothing tells the user. Also unfixed and adjacent: the transport path computes an honest `via` field saying whether SMTC or VK injection was used, and the widget discards it, so a silent degradation to the fragile SendInput path is invisible on the dashboard.
+  **NOT CLOSED BY THIS.** The multi-session paths were exercised with fabricated sessions, not live - the machine had exactly one real session, and the synthetic ones used to measure the premise were audible to the operator despite `Volume = 0.0` and were removed. **A DECISION REMAINS YOURS:** in the override case MYTHOS's play/pause deliberately stops agreeing with the physical media key, which still drives whatever Windows calls "current" - two "pause" gestures on one machine will do different things, and nothing tells the user. Also unfixed and adjacent: the transport path computes an honest `via` field saying whether SMTC or VK injection was used, and the widget discards it, so a silent degradation to the fragile SendInput path is invisible on the dashboard. **MEASURED 2026-08-28, and the premise holds but the severity is lower than it reads.** Scanned all 81 Episodic/Audit vault files: transport results carry via=smtc 40 times, via=vkey 68, and **via=vkey-fallback 6 times** — so the degraded path is genuinely reachable, not hypothetical. Nothing reads the field: the only node-side readers of a .via are from-app-reply.js:150 and from-pc.js:281, both a DIFFERENT via (message-box and document freshness), and the HUD media widget's `via ${sourceName}` at ui/public/js/widgets/kinds/media.js:134 is the SOURCE name, not the transport. So a degradation today would be invisible on the dashboard AND unlogged. **The caveat that stops this being called a live defect:** all 6 fallback events are dated 2026-07-29, a month BEFORE this ticket rewrote the SMTC session selection, and one of them records `smtc:"True"` alongside `via:"vkey-fallback"` — SMTC reporting success while the code still injected a key. That shape would be a double-send, but it cannot be attributed to the current branch from pre-rewrite records. Re-measure against a post-2026-08-27 occurrence before designing anything; if the fallback has not fired since the rewrite, surfacing the field is the whole job.
 - BUG-349 - see_and_click occluded-click refusal. FIXED 3ce6c8e:
 - BUG-350 - verifier retry-guidance mapping. FIXED 1adad59. Original: hard-fails cta/title-overlap killed most of the 11
   failed builds (design/verify.js :167-169,:236-247). Keep rules HARD
@@ -17472,3 +17485,13 @@ those records remain owed (this section is the index until then).
   defect is count-compliance beating source-fidelity.
   **What is left is the actual repair**, H2 (defending an invention when
   challenged) being the highest-severity half.
+
+- BUG-274 - dependency and licence remediation. Five implementable items plus a
+  much longer "change nothing" list; the sweep is done, the work is NOT STARTED.
+  Blocked on an operator/legal decision (notably the CC BY-NC-SA wake-word
+  weights), not on engineering. **Declared here 2026-08-28 as BUG-394 step 1:**
+  measured that day, this entry drew its `open` state from a nested bullet about
+  a DIFFERENT ticket, so tightening the marker patterns without declaring it
+  would have reported a live licence ticket as done. It now has an explicit
+  `**Status:**` line as well, so neither route stands alone. Full entry, with the
+  15-area sweep and the verified upstream licence findings, is at the top.
