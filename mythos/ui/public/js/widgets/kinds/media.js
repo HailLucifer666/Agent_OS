@@ -126,7 +126,12 @@ export function mountMedia(el) {
       }
       // Track info
       titleEl.textContent = m.title ? m.title : '—';
-      artistEl.textContent = m.artist ? m.artist : (m.source ? `via ${m.source}` : 'unknown artist');
+      // BUG-348: 'none' is the PowerShell side's sentinel for "no SMTC session at
+      // all", and it is a TRUTHY STRING — so the idle state, the most common state
+      // on a machine with no media app open, rendered as the literal text
+      // "via none". It is a source name only when it names a source.
+      const sourceName = m.source && m.source !== 'none' ? m.source : '';
+      artistEl.textContent = m.artist ? m.artist : (sourceName ? `via ${sourceName}` : 'no media playing');
       // Status
       if (m.playing) {
         statusEl.textContent = '▶ playing';
