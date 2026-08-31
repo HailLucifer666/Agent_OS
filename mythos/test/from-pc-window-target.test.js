@@ -103,7 +103,14 @@ test('a focus miss that succeeds on the retry proceeds normally (the retry is no
 // bare ok:true off the click call.
 // ---------------------------------------------------------------------------
 
-test('ui_click verifies with a foreground-pid oracle when the target window is still foreground after the click', async () => {
+// BUG-397 REWROTE THIS TEST. It previously asserted that "the target window is
+// still foreground after the click" EARNS a verified ok. That check cannot fail
+// for a click inside that window, so it was pinning a false green: the window
+// stays foreground whether the element reacted or not. BUG-073's real
+// requirement — ui_click must not return a bare ok:true off the click call — is
+// asserted here more strictly than before, because unverified+reason is a weaker
+// claim than the evidence block this used to accept.
+test('ui_click does not turn "still foreground" into a verified click', async () => {
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
     sendCommand: async (cmdObj) => {
@@ -114,10 +121,10 @@ test('ui_click verifies with a foreground-pid oracle when the target window is s
     },
   }, async (fromPc) => {
     const result = await fromPc.ui_click({ pid: 4242, elementPath: ['0', '1'] });
-    assert.equal(result.ok, true);
-    assert.equal(result.unverified, false);
-    assert.ok(result.evidence, 'a verified ui_click must carry an evidence field per evidence.js');
-    assert.equal(result.evidence.oracle, 'foreground-pid');
+    assert.equal(result.ok, true, 'unverified is not a failure');
+    assert.equal(result.unverified, true);
+    assert.equal(result.evidence, undefined, 'no evidence claim may be attached to an unverified click');
+    assert.match(result.reason, /Notepad/, 'the foreground observation is still reported, just not as proof');
   });
 });
 

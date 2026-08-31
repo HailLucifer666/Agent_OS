@@ -18,6 +18,7 @@ const { visionThink } = require('./vision-call');
 // The window a pid-omitted ui_type/ui_click aims at. Was a bare module-scope
 // `lastLaunchedPid` here that any launch overwrote and nothing expired (BUG-353).
 const implicitTarget = require('./implicit-target');
+const uiTarget = require('./ui-target');
 // A fresh module instance owns no target — see forget() for why this line exists.
 implicitTarget.forget();
 
@@ -771,20 +772,34 @@ async function ambient_awareness({ action }) {
   return ok({ running: screenSensorHandle.isRunning() });
 }
 
-async function ui_elements({ pid, depth }) {
+// BUG-397. The tree is TRUNCATED at `depth` and now says so — advice text and
+// reasoning in ui-target.js. Attached to the RESULT because that is the prompt
+// the model reliably reads, at the moment it is relevant (same reasoning as
+// SEE_AND_CLICK_RECOVERY below). Default depth stays 2: raising it pays tokens
+// on every call and only MOVES the boundary rather than making it visible.
+async function ui_elements({ pid, depth, hwnd }) {
   if (!pid) return fail('PID is required.');
-  return delegate({ cmd: 'ui_elements', pid, depth: depth || 2 });
+  var walked = depth || 2;
+  var res = await delegate({ cmd: 'ui_elements', pid, depth: walked, hwnd });
+  if (!res.ok || !res.result || typeof res.result !== 'object') return res;
+  var advice = uiTarget.truncationAdvice(res.result, walked);
+  if (advice) res.result.nextStep = advice;
+  return res;
 }
 
-async function ui_click({ pid, elementPath }) {
+// BUG-397 — `name` is the class fix: ui_elements returns NAMES, ui_click took
+// only INDICES, and that hand conversion is where paths got fabricated.
+async function ui_click({ pid, elementPath, name, automationId, hwnd }) {
   // FIX 1: default the omitted pid to the last app launch_app opened, so the
   // planner doesn't have to remember to thread it through itself.
   var targetPid = coercePid(pid) || implicitTarget.get();
   if (!targetPid) return fail('PID is required.');
-  if (!elementPath || !Array.isArray(elementPath)) return fail('elementPath is required (array of index strings).');
+  var target = uiTarget.clickTarget({ elementPath, name, automationId, hwnd });
+  if (target.error) return fail(target.error);
+  var cmdObj = Object.assign({ cmd: 'ui_click', pid: targetPid }, target.fields);
   // Phase 3 hardening: focus the target window first, then retry on failure —
   // a flaky ui_click often lands once the window is foregrounded.
-  var res = await foregroundThenRetry(targetPid, { cmd: 'ui_click', pid: targetPid, elementPath }, { attempts: 3 });
+  var res = await foregroundThenRetry(targetPid, cmdObj, { attempts: 3 });
   if (!res.ok) return withSeeAndClickRecovery(res);
 
   // WAVE 9 (BUG-073) — ui_click had never earned its evidence: it returned
@@ -839,42 +854,28 @@ async function ui_click({ pid, elementPath }) {
     }
   }
 
+  // BUG-397 — `foreground-pid` IS NO LONGER PROOF OF A CLICK. For a click INSIDE
+  // the target window the check cannot fail (Notepad stays foreground whether the
+  // File menu opened or not), and five no-op clicks were audited ok:true on it
+  // during the 2026-08-14 session. The round trip is KEPT — it still catches a
+  // click that switched away from the target — but it only reports now, it does
+  // not verify. Reached only when nothing observable changed at all, since rung 1
+  // now carries its own oracle. Evidence: test/bug-397-*.test.js header, BUGS.md.
   var fg = await delegate({ cmd: 'get_foreground_window' });
   if (fg.ok && fg.result && fg.result.pid === targetPid) {
-    return evidence.verifiedOk(res, {
-      oracle: 'foreground-pid',
-      expected: String(targetPid),
-      observed: 'pid ' + fg.result.pid + ' ("' + String(fg.result.title || '') + '") is still foreground right after the click',
-    });
+    return evidence.unverified(res,
+      'the click was delivered to pid ' + fg.result.pid + ' ("' + String(fg.result.title || '') + '"), which is the ' +
+      'right window — but this element exposes no state to read back, so nothing here proves it reacted. ' +
+      'Check the result yourself, or drive it with see_and_click or click_at.');
   }
   return evidence.unverified(res,
     'clicked, but could not re-confirm the target window is still foreground afterward — it may have landed on the right element or may not have');
 }
 
-// 2026-08-02 — see_and_click was declared, allowlisted, schema-valid, and called ZERO
-// times all session, while the model burned turn after turn inventing element paths
-// against WhatsApp's empty UIA tree. A tool the model never reaches for is the same as
-// a tool that does not exist.
-//
-// The fix is not another automatic fallback: a click tool must not silently change
-// strategy underneath the model, because "I clicked what you asked" and "I clicked
-// something that looked like it" are different claims. So the recovery is NAMED in the
-// failure message instead. Failure text is the one prompt the model reliably reads, and
-// it arrives at exactly the moment the alternative is relevant.
-//
-// Only appended to the tree-shaped failures. A denied foreground or a dead pid is not
-// something OCR can rescue, and padding every error with irrelevant advice is how
-// advice stops being read.
-var TREE_FAILURE_RE = /out of range|parent has \d+ children|no UIA window|elementPath|no usable named element/i;
-var SEE_AND_CLICK_RECOVERY = ' The UIA tree could not give you this element, and guessing another ' +
-  'elementPath will not fix that. Use see_and_click with the visible text of the thing you want — it ' +
-  'reads the text off the screen with OCR and clicks it, needing no element path and no working a11y tree.';
-
+// Recovery text + rationale moved to ui-target.js with BUG-397. Behaviour same.
 function withSeeAndClickRecovery(res) {
-  var msg = reasonOf(res);
-  if (!msg || !TREE_FAILURE_RE.test(String(msg))) return res;
-  if (String(msg).indexOf('see_and_click') !== -1) return res;
-  return fail(String(msg) + SEE_AND_CLICK_RECOVERY);
+  var msg = uiTarget.seeAndClickRecovery(reasonOf(res));
+  return msg ? fail(msg) : res;
 }
 
 // Windows titles that mean "this is MYTHOS's own UI", i.e. the dashboard the
@@ -1495,8 +1496,8 @@ const TOOLS = [
   { name: 'set_app_mute', description: 'Mute or unmute the audio session of ONE application without touching the system master volume. Reads the mute state back as evidence. Fails honestly if the app has no live audio session.', params: { name: 'string - process name, e.g. "Spotify" (omit .exe)', pid: 'number (optional) - target this exact process', mute: 'boolean - true to mute, false to unmute (default true)' }, danger: false, fn: set_app_mute },
   { name: 'screen_look', description: 'Look at the COMPUTER SCREEN: take a screenshot of the primary display and describe it via a vision brain. This is NOT a camera — it cannot see the operator, their face, their hands, or an object they are holding up; for any of those use camera_look (and camera_on if the camera is off). It is also NOT the way to answer questions about THIS machine: for CPU, cores, RAM, platform or uptime call read_system_specs, which reads the real numbers — never screenshot a dashboard to read them off it. Optionally pass a query to focus the description on part of the screen.', params: { query: 'string (optional) - question to ask about the screen' }, danger: false, fn: screen_look, needs_result: true },
   { name: 'capture_screenshot', description: 'Take a screenshot of the primary screen and save it as a PNG file to the vault/Incidents/ directory for evidence logging.', params: {}, danger: false, fn: capture_screenshot, needs_result: true },
-  { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2' }, danger: false, fn: ui_elements, needs_result: true },
-  { name: 'ui_click', description: 'Click a UI element identified by its path in the UIA tree. Uses Invoke pattern if available, otherwise clicks the element center. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { pid: 'number (optional) - window process ID; defaults to the last launched app', elementPath: 'array of number strings - element indices from root to target' }, danger: true, fn: ui_click },
+  { name: 'ui_elements', description: 'Walk the UI Automation tree of a window and return all interactive elements with their types, names, bounds, and paths. The walk STOPS at `depth`: any element marked truncated has children that are NOT in this result, and their indices cannot be guessed. To reach them, call again with a larger depth, or click by name with ui_click.', params: { pid: 'number - window process ID', depth: 'number (optional) - tree depth, default 2', hwnd: 'number (optional) - walk this exact window handle; use when the process owns several windows' }, danger: false, fn: ui_elements, needs_result: true },
+  { name: 'ui_click', description: 'Click a UI element. PREFER `name` — pass the element\'s visible label (e.g. "Save as") and the path is resolved for you. Use `elementPath` only with indices ui_elements actually returned; NEVER extend a path past what you were shown, because deeper indices cannot be inferred and will fail. Drives the element through its UIA pattern (Invoke, Toggle, SelectionItem, ExpandCollapse or RangeValue) and reports whether it visibly reacted — it never falls back to clicking coordinates; use click_at or see_and_click for that. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { pid: 'number (optional) - window process ID; defaults to the last launched app', name: 'string (optional) - the element\'s visible label; fails and lists the matches if more than one element shares it', automationId: 'string (optional) - the element\'s automationId, when a name is ambiguous or absent', elementPath: 'array of number strings (optional) - element indices from root to target, exactly as returned by ui_elements', hwnd: 'number (optional) - the hwnd ui_elements reported, so the click resolves against the same window the tree came from' }, danger: true, fn: ui_click },
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right, delete, home, end, f1-f12, a single letter, or a combo like ctrl+n). Uses real VK codes for apps that ignore Unicode input, and escalates to posted key messages for packaged apps that silently swallow injected input. Enter inside a chat app is routed through the verified send path, which confirms the message actually left the compose box.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right|delete|home|end|f1-f12, a letter, or a combo like ctrl+n', pid: 'number (optional) - target window PID; when given, the key is refused if the keyboard caret belongs to a different app' }, danger: false, fn: send_key },
   { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
