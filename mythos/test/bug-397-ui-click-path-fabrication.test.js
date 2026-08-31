@@ -399,19 +399,125 @@ describe('ui_click stops reporting unobserved clicks as confirmed', () => {
     const body = psFunctionBody('Handle-UiClick');
     const rung = body.slice(0, body.indexOf('$togglePattern'));
     assert.match(rung, /\$windowsBefore = Get-TopLevelWindowCount \$TargetPid/);
-    assert.match(rung, /\$windowsAfter = Get-TopLevelWindowCount \$TargetPid/);
+    // The "after" read is Wait-ForWindowCountChange, not a second bare count:
+    // the 2026-08-31 live run proved a fixed settle misses a dialog that has not
+    // opened yet. Asserted by behaviour (a bounded wait for the change) rather
+    // than by the old literal, which pinned the timing defect in place.
+    assert.match(rung, /\$windowsAfter = Wait-ForWindowCountChange \$TargetPid \$windowsBefore/);
     assert.match(rung, /Get-ExpandStateOrNull/);
     assert.match(rung, /name = 'invoke-side-effect'/);
-    // Pinned because it was considered and REJECTED: some providers move focus
-    // to the invoked element without honouring the invoke, so a focus signal
-    // would confirm exactly the no-op this oracle exists to catch.
+    // Pinned because it was considered and REJECTED: some providers move UIA
+    // focus to the invoked element without honouring the invoke, so a
+    // FocusedElement signal would confirm exactly the no-op this oracle exists
+    // to catch. GetForegroundWindow is a different fact — another WINDOW came
+    // up — and is used deliberately; see the rung comment.
     assert.doesNotMatch(rung, /FocusedElement/,
-      'keyboard focus is not a valid signal here — see the rung comment');
+      'UIA keyboard focus is not a valid signal here — see the rung comment');
   });
 
   it('Get-ExpandStateOrNull distinguishes "cannot expand" from "did not expand"', () => {
     const body = psFunctionBody('Get-ExpandStateOrNull');
     assert.match(body, /if \(-not \$p\) \{ return \$null \}/,
       'only $null tells the oracle this element has no expand state to read');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHAT THE FIRST LIVE DESKTOP RUN FOUND (2026-08-31).
+//
+// Everything above was green and mutation-proven, and the first run against a
+// real Notepad still failed three ways. None of the three was reachable from CI,
+// because all three are facts about what Windows does rather than about what the
+// code says. Recorded here so the next person does not re-derive them:
+//
+//   1. ONE ELEMENT DESCRIBED TWICE. "Save as" matched at ["0","0","0","0","6"]
+//      as a MenuItem and at ["0","0","0","0","6","0"] as the Text label inside
+//      it. Under a bare count rule EVERY menu item is ambiguous, so clicking by
+//      name was unusable for exactly the case it was built for.
+//   2. A MENU FLYOUT IS A CHILD OF THE WINDOW, NOT A NEW WINDOW, AND A FILE
+//      DIALOG IS NEITHER. Measured either side of each click: "File" moved the
+//      window's own child count 5 -> 6 with the top-level count unchanged;
+//      "Save as" moved neither count and changed the FOREGROUND WINDOW
+//      (133858 -> 68604). The oracle watched only the top-level count, so it
+//      reported both working clicks as confirmed:false — the false-NEGATIVE
+//      direction, calling a working click broken.
+//   3. A FIXED 180ms SETTLE IS TOO SHORT FOR A DIALOG. The Save As dialog did
+//      not exist yet when the oracle re-read.
+//
+// Live result after the fixes: 9 PASS, 0 UNVERIFIED, 0 FAIL, including the whole
+// 2026-08-14 sequence — ui_click name "File" then name "Save as" — each with
+// independent evidence. Re-run it with
+// `node scripts/verify-bug-397-ui-click.js` on an IDLE desktop.
+//
+// MUTATION LOG for this block, all run 2026-08-31, all watched red:
+//   11 ps1  `if ($oneChain) { $hits = @($root) }` -> `if ($false) { ... }`
+//         reds: a label nested inside its own control is one element
+//   12 ps1  drop `$childrenAfter = Get-WindowChildCount $TargetPid $Hwnd`
+//         reds: the invoke oracle watches the window's own children
+//   13 ps1  drop `$fgAfter = [int][NativeInput]::GetForegroundWindow()`
+//         reds: the invoke oracle watches the foreground window
+//   14 ps1  `Wait-ForWindowCountChange` -> `Get-TopLevelWindowCount` in rung 1
+//         reds: the settle waits for the change instead of guessing at it
+//   15 ps1  delete the `click its parent menu first` sentence
+//         reds: a no-match names the next move
+// ---------------------------------------------------------------------------
+
+describe('what the live desktop found', () => {
+  it('a label nested inside its own control is ONE element, not an ambiguity', () => {
+    const body = psFunctionBody('Find-UIAElementPathByName');
+    assert.match(body, /\$oneChain = \$true/);
+    assert.match(body, /if \(\$oneChain\) \{ \$hits = @\(\$root\) \}/,
+      'matches on a single ancestor chain collapse to the outermost control');
+    // ADJACENT CASE, asserted rather than assumed: the collapse is decided by
+    // CONTAINMENT, never by order. Sorting is by path length and every candidate
+    // must start with the shallowest path, so two matches on different branches
+    // still fall through to the ambiguity refusal.
+    assert.match(body, /Sort-Object \{ \$_\.path\.Count \}/,
+      'the survivor is the shallowest, not the first found');
+    assert.match(body, /if \(\[string\]\$h\.path\[\$k\] -ne \[string\]\$root\.path\[\$k\]\) \{ \$oneChain = \$false/,
+      'a candidate off the chain must break the collapse, not be swallowed by it');
+    assert.match(body, /ambiguous and nothing was clicked/,
+      'genuinely distinct matches still refuse');
+  });
+
+  it('the invoke oracle watches the window\'s own children and the foreground window', () => {
+    const body = psFunctionBody('Handle-UiClick');
+    const rung = body.slice(0, body.indexOf('$togglePattern'));
+    assert.match(rung, /\$childrenBefore = Get-WindowChildCount/);
+    assert.match(rung, /\$childrenAfter = Get-WindowChildCount/,
+      'a menu flyout is a child of the window, not a new top-level window');
+    assert.match(rung, /\$fgBefore = \[int\]\[NativeInput\]::GetForegroundWindow\(\)/);
+    assert.match(rung, /\$fgAfter = \[int\]\[NativeInput\]::GetForegroundWindow\(\)/,
+      'a file dialog changes neither window count — it takes the foreground');
+    assert.match(rung, /changed \+= 'foreground window'/);
+    // An unreadable child count must not read as "nothing changed" — that is the
+    // fail-open direction and Get-WindowChildCount returns -1 to signal it.
+    assert.match(rung, /\$childrenBefore -ge 0 -and \$childrenAfter -ge 0 -and \$childrenBefore -ne \$childrenAfter/,
+      'compare child counts only when BOTH reads succeeded');
+  });
+
+  it('Get-WindowChildCount reports failure as -1, never as a count', () => {
+    const body = psFunctionBody('Get-WindowChildCount');
+    assert.match(body, /if \(\$found\.error\) \{ return -1 \}/);
+    assert.match(body, /catch \{ return -1 \}/);
+  });
+
+  it('the settle waits for the change instead of guessing at it', () => {
+    const wait = psFunctionBody('Wait-ForWindowCountChange');
+    assert.match(wait, /while \(\$waited -lt \$TimeoutMs\)/, 'bounded polling, not a fixed sleep');
+    assert.match(wait, /if \(\$now -ne \$Before\) \{ return \$now \}/, 'returns as soon as it moves');
+    const body = psFunctionBody('Handle-UiClick');
+    const rung = body.slice(0, body.indexOf('$togglePattern'));
+    assert.match(rung, /Wait-ForWindowCountChange \$TargetPid \$windowsBefore/,
+      'the Save As dialog did not exist yet at the old fixed 180ms read');
+  });
+
+  it('a no-match names the next move, not just the candidates', () => {
+    const body = psFunctionBody('Find-UIAElementPathByName');
+    assert.match(body, /click its parent menu first/,
+      'a menu item does not exist in the tree until its menu is open');
+    assert.match(body, /other top-level window/,
+      'a pinned hwnd can be the wrong window of the same process — say so');
+    assert.match(body, /use see_and_click with its visible text/);
   });
 });

@@ -43,7 +43,7 @@ it is committed.
 
 ## BUG-397 — `ui_elements` returned a truncated tree without saying so, so the model invented the indices it was never shown and every `ui_click` failed "out of range" (✅ FIXED 2026-08-31, mutation-proven)
 
-**Status:** ✅ FIXED 2026-08-31. New guard file `test/bug-397-ui-click-path-fabrication.test.js` (19 tests), 10 mutations run, none survived. Two pre-existing tests deliberately rewritten (see SCOPE). **Live verification on a real desktop is still outstanding** — CI has no desktop, so the PowerShell rungs are covered only by source-shape assertions.
+**Status:** ✅ FIXED and ✅ LIVE-VERIFIED 2026-08-31. Guard file `test/bug-397-ui-click-path-fabrication.test.js` (24 tests), **15 mutations run, none survived**. Two pre-existing tests deliberately rewritten (see SCOPE). Live oracle committed as `scripts/verify-bug-397-ui-click.js` — **9 PASS · 0 UNVERIFIED · 0 FAIL** against a real Notepad, including the whole 2026-08-14 sequence (`ui_click name "File"`, then `name "Save as"`), each confirmed by an independent signal.
 
 **Reported as:** "the UI underscore click does not work as designed" (operator, 2026-08-31), symptom confirmed as the honest failure message rather than a silent wrong click.
 
@@ -81,6 +81,18 @@ The second half of the same session is the evidence half: **all five of those ca
 - **The Invoke rung gained a post-condition** — top-level window count and `ExpandCollapseState`, both content checks. Keyboard focus was considered and **rejected**: some providers move focus to the invoked element without honouring the invoke, so a focus signal would confirm exactly the no-op it exists to catch. This is an *oracle*, not a fourth escalation rung; BUG-274 T5 closed every client-side axis and concluded the WinUI3 provider reports a state change it did not perform.
 - **`foreground-pid` no longer licenses a verified `ui_click`.** The round trip is kept and still reported — it catches a click that switched away from the target — but it downgrades to `unverified` + reason instead of `verifiedOk`.
 - New pure module `src/core/effectors/ui-target.js` (`truncationAdvice`, `clickTarget`, `seeAndClickRecovery`) because `from-pc.js` is on the file-size ratchet and the ratchet is a ceiling. `withSeeAndClickRecovery` moved there unchanged — same concern.
+
+### WHAT THE FIRST LIVE RUN FOUND (and the green suite could not)
+
+The fix above was 19 tests and 10 mutations green before it ever met a desktop. The first real run failed **three** ways, none of them reachable from CI, because all three are facts about what Windows does rather than about what the code says. This is the entry's most reusable part:
+
+1. **One element described twice is not two elements.** `Save as` matched at `["0","0","0","0","6"]` as a `MenuItem` **and** at `["0","0","0","0","6","0"]` as the `Text` label inside it — the ordinary UIA shape for a labelled control. Under a bare count rule *every menu item* is ambiguous, so the refuse-on-ambiguity rule made clicking by name unusable for the exact case it was built for. Fixed with an ancestor-chain collapse: when every match lies on one chain, the shallowest is the control and the rest are its labels. Matches on **different branches** still refuse — containment decides it, never order.
+2. **The oracle was watching the one thing neither click changes.** Measured either side of each click: `File` moved the window's **own child count** 5 → 6 with the top-level count unchanged (a flyout is a *child of the window*, not a new window); `Save as` moved **neither** count and changed the **foreground window** (133858 → 68604) — a file dialog is neither. Watching only the top-level count reported both working clicks as `confirmed:false`: the **false-negative** direction, calling a working click broken. Both signals added. `GetForegroundWindow` is deliberately not the UIA `FocusedElement` signal rejected earlier — that one is focus *inside* the app, this is another window coming up.
+3. **A fixed 180 ms settle is too short for a dialog.** The Save As dialog did not exist yet when the oracle re-read. Replaced with a bounded wait that returns the moment the count moves; applied to rung 4 as well, which had the identical defect and whose only oracle *is* that count.
+
+Also measured and worth keeping: **`BUG-274 T5`'s WinUI3 `ExpandCollapseState` lie did not reproduce here.** Clicking `File` moved the state to `Expanded` *and* the flyout genuinely rendered (`Open`, `Save`, `Save as`, `Save all`, `Print`, `Exit` all appear in the tree afterwards). A working oracle was nearly "fixed" on the strength of that memory before the flyout was actually measured — check the claim where it runs before acting on it.
+
+And a limitation the run exposed rather than fixed: **`close_window` takes a pid, and Notepad puts every window on one pid.** Six probe windows could not be closed individually. Not in scope here; noted so it is not rediscovered.
 
 ### SCOPE — what was deliberately NOT done
 

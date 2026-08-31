@@ -2458,6 +2458,35 @@ function Find-UIAElementPathByName($TargetPid, $Name, $AutomationId, $Hwnd) {
         $limitNote = ' (the search reached depth ' + $Script:UIA_NAME_SEARCH_DEPTH + ' and ' + $truncated + ' elements have children below that)'
     }
 
+    # BUG-397 FOLLOW-UP, found on the first live desktop run (2026-08-31).
+    #
+    # ONE ELEMENT DESCRIBED TWICE IS NOT TWO ELEMENTS. Measured against Notepad's
+    # open File menu: "Save as" matches at ["0","0","0","0","6"] as a MenuItem AND
+    # at ["0","0","0","0","6","0"] as the Text child INSIDE it, carrying the same
+    # Name. That is the ordinary UIA shape for a labelled control, so under a bare
+    # count-based rule EVERY menu item is ambiguous and clicking by name is
+    # unusable for the exact case it was built for.
+    #
+    # The collapse is narrow on purpose. It applies only when every match lies on
+    # ONE ancestor chain - each deeper path starts with the shallowest one - in
+    # which case the shallowest is the real control and the rest are its own
+    # labels. Two matches on DIFFERENT branches are still genuinely ambiguous and
+    # still refuse below. This is not "take the first": order never decides it,
+    # containment does, and a set that is not a single chain is never collapsed.
+    if ($hits.Count -gt 1) {
+        $sorted = @($hits | Sort-Object { $_.path.Count })
+        $root = $sorted[0]
+        $oneChain = $true
+        foreach ($h in $sorted) {
+            if ($h.path.Count -lt $root.path.Count) { $oneChain = $false; break }
+            for ($k = 0; $k -lt $root.path.Count; $k++) {
+                if ([string]$h.path[$k] -ne [string]$root.path[$k]) { $oneChain = $false; break }
+            }
+            if (-not $oneChain) { break }
+        }
+        if ($oneChain) { $hits = @($root) }
+    }
+
     if ($hits.Count -eq 1) { return @{ path = $hits[0].path; name = $hits[0].name } }
 
     if ($hits.Count -eq 0) {
@@ -2470,7 +2499,33 @@ function Find-UIAElementPathByName($TargetPid, $Name, $AutomationId, $Hwnd) {
             if ($names.Count -ge 40) { break }
         }
         $nameText = if ($names.Count -gt 0) { ' Elements this window does expose: ' + ($names -join ', ') + '.' } else { ' This window exposes no named elements at all - its accessibility tree is empty, so use see_and_click with the visible text instead.' }
-        return @{ error = ('No element with ' + $asked + ' in this window' + $limitNote + '.' + $nameText) }
+
+        # BUG-397 FOLLOW-UP (2026-08-31 live run). This message used to stop at the
+        # candidate list: honest, but with no next move in it, which is the same
+        # dead end as the bare index error this ticket started from. Two live
+        # causes, both named here because neither is guessable from the list:
+        #
+        #  * A MENU ITEM DOES NOT EXIST UNTIL ITS MENU IS OPEN. "Save as" is
+        #    simply absent from Notepad's tree until "File" has been clicked.
+        #  * THE PINNED WINDOW MAY BE THE WRONG ONE. Notepad owns TWO top-level
+        #    windows, both titled "Untitled - Notepad", and the flyout renders
+        #    into the other one - so passing the hwnd from a previous
+        #    ui_elements made this search fail where omitting it succeeds. The
+        #    hwnd pin is still right for stability; it just has to say when it is
+        #    the thing standing in the way.
+        $siblingText = ''
+        if ($null -ne $Hwnd -and [int]$Hwnd -ne 0) {
+            $others = 0
+            try { $others = [int](Get-TopLevelWindowCount $TargetPid) - 1 } catch { $others = 0 }
+            if ($others -gt 0) {
+                $siblingText = ' NOTE: you pinned hwnd ' + $Hwnd + ', and this process owns ' + $others +
+                    ' other top-level window(s) - a menu or dialog often renders into one of those. Retry without hwnd to search whichever window UIA reports first.'
+            }
+        }
+        return @{ error = ('No element with ' + $asked + ' in this window' + $limitNote + '.' + $nameText +
+            ' If it is a menu item, click its parent menu first - items do not exist in the tree until their menu is open.' +
+            $siblingText +
+            ' If it is visible on screen but not in this list, use see_and_click with its visible text.') }
     }
 
     $where = @()
@@ -2567,20 +2622,50 @@ function Handle-UiClick($TargetPid, $elementPath, $Name, $AutomationId, $Hwnd) {
             $invokePattern = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern]
             if ($invokePattern) {
                 $tried += 'invoke'
+                # BUG-397 FOLLOW-UP (2026-08-31 live run). THE FIRST TWO SIGNALS
+                # WERE BLIND TO BOTH THINGS THE OPERATOR ACTUALLY CLICKS. Measured
+                # on Notepad, pid-scoped counts either side of each click:
+                #
+                #   click "File"    -> top-level windows 6 -> 6   (blind)
+                #                      window's own children 5 -> 6   <- the flyout
+                #   click "Save as" -> top-level windows 6 -> 6   (blind)
+                #                      window's own children 6 -> 6   (blind)
+                #                      foreground title "Untitled - Notepad"
+                #                        -> "Save as"                 <- the dialog
+                #
+                # So a menu flyout is a CHILD OF THE WINDOW, not a new top-level
+                # window, and a file dialog is neither - it simply takes the
+                # foreground. Watching only the top-level count reported both of
+                # those working clicks as confirmed:false, which is the
+                # false-NEGATIVE direction: it calls a working click broken.
+                #
+                # Foreground WINDOW is not the keyboard-focus signal rejected
+                # above. That one was UIA FocusedElement inside the app, which
+                # some providers move without honouring the invoke. This is a
+                # different window becoming foreground - something only an actual
+                # side effect does. Its cost is that an unrelated app stealing
+                # foreground during the settle would confirm falsely, which is why
+                # this script's header says an idle desktop is part of the
+                # instrument.
                 $windowsBefore = Get-TopLevelWindowCount $TargetPid
+                $childrenBefore = Get-WindowChildCount $TargetPid $Hwnd
+                $fgBefore = [int][NativeInput]::GetForegroundWindow()
                 $expandBefore = Get-ExpandStateOrNull $el
                 $invokePattern.Invoke()
-                Start-Sleep -Milliseconds 180
-                $windowsAfter = Get-TopLevelWindowCount $TargetPid
+                $windowsAfter = Wait-ForWindowCountChange $TargetPid $windowsBefore 900
+                $childrenAfter = Get-WindowChildCount $TargetPid $Hwnd
+                $fgAfter = [int][NativeInput]::GetForegroundWindow()
                 $expandAfter = Get-ExpandStateOrNull $el
                 $mechanism = 'invoke'
                 $changed = @()
                 if ($windowsBefore -ne $windowsAfter) { $changed += 'top-level window count' }
+                if ($childrenBefore -ge 0 -and $childrenAfter -ge 0 -and $childrenBefore -ne $childrenAfter) { $changed += 'window child count' }
+                if ($fgBefore -ne $fgAfter) { $changed += 'foreground window' }
                 if ($null -ne $expandBefore -and $expandBefore -ne $expandAfter) { $changed += 'expand-collapse state' }
                 $oracle = @{
                     name = 'invoke-side-effect'
-                    before = ('windows ' + $windowsBefore + ', expand ' + $(if ($null -eq $expandBefore) { 'n/a' } else { $expandBefore }))
-                    after = ('windows ' + $windowsAfter + ', expand ' + $(if ($null -eq $expandAfter) { 'n/a' } else { $expandAfter }))
+                    before = ('windows ' + $windowsBefore + ', children ' + $childrenBefore + ', fg ' + $fgBefore + ', expand ' + $(if ($null -eq $expandBefore) { 'n/a' } else { $expandBefore }))
+                    after = ('windows ' + $windowsAfter + ', children ' + $childrenAfter + ', fg ' + $fgAfter + ', expand ' + $(if ($null -eq $expandAfter) { 'n/a' } else { $expandAfter }))
                     confirmed = ($changed.Count -gt 0)
                 }
                 if ($changed.Count -gt 0) { $oracle.changed = $changed }
@@ -2646,9 +2731,11 @@ function Handle-UiClick($TargetPid, $elementPath, $Name, $AutomationId, $Hwnd) {
                     $before = [string]$expandPattern.Current.ExpandCollapseState
                     $windowsBefore = Get-TopLevelWindowCount $TargetPid
                     if ($before -eq 'Expanded') { $expandPattern.Collapse() } else { $expandPattern.Expand() }
-                    Start-Sleep -Milliseconds 180
+                    # BUG-397 follow-up: same fixed-settle false negative as rung 1
+                    # above, and this rung's oracle IS the window count, so it was
+                    # the more exposed of the two. Waits only when nothing moved.
+                    $windowsAfter = Wait-ForWindowCountChange $TargetPid $windowsBefore 900
                     $after = [string]$expandPattern.Current.ExpandCollapseState
-                    $windowsAfter = Get-TopLevelWindowCount $TargetPid
                     $mechanism = 'expand-collapse'
                     $oracle = @{
                         name = 'top-level-window-count'
@@ -5174,6 +5261,49 @@ function Get-TopLevelWindowCount($TargetPid) {
 # Returning $null (rather than a string like 'None') is what lets the invoke
 # oracle tell "this element cannot expand" apart from "it can, and it did not" -
 # only the second is evidence of anything.
+# BUG-397 FOLLOW-UP (2026-08-31 live run). A fixed settle is the wrong shape for
+# this oracle and it fails in the FALSE-NEGATIVE direction, which is the direction
+# that makes a working click report as a broken one.
+#
+# Measured: ui_click name "Save as" on Notepad genuinely opened the Save As
+# dialog - the very next probe walked into it and found "Organize", "New folder",
+# "Namespace Tree Control" - while the oracle, re-reading the window count 180ms
+# after the invoke, saw 4 windows before and 4 after and reported confirmed:false.
+# The dialog simply did not exist yet.
+#
+# So: wait UNTIL it changes, bounded. Costs nothing on the happy path (returns as
+# soon as the count moves) and bounds the unhappy one. The minimum settle is kept
+# so the paired ExpandCollapseState read is not taken before the provider has
+# updated it either.
+function Wait-ForWindowCountChange($TargetPid, $Before, $TimeoutMs) {
+    Start-Sleep -Milliseconds 180
+    $now = Get-TopLevelWindowCount $TargetPid
+    if ($now -ne $Before) { return $now }
+    $waited = 180
+    while ($waited -lt $TimeoutMs) {
+        Start-Sleep -Milliseconds 120
+        $waited += 120
+        $now = Get-TopLevelWindowCount $TargetPid
+        if ($now -ne $Before) { return $now }
+    }
+    return $now
+}
+
+# BUG-397 follow-up. Direct children of the window the click is aimed at. This is
+# the signal that sees a menu flyout, which renders INSIDE the window rather than
+# as a new top-level one. Returns -1 when it cannot be read, and the caller
+# compares only when both reads succeeded - an unreadable count must never look
+# like "nothing changed".
+function Get-WindowChildCount($TargetPid, $Hwnd) {
+    try {
+        $found = Find-UIAWindow $TargetPid $Hwnd
+        if ($found.error) { return -1 }
+        return [int]($found.element.FindAll(
+            [System.Windows.Automation.TreeScope]::Children,
+            [System.Windows.Automation.Condition]::TrueCondition)).Count
+    } catch { return -1 }
+}
+
 function Get-ExpandStateOrNull($Element) {
     try {
         $p = $Element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) -as [System.Windows.Automation.ExpandCollapsePattern]
