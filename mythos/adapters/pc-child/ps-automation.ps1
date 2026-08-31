@@ -2226,7 +2226,56 @@ function Handle-ScreenReadText($TargetPid) {
     }
 }
 
-function Handle-UiElements($TargetPid, $depth) {
+# BUG-397. The ONE place a pid becomes a window element, shared by ui_elements,
+# ui_click and anything else that walks a process's UIA tree.
+#
+# WHY IT EXISTS. Handle-UiElements and Resolve-UIAElementOnce each had their own
+# copy of FindFirst(Children, ProcessId == pid) - "the first top-level window UIA
+# happens to hand back". A process with more than one top-level window (Notepad
+# PLUS its Save-As dialog, which is exactly the 2026-08-14 flow) could therefore
+# have its tree READ against one window and an elementPath RESOLVED against
+# another, with no error raised anywhere. Two commands in this file disagreeing
+# about which window a pid means is the smell adapters/CLAUDE.md already names.
+#
+# So ui_elements now reports the hwnd it actually walked, ui_click accepts that
+# hwnd back, and a mismatch is a named refusal rather than a silent wrong target.
+# Omitting the hwnd keeps the historic first-window behaviour, so every existing
+# caller is unchanged.
+function Find-UIAWindow($TargetPid, $Hwnd) {
+    $root = [System.Windows.Automation.AutomationElement]::RootElement
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid
+    )
+    if ($null -eq $Hwnd -or [int]$Hwnd -eq 0) {
+        $first = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
+        if (-not $first) { return @{ error = ('No UIA window found for PID ' + $TargetPid) } }
+        return @{ element = $first }
+    }
+    $all = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
+    $seen = @()
+    foreach ($w in $all) {
+        $h = 0
+        try { $h = [int]$w.Current.NativeWindowHandle } catch { $h = 0 }
+        if ($h -eq [int]$Hwnd) { return @{ element = $w } }
+        if ($h -ne 0) { $seen += [string]$h }
+    }
+    $seenText = if ($seen.Count -gt 0) { ' PID ' + $TargetPid + ' currently owns: ' + ($seen -join ', ') + '.' } else { ' PID ' + $TargetPid + ' currently owns no top-level window.' }
+    return @{ error = ('Window ' + $Hwnd + ' is gone - the tree you read belongs to a window that no longer exists, so this path would have been resolved against a different window.' + $seenText + ' Call ui_elements again for the current tree and hwnd.') }
+}
+
+# BUG-397. How many nodes one Walk-UIA is allowed to visit. A name search walks
+# deeper than the default ui_elements depth, and an unbounded FindAll on a
+# browser-sized tree would wedge this single-threaded adapter the same way an
+# unanswered modal does (see the SendMessage note in adapters/CLAUDE.md). The
+# walk stops at the budget and SAYS it stopped - it never silently returns a
+# partial tree, which is the whole defect this commit exists to remove.
+$Script:UIA_WALK_NODE_BUDGET = 3000
+# Depth used when ui_click resolves an element by NAME rather than by index.
+# Notepad's File > Save as sits 5 levels below the window root; 2 (the
+# ui_elements default) cannot reach it, which is why the model was extrapolating.
+$Script:UIA_NAME_SEARCH_DEPTH = 6
+
+function Handle-UiElements($TargetPid, $depth, $Hwnd) {
     if (-not $depth) { $depth = 2 }
     try {
         # The process must exist - that check stays, so a dead pid says so. The
@@ -2257,28 +2306,63 @@ function Handle-UiElements($TargetPid, $depth) {
         # is the more accurate message anyway - Get-Process's MainWindowHandle is
         # a Win32 notion that says nothing about whether UIA can see a window.
 
-        # Get the window element from UIA
-        $root = [System.Windows.Automation.AutomationElement]::RootElement
-        $condition = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid
-        )
-        $windowEl = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-        if (-not $windowEl) {
-            return ('No UIA window found for PID ' + $TargetPid)
-        }
+        # Get the window element from UIA - one shared resolver, see Find-UIAWindow.
+        $found = Find-UIAWindow $TargetPid $Hwnd
+        if ($found.error) { return $found.error }
+        $windowEl = $found.element
+
+        # BUG-397 - THE DEFECT THIS FIELD EXISTS TO REMOVE.
+        #
+        # Walk-UIA stops at MaxDepth and used to return nothing about what it did
+        # not visit, so a node that is a genuine LEAF and a node that was CUT OFF
+        # at the depth limit came back byte-identical. The model, needing an
+        # element below the line, could only infer that it was one or two levels
+        # further down and append indices it had never been shown.
+        #
+        # MEASURED, vault/Audit/2026-08-14.jsonl, Notepad pid 31544: the single
+        # read that session was ui_elements(depth 3), so the longest path ever
+        # returned to the model was 3. It then called ui_click with paths of
+        # length 4, 4, 5 and 5. Those indices were in no tool result. Every one
+        # came back 'Element path index N out of range (parent has 0 children)' -
+        # and the '0 children' is the signature: it landed on a real leaf and
+        # asked for a child that was never claimed to exist.
+        #
+        # A boundary node now carries truncated/unreadChildren, and the reply
+        # carries the depth actually walked plus how many nodes are cut off. The
+        # default depth deliberately stays 2: a deeper default pays tokens on
+        # every call and only MOVES the boundary, it does not make it visible.
         $elements = @()
-        Walk-UIA -Element $windowEl -Depth 0 -MaxDepth $depth -Elements ([ref]$elements) -Path @()
-        return @{ elements = $elements; pid = $TargetPid }
+        $truncated = 0
+        $visited = 0
+        Walk-UIA -Element $windowEl -Depth 0 -MaxDepth $depth -Elements ([ref]$elements) -Path @() -Truncated ([ref]$truncated) -Visited ([ref]$visited)
+        $hwndWalked = 0
+        try { $hwndWalked = [int]$windowEl.Current.NativeWindowHandle } catch { $hwndWalked = 0 }
+        $reply = @{
+            elements = $elements
+            pid = $TargetPid
+            depth = $depth
+            truncated = $truncated
+            hwnd = $hwndWalked
+        }
+        # Honest about its own limit rather than silently short: a walk that hit
+        # the node budget is a partial tree and must not read as a complete one.
+        if ($visited -ge $Script:UIA_WALK_NODE_BUDGET) { $reply.budgetExhausted = $true }
+        return $reply
     } catch {
         return ('UIA tree walk failed for PID ' + $TargetPid + ': ' + $_.Exception.Message)
     }
 }
 
-function Walk-UIA($Element, $Depth, $MaxDepth, [ref]$Elements, $Path) {
+function Walk-UIA($Element, $Depth, $MaxDepth, [ref]$Elements, $Path, [ref]$Truncated, [ref]$Visited) {
     if ($Depth -ge $MaxDepth) { return }
+    if ($null -ne $Visited -and $Visited.Value -ge $Script:UIA_WALK_NODE_BUDGET) { return }
     $condition = [System.Windows.Automation.Condition]::TrueCondition
     $children = $Element.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
+    # BUG-397: children emitted at this level are the LAST ones the caller will
+    # see, so each of them has to say whether it is hiding a subtree.
+    $atBoundary = (($Depth + 1) -ge $MaxDepth)
     for ($i = 0; $i -lt $children.Count; $i++) {
+        if ($null -ne $Visited -and $Visited.Value -ge $Script:UIA_WALK_NODE_BUDGET) { return }
         $c = $children[$i]
         $cName = if ($c.Current.Name) { $c.Current.Name } else { $null }
         $cType = $c.Current.ControlType.ProgrammaticName
@@ -2300,16 +2384,116 @@ function Walk-UIA($Element, $Depth, $MaxDepth, [ref]$Elements, $Path) {
             rect = $cRect
             path = $childPath
         }
+        # BUG-397. At the depth boundary the recursive call below returns
+        # immediately, so THIS node's children are the ones nobody will ever see.
+        # Count them and say so.
+        #
+        # A read that THROWS marks the node truncated with no count rather than
+        # leaving it looking like a leaf. That direction is deliberate: claiming
+        # 'leaf' about a node we could not inspect is the exact fail-open shape
+        # this whole change removes, and a spurious 'there may be more below'
+        # costs one extra ui_elements call at worst.
+        if ($atBoundary) {
+            $unread = $null
+            try { $unread = [int]($c.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)).Count } catch { $unread = $null }
+            if ($null -eq $unread) {
+                $elInfo.truncated = $true
+                if ($null -ne $Truncated) { $Truncated.Value = $Truncated.Value + 1 }
+            } elseif ($unread -gt 0) {
+                $elInfo.truncated = $true
+                $elInfo.unreadChildren = $unread
+                if ($null -ne $Truncated) { $Truncated.Value = $Truncated.Value + 1 }
+            }
+        }
         $Elements.Value += $elInfo
+        if ($null -ne $Visited) { $Visited.Value = $Visited.Value + 1 }
 
-        Walk-UIA -Element $c -Depth ($Depth + 1) -MaxDepth $MaxDepth -Elements $Elements -Path $childPath
+        Walk-UIA -Element $c -Depth ($Depth + 1) -MaxDepth $MaxDepth -Elements $Elements -Path $childPath -Truncated $Truncated -Visited $Visited
     }
 }
 
-function Handle-UiClick($TargetPid, $elementPath) {
-    if (-not $elementPath) { return 'elementPath is required.' }
+# BUG-397 - THE CLASS FIX. ui_elements returns NAMES; ui_click accepted only
+# INDICES; so the model had to convert one into the other by hand, and that
+# conversion is where it fabricated. Removing the conversion removes the
+# fabrication: there is no index left to invent.
+#
+# Case-insensitive by design, and that is load-bearing rather than incidental -
+# PowerShell's -eq on strings ignores case, so a model asking for 'Save As'
+# still finds a menu item Windows spells 'Save as'. An exact-case UIA
+# PropertyCondition would have failed on precisely that difference and sent the
+# model straight back to guessing indices.
+#
+# Ambiguity FAILS and lists the matches. It must never quietly take the first -
+# that is the same defect as the FindFirst() this commit removed from the window
+# lookup, one level down.
+function Find-UIAElementPathByName($TargetPid, $Name, $AutomationId, $Hwnd) {
+    $found = Find-UIAWindow $TargetPid $Hwnd
+    if ($found.error) { return @{ error = $found.error } }
+    $elements = @()
+    $truncated = 0
+    $visited = 0
+    Walk-UIA -Element $found.element -Depth 0 -MaxDepth $Script:UIA_NAME_SEARCH_DEPTH -Elements ([ref]$elements) -Path @() -Truncated ([ref]$truncated) -Visited ([ref]$visited)
+
+    $wantedName = if ($Name) { ([string]$Name).Trim() } else { '' }
+    $wantedId = if ($AutomationId) { ([string]$AutomationId).Trim() } else { '' }
+    $hits = @()
+    foreach ($e in $elements) {
+        $n = if ($e.name) { ([string]$e.name).Trim() } else { '' }
+        $aid = if ($e.automationId) { ([string]$e.automationId).Trim() } else { '' }
+        if ($wantedId -ne '') {
+            if ($aid -ne '' -and $aid -eq $wantedId) { $hits += $e }
+        } elseif ($wantedName -ne '') {
+            if ($n -ne '' -and $n -eq $wantedName) { $hits += $e }
+        }
+    }
+
+    $asked = if ($wantedId -ne '') { 'automationId "' + $wantedId + '"' } else { 'name "' + $wantedName + '"' }
+    # Say where the search stopped. A zero-match answer from a search that was
+    # itself cut short is a different fact from 'this window does not have it',
+    # and reporting them as the same thing is how a partial answer reads as final.
+    $limitNote = ''
+    if ($visited -ge $Script:UIA_WALK_NODE_BUDGET) {
+        $limitNote = ' (the search stopped after ' + $Script:UIA_WALK_NODE_BUDGET + ' elements, so this window may hold more)'
+    } elseif ($truncated -gt 0) {
+        $limitNote = ' (the search reached depth ' + $Script:UIA_NAME_SEARCH_DEPTH + ' and ' + $truncated + ' elements have children below that)'
+    }
+
+    if ($hits.Count -eq 1) { return @{ path = $hits[0].path; name = $hits[0].name } }
+
+    if ($hits.Count -eq 0) {
+        $names = @()
+        foreach ($e in $elements) {
+            if ($e.name -and ([string]$e.name).Trim() -ne '') {
+                $label = [string]$e.name
+                if ($names -notcontains $label) { $names += $label }
+            }
+            if ($names.Count -ge 40) { break }
+        }
+        $nameText = if ($names.Count -gt 0) { ' Elements this window does expose: ' + ($names -join ', ') + '.' } else { ' This window exposes no named elements at all - its accessibility tree is empty, so use see_and_click with the visible text instead.' }
+        return @{ error = ('No element with ' + $asked + ' in this window' + $limitNote + '.' + $nameText) }
+    }
+
+    $where = @()
+    foreach ($h in $hits) {
+        $where += ('[' + (($h.path) -join ',') + '] ' + [string]$h.type)
+        if ($where.Count -ge 12) { break }
+    }
+    return @{ error = ($hits.Count + ' elements share ' + $asked + ', so this is ambiguous and nothing was clicked. Pass elementPath for the one you mean: ' + ($where -join ' | ')) }
+}
+
+function Handle-UiClick($TargetPid, $elementPath, $Name, $AutomationId, $Hwnd) {
+    $resolvedByName = $null
+    if (-not $elementPath) {
+        if (-not $Name -and -not $AutomationId) {
+            return 'ui_click needs either elementPath (indices from ui_elements) or name (the element''s visible label).'
+        }
+        $byName = Find-UIAElementPathByName $TargetPid $Name $AutomationId $Hwnd
+        if ($byName.error) { return $byName.error }
+        $elementPath = $byName.path
+        $resolvedByName = $byName.name
+    }
     try {
-        $element = Resolve-UIAElement -TargetPid $TargetPid -ElementPath $elementPath
+        $element = Resolve-UIAElement -TargetPid $TargetPid -ElementPath $elementPath -Hwnd $Hwnd
         if ($element.error) { return $element.error }
         $el = $element.element
 
@@ -2350,12 +2534,56 @@ function Handle-UiClick($TargetPid, $elementPath) {
         $oracle = $null
 
         # Rung 1 - InvokePattern. Buttons, menu items, links.
+        #
+        # BUG-397. THIS RUNG HAD NO ORACLE, AND IT IS THE ONE THAT RUNS MOST.
+        # Rungs 2-5 each carry a post-condition; rung 1 set $mechanism and left
+        # $oracle null, so every button, menu item and link fell through to
+        # from-pc.js's `foreground-pid` check - "the target window is still
+        # foreground" - which for an in-window click CANNOT FAIL. Notepad stays
+        # foreground whether the File menu opened or not.
+        #
+        # That is not theoretical. vault/Episodic/2026-08-14.jsonl records five
+        # ui_click calls on Notepad, every one ok:true with that evidence
+        # attached, while the operator said in the same breath "you didn't click
+        # on file, you clicked on edit" and "you have to click save as".
+        #
+        # THIS IS AN ORACLE, NOT A FOURTH ESCALATION RUNG. The WinUI3
+        # investigation closed every client-side axis (-NonInteractive,
+        # windowsHide, spawn shape, window station/desktop/integrity, message
+        # pump/apartment) and concluded the provider REPORTS A STATE CHANGE IT
+        # DID NOT PERFORM. Nothing here tries to defeat that - it checks, reports
+        # confirmed:false, and lets from-pc.js name see_and_click / click_at.
+        #
+        # Two signals, both CONTENT checks, deliberately matching rung 4's stated
+        # reasoning. Keyboard focus was considered and REJECTED: some providers
+        # move focus to the invoked element without honouring the invoke, so a
+        # focus signal would confirm exactly the no-op it exists to catch.
+        #
+        # Accepted consequence: a button that legitimately changes nothing
+        # observable (Copy) now reports unverified rather than ok. That is honest
+        # rather than wrong, and it is pinned by a test so it cannot be "fixed"
+        # back into a false success by the next reader.
         try {
             $invokePattern = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern) -as [System.Windows.Automation.InvokePattern]
             if ($invokePattern) {
                 $tried += 'invoke'
+                $windowsBefore = Get-TopLevelWindowCount $TargetPid
+                $expandBefore = Get-ExpandStateOrNull $el
                 $invokePattern.Invoke()
+                Start-Sleep -Milliseconds 180
+                $windowsAfter = Get-TopLevelWindowCount $TargetPid
+                $expandAfter = Get-ExpandStateOrNull $el
                 $mechanism = 'invoke'
+                $changed = @()
+                if ($windowsBefore -ne $windowsAfter) { $changed += 'top-level window count' }
+                if ($null -ne $expandBefore -and $expandBefore -ne $expandAfter) { $changed += 'expand-collapse state' }
+                $oracle = @{
+                    name = 'invoke-side-effect'
+                    before = ('windows ' + $windowsBefore + ', expand ' + $(if ($null -eq $expandBefore) { 'n/a' } else { $expandBefore }))
+                    after = ('windows ' + $windowsAfter + ', expand ' + $(if ($null -eq $expandAfter) { 'n/a' } else { $expandAfter }))
+                    confirmed = ($changed.Count -gt 0)
+                }
+                if ($changed.Count -gt 0) { $oracle.changed = $changed }
             }
         } catch { }
 
@@ -2475,6 +2703,10 @@ function Handle-UiClick($TargetPid, $elementPath) {
         }
         if ($tried.Count -gt 1) { $result.mechanismsTried = $tried }
         if ($null -ne $oracle) { $result.oracle = $oracle }
+        # BUG-397: when the caller passed a name, hand back the path it resolved
+        # to. The model then HAS the real indices for its next call instead of
+        # deriving them, which is the whole point.
+        if ($null -ne $resolvedByName) { $result.matchedName = $resolvedByName }
         return $result
     } catch {
         return ('Click failed: ' + $_.Exception.Message)
@@ -4538,24 +4770,28 @@ function Handle-MediaStatus {
 # "Element path index 0 out of range (parent has 0 children)" - a real example
 # against WhatsApp at 20:10:36. One retry after a short settle, reusing that
 # same precedent, before treating the path as genuinely gone.
-function Resolve-UIAElement($TargetPid, $elementPath) {
-    $result = Resolve-UIAElementOnce $TargetPid $elementPath
+# BUG-397. The 250ms retry rescues a tree that is still rendering. It CANNOT
+# rescue a path that was never in any tool result, which measurement shows is the
+# population it actually meets - re-running an identical walk against an
+# extrapolated path returns the identical error. Kept because it is free and does
+# help the render race; recorded here as NOT the mitigation for fabricated paths,
+# so nobody credits it with work it has never done.
+function Resolve-UIAElement($TargetPid, $elementPath, $Hwnd) {
+    $result = Resolve-UIAElementOnce $TargetPid $elementPath $Hwnd
     if (-not $result.error) { return $result }
     if ($result.error -notmatch 'out of range') { return $result }
     Start-Sleep -Milliseconds 250
-    return Resolve-UIAElementOnce $TargetPid $elementPath
+    return Resolve-UIAElementOnce $TargetPid $elementPath $Hwnd
 }
 
-function Resolve-UIAElementOnce($TargetPid, $elementPath) {
+function Resolve-UIAElementOnce($TargetPid, $elementPath, $Hwnd) {
     try {
-        $root = [System.Windows.Automation.AutomationElement]::RootElement
-        $condition = New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $TargetPid
-        )
-        $windowEl = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-        if (-not $windowEl) {
-            return @{ error = ('No UIA window found for PID ' + $TargetPid) }
-        }
+        # One shared window resolver with ui_elements - see Find-UIAWindow. This
+        # used to be its own FindFirst(), which is how a path read against the
+        # app window could be resolved against its dialog and nobody was told.
+        $found = Find-UIAWindow $TargetPid $Hwnd
+        if ($found.error) { return @{ error = $found.error } }
+        $windowEl = $found.element
         $current = $windowEl
         $treeCondition = [System.Windows.Automation.Condition]::TrueCondition
         foreach ($idx in $elementPath) {
@@ -4573,7 +4809,15 @@ function Resolve-UIAElementOnce($TargetPid, $elementPath) {
                     } catch { }
                 }
                 $labelText = if ($labels.Count -gt 0) { ' - current children: ' + ($labels -join ', ') } else { '' }
-                return @{ error = ('Element path index ' + $idx + ' out of range (parent has ' + $children.Count + ' children)' + $labelText) }
+                # BUG-397. 'parent has 0 children' is the signature of an
+                # EXTRAPOLATED path: the walk reached a real leaf and was asked
+                # for its child. That is a different failure from a stale path
+                # (which reports a non-zero count), and it has a different
+                # remedy, so the two are no longer given the same advice.
+                $extraText = if ($children.Count -eq 0) {
+                    ' That parent is a leaf, so this index was never in any ui_elements result - deeper indices cannot be inferred from a shallower walk. Call ui_click with name instead, or re-read with a larger depth.'
+                } else { '' }
+                return @{ error = ('Element path index ' + $idx + ' out of range (parent has ' + $children.Count + ' children)' + $labelText + $extraText) }
             }
         }
         return @{ element = $current }
@@ -4926,6 +5170,18 @@ function Get-TopLevelWindowCount($TargetPid) {
             [System.Windows.Automation.TreeScope]::Children, $cond)).Count
     } catch { return -1 }
 }
+# BUG-397. ExpandCollapseState if the element has one, $null if it does not.
+# Returning $null (rather than a string like 'None') is what lets the invoke
+# oracle tell "this element cannot expand" apart from "it can, and it did not" -
+# only the second is evidence of anything.
+function Get-ExpandStateOrNull($Element) {
+    try {
+        $p = $Element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) -as [System.Windows.Automation.ExpandCollapsePattern]
+        if (-not $p) { return $null }
+        return [string]$p.Current.ExpandCollapseState
+    } catch { return $null }
+}
+
 function Get-FileMenuElement($TargetPid) {
     $root = $null
     try {
@@ -5309,10 +5565,10 @@ while ($true) {
             $result = Handle-ScreenLook $cmd.query
         }
         'ui_elements' {
-            $result = Handle-UiElements $cmd.pid $cmd.depth
+            $result = Handle-UiElements $cmd.pid $cmd.depth $cmd.hwnd
         }
         'ui_click' {
-            $result = Handle-UiClick $cmd.pid $cmd.elementPath
+            $result = Handle-UiClick $cmd.pid $cmd.elementPath $cmd.name $cmd.automationId $cmd.hwnd
             # Reliability audit: Handle-UiClick returns a bare 'Click failed: ...'
             # string on arg-validation/resolution failure. Without this guard it
             # shipped as ok:true (danger:true, physically acts on the desktop)

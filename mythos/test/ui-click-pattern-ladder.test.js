@@ -128,18 +128,32 @@ describe('ui_click: the per-element oracle is used when the rung provides one', 
     });
   });
 
-  it('falls back to foreground-pid for a rung with no element oracle', async () => {
-    // The Invoke rung has no cheap post-condition, so the pre-existing ceiling
-    // still applies there. Back-compat matters: every button and menu item in
-    // the live-verified charmap/notepad matrix goes through this path.
+  // BUG-397 REWROTE THIS TEST, and the rewrite is the point of the change.
+  //
+  // It used to assert that a rung with no element oracle settles for
+  // `foreground-pid` — "the target window is still foreground right after the
+  // click". For a click INSIDE that window that check cannot fail, so it was
+  // pinning a green light that was structurally incapable of seeing the defect.
+  // vault/Episodic/2026-08-14.jsonl has five consecutive Notepad clicks audited
+  // ok:true on exactly this evidence while the operator said, in the same
+  // conversation, "you didn't click on file, you clicked on edit".
+  //
+  // The foreground round trip is KEPT — it genuinely catches a click that
+  // dismissed or switched away from the target — but it no longer licenses a
+  // verified verdict on its own.
+  it('does not accept "still foreground" as proof that an element reacted', async () => {
     const child = pcChild({
       ok: true,
       result: { clicked: true, invoked: true, mechanism: 'invoke', path: ['0', '1'] },
     }, { foregroundPid: PID });
     await withMockedPcChild(child.adapter, async (fromPc) => {
       const res = await fromPc.ui_click({ pid: PID, elementPath: ['0', '1'] });
-      assert.equal(res.ok, true);
-      assert.equal(res.evidence.oracle, 'foreground-pid');
+      assert.equal(res.ok, true, 'unverified is not a failure — the click may well have landed');
+      assert.equal(res.unverified, true,
+        'nothing here observed the element react, so this must not read as confirmed: ' + JSON.stringify(res));
+      assert.equal(res.evidence, undefined, 'an unverified result must not carry an evidence claim');
+      assert.match(res.reason, /right window/, 'the reason must still report what WAS observed');
+      assert.match(res.reason, /see_and_click|click_at/, 'an unverified click must name a way forward');
     });
   });
 
@@ -287,16 +301,22 @@ describe('ui_elements reaches a dialog whose host reports no main window', () =>
   // scan that counts prose is the same defect as a guard that reads its own
   // documentation, which is what test/control-field-survival.test.js also had to
   // strip around.
-  function handleUiElementsBody() {
+  // BUG-397: taken by name rather than hardcoded to Handle-UiElements, because
+  // the ProcessId lookup MOVED into a shared Find-UIAWindow and the assertion
+  // below has to follow the code instead of pinning where it used to live.
+  function psFunctionBody(fnName) {
     const src = fs.readFileSync(PS_PATH, 'utf8');
-    const start = src.indexOf('function Handle-UiElements');
-    assert.notEqual(start, -1, 'Handle-UiElements not found — fix the extraction, do not delete the assertion');
+    const start = src.indexOf('function ' + fnName);
+    assert.notEqual(start, -1, fnName + ' not found — fix the extraction, do not delete the assertion');
     const next = src.indexOf('\nfunction ', start + 10);
     assert.notEqual(next, -1);
     return src.slice(start, next)
       .split(/\r?\n/)
       .filter((line) => !/^\s*#/.test(line))
       .join('\n');
+  }
+  function handleUiElementsBody() {
+    return psFunctionBody('Handle-UiElements');
   }
 
   it('does not reject a target on MainWindowHandle', () => {
@@ -315,8 +335,23 @@ describe('ui_elements reaches a dialog whose host reports no main window', () =>
     const body = handleUiElementsBody();
     assert.match(body, /Get-Process -Id \$TargetPid -ErrorAction Stop/,
       'a dead pid must still throw rather than return an empty element list');
-    assert.match(body, /ProcessIdProperty/, 'the window is located by ProcessId through UIA');
-    assert.match(body, /No UIA window found for PID/,
+    // BUG-397 widened this rather than relaxing it. The lookup moved into a
+    // shared Find-UIAWindow (so ui_elements and ui_click can no longer resolve
+    // DIFFERENT windows for one pid), so BUG-280's invariant is now asserted
+    // where the code actually is — and the caller is pinned to it, so extracting
+    // it again cannot quietly orphan the check.
+    assert.match(body, /Find-UIAWindow/,
+      'Handle-UiElements must resolve its window through the shared resolver');
+    const resolver = psFunctionBody('Find-UIAWindow');
+    assert.match(resolver, /ProcessIdProperty/, 'the window is located by ProcessId through UIA');
+    assert.doesNotMatch(resolver, /MainWindowHandle/,
+      'BUG-280: MainWindowHandle says nothing about whether UIA can see a window');
+    // Both halves, because the message moved into the resolver: it must still be
+    // PRODUCED there, and the caller must still PROPAGATE it rather than
+    // swallowing it into an empty element list.
+    assert.match(resolver, /No UIA window found for PID/,
       'a pid that really owns no window must still get an honest answer');
+    assert.match(body, /if \(\$found\.error\) \{ return \$found\.error \}/,
+      'Handle-UiElements must surface the resolver failure, not continue past it');
   });
 });

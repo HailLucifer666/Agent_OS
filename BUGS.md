@@ -41,6 +41,58 @@ it is committed.
 
 ---
 
+## BUG-397 — `ui_elements` returned a truncated tree without saying so, so the model invented the indices it was never shown and every `ui_click` failed "out of range" (✅ FIXED 2026-08-31, mutation-proven)
+
+**Status:** ✅ FIXED 2026-08-31. New guard file `test/bug-397-ui-click-path-fabrication.test.js` (19 tests), 10 mutations run, none survived. Two pre-existing tests deliberately rewritten (see SCOPE). **Live verification on a real desktop is still outstanding** — CI has no desktop, so the PowerShell rungs are covered only by source-shape assertions.
+
+**Reported as:** "the UI underscore click does not work as designed" (operator, 2026-08-31), symptom confirmed as the honest failure message rather than a silent wrong click.
+
+### THE BUG
+
+`Handle-UiElements` walks the UIA tree to `depth` and stops. It returned nothing about what it had not visited, so **a node that was a genuine LEAF and a node CUT OFF at the depth limit came back byte-identical**. A caller needing an element below that line could only infer it sat one or two levels further down — so it appended indices it had never been shown, and `Resolve-UIAElementOnce` walked off the end of the real tree.
+
+Three separate defects sat on that one path:
+
+1. **The truncation was invisible.** `@{ elements; pid }` carried no `depth`, no `truncated`, no per-node flag.
+2. **`FindFirst(Children, ProcessId)` was duplicated** in `Handle-UiElements` and `Resolve-UIAElementOnce` — each took "the first top-level window UIA happens to return". A process owning several windows (Notepad **plus** its Save-As dialog) could have its tree read against one and a path resolved against another, with no error raised.
+3. **The Invoke rung had no oracle**, so every button, menu item and link fell through to `foreground-pid` — "the target window is still foreground right after the click" — which for a click inside that window **cannot fail**.
+
+### WHY IT IS NOT HYPOTHETICAL
+
+Measured in `%APPDATA%\MYTHOS\vault\Audit\2026-08-14.jsonl` (the Electron vault; the repo vault stops at 2026-08-02). Live voice session, Notepad pid 31544, "save this file as…". The **only** read that session was `ui_elements({pid: 31544, depth: 3})`, so the longest path ever returned to the model was 3. What followed:
+
+| Call | Path | Length | In any tool result? |
+|---|---|---|---|
+| `ui_click` | `["0","0"]` | 2 | yes |
+| `ui_click` | `["2","0","0","1"]` | 4 | **no** |
+| `ui_click` | `["2","0","0","0"]` | 4 | **no** |
+| `ui_click` | `["2","0","0","0","2"]` | 5 | **no** |
+| `ui_click` | `["2","0","0","0","3"]` | 5 | **no** |
+
+Across the whole vault the worst case is `["0","0","0","0","3","0","0","0","0"]` — length 9, against a tree never read deeper than 4. Each failed as `Element path index N out of range (parent has 0 children)`, and **the `0 children` is the signature**: the walk reached a real leaf and was asked for its child. A stale path reports a non-zero count.
+
+The second half of the same session is the evidence half: **all five of those calls returned `ok:true`** with `evidence.oracle: foreground-pid`, while the operator was saying, in the same conversation, *"You didn't click on file, you clicked on edit"* and *"you have to click save as"*.
+
+### THE FIX
+
+- **`Walk-UIA`** flags every node whose children it did not visit (`truncated`, `unreadChildren`) and counts them; `Handle-UiElements` returns `depth`, `truncated`, `hwnd`, and `budgetExhausted`. A child-count read that *throws* marks the node truncated rather than letting it pass as a leaf — the fail-safe direction, asserted so it cannot be tidied into a fail-open one.
+- **`ui_click` accepts `name`/`automationId`.** This is the class fix, not a convenience: `ui_elements` returns NAMES and `ui_click` took only INDICES, so the caller had to convert by hand and that conversion is where the fabrication happened. With a name there is no index left to invent. Case-insensitive by design ("Save As" vs "Save as"). Ambiguity **fails and lists the matches** — never silently takes the first.
+- **One shared `Find-UIAWindow`**, so the tree read and the click resolve the same window; `ui_elements` reports its `hwnd` and `ui_click` accepts it back, with a named refusal when it is gone.
+- **The Invoke rung gained a post-condition** — top-level window count and `ExpandCollapseState`, both content checks. Keyboard focus was considered and **rejected**: some providers move focus to the invoked element without honouring the invoke, so a focus signal would confirm exactly the no-op it exists to catch. This is an *oracle*, not a fourth escalation rung; BUG-274 T5 closed every client-side axis and concluded the WinUI3 provider reports a state change it did not perform.
+- **`foreground-pid` no longer licenses a verified `ui_click`.** The round trip is kept and still reported — it catches a click that switched away from the target — but it downgrades to `unverified` + reason instead of `verifiedOk`.
+- New pure module `src/core/effectors/ui-target.js` (`truncationAdvice`, `clickTarget`, `seeAndClickRecovery`) because `from-pc.js` is on the file-size ratchet and the ratchet is a ceiling. `withSeeAndClickRecovery` moved there unchanged — same concern.
+
+### SCOPE — what was deliberately NOT done
+
+- **The WinUI3 Invoke no-op itself is not attacked.** Every client-side axis is closed (`-NonInteractive`, `windowsHide`, spawn shape, window station/desktop/integrity, message pump/apartment). The new oracle detects and reports it. Do not open a sixth axis, and do not add a fourth rung.
+- **The default `depth` stays 2.** Raising it pays tokens on every call and only MOVES the boundary instead of making it visible.
+- **The 250 ms resolve retry stays**, and is now documented in code as *not* a mitigation for a fabricated path — re-running an identical walk against an extrapolated path returns the identical error. It was never credited with work it has not done.
+- **Two pre-existing tests were rewritten, not deleted**: `ui-click-pattern-ladder.test.js`'s "falls back to foreground-pid…" and `from-pc-window-target.test.js`'s "ui_click verifies with a foreground-pid oracle…". Both pinned the false green this ticket removes. BUG-280's ProcessId assertion was *widened* to follow the lookup into the shared resolver, not weakened.
+- **Accepted behaviour change:** a button that legitimately changes nothing observable (e.g. *Copy*) now reports `unverified` rather than `ok`. Honest rather than wrong, and pinned by a test so the next reader cannot "fix" it back into a false success.
+- **Not reconciled:** this file's earlier note that `ui_click` is "16/6 with no failure since 2026-08-09" matches neither vault measured here (repo vault ends 2026-08-02; the MYTHOS vault has 2026-08-14 and 2026-08-18). Flagged, not corrected — it needs its own pass over which vault that count came from.
+
+---
+
 ## BUG-396 — `see_and_click` clicked the video, then measured the screen too early and told the operator it had failed (✅ FIXED 2026-08-28, mutation-proven)
 
 **Status:** ✅ FIXED 2026-08-28. One new module,
