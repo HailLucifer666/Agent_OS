@@ -129,3 +129,107 @@ function seeAndClickRecovery(msg) {
 }
 
 module.exports = { truncationAdvice, clickTarget, seeAndClickRecovery };
+
+// ---------------------------------------------------------------------------
+// BUG-398 rows 9 and 10 (2026-09-02). Two pure message builders, here rather
+// than in from-pc.js because that file is on the file-size ratchet at a
+// recorded ceiling of 1552 lines and its guard says, in as many words: "the
+// baseline number is a ceiling, not a suggestion — do not raise it to make this
+// pass. Move the new code somewhere else." This module already exists for
+// exactly this kind of thing (truncationAdvice, seeAndClickRecovery: pure text
+// that turns a refusal into a next step), so it is the right home and not
+// merely a smaller one.
+
+// ROW 9. see_and_click was 8 fails / 0 successes, and every call carried pid
+// 6272 — a Brave window titled "Superfanstudio/OTT-Dashboard-APP: ... - Brave",
+// a GitHub page, while the target was a YouTube video. The refusal printed the
+// OCR sample every time and never compared it to the window it was asked about,
+// so with a pid given and the focus succeeding the remedy was the EMPTY STRING
+// and the message dead-ended. The pid was never cached: the MODEL re-sent it,
+// because nothing told it that pid was wrong.
+//
+// Takes the list_windows rows and returns the sentence that names what was
+// really read. Pure so the wording is testable without a desktop.
+function readWindowNote(targetPid, windows) {
+  const pid = Number(targetPid);
+  if (!Number.isFinite(pid) || pid <= 0) return '';
+  const rows = Array.isArray(windows) ? windows : [];
+  const mine = rows.filter((w) => w && Number(w.pid) === pid);
+  if (!mine.length) {
+    return ' Nothing owned by pid ' + pid + ' is on screen any more, '
+      + 'so that read was of whatever is there instead.';
+  }
+  const titles = mine.map((w) => String(w.title || '').trim()).filter(Boolean);
+  const proc = mine[0].processName ? '"' + mine[0].processName + '"' : 'the window';
+  return ' I read ' + proc + ' (pid ' + pid + ')'
+    + (titles.length ? ', titled ' + titles.map((t) => '"' + t + '"').join(' / ') : '')
+    + ' — if that is not the app you meant, this is the wrong pid.';
+}
+
+// ROW 10. click_at(1336, 1433) returned {"clicked":true} while the URL never
+// changed and the <video> still read paused:true, t:0 — the element's rect was
+// y 1399, height 67, below the fold, so the click hit whatever pixel was there.
+// `ui_click`'s own failure text recommends click_at, so the one tool the
+// recovery ladder points at was the one that could not report its own effect.
+//
+// Returns { verified, reason, observed } for a settle outcome. `verified` true
+// means the caller may cite the 'ocr' oracle; otherwise `reason` is the
+// unverified explanation. No verdict here is ever a plain success.
+function clickVerdict(settleKind, want, x, y) {
+  if (!want) {
+    return { verified: false, reason:
+      'the click was delivered at ' + x + ',' + y + ', but a raw coordinate click has no oracle: '
+      + 'nothing here can tell you WHAT was at those pixels or whether anything changed. '
+      + 'Pass expect:"<text you should see afterwards>" to have it verified, or use see_and_click '
+      + 'to find the label and click it with proof.' };
+  }
+  if (settleKind === 'expected') {
+    return { verified: true, observed: '"' + want + '" is on screen after the click' };
+  }
+  if (settleKind === 'changed') {
+    return { verified: false, reason:
+      'the click landed and the screen changed, but "' + want + '" did not appear, so the change '
+      + 'may not be the one you wanted' };
+  }
+  if (settleKind === 'unreadable') {
+    return { verified: false, reason:
+      'the click was delivered but the screen could not be re-read afterwards, so nothing is confirmed' };
+  }
+  return { verified: false, reason:
+    'the click was delivered and the screen reads exactly the same afterwards, so I cannot tell '
+    + 'that it hit anything that mattered — those pixels may be behind another window, or below '
+    + 'the visible part of a scrolling page' };
+}
+
+module.exports.readWindowNote = readWindowNote;
+module.exports.clickVerdict = clickVerdict;
+
+// The whole remedy for a see_and_click miss, both branches, so from-pc keeps one
+// line instead of the branch plus its two message bodies.
+//
+// BUG-099's rule still holds and is the reason the two branches differ: a remedy
+// is only a remedy when it has not already been taken, so the UNSCOPED advice
+// ("pass a pid so I read that window instead") is never handed to a caller that
+// already passed one. What BUG-398 row 9 added is that passing a pid does not
+// mean passing the RIGHT one — so the scoped branch names the window actually
+// read and points at list_windows for a different reason: not "go and scope it"
+// but "that was the wrong window, here is how to find the right one".
+// `listWindows` is injected rather than imported: from-pc owns the pc-child
+// delegate, and reaching back for it here would be a circular require. The
+// call is best-effort — a refusal must never fail because a nicety threw.
+async function scopedMissRemedy(targetPid, focusNote, listWindows) {
+  if (!targetPid) {
+    return ' This was a whole-screen read, which includes my own window — if the app you '
+      + 'mean is behind mine, call list_windows and pass its pid so I read (and focus) '
+      + 'that window instead.';
+  }
+  let rows = [];
+  try {
+    const wins = await listWindows();
+    if (wins && wins.ok && wins.result && Array.isArray(wins.result.windows)) rows = wins.result.windows;
+  } catch (_) { /* a nicety, not a requirement */ }
+  return readWindowNote(targetPid, rows) + (focusNote || '')
+    + ' Call list_windows and pass the pid of the window that really holds this text.';
+}
+
+module.exports.scopedMissRemedy = scopedMissRemedy;

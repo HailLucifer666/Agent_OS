@@ -218,6 +218,24 @@ describe('BUG-297 — the late-for-turn re-narration is the fourth path', () => 
       // precisely the job. Its prohibition is checked in
       // bug-299-fragment-cannot-license-a-fact.test.js.
       'ad4-correction-unheard',
+      // Added by BUG-398 D1 (2026-09-02) — a promised RECURRING commitment with
+      // nothing scheduled. This guard did its job again: the new site made this
+      // test fail on the commit that introduced it. Enumerated here after
+      // checking, as the message below instructs, that it carries a prohibition
+      // ("Do NOT repeat the promise") and that its wording is pinned — in
+      // bug-398-d1-promised-schedule-not-created.test.js, whose wiring tests
+      // assert the notice names `remember` as the trap and `reminder_add` as the
+      // remedy. It is NOT in bug-273-unverified-payload.test.js's matrix on
+      // purpose: that file enumerates the paths that narrate a TOOL OUTCOME, and
+      // this site narrates the absence of one.
+      'bug398-d1-unscheduled-commitment',
+      // Added by BUG-398 row 7 (2026-09-02) — the model retracting a PROVEN
+      // action under operator pressure. The only site in this list whose
+      // prohibition runs the OTHER way: it forbids taking a true claim back
+      // rather than making a false one. Its wording ("Do NOT retract it",
+      // RECONCILE, and the concrete next step) is pinned in
+      // bug-398-cluster-b-narration.test.js.
+      'bug398-row7-false-retraction',
       'confirm-rejected-by-voice',
       'confirm-resolved',
       'late-for-turn',

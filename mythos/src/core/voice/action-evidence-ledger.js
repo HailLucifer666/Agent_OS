@@ -42,6 +42,13 @@ function actionStatus(entry) {
   // (`ok: dispatchOk && !isUnverified`), so an unverified entry arrives here as
   // ok:false and would otherwise be reported as a flat failure — the exact
   // flattening src/core/CLAUDE.md's evidence contract forbids.
+  // BUG-398 R5a: same reason as the line below, one state over. A caller-abort
+  // carries ok:false with unverified unset, so it reached `return 'failed'` —
+  // and "failed" is the one thing an uncancelled, possibly-completed action must
+  // not be called. Its own word, not 'unverified': the claim is the same but the
+  // permitted next MOVE is not (never retry), and the recent-action ledger this
+  // status feeds is what the claim detector reads.
+  if (entry.abortedInFlight) return 'aborted-in-flight';
   if (entry.unverified) return 'unverified';
   if (entry.ok === true) return 'ok';
   if (entry.ok === null || entry.ok === undefined) return 'pending';
@@ -99,9 +106,15 @@ const STARTED_MESSAGE =
   'This action takes longer than this turn. Say what you are DOING, not what happened — ' +
   'do NOT claim completion. The real outcome will arrive as a [SYSTEM] message; report it then.';
 
-function pendingAck(toolName) {
+// BUG-398 row 2: `traceId` so a slow tool's ACK can be joined to its Audit
+// row. This entry is what the TURN RECORD holds for launch_app and open_web —
+// the ticket's own two examples — because their real outcome arrives after the
+// turn has closed. Without it the fix would have looked done while the measured
+// cases stayed unjoinable.
+function pendingAck(toolName, traceId) {
   return {
     tool: toolName, ok: null, started: true, status: 'pending',
+    traceId: traceId || null,
     summary: `${toolName} started — outcome pending.`,
   };
 }

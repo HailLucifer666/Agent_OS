@@ -84,7 +84,12 @@ async function dispatchAction(decision, ctx) {
   }
 
   // 2. Dispatch
-  const result = await effectors.invoke(decision.tool, decision.args, { signal: signal, bus: bus, goalId: goalId });
+  // BUG-398 row 13: `channel` rides along so an effector can tell WHICH surface
+  // is calling it. The audit line below has always recorded it (as `actor`);
+  // the effector itself could not see it, which is how think_deeply came to tell
+  // a voice turn that IT had just used a budget the background loop consumed.
+  const result = await effectors.invoke(decision.tool, decision.args,
+    { signal: signal, bus: bus, goalId: goalId, channel: ctx.channel || null });
 
   // REMEDIATION P2-12: the one per-turn correlation id already threaded
   // through by callers (the voice WS message's reqId, a confirm's confirmId,

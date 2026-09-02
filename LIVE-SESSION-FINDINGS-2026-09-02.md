@@ -15,6 +15,49 @@ such and were decisive twice (the WhatsApp delivery, the app-picker dialog).
 Section 0 lists what is working and must survive. Section 9 lists five ways my own
 measurements were wrong today, so the next session does not repeat them.
 
+> **CLOSED 2026-09-02. All 13 rows of BUG-398 are addressed — see that ticket for
+> the commit table. FIVE things in this dossier turned out to be wrong, and the
+> measurements are still not among them: every correction below came from
+> re-measuring something this file recorded accurately.**
+>
+> 4. **E5 was reachable the whole time.** `manage_widget` is tier 1, on the voice
+>    allowlist, and maps "music", "music player", "now playing", "player" and
+>    "spotify" to the media widget. "There isn't a specific music widget I can
+>    open" was a FALSE CAPABILITY DENIAL, not a missing tool — §2's class, one
+>    step earlier.
+> 5. **§9 needs a sixth and seventh entry, both earned during the fix.** (6) Two
+>    of E1's three "ok with no CDP" calls were two calls, and their episodic
+>    payload proves CDP connected — the machine was measured at a different
+>    moment than the call. (7) The claim detector caught **1 of the 9**
+>    overstatements when they were replayed against it, so §2's counts were right
+>    and its stated mechanism was not: the sentences were PROGRESSIVE, which no
+>    tier could see.
+>
+> **UPDATE 2026-09-02, after the root-cause pass. Three things in this dossier are
+> wrong; the measurements are not.**
+>
+> 1. **D2 is FIXED** (commit `60c98ed`) — and it was never a `whatsapp_send`
+>    defect. `hub.js`'s caller-abort stops *waiting* for an effector without
+>    cancelling it and returned a bare `ok:false`, so all four narration paths
+>    called an uncancelled, possibly-delivered send a FAILURE. It now carries
+>    `effectMayHaveLanded` and a claim that forbids the retry. Because
+>    `whatsapp_send` is tier 3, the measured incident came through
+>    `resolveLiveConfirm` — the path a fix aimed only at the awaited branch would
+>    have missed.
+> 2. **D3 did NOT cause D2.** The flip is real (`live-tool-adapter.js:427`,
+>    persisted at `:1419`) but the model never reads that boolean — its
+>    functionResponse carries a string `status`. D2's retry came from a genuine
+>    `failed`. D3 remains a real ledger-honesty defect; it is simply not the cause
+>    named here.
+> 3. **E1 is NOT CONFIRMED and the code contradicts it.** Every `ok` return in
+>    `from-browser.js:1018–1119` needs `state === 'ONLINE'` or a successful
+>    `connectOverCDP`; the `launchLocal` fallback is unreachable from that call
+>    site. Read the three rows' `detail.result` in the vault before touching code.
+>
+> Separately, **BUG-399's fork-exhaustion hypothesis is disproved** — the runner
+> runs 3 test workers to this machine's 7 — and its three real causes are fixed
+> (`4e4e663`, `38e884c`). §10's `verify-lib-attach` remains load-sensitive.
+
 ---
 
 ## 0. Do not break these — verified working
@@ -275,14 +318,22 @@ reply: `Folder [.antigravity]` — bracket syntax, not a spoken sentence.
 - Content bug in the same flow: the composed message began *"Good morning, Sir. Here's
   your daily AI briefing…"* — addressed to the operator while being sent to Alex.
 
-### D3. `ok` polarity disagrees between the two ledgers — likely the cause of D2's retry
+### D3. `ok` polarity disagrees between the two ledgers — ~~likely the cause of D2's retry~~ (CORRECTED 2026-09-02: it is not)
 
 - **Measured, same action, two records:**
   - action record: `ok:true, unverified:true`
   - turn record: `ok:false, status:"unverified"`
   - Confirmed on `launch_app({name:"code"})` and `open_web`.
-- **Consequence:** the model reads `ok:false`, concludes failure, and **retries**.
-  Harmless for `open_file` (3 identical retries); a duplicate WhatsApp message for D2.
+- **Consequence — corrected 2026-09-02.** The stated consequence ("the model reads
+  `ok:false`, concludes failure, and retries") is **wrong about the mechanism**: the
+  model is handed a string `status` field, never this boolean, so it cannot read
+  it. Traced: the flip is `evaluateOutcome()` at `live-tool-adapter.js:427`
+  (`ok: dispatchOk && !isUnverified`), written into the turn record at `:1419`
+  next to a correctly-derived `status`. `action-evidence-ledger.js:41–44` already
+  documents the fold and un-folds it for narration.
+  The real consequence is narrower and still worth fixing: **every session that
+  reads the vault sees two records disagree about the same action**, and one of
+  them says an action that may well have happened did not.
 - **Prevention:** one representation of outcome. `unverified` must never present as
   `ok:false` — "couldn't confirm" and "didn't happen" warrant opposite next moves
   (hedge vs retry). Guard: assert the two ledgers agree on `ok` for the same

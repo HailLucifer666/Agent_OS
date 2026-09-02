@@ -731,7 +731,16 @@ describe('aether-sensor (Phase 1)', function () {
 
       // Kill the connection: the drop must clear queue and timer.
       client.close();
-      assert.ok(await waitFor(function () { return agg.wss.clients.size === 0; }, 1000), 'connection must drop');
+      // BUG-398 R3 (2026-09-02): this used to wait for `agg.wss.clients.size === 0`
+      // — the SERVER's view — and then assert on the SENSOR's queue, which is
+      // cleared by the sensor's own socket 'close' handler (sensors/aether.js:376).
+      // Those are two different sides of one wire and the server reaches zero
+      // first. On a fast machine the gap is invisible; on a CI runner it is not,
+      // and this test failed there with `+ { queuedAt, text: 'stale queued text' }
+      // - null` while passing 3/3 locally — one of the three causes behind
+      // BUG-399. Wait for the side the assertion is actually about.
+      assert.ok(await waitFor(function () { return sensor._internal._queueState().queued === null; }, 1000),
+        'drop must clear the queued say');
       assert.equal(sensor._internal._queueState().queued, null, 'drop must clear the queued say');
       assert.equal(sensor._internal._queueState().timerActive, false, 'drop must clear the safety timer');
 

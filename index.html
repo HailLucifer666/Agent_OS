@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6948,
+      "value": 7050,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -3957,24 +3957,24 @@
       {
         "n": 398,
         "shape": "entry",
-        "state": "open",
-        "title": "the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation (🔴 NOT STARTED — diagnosis complete)",
+        "state": "verified",
+        "title": "the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation",
         "detail": {},
-        "excerpt": "**NOT STARTED — no code has been written for any finding below.** **Status:** 🔴 diagnosis complete and evidence-backed. Full dossier with verbatim errors, measurements and per-finding prevention notes: [`LIVE-SESSION-FINDINGS-2026-09-02.md`](LIVE-SESSION-FINDINGS-2026-09-02.md). **Read that file's section 0 (what already works — do not break it) and section 9 (five ways the measurements were wrong) before planning.** **Source:** one ~2-hour live voice session, 2026-09-02, operator-driven, trailed from `%APPDATA%\\MYTHOS\\vault\\Audit\\2026-09-02.jsonl`, the matching Episodic log and `mythos-server.log`. ### THE BUG The effector layer, the leash and the memory behaved correctly throughout. **Two clusters failed: anything that has to find something on a screen, and the spoken turn's claims about actions.** Every bad claim sat on a `fail` or an `unverified` — not one sat on a verified success,…"
+        "excerpt": "**Status:** ✅ FIXED 2026-09-02, mutation-proven. Every one of the 13 measured rows is closed, and three of them closed by DISPROVING the finding rather than by writing code — those are called out below, because a wrong premise left in a ticket is worse than no premise. Full suite 7050 pass / 0 fail / 0 skipped. Nine commits on `fix/bug-398-r5a-aborted-in-flight`: | Commit | Rows | |---|---| | `60c98ed` | 1 — the aborted-in-flight outcome (the only irreversible path) | | `4e4e663` | BUG-399 cause 2, found while measuring this ticket | | `38e884c` | BUG-399 causes 1 and 3 | | `e28c03a` | 11 — the register read a partially-fixed ticket as done; plus the corrected causes | | `aff8011` | 8 — a promised recurring commitment with nothing scheduled | | `45bb24a` | 4, 5, 6, 7 — the narration cluster | | `cd3fec3` | 13 + E4 — the shared reasoning budget, and voice can scroll | | `c13a1c8` | 2 — tw…"
       },
       {
         "n": 399,
         "shape": "entry",
-        "state": "open",
-        "title": "CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable (🔴 NOT STARTED — diagnosis only)",
+        "state": "fixed",
+        "title": "CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable",
         "detail": {},
-        "excerpt": "**NOT STARTED — no code or workflow change has been made.** **Status:** 🔴 diagnosis only, from run evidence gathered 2026-09-02 while merging PR #69. ### THE BUG `.github/workflows/ci.yml`'s `test` job fails on essentially every run, **while the same suite is green on a developer machine**. The failing tests are not the same ones twice. Nothing in the failing set has any relationship to the change under test — PR #69's second commit changed only markdown and generated HTML and still went red. **Consequence: CI cannot currently tell anyone anything.** A red check no longer distinguishes \"this PR broke something\" from \"the runner ran out of headroom\", so the gate is either ignored or it blocks good work. The session that merged #69 spent a material part of its budget establishing that a red `test` job was not its fault, and the next session will repeat that unless this is fixed or documen…"
+        "excerpt": "**Status:** ✅ FIXED 2026-09-02. Three ordinary test defects, each masked on a developer machine by a different environmental accident. Commits `4e4e663` (cause 2) and `38e884c` (causes 1 and 3). The original diagnosis below is kept because its measurements were right and are what made the causes findable — but **its stated root-cause hypothesis was wrong and has been struck.** ### THE CORRECTION — read this before the original text **The fork/commit-limit exhaustion hypothesis is wrong.** `node --test`'s default concurrency is `availableParallelism() - 1`, so the 4-vCPU hosted runner runs **3 workers against this machine's 7**. CI runs *less* in parallel, not more. Bounding concurrency, sharding, or moving to a self-hosted runner would have changed nothing. The errors were also assertion- and cancellation-shaped throughout, never the exit-127-with-no-summary signature the root `CLAUDE.md…"
       }
     ],
     "counts": {
-      "verified": 62,
-      "fixed": 173,
-      "open": 8,
+      "verified": 63,
+      "fixed": 174,
+      "open": 6,
       "coded": 2,
       "diagnosed": 1,
       "duplicate": 2,

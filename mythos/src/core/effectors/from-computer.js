@@ -9,6 +9,8 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const { effectorFromTool } = require('./adapter');
+const { findAppPicker, appPickerNote } = require('./open-file-picker');
+const deepBudget = require('./deep-think-budget');
 // Spawning explorer.exe is not a window existing — see evidence.js's header.
 const evidence = require('./evidence');
 // Task 3 (step 5) — clipboard_read/clipboard_write delegate through pc-child,
@@ -693,58 +695,10 @@ let deepThinkBrain = null;
 let deepThinkConfig = null;
 let deepThinkLogger = null;
 
-// BUG-287 (2026-08-20): think_deeply had no rate limit, and the reasoning lane
-// is slow and rate-limited upstream, so nothing stopped it being called in a
-// tight loop.
-//
-// Measured from that day's audit: eight calls, all actor:"cortex", with gaps of
-// 61s, 12s, 17s, 153s, 416s and 22s — four of them inside 91 seconds, each
-// restating the same browser-offline diagnosis. The operator said "Why are you
-// repeating yourself? You just told me that" and "why are you thinking deeply
-// for everything?", then told it to log the bug, which is incident
-// inc-1787170098385-1. The loop is legible in the arguments: at 20:07:59 it
-// asked the reasoning lane why it had repeated itself, and at 20:08:16 it asked
-// the reasoning lane why it kept calling the reasoning lane — each call adding
-// the latency that produced the next repetition.
-//
-// A CONTENT DIFF-GATE WOULD NOT HAVE CAUGHT THIS, and diff-gate.js already
-// exists for a neighbouring problem (mull() speaks only when its thought
-// changed), so that was the obvious first idea. All eight questions are
-// textually different — different questions about the same stuck situation. The
-// only thing they share is being seconds apart, so the gate has to be time.
-//
-// 60s is not a round number chosen for looking sensible: it is the cut that
-// blocks the three rapid calls (12s, 17s, 22s) and allows the four spaced ones
-// (61s, 153s, 416s). Change the reasoning if you change the number.
-//
-// The tool description already says "DEFAULT TO ANSWERING IT YOURSELF... this
-// call is expensive". It is still there, still right, and it lost — the third
-// time prose guidance has lost to a tool call in this codebase.
-const DEEP_THINK_MIN_INTERVAL_DEFAULT_MS = 60000;
-let lastDeepThinkAt = 0;
-
-function deepThinkMinIntervalMs() {
-  const raw = deepThinkConfig && deepThinkConfig.DEEP_THINK_MIN_INTERVAL_MS;
-  if (raw === undefined || raw === null || raw === '') return DEEP_THINK_MIN_INTERVAL_DEFAULT_MS;
-  const n = Number(raw);
-  // A threshold that parses to NaN makes every comparison below false, which
-  // switches the guard OFF while leaving it looking on — the exact shape this
-  // repo has been bitten by before. Fall back to the DEFAULT, never to zero:
-  // a broken value must leave the guard standing, and it says so out loud.
-  // An explicit 0 is different and is honoured — that is the deliberate opt-out.
-  if (!Number.isFinite(n) || n < 0) {
-    if (deepThinkLogger && typeof deepThinkLogger.warn === 'function') {
-      try {
-        deepThinkLogger.warn('DEEP_THINK_MIN_INTERVAL_MS is not a non-negative number — using the default',
-          { value: raw, usingMs: DEEP_THINK_MIN_INTERVAL_DEFAULT_MS });
-      } catch (_) { /* logging must never take the tool down */ }
-    }
-    return DEEP_THINK_MIN_INTERVAL_DEFAULT_MS;
-  }
-  return n;
-}
-
-async function think_deeply({ question, context }) {
+// BUG-287 + BUG-398 row 13: the think_deeply budget lives in
+// deep-think-budget.js — one shared clock, its 60s rationale, and the refusal
+// that names which surface consumed it.
+async function think_deeply({ question, context }, ctx) {
   if (!deepThinkBrain || typeof deepThinkBrain.think !== 'function') {
     return fail('No brain is wired for deep reasoning, so I cannot think this through properly.');
   }
@@ -757,21 +711,16 @@ async function think_deeply({ question, context }) {
   // deliberately — it is what makes the 0 opt-out true even if the system clock
   // steps backwards mid-session, which is the one case where sinceLast can go
   // negative. Recorded so the next reader does not delete it as dead.
-  const minIntervalMs = deepThinkMinIntervalMs();
+  const minIntervalMs = deepBudget.deepThinkMinIntervalMs(deepThinkConfig, deepThinkLogger);
+  const lastDeepThinkAt = deepBudget.deepThinkState().lastDeepThinkAt;
   const sinceLast = Date.now() - lastDeepThinkAt;
   if (minIntervalMs > 0 && lastDeepThinkAt > 0 && sinceLast < minIntervalMs) {
-    const waitS = Math.ceil((minIntervalMs - sinceLast) / 1000);
-    // Deliberately NOT phrased as a fault. A message the model reads as broken
-    // sends it diagnosing a healthy system, which is the loop this is closing.
-    // It has to be actionable, so it names the one action available: answer now.
-    return fail('Deep reasoning was used ' + Math.round(sinceLast / 1000) + 's ago and is rate-limited '
-      + 'for another ' + waitS + 's. Nothing is wrong. Answer this yourself now, from what you already '
-      + 'know — you are capable of it, and a fast good answer beats a slow better one.');
+    return fail(deepBudget.cooldownRefusal(sinceLast, minIntervalMs, (ctx && ctx.channel) || null));
   }
   // Stamped BEFORE the call, not after. A lane that is down burns the full
   // timeout on every attempt, so a failing call is the one most worth spacing
   // out; stamping on success only would leave a broken lane hammerable.
-  lastDeepThinkAt = Date.now();
+  deepBudget.stampDeepThink((ctx && ctx.channel) || null);
   const { deepThink } = require('./deep-think');
   try {
     const r = await deepThink(deepThinkBrain, {
@@ -853,22 +802,26 @@ async function open_file({ path: raw }) {
   // their own. Shortening the text WITHOUT the oracle would have meant claiming
   // an open nobody had checked, which is the one thing the contract forbids.
   //
-  // Bounded poll, four tries 400ms apart, mirroring open_folder: an app needs a
-  // moment to create and title its window, and a single fixed-delay check is a
-  // coin flip on a busy machine that reports real successes as unverified.
-  // from-pc is required lazily (circular dep) and its absence costs only the
-  // oracle, never the open.
+  // Bounded poll, four tries 400ms apart, mirroring open_folder: a single
+  // fixed-delay check is a coin flip on a busy machine. from-pc is required
+  // lazily (circular dep); its absence costs the oracle, never the open.
   const leaf = path.basename(resolved);
   const base = ok({ opened: resolved, name: leaf });
   let locate = null;
   try { locate = require('./from-pc').findWindowByTitle; } catch (_) { /* offline costs only the oracle */ }
+  // BUG-398 row 11: the picker check is inside the poll and ends it — see
+  // open-file-picker.js.
   let located = null;
+  let picker = null;
   if (typeof locate === 'function') {
-    for (let attempt = 0; attempt < 4 && !(located && located.window); attempt++) {
+    for (let attempt = 0; attempt < 4 && !(located && located.window) && !picker; attempt++) {
       await new Promise((r) => setTimeout(r, 400));
       try { located = await locate(leaf); } catch (_) { located = null; }
+      if (located && located.window) break;
+      picker = await findAppPicker(() => require('./from-pc').list_windows());
     }
   }
+  if (picker && !(located && located.window)) return evidence.unverified(base, appPickerNote(picker, leaf));
 
   if (located && located.window) {
     // "and focus it on front" was part of the same request. Advisory: Windows
@@ -967,7 +920,9 @@ module.exports = {
   setOpenPathProvider,
   // BUG-287 test seam: lets the suite assert the schema default and the code
   // default are the same number, since the reasoning for 60s lives in both.
-  _deepThinkMinIntervalDefaultMs: () => DEEP_THINK_MIN_INTERVAL_DEFAULT_MS,
+  // BUG-398 row 13: the constant moved to deep-think-budget.js; this seam still
+  // answers for it so test/bug-287's schema-agreement check keeps working.
+  _deepThinkMinIntervalDefaultMs: () => deepBudget.DEEP_THINK_MIN_INTERVAL_DEFAULT_MS,
   TOOLS,
   open_folder,
   list_folder,

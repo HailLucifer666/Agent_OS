@@ -98,8 +98,36 @@ const CLAIM_CATEGORIES = [
   },
   {
     name: 'opening',
-    tools: ['launch_app', 'browser_navigate', 'open_web', 'navigate'],
+    // BUG-398 row 7, found while measuring it: open_folder and open_file were in
+    // NO category, so a SUCCESSFUL open_folder could not back "I opened the
+    // Downloads folder" — `re` matched "I opened", the backed check looked only
+    // at the four tools below, found nothing, and flagged a true statement. That
+    // is the F1b regression exactly (the searching category listing only the two
+    // code-search tools), one category over, and it was live. Both names exist in
+    // TIER_TABLE and neither was claimed elsewhere.
+    tools: ['launch_app', 'browser_navigate', 'open_web', 'navigate', 'open_folder', 'open_file'],
     re: /\b(?:i(?:'ve| have) |i )(opened|launched|navigated(?: to)?|went to)\b/i,
+    // BUG-398 row 4 — 2026-09-02. THE PROGRESSIVE TIER. Measured verbatim:
+    // "Rectifying that now — Google News is opening on a new tab, for real this
+    // time." NO TOOL RAN IN THAT TURN AT ALL. The claim is not completed-aspect,
+    // so `re` cannot see it, and it is not future-tense either, so FUTURE_RE
+    // does not (and should not) excuse it. A progressive claim asserts something
+    // is happening RIGHT NOW; with nothing in flight, nothing is.
+    //
+    // Third-person subjects are the point: the sentence that fooled the existing
+    // matcher put the APP in subject position ("Google News is opening"), not
+    // "I". Same lesson as BUG-357's elliptical tier one aspect over.
+    progressiveRe: /\b(?:is|are|am|'m)\s+(?:now\s+|just\s+)?(?:opening|launching|loading|navigating|coming\s+up)\b|\b(?:opening|launching|navigating\s+to)\b[^.]{0,30}\b(?:now|right\s+now|as\s+we\s+speak)\b/i,
+  },
+  {
+    // BUG-398 row 4, second half. "Closing the music news widget on the HUD
+    // now." — NO TOOL RAN, and no category owned the verb, so nothing could
+    // have flagged it however the tiers were written. The gap was the category
+    // table, not the regexes.
+    name: 'window-control',
+    tools: ['close_panel', 'close_window', 'manage_widget', 'spawn_widget'],
+    re: /\b(?:i(?:'ve| have) |i )(closed|dismissed|opened up|spawned)\b[^.]{0,30}\b(widget|panel|window|card)\b|\b(?:the\s+)?(widget|panel|window|card)\b[^.]{0,20}\b(?:has been|is now)\s+(?:closed|dismissed|open)\b/i,
+    progressiveRe: /\b(?:closing|dismissing|opening|spawning)\b[^.]{0,40}\b(widget|panel|window|card)\b|\b(?:is|am|'m)\s+(?:now\s+)?(?:closing|dismissing)\b/i,
   },
   {
     name: 'reminders',
@@ -223,6 +251,24 @@ const CLAIM_CATEGORIES = [
 // completed-aspect claim, and must never be flagged.
 const FUTURE_RE = /\b(i'll|i will|i'm going to|im going to|going to|about to|let me|i'm about to|gonna|i plan to|i intend to)\b/i;
 
+// BUG-398 row 4. The progressive tier is the only one that accepts a THIRD-PERSON
+// subject, because the sentence that produced the bug put the app there ("Google
+// News is opening on a new tab") rather than "I". That relaxation immediately
+// re-opens the exact false-positive class this file's header spends thirty lines
+// warning about — a verb matching in a sentence about the OPERATOR rather than
+// about MYTHOS. Found by attacking the tier once it was green: "Your laptop is
+// opening slowly today" flagged as an unbacked claim.
+//
+// So the progressive tier alone carries this negative, tested before the
+// positive. The other tiers do not need it: their regexes all require an
+// explicit first-person prefix, which is what the header says must stay
+// mandatory. Under-firing is the right direction here — the progressive tier is
+// only half-gated (it needs the absence of a pending row, not the presence of a
+// failed one), so an over-fire reaches ordinary conversation, and the header's
+// own cost table says a detector that makes the assistant retract true
+// statements is worse than no detector.
+const PROGRESSIVE_SUBJECT_IS_THEIRS_RE = /\byour\s+[\w'-]+(?:\s+[\w'-]+){0,2}\s+(?:is|are|'s|was|were)\b/i;
+
 function splitSentences(text) {
   return String(text || '')
     .split(/(?<=[.!?])\s+|\n+/)
@@ -261,6 +307,16 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
   const attemptedUnproven = new Set(
     actions.filter((a) => a && a.tool && a.ok !== true).map((a) => a.tool),
   );
+  // BUG-398 row 4: tools DISPATCHED and not yet returned. `ok == null` is the
+  // pending shape (the SLOW_TOOLS ack and the confirm-pending row both carry
+  // it), and `started`/`confirmPending` are set explicitly by their push sites.
+  // Only the progressive tier reads this — a pending tool makes "it is opening
+  // now" true, and the premature-claim path already owns that correction.
+  const pendingTools = new Set(
+    actions.filter((a) => a && a.tool
+      && (a.started === true || a.confirmPending === true || a.ok === null || a.ok === undefined))
+      .map((a) => a.tool),
+  );
 
   const claims = [];
   const flaggedCategories = new Set();
@@ -283,6 +339,24 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
       if (!match && category.ellipticalRe
           && gate.some((tool) => attemptedUnproven.has(tool))) {
         match = category.ellipticalRe.exec(sentence);
+      }
+      // BUG-398 row 4: the progressive tier, and its gate is the OPPOSITE shape
+      // to the elliptical one above. Elliptical needs a tool ATTEMPTED and
+      // unproven; progressive fires when NOTHING from the category is in flight
+      // and nothing succeeded — because "it's opening now" with an empty tool
+      // batch is a statement about a present that does not exist. Two of the
+      // session's ten overstatements had NO tools in the turn whatsoever, and
+      // this is the only tier that can see them.
+      //
+      // PENDING IS EXCLUDED, DELIBERATELY. A slow tool that has been dispatched
+      // and not yet returned makes "it's opening now" TRUE, and this repo has
+      // already recorded the cost of getting that backwards: "telling the model
+      // a pending tool did NOT happen is its own false statement" (the
+      // ad4-correction-premature branch exists for exactly that). So a category
+      // with a pending row is silent here, and the premature-claim path owns it.
+      if (!match && category.progressiveRe && !gate.some((tool) => pendingTools.has(tool))
+          && !PROGRESSIVE_SUBJECT_IS_THEIRS_RE.test(sentence)) {
+        match = category.progressiveRe.exec(sentence);
       }
       if (!match) continue;
       // A fact-finding tool that SUCCEEDED backs the claim. This is what stops
@@ -340,4 +414,192 @@ function buildSpokenGoAheadNotice(utterance, pendingToolNames, opts) {
   };
 }
 
-module.exports = { detectUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice };
+// ---------------------------------------------------------------------------
+// BUG-398 D1 — a promised RECURRING commitment with nothing scheduled.
+//
+// A DIFFERENT PREDICATE FROM EVERYTHING ABOVE, which is why it is its own
+// function rather than a seventh CLAIM_CATEGORY. detectUnbackedClaims asks "did
+// this completed-aspect claim have a successful tool behind it", and it is right
+// to skip future tense (FUTURE_RE) — "I'll open that next" is a plan, not a lie.
+// But a recurring commitment is a promise about the FUTURE that is already false
+// when it is made, because the thing that would honour it was never created.
+// Skipping future tense is exactly what let all three of these through.
+//
+// MEASURED, 2026-09-02 session, and re-measured against this file before writing
+// a line of it — all three of these returned [] from detectUnbackedClaims:
+//   "The news will be delivered daily at 10 AM precisely."
+//   "I will update you tomorrow at 10 AM as scheduled."
+//   "I've set up a daily briefing for you at 10 AM every morning."
+// `reminder_add` ran ZERO times all session. There was no reminder store in the
+// vault at all. What the model called instead was `remember`, which stores a
+// FACT and schedules nothing — and which returns ok:true, so every
+// evidence-based check in this file sees a successful tool and stays quiet. The
+// system caught its own lie one turn later, when `reminder_approve_action`
+// answered `No reminder matching "Daily 10 AM AI news briefing…"`.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Any commitment MYTHOS cannot keep without a
+// scheduler: daily, weekly, hourly, "every morning", "each Monday". Keyed on the
+// recurrence marker plus a first-person or delivery-promise shape in the SAME
+// sentence, never on the word "daily" alone — "your daily briefing is usually
+// quiet" is not a promise.
+//
+// Q8 — A READ SATISFIES IT TOO, DELIBERATELY. If the model called reminder_list
+// or timer_list this turn it has grounds to TALK about a schedule that already
+// exists ("it's set for 10 AM daily"), and firing there would be the
+// existence-vs-agreement trap in reverse: punishing an accurate report. Only a
+// turn that promises recurrence while neither creating nor reading a schedule is
+// flagged.
+const RECURRENCE_RE = /\b(?:dail(?:y|ies)|every\s+(?:day|morning|evening|night|week|month|hour|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d+\s*(?:minutes?|hours?|days?))|each\s+(?:day|morning|evening|week|month)|weekly|hourly|monthly|every\s+single\s+day)\b/i;
+
+// The commitment shape: MYTHOS undertaking to do it, or promising delivery.
+// "will be delivered/sent/posted" is included because the session's worst
+// instance was passive ("The news will be delivered daily at 10 AM").
+const COMMITMENT_RE = /\b(?:i'll|i will|i've|i have|i am going to|i'm going to)\b|\bwill be (?:delivered|sent|posted|shared|updated|briefed)\b|\byou'll (?:get|receive|have)\b/i;
+
+// Tested BEFORE the positive above it, the same rule the MARK table in
+// build-index.js states and for the same reason. Found by attacking this guard
+// after it was written and green: "I will NOT send it daily unless you ask" is a
+// REFUSAL to schedule, and it flagged as a broken promise. Harmless in effect —
+// the model would get a notice agreeing with it — but a guard that fires on
+// correct behaviour is a guard that gets muted, and this one has to survive the
+// turns where MYTHOS is being careful.
+const NOT_A_COMMITMENT_RE = /\b(?:i\s+(?:will|'ll)\s+not|i\s+won'?t|i\s+am\s+not\s+going\s+to|i'?m\s+not\s+going\s+to|i\s+(?:can'?t|cannot|could\s+not|couldn'?t))\b|\bwill\s+not\s+be\s+(?:delivered|sent|posted|shared|updated|briefed)\b/i;
+
+// Tools that actually create a schedule. Taken from the voice allowlist in
+// live-tools.js — a name not reachable by voice could never satisfy this.
+const SCHEDULE_WRITE_TOOLS = ['reminder_add', 'timer_add', 'daily_plan'];
+// Tools that READ one. See Q8 above.
+const SCHEDULE_READ_TOOLS = ['reminder_list', 'timer_list'];
+
+// Pure, exported, separately testable — same contract as detectUnbackedClaims.
+// Returns [] when nothing is flagged, or one entry per flagged sentence:
+// { category:'recurring-commitment', sentence, sawTools }.
+function detectUnscheduledCommitments(assistantText, actionsThisTurn, recentActions) {
+  const text = String(assistantText || '');
+  if (!text) return [];
+
+  const current = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
+  const recent = Array.isArray(recentActions) ? recentActions : [];
+  const actions = current.concat(recent);
+
+  // `ok === true` and not unverified: a scheduling call that FAILED or could not
+  // be confirmed has not created anything, so it must not silence the promise.
+  // This is the one place in this file where `unverified` is checked explicitly
+  // rather than through ok — an unverified reminder_add is precisely the state
+  // where a confident recurring promise is still wrong.
+  const satisfied = actions.some((a) => a && a.ok === true && a.unverified !== true
+    && (SCHEDULE_WRITE_TOOLS.indexOf(a.tool) !== -1 || SCHEDULE_READ_TOOLS.indexOf(a.tool) !== -1));
+  if (satisfied) return [];
+
+  const out = [];
+  for (const sentence of splitSentences(text)) {
+    if (!RECURRENCE_RE.test(sentence)) continue;
+    if (NOT_A_COMMITMENT_RE.test(sentence)) continue; // negative before the positive
+    if (!COMMITMENT_RE.test(sentence)) continue;
+    out.push({
+      category: 'recurring-commitment',
+      sentence: sentence.trim().slice(0, 300),
+      sawTools: actions.map((a) => a && a.tool).filter(Boolean),
+    });
+    break; // one flag per reply, same rule the categories above follow
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// BUG-398 row 7 — the OPPOSITE direction, and nothing in this file could see it.
+//
+// MEASURED: `open_folder` returned ok with the `window-title` oracle naming the
+// real window — "Arghya Chowdhury - File Explorer (pid 15816)". The folder
+// genuinely opened. MYTHOS then said: "I was mistaken about that folder opening
+// successfully; I am retracting that claim." It retracted a PROVEN success
+// because the operator said it had not happened.
+//
+// Pair that with the same session's WhatsApp standoff, where it held its
+// position against the operator THREE TIMES on weaker evidence and was right to.
+// So the behaviour is not a missing spine — it is that there is NO POLICY for
+// "the operator contradicts my evidence", and which way it goes is unrelated to
+// how strong the evidence is. Everything else in this file guards against
+// over-claiming; this is the only guard against under-claiming, and a detector
+// that only ever pushes one way trains exactly this failure.
+//
+// THE MISSING BEHAVIOUR IS RECONCILE, not fold and not dig in: "it did open —
+// pid 15816; it may be behind another window, shall I bring it to the front?"
+// `focus_window` was available and had been used correctly earlier in the
+// session.
+//
+// THE GATE IS DELIBERATELY CONSERVATIVE, and this is the honest limit of it: it
+// fires only when the evidence window holds at least one PROVEN action and
+// NOTHING unproven. If something in the window did legitimately fail, a
+// retraction may well be about that, and guessing which would risk telling
+// MYTHOS to stand behind a claim that really was wrong — the one error this file
+// must never make (see the F1b note in the searching category). So this catches
+// the clean case and stays silent on the ambiguous one, which means it will miss
+// some real instances. The prompt-level rule added alongside it in voice-agent's
+// RULES is what covers the ambiguous ones; a detector cannot.
+// A retraction MARKER on its own is not enough, and this is the bound the first
+// draft got wrong: "I was wrong about the weather earlier" flagged as a false
+// retraction, because a bare marker matched with no reference to an action.
+// Retracting a FACT is ordinary and often correct; retracting a proven ACTION is
+// the defect. So a marker must co-occur with an action word in the same
+// sentence. Caught by this guard's own bounds test before it shipped.
+const RETRACTION_MARKER_RE = new RegExp([
+  '\\bi\\s+was\\s+mistaken\\b',
+  "\\bi(?:'m|\\s+am)\\s+retracting\\b",
+  '\\bi\\s+retract\\s+that\\b',
+  '\\bi\\s+was\\s+wrong\\s+(?:about|to\\s+say)\\b',
+  '\\bi\\s+should\\s+not\\s+have\\s+(?:said|claimed)\\b',
+].join('|'), 'i');
+
+// The vocabulary of things a TOOL does, in any aspect — the retraction may name
+// the act ("that folder opening") or the outcome ("it opened").
+const RETRACTED_ACTION_RE = /\b(?:open(?:ed|ing|s)?|launch(?:ed|ing|es)?|send|sent|sending|clos(?:e|ed|ing)|play(?:ed|ing|s)?|click(?:ed|ing|s)?|typ(?:e|ed|ing)|navigat(?:e|ed|ing)|schedul(?:e|ed|ing))\b/i;
+
+// A denial already names the verb, so it stands alone.
+const RETRACTION_DENIAL_RE =
+  /\b(?:it|that)\s+(?:did\s*n[o']?t|didn'?t|never)\s+(?:actually\s+)?(?:open|launch|send|close|play|work|go\s+through|happen)\b/i;
+
+function looksLikeActionRetraction(sentence) {
+  if (RETRACTION_DENIAL_RE.test(sentence)) return true;
+  return RETRACTION_MARKER_RE.test(sentence) && RETRACTED_ACTION_RE.test(sentence);
+}
+
+// Pure, exported, separately testable. Returns [] or one entry:
+// { category:'false-retraction', sentence, provenTools }.
+function detectFalseRetractions(assistantText, actionsThisTurn, recentActions) {
+  const text = String(assistantText || '');
+  if (!text) return [];
+
+  const current = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
+  const recent = Array.isArray(recentActions) ? recentActions : [];
+  const actions = current.concat(recent).filter((a) => a && a.tool);
+  if (!actions.length) return [];
+
+  // A pending row is neither proven nor failed, and a retraction while something
+  // is still in flight is premature rather than false — the
+  // ad4-correction-premature path owns that shape.
+  const pending = actions.filter((a) => a.started === true || a.confirmPending === true
+    || a.ok === null || a.ok === undefined);
+  if (pending.length) return [];
+
+  const proven = actions.filter((a) => a.ok === true && a.unverified !== true);
+  const unproven = actions.filter((a) => a.ok !== true);
+  if (!proven.length) return [];   // nothing proven — a retraction may be correct
+  if (unproven.length) return [];   // something did fail — do not guess which is meant
+
+  for (const sentence of splitSentences(text)) {
+    if (!looksLikeActionRetraction(sentence)) continue;
+    return [{
+      category: 'false-retraction',
+      sentence: sentence.trim().slice(0, 300),
+      provenTools: [...new Set(proven.map((a) => a.tool))],
+    }];
+  }
+  return [];
+}
+
+module.exports = {
+  detectUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice,
+  detectUnscheduledCommitments, SCHEDULE_WRITE_TOOLS, SCHEDULE_READ_TOOLS,
+  detectFalseRetractions,
+};

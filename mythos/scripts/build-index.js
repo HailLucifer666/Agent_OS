@@ -312,6 +312,35 @@ function classify(bug, openSet) {
   if (openSet.has(bug.n)) return 'open';
   if (mark && MARK_OPEN.has(mark.state)) return 'open';
 
+  // BUG-398 R11 (2026-09-02): NEGATIVE-FIRST ON THE STATUS LINE. The MARK table
+  // above opens with "Order matters: every negative is tested before the positive
+  // it contains" — and the Status-line path below never honoured that intent, so
+  // prose beat an explicit marker sitting in the same sentence.
+  //
+  // MEASURED, live: a status line reading "🔴 PARTIALLY FIXED — row 1 closed,
+  // the rest still open" was classified **fixed**, because /\bFIXED\b/ matches
+  // inside "PARTIALLY FIXED" and nothing looked at the 🔴. The register then
+  // reported a partially-fixed ticket as done — and the register is what a new
+  // session reads to know what is outstanding.
+  //
+  // Scope was measured before changing anything: across all 248 entries exactly
+  // ONE status line carries 🔴 together with a positive word (the one above).
+  // Two entries whose prose mentions leftovers ("Not done, ...", "which is
+  // still ...") carry no 🔴 and are genuinely fixed — they are untouched, which
+  // is the false-positive case this rule must not fire on.
+  //
+  // NOT a complete fix for the prose-matching class. The underlying defect is
+  // that ANY of these words ANYWHERE in the status line still means fixed, so a
+  // cross-reference like "section 0 (verified working — do not break)" can still
+  // close a ticket by accident. The real remedy is an explicit machine-readable
+  // state field, or bounding this match the way the `duplicate` check above is
+  // bounded to 40 characters. This closes only the half where the author DID
+  // write an unambiguous marker and it was ignored.
+  const statusSaysNotDone = /🔴/.test(s)
+    || /^[^.]{0,40}\bPARTIAL(?:LY)?\b/i.test(s)
+    || /^[^.]{0,40}\bNOT\s+(?:yet\s+)?(?:FIXED|STARTED|DONE|IMPLEMENTED)\b/i.test(s);
+  if (statusSaysNotDone) return 'open';
+
   // MITIGATED is a shipped change that bounds a defect it does not remove. It is
   // closer to fixed than to anything else and is stated as a status by its author.
   const fixed = /✅/.test(h) || /\bFIXED\b/.test(h) || /\bRESOLVED\b/.test(h)

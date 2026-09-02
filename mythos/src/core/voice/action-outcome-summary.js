@@ -37,6 +37,23 @@ function summarizeActionsForResult(actions) {
     if (!a || !a.tool) continue;
     if (a.confirmPending) continue; // confirm-pending = deferred, not an outcome
     if (a.started) { parts.push(a.tool + ' started (outcome pending)'); continue; }
+    // BUG-398 R5a (2026-09-02): the third non-outcome to reach this line
+    // carrying ok:false, after `confirmPending` and `started` — and the reason
+    // the header's rule ("started and failed are not the same claim and must
+    // not share a code path just because both carry ok:false") generalises. A
+    // caller-abort did not cancel the effector, so this note is what the NEXT
+    // turn reads: rendering it "FAILED" is how the model came back and offered
+    // to send an already-delivered WhatsApp message again.
+    if (a.abortedInFlight) {
+      parts.push(a.tool + ' NOT CONFIRMED — it was not cancelled and may have completed'
+        + (a.summary ? ': ' + a.summary : '') + ' (do not repeat it)');
+      continue;
+    }
+    // KNOWN GAP, deliberately not changed here: an `unverified` entry also
+    // arrives with ok:false and still renders "FAILED", which is the same
+    // flattening one field over. That is BUG-398 R5b (the turn record), which
+    // touches the record shape itself; widening this line to cover it without
+    // that change would make the note and the record disagree.
     const status = a.ok ? 'succeeded' : 'FAILED';
     parts.push(a.tool + ' ' + status + (a.summary ? ': ' + a.summary : ''));
   }

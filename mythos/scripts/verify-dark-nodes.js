@@ -219,7 +219,22 @@ async function groupFileOps(sandbox) {
   // from-computer's sandbox is its allowed-roots list, which is config-driven.
   // Point it at the temp dir so nothing outside it can be touched even by a bug
   // in this harness.
-  process.env.ALLOWED_FOLDERS = sandbox;
+  //
+  // BUG-398 R2 (2026-09-02): this said ALLOWED_FOLDERS, which nothing reads.
+  // from-computer.js:44 reads VOICE_ALLOWED_DIRS, so the pin was inert and the
+  // allowlist silently stayed the default (%USERPROFILE% + the project root).
+  // That passed on a dev machine, where os.tmpdir() sits under the home
+  // directory, and failed all eight file-ops tools on CI, where TEMP is
+  // exported in Windows 8.3 SHORT form: the profile folder appears as its
+  // truncated alias (six characters, tilde, digit) rather than the full account
+  // name, so the sandbox path no longer matches the home directory the default
+  // allowlist derives from. (Written out in prose rather than as an example
+  // path on purpose — AD-7 forbids a machine-specific absolute path literal in
+  // a tracked file, and it caught the first draft of this comment.)
+  // CI reported it as eight product failures for weeks. Pinned by
+  // test/bug-382-dark-node-harness.test.js's BUG-398 R2 block, which sets a
+  // hostile VOICE_ALLOWED_DIRS so the assertion cannot depend on TEMP's form.
+  process.env.VOICE_ALLOWED_DIRS = sandbox;
 
   const G = 'file ops';
   const dir = path.join(sandbox, 'fileops');

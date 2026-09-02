@@ -286,7 +286,35 @@ function createEffectorHub({ bus, config }) {
         // the reason it happened would be strictly worse than the hang.
         if (bus) bus.emit('health.anomaly', { kind: 'tool-timeout', target: resolvedName });
         breakers.recordFailure(resolvedName);
-        return { ok: false, result: 'tool-timeout' };
+        // BUG-398 R5a (2026-09-02). `ok:false` is the RELIABILITY truth and does
+        // not change: the dispatch blew its budget, the breaker counts it, and
+        // the audit records a failure. But raceSignal does NOT cancel the
+        // effector — it stops WAITING for it. So the world-state truth is a
+        // third thing, neither success nor failure: the side effect may already
+        // have landed and nothing here can know.
+        //
+        // MEASURED, 2026-09-02 live voice session: whatsapp_send came back
+        // `outcome:fail reason:"tool-timeout"` twice while the operator watched
+        // the message ARRIVE. submitMessage (from-pc.js:353) injects the send
+        // and only then waits for the composer to clear as its oracle, so the
+        // abort landed after delivery, during confirmation. The model was told
+        // "failed", and it offered to send again — a duplicate outward message
+        // to a third party, the only irreversible consequence in that session.
+        //
+        // `effectMayHaveLanded` travels ALONGSIDE ok/result and is never folded
+        // into either, exactly like `terminal` above (see isTerminalResult) and
+        // exactly as dispatch-action.js's evidence contract requires of
+        // `unverified`. `result` stays the literal 'tool-timeout' because it is
+        // the machine-readable code every existing consumer and test keys on;
+        // the prose goes in `reason`, which is where the three narration paths
+        // in voice/live-tool-adapter.js already look for an unproven outcome.
+        return {
+          ok: false,
+          result: 'tool-timeout',
+          effectMayHaveLanded: true,
+          reason: 'the caller budget expired before ' + resolvedName + ' reported back. '
+            + 'It was NOT cancelled, so its effect may already have landed',
+        };
       }
     } catch (err) {
       // invoke() contract says effectors never throw, but hub must not trust that —
