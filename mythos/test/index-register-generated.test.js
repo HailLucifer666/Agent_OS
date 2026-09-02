@@ -85,6 +85,56 @@ describe('the register reads status, and never infers it from silence', () => {
   });
 });
 
+// BUG-398 R11 (2026-09-02) — an explicit marker must beat the prose beside it.
+//
+// MEASURED LIVE while filing BUG-398: its status line read
+// "🔴 PARTIALLY FIXED — row 1 closed, the rest still open" and the register
+// classified it **fixed**, because /\bFIXED\b/ matches inside "PARTIALLY FIXED"
+// and nothing consulted the 🔴. The register is what a new session reads to know
+// what is outstanding, so a partially-fixed ticket silently read as done is the
+// worst direction for this file to be wrong in.
+//
+// The MARK table's own first line already states the intent — "Order matters:
+// every negative is tested before the positive it contains" — and the
+// Status-line path was the one place that did not honour it.
+//
+// MUTATION PROOF, 2026-09-02: removing the `statusSaysNotDone` early return from
+// scripts/build-index.js makes the first two tests below fail with
+// `expected 'open', got 'fixed'`, verified applied by grepping the identifier
+// before re-running. The third test is the false-positive bound and passes
+// either way — it is here because two real entries in BUGS.md carry the words
+// "Not done" and "still" in prose while being genuinely fixed, and this rule
+// must not fire on them.
+describe('BUG-398 R11 — a 🔴 or PARTIAL marker outranks a fixed word in the same status line', () => {
+  function stateOf(statusLine) {
+    const txt = REGISTER_SECTION + '\n## ' + B + '500 — something\n\n'
+      + '**Status:** ' + statusLine + '\n';
+    const r = gen.buildRegister({ bugsText: txt });
+    return r.bugs.find((b) => b.n === 500).state;
+  }
+
+  test('🔴 PARTIALLY FIXED is open, not fixed (the measured case)', () => {
+    assert.strictEqual(stateOf('🔴 PARTIALLY FIXED — row 1 closed, the rest still open'), 'open');
+  });
+
+  test('a NOT-yet-fixed qualifier at the head of the line is open', () => {
+    assert.strictEqual(stateOf('NOT yet FIXED — coded but unverified'), 'open');
+    assert.strictEqual(stateOf('🔴 diagnosis only, no code written'), 'open');
+  });
+
+  test('BOUND: a genuinely fixed entry whose PROSE mentions leftovers stays fixed', () => {
+    // Both shapes are real BUGS.md status lines. Neither carries a marker, and
+    // widening this rule to catch their prose would reopen dozens of closed
+    // tickets — which is the failure mode that gets a guard muted.
+    assert.strictEqual(
+      stateOf('FIXED, audit-read 2026-08-28. F3 and F4 coded, F5 handed to BUG-275 which is still open'),
+      'fixed');
+    assert.strictEqual(
+      stateOf('FIXED 2026-08-14. The closing "Not done, ..." note was stale'),
+      'fixed');
+  });
+});
+
 describe('the register shares one island with the map, and owns only its own key', () => {
   test('generating the register preserves every key it does not own', () => {
     const island = { generated: 'x', vitals: { a: 1 }, nodes: [{ n: 'z', bugs: [1] }], clusters: [] };
