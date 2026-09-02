@@ -14,6 +14,7 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const { createTtsChain } = require('../providers/tts');
+const { unauthorizedHint } = require('./auth-hint');
 const { mountTtsVoiceRoutes } = require('./routes/tts-voices');
 const { recordLiveVoiceSwitch, popPreviousLiveVoice } = require('../src/core/config/voice-choice');
 const sttChain = require('../providers/stt');
@@ -775,9 +776,8 @@ function createServer(deps) {
 
   function requireToken(req, res, next) {
     if (!tokenOk(req)) {
-      const hint = (AUTH_TOKEN && pinSessionRequired())
-        ? 'Unauthorized — this deployment requires BOTH the MYTHOS_AUTH_TOKEN bearer token (Authorization: Bearer <token> or ?token=) AND an unlocked PIN session (the mythos_token cookie from POST /api/pin/verify).'
-        : 'Unauthorized — set MYTHOS_AUTH_TOKEN via Authorization: Bearer <token> or the mythos_token cookie.';
+      // BUG-400: three deployments, three missing credentials. See ./auth-hint.js.
+      const hint = unauthorizedHint({ hasToken: !!AUTH_TOKEN, pinRequired: pinSessionRequired() });
       return res.status(401).json({ error: hint });
     }
     next();
