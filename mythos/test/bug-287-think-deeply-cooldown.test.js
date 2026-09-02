@@ -51,8 +51,17 @@ const DEEP_THINK = path.resolve(__dirname, '../src/core/effectors/deep-think.js'
 
 // A fresh module per test: the cooldown timestamp is module state, so a stale
 // one would leak between cases and make them pass or fail on ordering.
+//
+// BUG-398 row 13 (2026-09-02): the timestamp MOVED to deep-think-budget.js when
+// the file-size ratchet forced the limiter out of from-computer.js, so dropping
+// only from-computer from the cache stopped resetting it and every case after
+// the first was refused. Reset through the module's own seam rather than by
+// deleting its cache — from-computer holds a reference to it, so a fresh copy
+// would leave production and test looking at two different clocks.
+const DEEP_BUDGET = path.resolve(__dirname, '../src/core/effectors/deep-think-budget.js');
 function freshModule() {
   delete require.cache[FROM_COMPUTER];
+  require(DEEP_BUDGET).resetDeepThinkBudget();
   return require(FROM_COMPUTER);
 }
 

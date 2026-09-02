@@ -4344,6 +4344,14 @@ $VK_CODES = @{
     delete = 0x2E
     home   = 0x24
     end    = 0x23
+    # BUG-398 E4: voice had NO working way to scroll a page. scroll_at is
+    # withheld from the voice allowlist by design (the 2026-08-09 Spotify
+    # wandering incident), browser_scroll needs a live CDP browser, and send_key
+    # answered `Invalid key: "pagedown"`. PageUp/PageDown are contiguous with
+    # End and Home above (0x21..0x24), which is why they belong here rather than
+    # anywhere else in this table.
+    pageup   = 0x21
+    pagedown = 0x22
     # BUG-077: function keys - needed to express alt+f4 ("close Spotify"). VK_F1
     # is 0x70 and they're contiguous through VK_F12 (0x7B).
     f1 = 0x70; f2 = 0x71; f3 = 0x72; f4 = 0x73; f5 = 0x74; f6 = 0x75
