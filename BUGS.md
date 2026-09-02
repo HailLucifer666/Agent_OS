@@ -4714,6 +4714,63 @@ the live gate.
 
 ## BUG-358 — the procedural-skills layer has never fired once: 0 of 3,065 recorded actions carry a skillRef (🔍 MEASURED 2026-08-25, fix undecided)
 
+**Status:** 🔍 RE-MEASURED 2026-09-02 and all three findings hold — the layer is
+still completely inert. Still awaiting an **operator decision**, not engineering:
+this entry's own ruling is that wiring skills into the Live tool-selection
+surface is a design change needing its own safety story, and that both halves
+"need the operator's call on what skills are FOR in a voice-first system before
+code moves." No code moved. The measurement is now repeatable:
+`node mythos/scripts/measure-skill-usage.js`.
+
+> ### 🔍 RE-MEASURED 2026-09-02. Every claim holds, and one is better news than filed.
+>
+> | claim (2026-08-25) | measured 2026-09-02 |
+> |---|---|
+> | 0 actions with a skillRef, 3,065 without | **0 with, 4,372 without**, across 43 day files. 1,307 more actions recorded since, still not one use |
+> | `goals/index.js:400` is the sole caller of `skills.recall()` | **still exactly one**, same file and line |
+> | 98 vault skills, all parsing | **98, all 98 carrying their metadata comment** |
+>
+> **New, and it changes the size of the remaining work.** The store's own counters
+> agree independently with the episodic log: **`uses > 0` on ZERO of the 98**, so
+> the inertness is confirmed from two unrelated records rather than one.
+>
+> And the data-quality half is **much narrower than this entry implies**. It reads
+> as though the whole store is raw action rows needing a re-mint; measured, the
+> un-replayable share is small: **7 of 98 bake a literal pid** and **3 of 98 have
+> a pseudo-code `When` section**. So "re-minting 98 recordings" is really about
+> **ten files**, which is a materially different decision to put to the operator.
+> `acdc-session.md` is real and is one of the seven — line 11 is
+> `- tool: close_window, args: {"pid":4668}`.
+>
+> ### Two measurement errors made while re-checking this by hand, both mine
+>
+> Recorded because each is a trap this repo keeps paying for, and because
+> `scripts/measure-skill-usage.js` now encodes the correct patterns:
+> - **The "sidecar JSON" is an HTML comment INSIDE the `.md`**
+>   (`<!-- {"id":"sk-…","uses":0,"successRate":0} -->`), not a sibling `.json`
+>   file. Looking for `.json` files reported "0 sidecars" and made this entry
+>   look wrong. It was not — I was.
+> - **The baked pid is written `{"pid":4668}`**, so a `\bpid\s*:` pattern misses
+>   it on the quote and reports zero baked pids in a store where the named
+>   example is real. The same substring/shape class as BUG-394's
+>   `code-review` vs `code-review-and-quality` collision, twice in one day.
+>
+> ### Why this is a script and not a test
+>
+> Every figure comes from the LIVE vault, which CI and a fresh worktree do not
+> have, and this repo's baseline is `skipped=0` — so a vault-gated test would
+> either break that baseline or pass vacuously against an empty directory. The
+> script prints "nothing to measure" and exits 0 when no vault is reachable.
+>
+> ### The decision this is waiting on, stated as narrowly as it can be
+>
+> Not "should skills be wired in" but: **when the Live model already selects its
+> own tools from `functionDeclarations` (AD-1), what is a stored procedure FOR?**
+> A recall channel that offers the model a recorded sequence needs its own
+> confirmation semantics, because replaying somebody's earlier T3 steps is not
+> the same act as the model choosing them now. Until that is answered, the
+> honest state is an inert layer that reports itself as inert.
+
 Operator asked after the 2026-08-24 session why MYTHOS never used its skills. Measured across
 the ENTIRE episodic history (`vault/Episodic/*.jsonl`, all days): **0 actions with a skillRef,
 3,065 without**. This is not a bad session — the layer is completely inert, and always has been.
