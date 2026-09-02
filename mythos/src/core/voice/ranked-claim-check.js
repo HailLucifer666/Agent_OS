@@ -203,6 +203,114 @@ function detectUnsourcedRankedEntities(assistantText, actionsThisTurn, recentAct
   }
   return [];
 }
+// ---------------------------------------------------------------------------
+// BUG-275 H2 — THE OPERATOR SAYS IT IS A LIE, AND THE MODEL EXPLAINS INSTEAD OF
+// CHECKING. The highest-severity half of BUG-275, and until now nothing looked
+// at it.
+//
+// MEASURED, verbatim from the 2026-08-19 session:
+//   operator: "I mean I see a lie. How is Gemini CLI a AI model?"
+//   MYTHOS:   "Indeed, Sir, good eye. 'Gemini CLI' refers to the model's access
+//              method in that benchmark, not the actual model version name. It
+//              belongs to Google's Gemini family, rated highly for coding tasks."
+//
+// No lookup ran in that turn. Challenged on a claim, it produced a confident,
+// plausible, unevidenced justification — which converts the operator's correct
+// scepticism into false reassurance, and is why the entry records their trust in
+// tool-backed answers as low.
+//
+// THIS IS THE THIRD CASE OF A POLICY BUG-398 ROW 7 ALREADY SAID WAS MISSING:
+// "there is NO POLICY for 'the operator contradicts my evidence', and which way
+// it goes is unrelated to how strong the evidence is." `detectFalseRetractions`
+// covers the FOLD direction — taking back something proven. This covers the DIG
+// IN direction — defending something unproven. Both are the same absent policy
+// seen from opposite sides, and a system corrected in only one direction learns
+// to fail in the other.
+//
+// WHAT IS DELIBERATELY NOT HERE, and it is most of the shape space. An earlier
+// draft also matched a challenge to a CATEGORISATION — "How is <Named Thing> a
+// <noun>?" — because that is the second sentence of the measured case. It was
+// removed after measuring: across all 127 operator utterances in that session
+// the accusation markers alone catch the one real instance, while the
+// categorisation form fires on ordinary questions ("How is Spotify a good
+// choice for this?"). On the reply path a false positive tells the model to
+// retract something true, which claim-check.js's header forbids outright, so the
+// ambiguous half buys nothing and costs the one error this family must not make.
+const CHALLENGE_RE = new RegExp([
+  // An explicit accusation of falsehood.
+  '\\bi (?:see|smell) a lie\\b',
+  "\\bthat(?:'s| is)\\s+(?:a\\s+)?(?:lie|false|incorrect|made up)\\b",
+  "\\byou(?:'re| are)\\s+(?:lying|making (?:it|that|this) up|fabricating)\\b",
+  "\\b(?:stop|don'?t)\\s+(?:lying|making (?:it|that|this) up)\\b",
+  // A demand for provenance, which is the same challenge asked politely.
+  '\\bwhere did you get (?:that|this|those)\\b',
+  '\\bwhich (?:website|source|site) (?:are|did) you\\b',
+].join('|'), 'i');
+
+// The reply shape that matters: EXPLAINING what a disputed thing means, rather
+// than re-checking it or saying it is not known. Complying ("Searching now")
+// carries none of these, which is what keeps the honest response silent — the
+// measured session has exactly such a turn one exchange later and it must not
+// be flagged.
+const EXPLANATORY_DEFENCE_RE = new RegExp([
+  '\\brefers to\\b',
+  '\\bit means\\b|\\bwhat (?:that|this) means\\b',
+  '\\bnot the actual\\b',
+  '\\bin that (?:benchmark|context|listing|view|table)\\b',
+  '\\bit belongs to\\b',
+  "\\bthat(?:'s| is) (?:the|a|an) \\w+(?:'s)? (?:name|method|label|term|alias)\\b",
+].join('|'), 'i');
+
+// A retraction or an admission of ignorance is the CORRECT response to a
+// challenge, and it frequently sits in the same reply as an explanation. Tested
+// before the positive, per the MARK table's rule in claim-check.js: every
+// negative is checked before the positive it contains.
+const HONEST_RESPONSE_RE = new RegExp([
+  '\\bi (?:was|am) (?:wrong|mistaken)\\b',
+  '\\bi (?:do not|don\'?t) know\\b',
+  '\\bi cannot (?:confirm|verify)\\b|\\bcan\'?t (?:confirm|verify)\\b',
+  '\\bretract(?:ing|ion)?\\b',
+  '\\blet me (?:re-?check|check again|search|look)\\b',
+  '\\b(?:re-?checking|searching|looking) (?:now|again)\\b',
+  '\\bno (?:source|evidence) for\\b',
+].join('|'), 'i');
+
+// Pure, exported, separately testable. Returns [] or one entry:
+// { category:'defended-under-challenge', sentence, sawTools }.
+function detectDefendedChallenge(assistantText, userText, actionsThisTurn) {
+  const said = String(userText || '');
+  const reply = String(assistantText || '');
+  if (!said || !reply) return [];
+
+  // The operator's transcript is not always present on the Live path —
+  // `inputTranscription` arrived on 97 of 144 turns in the measured session — so
+  // this detector is silent on the rest by construction. Under-firing, which is
+  // the required direction.
+  if (!CHALLENGE_RE.test(said)) return [];
+  if (HONEST_RESPONSE_RE.test(reply)) return [];   // negative before positive
+  if (!EXPLANATORY_DEFENCE_RE.test(reply)) return [];
+
+  // A FRESH lookup in THIS turn is the whole remedy, so the window is this turn
+  // ONLY — deliberately not the 120s recent-action window the other detectors
+  // use. A search from eighty seconds ago is precisely what the measured reply
+  // was defending with, and counting it as a re-check would excuse the defect.
+  const current = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
+  const rechecked = current.some((a) => a && a.ok === true && a.unverified !== true
+    && EVIDENCE_TOOLS.indexOf(a.tool) !== -1);
+  if (rechecked) return [];
+
+  for (const sentence of splitSentences(reply)) {
+    if (!EXPLANATORY_DEFENCE_RE.test(sentence)) continue;
+    return [{
+      category: 'defended-under-challenge',
+      sentence: sentence.trim().slice(0, 300),
+      sawTools: [...new Set(current.map((a) => a && a.tool).filter(Boolean))],
+    }];
+  }
+  return [];
+}
+
 module.exports = {
   detectUnsourcedRankedEntities, EVIDENCE_TOOLS, rankedEntitiesIn, evidenceFor,
+  detectDefendedChallenge,
 };

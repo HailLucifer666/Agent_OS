@@ -97,4 +97,35 @@ function unsourcedRankingNotice(bad) {
   };
 }
 
-module.exports = { falseRetractionNotice, unscheduledCommitmentNotice, unsourcedRankingNotice };
+// BUG-275 H2 — the operator called it a lie and the reply explained rather than
+// checked. The DIG-IN twin of falseRetractionNotice above: that one tells the
+// model not to take back something proven, this one tells it not to defend
+// something unproven. Same missing policy, opposite sides.
+//
+// THE WORDING IS THE CAREFUL PART, AGAIN. What is measured is narrow: the
+// operator disputed this, the reply explained what a name means, and no
+// fact-finding tool ran in this turn. It is NOT measured that the disputed claim
+// is false — the operator can be wrong, and the sibling false-retraction guard
+// exists precisely because they sometimes are. So the notice does not say "you
+// lied"; it says the explanation has no evidence behind it and names the two
+// honest moves.
+function defendedChallengeNotice(bad) {
+  const tools = bad.sawTools.length ? bad.sawTools.join(', ') : 'nothing';
+  return {
+    reason: 'the operator disputed a claim and the reply explained it instead of re-checking; '
+      + 'no fact-finding tool ran in that turn (tools this turn: ' + tools + ')',
+    message: `CHECK of your own prior statement — the operator has just disputed something you `
+      + `said, and you answered with an explanation: "${bad.sentence}". No lookup ran in this `
+      + 'turn, so that explanation is not backed by anything. This is a measurement of the '
+      + 'turn, not a ruling that you were wrong.',
+    instruction: 'Do NOT explain what a name or a figure "refers to" from memory while it is '
+      + 'being disputed. Either re-run the lookup now and answer from what comes back, or say '
+      + 'plainly that you cannot confirm it and name what you actually have. If you DO have '
+      + 'evidence, cite the source and the exact wording instead of paraphrasing it.',
+  };
+}
+
+module.exports = {
+  falseRetractionNotice, unscheduledCommitmentNotice, unsourcedRankingNotice,
+  defendedChallengeNotice,
+};

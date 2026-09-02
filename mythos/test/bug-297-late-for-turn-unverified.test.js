@@ -202,6 +202,25 @@ describe('BUG-297 — the late-for-turn re-narration is the fourth path', () => 
     // Every injection tags itself with a `site:` label — BUG-273 D3's injection
     // log — so these labels are load-bearing already, not a shape invented here.
     //
+    // TWICE MORE ON 2026-09-02, THIS GUARD CAUGHT WHAT NOTHING ELSE WOULD HAVE,
+    // and both are recorded here because both are about the guard rather than
+    // about any one site.
+    //
+    // 1. A REFACTOR MADE IT BLIND TO FOUR SITES. The four turn-auditing
+    //    detectors were collapsed into one shared reporter (the size ratchet
+    //    demanded it), and the first draft passed each site as a bare positional
+    //    string. The labels stopped being written in the form this matcher
+    //    greps, so four narration paths vanished from this list at once — while
+    //    still firing in production. The reporter now takes an OPTIONS OBJECT so
+    //    every site stays a quoted literal. That label is load-bearing beyond
+    //    this test: BUG-273 D3's injection log keys on it.
+    // 2. THE COMMENT EXPLAINING THAT FIX BECAME A THIRTEENTH SITE. It quoted the
+    //    pattern verbatim, so the grep counted the prose as a narration path.
+    //    Exactly the trap build-index.js's `bulletMarks` comment already warns
+    //    about — a pattern that matches ids must not look like one, and neither
+    //    must the sentence explaining it. Reworded to describe the shape without
+    //    spelling it.
+    //
     // THE CHARACTER CLASS IS THE WHOLE TEST. The first version of this matcher was
     // /site:\s*'([a-z-]+)'/ and reported FOUR sites. There are six: 'ad4-correction-
     // premature' and 'ad4-correction-retract' contain a digit, so the class failed
@@ -239,6 +258,23 @@ describe('BUG-297 — the late-for-turn re-narration is the fourth path', () => 
       // NOT in bug-273-unverified-payload.test.js's matrix, for the same reason
       // as the D1 site below: that file enumerates paths narrating a TOOL
       // OUTCOME, and this one narrates a property of a reply.
+      // Added by BUG-275 H2 (2026-09-02) — the operator disputes a claim and the
+      // reply EXPLAINS it instead of re-checking. The DIG-IN twin of
+      // bug398-row7-false-retraction below: that site stops the model taking
+      // back something proven, this one stops it defending something unproven.
+      // BUG-398 row 7 recorded that "there is NO POLICY for 'the operator
+      // contradicts my evidence'"; these two sites are that policy, from both
+      // sides.
+      //
+      // ITS PROHIBITION: "Do NOT explain what a name or a figure 'refers to'
+      // from memory while it is being disputed." Wording pinned in
+      // bug-275-h2-defended-under-challenge.test.js, which also asserts the
+      // notice does NOT claim the operator was right — that is unmeasured, and
+      // asserting it would be BUG-398 row 5 pointed at an opinion.
+      //
+      // Like the two BUG-398 sites, NOT in bug-273-unverified-payload.test.js's
+      // matrix: that file enumerates paths narrating a TOOL OUTCOME.
+      'bug275-h2-defended-challenge',
       'bug275-h3-unsourced-ranking',
       // Added by BUG-398 D1 (2026-09-02) — a promised RECURRING commitment with
       // nothing scheduled. This guard did its job again: the new site made this

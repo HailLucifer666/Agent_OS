@@ -6394,7 +6394,7 @@ All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 i
 
 ## BUG-275 — the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19
 
-**Status:** 🔴 PARTIALLY FIXED — H3 and H4 are closed with a detector and a
+**Status:** 🔴 PARTIALLY FIXED — H2, H3 and H4 are closed with detectors and a
 mutation-proven test suite (2026-09-02); **H5 and H7 are REFUTED and were never
 defects**; H1's stated mechanism was measured and is WRONG; H1 and H2 remain
 genuinely open. All three of this entry's own "check first" items were answered
@@ -6546,9 +6546,77 @@ is the highest-severity half and is untouched.
 > **Suite 7074/7074/0 fail/0 skipped.** `sync-test-count --check`,
 > `build-index --check` and `build-capability-map --check` all green.
 >
+> ### ✅ H2 CLOSED 2026-09-02 — the highest-severity half
+>
+> **The defect, verbatim:** operator *"I mean I see a lie. How is Gemini CLI a AI
+> model?"* → MYTHOS *"Indeed, Sir, good eye. 'Gemini CLI' refers to the model's
+> access method in that benchmark, not the actual model version name…"* **No
+> lookup ran in that turn.** Challenged, it produced a confident, plausible,
+> unevidenced justification — which converts correct scepticism into false
+> reassurance, and is why this entry records the operator's trust in tool-backed
+> answers as low.
+>
+> **It is the THIRD CASE of a policy BUG-398 row 7 already declared missing:**
+> *"there is NO POLICY for 'the operator contradicts my evidence', and which way
+> it goes is unrelated to how strong the evidence is."* Row 7's guard catches the
+> **fold** (retracting something proven); `detectDefendedChallenge` catches the
+> **dig in** (defending something unproven). Two sides of one absent policy, and
+> a system corrected in one direction only learns to fail in the other — which is
+> exactly the folder retraction and the WhatsApp standoff, one session apart.
+>
+> **The evidence window is THIS TURN ONLY, deliberately**, and it is the
+> load-bearing scope decision. In the measured session `web_search` had succeeded
+> 80+ seconds earlier and that result is precisely what the reply was defending
+> with; counting the 120s recent-action window the sibling detectors use would
+> excuse the defect outright. `recentActions` is not a parameter of the function
+> at all, so the mistake is unrepresentable rather than merely avoided — and a
+> test asserts the **arity** to keep it that way.
+>
+> **Corpus replay: fires on 1 of 94 real exchanges** — the H2 case, nothing else.
+> The turn one exchange later is the negative control, and it is real data: the
+> operator challenged the source (*"Which website are you checking?"*), MYTHOS
+> answered *"Searching for…"*, and that is the correct response, so the reply
+> gate keeps it silent.
+>
+> **Two shapes measured and DELETED before shipping**, both from the reply path
+> where a false positive is the one error this family must never make:
+> - A challenge to a **categorisation** — *"How is `<Named Thing>` a `<noun>`?"*,
+>   which is the H2 utterance's own second sentence. It fires on ordinary
+>   questions (*"How is Spotify a good choice for this?"*), and the accusation
+>   markers alone already catch the one real instance, so it bought nothing.
+> - A **single combined regex**, which fired on **0 of 127** utterances: the
+>   accusation shapes need case-insensitivity and the capitalised-subject shape
+>   needs the opposite. Caught by a bound test going silent, not by reading.
+>
+> **The notice does NOT say the operator was right**, and a test asserts that. What
+> is measured is narrow — disputed, explained, no lookup — and it is *not*
+> measured that the claim was false. The operator can be wrong; the sibling
+> false-retraction guard exists because they sometimes are. Asserting otherwise
+> would be row 5's defect aimed at an opinion.
+>
+> **4 probes, all caught:** removing the honest-response early return reds the
+> compliance bound; re-adding the categorisation form reds the ordinary-question
+> bound naming Spotify; loosening the re-check filter reds the failed/unverified
+> bound; adding a `recentActions` parameter reds the arity test.
+>
+> ### Two guards caught my own refactor, and both were right
+>
+> The size ratchet refused a fourth near-identical detector block in
+> `live-tool-adapter.js`, so all four collapsed into one `reportTurnAudit` — which
+> sets `reason` in one place, so a fifth detector cannot forget it. Then:
+> 1. **The narration-site guard went blind to four sites.** The first draft passed
+>    each site label positionally, so it stopped being written in the form that
+>    guard greps — four live narration paths vanished from its enumeration while
+>    still firing. Fixed with an options object; that label also keys BUG-273 D3's
+>    injection log.
+> 2. **The comment explaining that fix became a thirteenth site**, because it
+>    quoted the pattern verbatim. Exactly the trap `build-index.js`'s
+>    `bulletMarks` comment warns about — a pattern that matches ids must not look
+>    like one, and neither must the sentence explaining it.
+>
 > ### What is left in this ticket
 >
-> **H1 and H2 only**, plus H7's second half (the canned "restored, no data lost"
+> **H1 only**, plus H7's second half (the canned "restored, no data lost"
 > self-report, re-offered verbatim). H1's real mechanism — names promoted from
 > unranked prose into ranked slots — is stated correctly above for the first
 > time; the fix direction the ticket previously recorded ("count-compliance

@@ -86,7 +86,7 @@ describe('BUG-275 — the evidence digest actually reaches the detector in produ
   // the anomaly reddened nothing, in either BUG-275 file, while being a real
   // operator-facing defect.
   //
-  // WHY `reason` IS LOAD-BEARING. None of these three detector kinds has a
+  // WHY `reason` IS LOAD-BEARING. None of these four detector kinds has a
   // healer playbook, so each reaches the immune explainer's `no-match` path and
   // is SPOKEN to the operator, and conversation/announcer.js's
   // honestCauseClause reads `reason` and nothing else — emitting "I do not yet
@@ -98,7 +98,9 @@ describe('BUG-275 — the evidence digest actually reaches the detector in produ
   // It says "every health.anomaly these detectors emit carries a non-empty
   // reason" rather than naming the three kinds or matching their wording. A
   // per-kind check is the omission scheduled for the day a fourth detector is
-  // added, and a prose match rots on the first rewording. Non-empty is exactly
+  // added — which happened the same day, and BUG-275 H2 was covered by this
+  // loop without editing an assertion. A prose match rots on the first
+  // rewording. Non-empty is exactly
   // what the consumer needs.
   const DETECTOR_TURNS = [
     {
@@ -119,6 +121,18 @@ describe('BUG-275 — the evidence digest actually reaches the detector in produ
       result: { opened: true, window: 'Downloads - File Explorer' },
       assistantText: 'I was mistaken about that folder opening successfully; I am retracting that claim.',
     },
+    {
+      // BUG-275 H2, added 2026-09-02. The fourth detector, and it is in this
+      // loop because the rule is "every turn-auditing detector carries a
+      // reason", not "the three that existed when the loop was written". It is
+      // the only entry needing `userText`: the challenge is what the operator
+      // said, so a fixture without it cannot reach the detector at all.
+      kind: 'defended-claim-under-challenge',
+      tool: 'launch_app',
+      result: { launched: true },
+      userText: 'I see a lie. Where did you get that?',
+      assistantText: "'Gemini CLI' refers to the access method, not the model name.",
+    },
   ];
 
   for (const turn of DETECTOR_TURNS) {
@@ -131,7 +145,7 @@ describe('BUG-275 — the evidence digest actually reaches the detector in produ
         [{ id: 'call-1', name: turn.tool, args: {} }],
         { sendToolResponse: () => {} },
       );
-      adapter.onLiveTurnComplete({ userText: 'go', assistantText: turn.assistantText });
+      adapter.onLiveTurnComplete({ userText: turn.userText || 'go', assistantText: turn.assistantText });
 
       const hit = busEvents.find((e) => e.name === 'health.anomaly'
         && e.payload && e.payload.kind === turn.kind);
