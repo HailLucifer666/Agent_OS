@@ -659,7 +659,7 @@ function createLiveToolAdapter(deps) {
         if (bus && typeof bus.emit === 'function') {
           bus.emit('confirm-request', { ...decision, confirmId, summary, tier: verdict.tier });
         }
-        commitAction({ tool: call.name, ok: false, confirmPending: true, summary });
+        commitAction({ tool: call.name, ok: false, confirmPending: true, summary, traceId: call.id });
         responses.push({ id: call.id, name: call.name, response: {
           status: 'awaiting_human_confirmation',
           message: `Tier ${verdict.tier} action. Tell the operator you need approval, then wait.`,
@@ -668,7 +668,7 @@ function createLiveToolAdapter(deps) {
       }
 
       if (!verdict.allow) {
-        commitAction({ tool: call.name, ok: false, summary: `Denied: ${verdict.reason}` });
+        commitAction({ tool: call.name, ok: false, summary: `Denied: ${verdict.reason}`, traceId: call.id });
         responses.push({ id: call.id, name: call.name, response: { status: 'denied', reason: verdict.reason } });
         continue;
       }
@@ -689,14 +689,14 @@ function createLiveToolAdapter(deps) {
       stampProvenanceIfUnbacked(decision);
 
       if (SLOW_TOOLS[call.name]) {
-        commitAction(pendingAck(call.name));
+        commitAction(pendingAck(call.name, call.id));
         responses.push({ id: call.id, name: call.name, response: {
           status: 'started', message: STARTED_MESSAGE,
         }});
         // Deliberately not awaited: the whole point is that the turn does not wait.
         dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id })
-          .then((outcome) => reportLateOutcome(call.name, outcome))
-          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }));
+          .then((outcome) => reportLateOutcome(call.name, outcome, call.id))
+          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id));
         continue;
       }
 
@@ -711,13 +711,13 @@ function createLiveToolAdapter(deps) {
         const settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
         if (settled === DEADLINE_EXCEEDED) {
           logger.info('live.tool-ack-deadline', { tool: call.name, callId: call.id, deadlineMs: TOOL_ACK_DEADLINE_MS });
-          commitAction(pendingAck(call.name));
+          commitAction(pendingAck(call.name, call.id));
           responses.push({ id: call.id, name: call.name, response: {
             status: 'started', message: STARTED_MESSAGE,
           }});
           pending
-            .then((outcome) => reportLateOutcome(call.name, outcome))
-            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }));
+            .then((outcome) => reportLateOutcome(call.name, outcome, call.id))
+            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id));
           continue;
         }
         if (settled.error) throw settled.error;
@@ -781,11 +781,20 @@ function createLiveToolAdapter(deps) {
         // tell a partial hand-off from a wholly unproven outcome exactly as the other
         // three paths do.
         commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified,
-          abortedInFlight: ev.abortedInFlight, confirmedStep: ev.confirmedStep, summary });
+          abortedInFlight: ev.abortedInFlight, confirmedStep: ev.confirmedStep, summary,
+          // BUG-398 row 2. `ok` here is EVIDENCE-level ("proven"), while the
+          // Audit row's `outcome` is DISPATCH-level ("the effector returned
+          // without failing"). Both are correct and they disagree for an
+          // unverified action, which is what the dossier read as a polarity bug.
+          // Carrying dispatchOk under its own name makes the two scopes legible
+          // instead of contradictory, and traceId is what lets a reader JOIN the
+          // two records at all — until now nothing did, which is why the
+          // disagreement could only be found by eye.
+          dispatchOk: ev.dispatchOk, traceId: call.id });
         responses.push({ id: call.id, name: call.name, response });
       } catch (err) {
         const reason = sanitize(err);
-        commitAction({ tool: call.name, ok: false, summary: reason });
+        commitAction({ tool: call.name, ok: false, summary: reason, traceId: call.id });
         responses.push({ id: call.id, name: call.name, response: {
           status: 'error', error: reason, message: failedNarration(call.name, reason),
         } });
@@ -798,7 +807,7 @@ function createLiveToolAdapter(deps) {
   // Pushes straight to liveTurnActions rather than through commitAction: this
   // arrival is EXPECTED, so it must not raise the late-for-turn anomaly that
   // exists to catch accidental misattribution.
-  function reportLateOutcome(toolName, outcome) {
+  function reportLateOutcome(toolName, outcome, traceId) {
     const ev = evaluateOutcome(outcome);
     let verdict;
     // BUG-116: the closing instruction is what the model is allowed to SAY about
@@ -841,8 +850,13 @@ function createLiveToolAdapter(deps) {
     // BUG-398 R5a: `abortedInFlight` rides on the entry for the same reason
     // BUG-297 put `unverified` there — the late-for-turn site re-narrates from
     // the entry alone, and a discriminator it cannot see is one it gets wrong.
+    // BUG-398 row 2: the SLOW_TOOLS path carries both scopes and the join key
+    // too. This is where the ticket's own two examples (launch_app, open_web)
+    // actually land, so omitting it here would have left the fix looking done
+    // while the measured cases stayed unjoinable.
     const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified,
-      abortedInFlight: ev.abortedInFlight, summary: verdict };
+      abortedInFlight: ev.abortedInFlight, summary: verdict,
+      dispatchOk: ev.dispatchOk, traceId: traceId || null };
     liveTurnActions.push(lateEntry);
     recentActionLedger.record(lateEntry);
     sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
@@ -1377,6 +1391,8 @@ function createLiveToolAdapter(deps) {
           // every push site gets a consistent value without having to remember.
           actions: actionsThisTurn.map((a) => ({
             tool: a.tool, ok: a.ok, summary: a.summary, status: actionStatus(a),
+            // BUG-398 row 2: both scopes and the join key reach the vault.
+            dispatchOk: a.dispatchOk, traceId: a.traceId,
           })),
         },
         salience: 0.6, channel: 'voice',
