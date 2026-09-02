@@ -401,9 +401,9 @@ function buildTools(ctx) {
           // unknown. Same data, same unverified verdict; what changes is that
           // MYTHOS can now tell the operator their browser is opening instead of
           // being forbidden from claiming anything at all.
-          return evidence.unverified(ok({ widgetType: 'newtab', url: bUrl, title: title || bRaw, handedToBrowser: true }),
+          return evidence.unverified(ok({ widgetType: 'newtab', url: bUrl, title: title || bRaw, handedToBrowser: true, windowPidsMayBeStale: true }),
             'whether the page actually rendered in the browser',
-            { confirmedStep: 'your default browser was handed ' + bUrl + ' and accepted it' });
+            { confirmedStep: 'your default browser was handed ' + bUrl + ' and accepted it. If it was not already running this LAUNCHED it, so any window pid you were holding for that browser is now dead — call list_windows before focusing or clicking one (BUG-405)' });
         }
         return fail('open_web with browser:true needs the MYTHOS desktop shell to reach your real '
           + 'browser, and it is not running (this looks like a plain server/browser session). '
