@@ -41,9 +41,51 @@ it is committed.
 
 ---
 
+## BUG-398 — the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation (🔴 NOT STARTED — diagnosis complete)
+
+**NOT STARTED — no code has been written for any finding below.**
+
+**Status:** 🔴 diagnosis complete and evidence-backed. Full dossier with verbatim errors, measurements and per-finding prevention notes: [`LIVE-SESSION-FINDINGS-2026-09-02.md`](LIVE-SESSION-FINDINGS-2026-09-02.md). **Read that file's section 0 (what already works — do not break it) and section 9 (five ways the measurements were wrong) before planning.**
+
+**Source:** one ~2-hour live voice session, 2026-09-02, operator-driven, trailed from `%APPDATA%\MYTHOS\vault\Audit\2026-09-02.jsonl`, the matching Episodic log and `mythos-server.log`.
+
+### THE BUG
+
+The effector layer, the leash and the memory behaved correctly throughout. **Two clusters failed: anything that has to find something on a screen, and the spoken turn's claims about actions.** Every bad claim sat on a `fail` or an `unverified` — not one sat on a verified success, which is what makes a guard on the non-success paths safe.
+
+### WHY NOT HYPOTHETICAL — measured
+
+| # | Finding | Measurement |
+|---|---|---|
+| 1 | `whatsapp_send` collapses "sent but unconfirmed" into `tool-timeout`, then **offers a retry** | 2 attempts, both `outcome:fail reason:"tool-timeout"`. **Operator confirmed the message arrived.** `submitMessage` (`from-pc.js:353`) sends then waits for the composer to clear; `COMMAND_TIMEOUT_MS = 15000`. A retry would duplicate an outward message to a third party — **the only irreversible consequence found** |
+| 2 | `ok` polarity disagrees between ledgers — likely the cause of #1's retry | same action: action record `ok:true, unverified:true`; turn record `ok:false, status:"unverified"`. Confirmed on `launch_app({name:"code"})` and `open_web` |
+| 3 | Reasoning and prompt text leaked into the reply channel, twice | *"My persona rules state that when the user is frustrated…"* and *"According to my instructions, I should treat this as ground truth…"* — both **with `live.reasoning-stripped` firing in the same window**, so the stripper is not the broken part |
+| 4 | 10 overstated action claims, **2 on turns where no tool ran at all** | e.g. *"Rectifying that now — Google News is opening on a new tab, for real this time"* with an empty tool batch |
+| 5 | 5 invented mechanisms; the true cause was always in the reason string | *"I misheard you"* (tool FAILed) · *"an internal suppression rule"* (no such rule) · *"Chrome crashed under pressure from Brave"* (`pid no longer exists`) · *"testing my vocal range"* (`gemini-tts 429 quota`) · *"an internal error occurred"* (deliberate sandbox refusal) |
+| 6 | 1 invented citation | *"System notices confirm the click and the successful tool call"* — no click occurred, no such notice, and `spotify_play_pause` had just **paused** the track |
+| 7 | 1 **false retraction of a true claim** | `open_folder` → `ok [window-title: … (pid 15816)]`, then *"I was mistaken about that folder opening successfully."* No stable policy for operator-contradicts-evidence: it held firm three times on WhatsApp (correctly) and folded here on stronger evidence |
+| 8 | `remember` used instead of scheduling — nothing will fire | `reminder_add` ran **0 times**; no reminder store in the vault; `reminder_approve_action` → `No reminder matching "Daily 10 AM AI news briefing…"`, while it said *"delivered daily at 10 AM precisely"* |
+| 9 | `see_and_click` read the wrong window all session | **8 fails, 0 successes.** Every call used `pid 6272` = Brave window `"Superfanstudio/OTT-Dashboard-APP…"`. Its own failure printed what it read and the mismatch was never noticed |
+| 10 | `click_at` reports success with no oracle | `click_at(1336,1433)` → `clicked:true`; URL unchanged, video `paused:true t:0`; rect was below the fold |
+| 11 | Three tools measured **before the world could change** (false negatives) | invoke oracle 180 ms (already corrected 2026-08-31 via `Wait-ForWindowCountChange`), `whatsapp_send` 15 s, `open_file` window-title poll (5 unverified / 2 verified) |
+| 12 | `browser_launch_debug` returns `ok` with no CDP | called 3×, `ok` each time; port 9222 unreachable, `chrome.exe` count **0**; `ECONNREFUSED 127.0.0.1:9222` all session |
+| 13 | `think_deeply` availability correlates with honesty | 3 successes → accurate narration; 2 rate-limited failures → confabulation. **60 s cooldown vs faster voice turns, so the confabulating mode is the default during rapid exchange.** 5 samples — validate before acting |
+
+Smaller, each with evidence in the dossier: `open_web` cannot name a browser (`browser: boolean`, always the OS default); voice cannot scroll (`scroll_at` withheld by design, `browser_scroll` needs the dead browser, `send_key` rejects `pagedown`); the HUD's `media.js` widget is unreachable because no tool requests a named widget kind; `open_file` cannot distinguish Windows' app-picker dialog from a slow launch (**operator identified this cause**); Gemini TTS is first in `VOICE_TTS_CHAIN` with an exhausted quota (20 failovers, double-voice); `loop.stalled` ×255 is event-loop lag, log-only by design — **not** a wedged loop.
+
+### THE FIX — direction only, not a plan
+
+Priority order and rationale are in the dossier's section 6. In short: #1 and #2 first (irreversible, and #2 likely causes #1), then #3 (different severity class, reproducible), then #4 and #8 (cheapest guards, most instances), then #9, then the browser unblock, then the wait-for-change pattern applied to the remaining two sites.
+
+### SCOPE — deliberately not done here
+
+No code was written for any of the above. **`web_search` is working** — this supersedes the 2026-08-26 audit that recorded all six routes returning zero; do not act on that older finding. Two unrelated tests are load-sensitive and fail intermittently in the full suite while passing 3/3 alone (`bug-234-acknowledge-is-not-a-heal`, `verify-lib-attach`); neither is touched by this work.
+
+---
+
 ## BUG-397 — `ui_elements` returned a truncated tree without saying so, so the model invented the indices it was never shown and every `ui_click` failed "out of range" (✅ FIXED 2026-08-31, mutation-proven)
 
-**Status:** ✅ FIXED and ✅ LIVE-VERIFIED 2026-08-31. Guard file `test/bug-397-ui-click-path-fabrication.test.js` (24 tests), **15 mutations run, none survived**. Two pre-existing tests deliberately rewritten (see SCOPE). Live oracle committed as `scripts/verify-bug-397-ui-click.js` — **9 PASS · 0 UNVERIFIED · 0 FAIL** against a real Notepad, including the whole 2026-08-14 sequence (`ui_click name "File"`, then `name "Save as"`), each confirmed by an independent signal.
+**Status:** ✅ FIXED and ✅ LIVE-VERIFIED 2026-08-31, extended 2026-09-02 after a Chromium run. Guard file `test/bug-397-ui-click-path-fabrication.test.js` (25 tests), **19 mutations run, none survived**. Two pre-existing tests deliberately rewritten (see SCOPE). Live oracle committed as `scripts/verify-bug-397-ui-click.js` — **9 PASS · 0 UNVERIFIED · 0 FAIL** against a real Notepad, including the whole 2026-08-14 sequence (`ui_click name "File"`, then `name "Save as"`), each confirmed by an independent signal.
 
 **Reported as:** "the UI underscore click does not work as designed" (operator, 2026-08-31), symptom confirmed as the honest failure message rather than a silent wrong click.
 
@@ -93,6 +135,30 @@ The fix above was 19 tests and 10 mutations green before it ever met a desktop. 
 Also measured and worth keeping: **`BUG-274 T5`'s WinUI3 `ExpandCollapseState` lie did not reproduce here.** Clicking `File` moved the state to `Expanded` *and* the flyout genuinely rendered (`Open`, `Save`, `Save as`, `Save all`, `Print`, `Exit` all appear in the tree afterwards). A working oracle was nearly "fixed" on the strength of that memory before the flyout was actually measured — check the claim where it runs before acting on it.
 
 And a limitation the run exposed rather than fixed: **`close_window` takes a pid, and Notepad puts every window on one pid.** Six probe windows could not be closed individually. Not in scope here; noted so it is not rediscovered.
+
+### WHAT THE CHROMIUM RUN FOUND (2026-09-02) — asked for as "open debug Chrome, play the third video"
+
+The Notepad result licensed nothing about browsers, and the browser run is where the remaining ceiling is. Debug Chrome via `browser_launch_debug`, YouTube home, third video read off the page by CDP so the target is a fact rather than a choice (`India's Most Beautiful Islands…`, `-YaRRFrXW9M`).
+
+**A single fixed name-search depth cannot serve both a dialog and a browser — FIXED.** Same window, same walk, depth varied:
+
+| depth | elements | named | page content? |
+|---|---|---|---|
+| 6 | 28 | 8 | **none** — Minimize, Maximize, Close, New Tab |
+| 8 | 52 | 20 | none |
+| 12 | 109 | 29 | none |
+| 16 | 452 | 309 | **72 page names**, truncated 0 |
+
+Chromium's accessibility tree starts roughly 14 levels below the window root. `UIA_NAME_SEARCH_DEPTH = 6` therefore made `ui_click` refuse **every page element in every browser** while blaming the element — "no element with that name in this window" — for a limit of its own search. The search now escalates 6 → 12 → 18, stopping at the first depth that matches or when the tree has been fully seen, so a Notepad menu still costs one shallow walk. After the change the same call resolves the title and fails for the *true* reason instead.
+
+**Two findings from that run are NOT fixed, and are named rather than left to be rediscovered:**
+
+1. **The ancestor-chain collapse picks the wrong end when the clickable node is DEEPER than its label.** Measured: the exact title is a `ControlType.Text` at `[1,0,0,1,2,0,0,1,0,0,2,5,0,1]`; the `ControlType.Hyperlink` that can actually be driven is its **child**, one level deeper, and its Name is **elided** by Chromium (`…Life in Andaman and…`) so exact matching never sees it. The collapse rule added on 2026-08-31 assumes the shallowest match is the control — true for a Win32 menu item, inverted here. So `ui_click` matches the Text node and fails honestly with "exposes none of the UIA patterns". Fixing it properly means preferring a match that exposes a clickable pattern over the shallowest one, and coping with elided names — neither is a one-liner and neither should be bolted on at the end of a session.
+2. **`click_at` reports success with no oracle at all, and did so here.** `click_at(1336, 1433)` returned `clicked:true` while the URL never changed and the video stayed paused at 0 — the element's rect (`y 1399, height 67`) sits below the fold, so the click landed on whatever pixel was there. This is the exact 1/0 false-success the pattern ladder was built to avoid, still live in the sibling tool that `ui_click`'s own failure text recommends. A remedy the caller is pointed at needs a visibility check and an oracle before it can be trusted.
+
+Also measured: **`see_and_click` read the wrong window.** With no `pid` it does a whole-screen OCR, and with Chrome not foreground it read the operator's terminal instead ("Pre-dep10D | Ran 3 | Verified | #108"). Its own failure text names the fix — pass a pid — so the advice chain is sound, but the default is a foot-gun.
+
+**Bottom line for the tool as it stands: `ui_click` cannot yet play a YouTube video.** It can now find page elements in a browser, which it could not before, and it fails honestly about the rest. Notepad-class apps work end-to-end.
 
 ### SCOPE — what was deliberately NOT done
 

@@ -512,6 +512,30 @@ describe('what the live desktop found', () => {
       'the Save As dialog did not exist yet at the old fixed 180ms read');
   });
 
+  // 2026-09-02, live against Chrome. A SINGLE FIXED SEARCH DEPTH CANNOT SERVE
+  // BOTH A DIALOG AND A BROWSER. Same window, same walk, depth varied:
+  //   depth  6 -> 28 elements, 8 named, ZERO page content
+  //   depth 12 -> 109 elements, 29 named, zero page content
+  //   depth 16 -> 452 elements, 309 named, 72 page names, truncated 0
+  // Chromium's accessibility tree starts ~14 levels below the window root, so at
+  // 6 the only visible things are Minimize/Maximize/Close/New Tab. ui_click was
+  // refusing every page element in every browser and blaming the ELEMENT ("no
+  // element with that name in this window") for a limit of its own search.
+  it('the name search escalates depth instead of blaming the element', () => {
+    const body = psFunctionBody('Find-UIAElementPathByName');
+    assert.match(body, /\$searchDepths = @\(\$Script:UIA_NAME_SEARCH_DEPTH, 12, 18\)/,
+      'one fixed depth cannot serve both a dialog and a browser');
+    assert.match(body, /if \(\$hits\.Count -gt 0\) \{ break \}/,
+      'stop at the first depth that matches, so a shallow app pays for one walk');
+    // ADJACENT CASE: it must also stop when there is genuinely nothing deeper,
+    // rather than re-walking the same complete tree three times.
+    assert.match(body, /if \(\$truncated -eq 0 -and \$visited -lt \$Script:UIA_WALK_NODE_BUDGET\) \{ break \}/,
+      'a fully-seen tree ends the escalation');
+    // The reported depth must be the one actually searched. Naming the starting
+    // constant would point the reader at the wrong limit.
+    assert.match(body, /the search went to depth ' \+ \$searchedDepth/);
+  });
+
   it('a no-match names the next move, not just the candidates', () => {
     const body = psFunctionBody('Find-UIAElementPathByName');
     assert.match(body, /click its parent menu first/,
