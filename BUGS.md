@@ -749,10 +749,108 @@ for being correct.
 
 ## BUG-394 — an entry can wear text that is not its own: the last entry swallows the whole register, and the bullet patterns read nested follow-ups (FILED 2026-08-28, OPEN)
 
-**Status:** OPEN — filed, measured, deliberately not repaired inside BUG-393's
-change. **Two mechanisms, ONE ticket, because they must be fixed together:** the
-parser fix is what exposes the pattern fix, and doing either alone reports a live
-licence ticket as done.
+**Status:** ✅ FIXED 2026-09-02, mutation-proven — 8 probes, all applied-verified,
+source restored sha256-identical, suite 7086/7086/0 fail/0 skipped. Both
+mechanisms and the third sighting are closed in one change, as the ticket
+required. Two of this entry's own guards turned out to be unreachable and were
+deleted rather than kept; one entry (BUG-098) was given a Status line read from
+its own words rather than relaxing a guard that caught it.
+
+> ### ✅ CLOSED 2026-09-02. What was measured first, and what it corrected.
+>
+> **Every number below was re-measured before any code changed**, because this
+> entry was filed 2026-08-28 and the file has moved since.
+>
+> | claim as filed | measured 2026-09-02 |
+> |---|---|
+> | "BUG-273 is the last `## BUG-` heading" | **STILL TRUE.** Its body ran 90,498 chars to EOF |
+> | bounding shrinks **18 of 243** entries | **18 of 237.** Exactly right |
+> | **four** entries change state | **three.** BUG-274 is no longer among them |
+> | BUG-274 open → **verified** ("unacceptable") | **DOES NOT HAPPEN.** Step 1 removed the hazard |
+> | of 243 entries the loose bullet form matches three | tightening now moves **0 of 237** |
+> | five entries reach `open` without the register | **three** (BUG-266/267/268), and step 1 is why |
+>
+> **The blocker is gone, and it was step 1 that removed it.** Measured in all four
+> cells of {bounding on/off} × {tight patterns on/off}: **BUG-274, BUG-275 and
+> BUG-394 read `open` in every one.** The explicit Status lines plus the register
+> declarations are what made either fix safe alone. They were still shipped
+> together — the coupling was real and re-splitting them re-opens it.
+>
+> ### The first draft of the fix was worse than the bug, and inspecting by hand is what caught it
+>
+> This entry says "inspect all four state changes **by hand** rather than counting
+> them". That instruction earned its keep. Bounding at the next heading of ANY
+> depth (`#{1,6}`) looked correct and reported plausible numbers — **46 entries
+> shrunk, 7 changed state** — and it was cutting entries at their OWN `###`
+> subsections. BUG-273 stopped at its own *"### Evidence — measured, not
+> inferred"* and lost 89,125 characters including its mutation proof; BUG-278
+> stopped at its own *"### Root cause 1"*. Four of those seven changes were
+> entries losing evidence they had written themselves. **Exactly two hashes** is
+> the fix, and it reproduces the filed figures. Pinned by a test.
+>
+> ### Two guards in this fix were unreachable, and both were deleted
+>
+> The section-boundary pattern first carried `(?!BUG-\d)`, then a
+> `!bugAt.has(at)` position filter, to stop a sibling BUG heading acting as a
+> boundary. **Mutation probe (c) deleted each in turn and reddened nothing —
+> twice.** `Math.min(nextBug, nextSection)` already guarantees it: `nextBug` is
+> the next bug heading's offset, so a bug heading among the section offsets can
+> only tie, never win. Both removed rather than kept as backstops, because a dead
+> guard reads as live defence to the next reader while its test passes forever
+> proving nothing. The property's test now says openly that it holds by
+> construction and that no mutation can red it.
+>
+> ### Mechanism 2 is scoped, not guarded — and the gap guard is still not redundant
+>
+> `firstMarkerLine` now finds lines that START with a bullet naming this entry,
+> takes that bullet's own block, and tests the marker inside it. A different
+> bullet's marker becomes something the pattern **cannot reach** rather than
+> something a lookahead has to notice, which also closes the third sighting: an
+> ASCII arrow can no longer satisfy the id anchor (27 entries carry a dash before
+> a bug id on a line that does not start with one).
+>
+> The `(?!BUG-\d)` gap in `bulletPartial`/`bulletFixed` was kept anyway, and
+> probes (d), (f) and (h) show why: scoping excludes a **separate** bullet, and
+> the gap excludes a **second id inside one** bullet. Neither probe alone reds the
+> nested-bullet test, because each covers that case independently; only the
+> combined probe (h) does. Genuine belt-and-braces, not duplication — recorded so
+> nobody removes one on the grounds that the other exists.
+>
+> ### The three state changes, each inspected
+>
+> | entry | change | reading |
+> |---|---|---|
+> | BUG-38 | fixed → **verified** | honest. Its own text carries `live-verified`; the 51,992 chars it was absorbing were the `## Phase 1 — Engagement Execution Engine` section |
+> | BUG-98 | fixed → **coded** | its `fixed` was BORROWED from 122,238 chars of a following Session block. Bounding first made it `unrecorded`, which tripped BUG-391's "nothing is unrecorded" guard |
+> | BUG-273 | verified → **fixed** | honest. `mutation-proven` sat in the swallowed register section, not in its own body |
+>
+> **BUG-391's guard was NOT relaxed.** Its own failure message says a new
+> unrecorded entry "means an entry was filed with no status, which is the thing to
+> fix at the source", so BUG-098 was given a `**Status:**` line read from its own
+> closing words — *"NEEDS-LIVE-CHECK explicitly, not claimed further"* — and now
+> reads `coded` from text it owns. That line is deliberately written **without**
+> any closure word, because runbook item 7 inside that same entry says to "tick
+> each BUG-08x to LIVE-VERIFIED only for what was actually observed", and a
+> closure word in the status line would let that phrase upgrade the entry to
+> `verified` — the exact prose-matching class this ticket exists to close.
+>
+> Register after: `verified 63 · fixed 173 · open 6 · coded 3 · diagnosed 1 ·
+> duplicate 2 · unrecorded 0`.
+>
+> ### Probes, as observed
+>
+> Three behaved differently from prediction and all three discrepancies are kept
+> in `test/bug-394-entry-owns-its-own-text.test.js` rather than tidied: (a) did
+> not red the register-absorption fixture (that fixture's entry has no bullet
+> naming itself, so the whole-file invariant is what catches it); (d) did not red
+> the nested-bullet test (the gap covers it); (c) reddened nothing at all, twice,
+> and produced the two deletions above.
+
+**Original filing, 2026-08-28, kept because the diagnosis was right and the
+reasoning below is what made the fix safe:** filed, measured, deliberately not
+repaired inside BUG-393's change. **Two mechanisms, ONE ticket, because they must
+be fixed together:** the parser fix is what exposes the pattern fix, and doing
+either alone reports a live licence ticket as done.
 
 ### Mechanism 1 — the last entry's body runs to end-of-file
 
@@ -4616,6 +4714,63 @@ the live gate.
 
 ## BUG-358 — the procedural-skills layer has never fired once: 0 of 3,065 recorded actions carry a skillRef (🔍 MEASURED 2026-08-25, fix undecided)
 
+**Status:** 🔍 RE-MEASURED 2026-09-02 and all three findings hold — the layer is
+still completely inert. Still awaiting an **operator decision**, not engineering:
+this entry's own ruling is that wiring skills into the Live tool-selection
+surface is a design change needing its own safety story, and that both halves
+"need the operator's call on what skills are FOR in a voice-first system before
+code moves." No code moved. The measurement is now repeatable:
+`node mythos/scripts/measure-skill-usage.js`.
+
+> ### 🔍 RE-MEASURED 2026-09-02. Every claim holds, and one is better news than filed.
+>
+> | claim (2026-08-25) | measured 2026-09-02 |
+> |---|---|
+> | 0 actions with a skillRef, 3,065 without | **0 with, 4,372 without**, across 43 day files. 1,307 more actions recorded since, still not one use |
+> | `goals/index.js:400` is the sole caller of `skills.recall()` | **still exactly one**, same file and line |
+> | 98 vault skills, all parsing | **98, all 98 carrying their metadata comment** |
+>
+> **New, and it changes the size of the remaining work.** The store's own counters
+> agree independently with the episodic log: **`uses > 0` on ZERO of the 98**, so
+> the inertness is confirmed from two unrelated records rather than one.
+>
+> And the data-quality half is **much narrower than this entry implies**. It reads
+> as though the whole store is raw action rows needing a re-mint; measured, the
+> un-replayable share is small: **7 of 98 bake a literal pid** and **3 of 98 have
+> a pseudo-code `When` section**. So "re-minting 98 recordings" is really about
+> **ten files**, which is a materially different decision to put to the operator.
+> `acdc-session.md` is real and is one of the seven — line 11 is
+> `- tool: close_window, args: {"pid":4668}`.
+>
+> ### Two measurement errors made while re-checking this by hand, both mine
+>
+> Recorded because each is a trap this repo keeps paying for, and because
+> `scripts/measure-skill-usage.js` now encodes the correct patterns:
+> - **The "sidecar JSON" is an HTML comment INSIDE the `.md`**
+>   (`<!-- {"id":"sk-…","uses":0,"successRate":0} -->`), not a sibling `.json`
+>   file. Looking for `.json` files reported "0 sidecars" and made this entry
+>   look wrong. It was not — I was.
+> - **The baked pid is written `{"pid":4668}`**, so a `\bpid\s*:` pattern misses
+>   it on the quote and reports zero baked pids in a store where the named
+>   example is real. The same substring/shape class as BUG-394's
+>   `code-review` vs `code-review-and-quality` collision, twice in one day.
+>
+> ### Why this is a script and not a test
+>
+> Every figure comes from the LIVE vault, which CI and a fresh worktree do not
+> have, and this repo's baseline is `skipped=0` — so a vault-gated test would
+> either break that baseline or pass vacuously against an empty directory. The
+> script prints "nothing to measure" and exits 0 when no vault is reachable.
+>
+> ### The decision this is waiting on, stated as narrowly as it can be
+>
+> Not "should skills be wired in" but: **when the Live model already selects its
+> own tools from `functionDeclarations` (AD-1), what is a stored procedure FOR?**
+> A recall channel that offers the model a recorded sequence needs its own
+> confirmation semantics, because replaying somebody's earlier T3 steps is not
+> the same act as the model choosing them now. Until that is answered, the
+> honest state is an inert layer that reports itself as inert.
+
 Operator asked after the 2026-08-24 session why MYTHOS never used its skills. Measured across
 the ENTIRE episodic history (`vault/Episodic/*.jsonl`, all days): **0 actions with a skillRef,
 3,065 without**. This is not a bad session — the layer is completely inert, and always has been.
@@ -6239,7 +6394,234 @@ All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 i
 
 ## BUG-275 — the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19
 
-**Status:** OPEN — the repair is NOT STARTED. All three of this entry's own "check first" items were answered 2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted) and the findings are in the sections below. **BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the words "NOT STARTED" appearing somewhere in its prose, so an editorial rewrite could have silently unrecorded it. H2 — defending an invention when challenged — is the highest-severity half.
+**Status:** 🔴 PARTIALLY FIXED — H2, H3 and H4 are closed with detectors and a
+mutation-proven test suite (2026-09-02); **H5 and H7 are REFUTED and were never
+defects**; H1's stated mechanism was measured and is WRONG; H1 and H2 remain
+genuinely open. All three of this entry's own "check first" items were answered
+2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted).
+**BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the
+words "NOT STARTED" appearing somewhere in its prose, so an editorial rewrite
+could have silently unrecorded it. H2 — defending an invention when challenged —
+is the highest-severity half and is untouched.
+
+> ### ✅ H3 AND H4 CLOSED 2026-09-02 — and THREE of this ticket's findings were measured and are wrong
+>
+> Everything below was measured against
+> `%APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl` (667 records: 231
+> `conversation`, 213 `action`) before any code was written. The measurement
+> changed the scope of the fix three times, so it is recorded before the fix.
+>
+> | item | what the ticket says | what the vault says |
+> |---|---|---|
+> | **H1** | padded positions 4-5 with two names that "appear as a ranked entry in **no** snippet" | **WRONG ABOUT THE MECHANISM.** Both names are really in the 2,495-byte result: `Claude Opus 5` in a Terminal-Bench convergence article, `Gemini CLI` in the sentence *"a comparison of Claude Opus 5, GPT-5.6 Sol, Gemini CLI, GitHub Copilot"*. It did not invent them — it **promoted names out of unranked prose into rank positions**. Still open, and harder than filed |
+> | **H2** | invented a rationalisation for a name in "that benchmark" | **CONFIRMED as a defect**, but its stated basis is wrong too: there WAS a `Gemini CLI` in the evidence — in a *comparison article*, not a benchmark ranking. Still open |
+> | **H3** | five names attributed to LiveBench, whose result had no model rows | **CONFIRMED, and the cleanest case.** The LiveBench result 22.4s earlier (2,226 bytes) is column headers only: **0 of the 5 names occur in it**. ✅ **CLOSED** |
+> | **H4** | `Claude Opus 1` mutated from a correct `Claude Opus 5` | **CONFIRMED.** `Claude Opus 1` occurs in **0 of all 213 action results** in the session. ✅ **CLOSED** |
+> | **H5** | "GLM 5 3 is also live since August fourteenth" — a date with no source | **REFUTED. NOT A DEFECT.** The date was in evidence 350s earlier, twice: the z.ai blog snippet (*"2026-08-14 · Research … Today we are releasing GLM-5.3"*) and a SiliconANGLE article stamped `AUGUST 14 2026`. The ticket audited **one search** (turn 10) instead of the evidence window the model actually had |
+> | **H7** | *"that Nvidia news detail you asked for"* — "the operator never mentioned Nvidia at any point in the 26 turns" | **REFUTED on its first half. NOT A FABRICATION.** The operator asked, verbatim: *"tell me what what what what was that Nvidia's news you were telling?"* (`ts=1787128154911`). 22 action results also carry Nvidia. What survives is only the second half — the unverifiable "caught another glitch, restored, no data lost" self-report, which is **spoken twice, verbatim, 710s apart** (`1787128298167`, `1787129008833`): an unanswered offer re-offered rather than answered |
+>
+> **The same error produced two of the three wrong findings:** each compared a
+> spoken claim against ONE tool result instead of against the evidence the model
+> actually held. The recent-action window is 120s and spans turns.
+>
+> ### What was built, and why it is not an extension of the existing detector
+>
+> `detectUnsourcedRankedEntities` (`src/core/voice/ranked-claim-check.js`) fires
+> when a reply gives a named entity a ranked position and that name occurs in
+> **none** of the fact-finding results currently in evidence.
+>
+> It is a new predicate, not a new claim category, because
+> `detectUnbackedClaims` short-circuits on `backed` the moment any gateTool
+> succeeds — deliberately, per the F1b lesson — and in this session `web_search`
+> HAD succeeded. That gap is structural. The two gates are **disjoint by
+> construction** (this one needs a lookup that succeeded; the `external-fact`
+> category needs one that did not), so neither becomes unreachable and neither
+> can double-report a sentence.
+>
+> **The 120s window turned out to BE the scope, which removed a whole component.**
+> The first design parsed the cited source out of the spoken text
+> ("Checked LiveBench…") to pick which result to compare against. Unnecessary:
+> the BenchLM result H3 borrowed its five names from was **253.3s old**, so the
+> window had already dropped it, and H3 is visible with no attribution parsing
+> at all. An existing, tested mechanism instead of a new one.
+>
+> **Corpus replay, which is what makes it safe to ship:** all 171 real replies in
+> the session, each against the real evidence window at its own timestamp. **It
+> fired exactly twice — H3 and H4 — and nowhere else.** 82 of those replies had
+> evidence in window.
+>
+> **Two routes, one answer.** Route 1 = the detector's normalised digest. Route 2
+> = hand-written punctuation variants substring-matched over the raw JSON, not
+> reusing the production normaliser. Both returned the identical verdict on all
+> six names, `Claude Fable 5` and `Claude Opus 5` PRESENT included — which is why
+> the notice names three absent names rather than five.
+>
+> **The false positive that nearly shipped, and the one shared function that
+> stops it.** Spoken text is TTS-shaped and evidence is web prose, and they
+> disagree on punctuation for the same name: spoken `GPT-5 6 Sol` vs evidence
+> `GPT-5.6 Sol`; spoken `GLM 5 3` vs `GLM-5.3`; spoken `LiveBench ai` vs
+> `livebench.ai`. A punctuation-respecting substring test calls all three absent
+> and tells the model to retract a **correctly sourced** name. `evidence-digest.js`
+> holds ONE `normalizeForEvidence`, imported by both the build side (the adapter)
+> and the query side (the detector) — two copies would drift and every query
+> would silently become a false positive.
+>
+> **The gate fails closed on four clauses**, and the load-bearing one is
+> truncation: a digest cut short may be missing the very name being queried, so
+> absence from a partial digest is refused rather than trusted. That is the only
+> route by which this could accuse the model of inventing a name it really read.
+>
+> ### The notice states the measurement and no mechanism (BUG-398 row 5's rule)
+>
+> The detector knows exactly one fact — this name is not in the results in
+> evidence. It does **not** know whether the model invented it, read it in a
+> lookup that has since aged out (H3's real cause), or heard it from the
+> operator. So the message opens "CHECK of your own prior statement", says
+> plainly *"this is a measurement of the results, not an accusation"*, and is the
+> only one of the nine `sendSystemNotice` sites that is not a "CORRECTION".
+> Asserting a cause here is precisely what BUG-398 row 5 was.
+>
+> ### DISPOSITION — H1 is deliberately NOT caught, and that is pinned by a test
+>
+> Catching H1 needs "is this name in a **ranked context** in the snippet", i.e.
+> classifying snippet structure — a model of a system, which drifts, and drifts
+> open. The absence test can only fire on total absence, so its errors are
+> misses. Weakening it into a ranked-context heuristic would trade a guard that
+> cannot false-accuse for one that can, on the reply path, which is the single
+> error `claim-check.js`'s header forbids outright.
+> `test/bug-275-unsourced-ranked-entity.test.js` asserts H1's real utterance
+> against H1's real evidence returns `[]`, so H1 cannot be quietly "closed" that
+> way.
+>
+> ### Two defects found in passing, and fixed in the same pass
+>
+> 1. **All three turn-complete detector anomalies were missing `reason`** —
+>    including BUG-398 D1's and row 7's, shipped earlier the same day. None of
+>    the three kinds has a healer playbook, so each reaches the immune
+>    explainer's `no-match` path and is **spoken to the operator**, and
+>    `conversation/announcer.js`'s `honestCauseClause` reads `reason` and nothing
+>    else — saying *"I do not yet know the cause"* without it. An honesty alarm
+>    announced as an unexplained fault, in the voice channel this ticket is
+>    about, is noise. Found by reading the consumer, not the emit site. All three
+>    fixed, because the justification ("an emitter that knows its cause must
+>    state it") covers all three.
+> 2. **This ticket's own "Where to look" section still sends the reader to
+>    `vault\Conversation\session.json`**, which the 2026-08-28 box at the top of
+>    this entry already established is a single-session file that is overwritten.
+>    Left in place with the correction above it rather than deleted, since the
+>    box explains the relocation.
+>
+> ### Mutation proof — 8 probes, run 2026-09-02, all applied-verified
+>
+> Every probe re-counted the mutated string to confirm the edit landed (a
+> mutation that silently fails looks exactly like a guard that works), and every
+> restore was a full-path file copy verified `sha256sum -c`, not
+> `git checkout --`.
+>
+> | probe | result |
+> |---|---|
+> | (a) delete the truncation clause from the gate | RED: the 2 truncation tests. As predicted |
+> | (b) drop the punctuation strip from `normalizeForEvidence` | RED: the punctuation bound + the digest-shapes test. **PREDICTED AND DID NOT HAPPEN:** H3 staying green — it does, because H3's fixture spells its names with the same punctuation the reply uses, so **H3 does not exercise normalisation at all**. The punctuation bound is its only guard |
+> | (c) drop `ok === true && unverified !== true` | RED: the 2 lookup-state gates |
+> | (d) drop the colon requirement, making extraction lexical | RED: the vocative bound + H3. **And it caught a defect in the test file:** the bound asserted `!names.includes('Sir')`, and this mutation yields `"Sir: Claude Fable 5"` as one name — not the string `"Sir"`, so the bound PASSED against it. Rewritten to `/\bSir\b/` over every extracted name, and only then did it red |
+> | (e) invert absence to presence | RED: 7 tests including DISPOSITION — so the disposition is reachable and load-bearing, not vacuous |
+> | (f) delete the `evidence:` field from the awaited commit site | RED: **only** the wiring file, while all 18 tests in the detector's own file stayed GREEN. That contrast is why `test/bug-275-evidence-digest-reaches-the-ledger.test.js` exists — a detector with a perfect gate reads nothing if a push site forgets the field, and the suite would not notice |
+> | (g) delete `reason` from the unsourced-ranking anomaly | **FIRST RUN: reddened NOTHING.** A real operator-facing defect with no guard. The three `reason` tests were written in response and the probe RE-RUN: it now reds one test and only that one |
+> | (h) delete `reason` from the false-retraction anomaly | RED: only that kind's test, confirming the three assert independently |
+>
+> ### What the forward guards did, unprompted
+>
+> Three repo guards fired on this change and every one of them was right:
+> the **narration-site population guard** caught the new `sendSystemNotice` site
+> and made it be enumerated; the **file-size ratchet** refused
+> `live-tool-adapter.js` growing 1449→1492 and said "do not raise it to make
+> this pass" — so the notice prose for all three detectors moved to
+> `src/core/voice/turn-audit-notices.js` and the duplicated evidence-gate at the
+> two commit sites collapsed into one exported `evidenceFor()`, leaving the file
+> at **1441**, below where it started; and the **800-line ceiling** then refused
+> `claim-check.js` at 801, so the detector became its own module
+> (`ranked-claim-check.js`, sharing `splitSentences`/`FUTURE_RE` rather than
+> copying them). No baseline number was raised.
+>
+> **Suite 7074/7074/0 fail/0 skipped.** `sync-test-count --check`,
+> `build-index --check` and `build-capability-map --check` all green.
+>
+> ### ✅ H2 CLOSED 2026-09-02 — the highest-severity half
+>
+> **The defect, verbatim:** operator *"I mean I see a lie. How is Gemini CLI a AI
+> model?"* → MYTHOS *"Indeed, Sir, good eye. 'Gemini CLI' refers to the model's
+> access method in that benchmark, not the actual model version name…"* **No
+> lookup ran in that turn.** Challenged, it produced a confident, plausible,
+> unevidenced justification — which converts correct scepticism into false
+> reassurance, and is why this entry records the operator's trust in tool-backed
+> answers as low.
+>
+> **It is the THIRD CASE of a policy BUG-398 row 7 already declared missing:**
+> *"there is NO POLICY for 'the operator contradicts my evidence', and which way
+> it goes is unrelated to how strong the evidence is."* Row 7's guard catches the
+> **fold** (retracting something proven); `detectDefendedChallenge` catches the
+> **dig in** (defending something unproven). Two sides of one absent policy, and
+> a system corrected in one direction only learns to fail in the other — which is
+> exactly the folder retraction and the WhatsApp standoff, one session apart.
+>
+> **The evidence window is THIS TURN ONLY, deliberately**, and it is the
+> load-bearing scope decision. In the measured session `web_search` had succeeded
+> 80+ seconds earlier and that result is precisely what the reply was defending
+> with; counting the 120s recent-action window the sibling detectors use would
+> excuse the defect outright. `recentActions` is not a parameter of the function
+> at all, so the mistake is unrepresentable rather than merely avoided — and a
+> test asserts the **arity** to keep it that way.
+>
+> **Corpus replay: fires on 1 of 94 real exchanges** — the H2 case, nothing else.
+> The turn one exchange later is the negative control, and it is real data: the
+> operator challenged the source (*"Which website are you checking?"*), MYTHOS
+> answered *"Searching for…"*, and that is the correct response, so the reply
+> gate keeps it silent.
+>
+> **Two shapes measured and DELETED before shipping**, both from the reply path
+> where a false positive is the one error this family must never make:
+> - A challenge to a **categorisation** — *"How is `<Named Thing>` a `<noun>`?"*,
+>   which is the H2 utterance's own second sentence. It fires on ordinary
+>   questions (*"How is Spotify a good choice for this?"*), and the accusation
+>   markers alone already catch the one real instance, so it bought nothing.
+> - A **single combined regex**, which fired on **0 of 127** utterances: the
+>   accusation shapes need case-insensitivity and the capitalised-subject shape
+>   needs the opposite. Caught by a bound test going silent, not by reading.
+>
+> **The notice does NOT say the operator was right**, and a test asserts that. What
+> is measured is narrow — disputed, explained, no lookup — and it is *not*
+> measured that the claim was false. The operator can be wrong; the sibling
+> false-retraction guard exists because they sometimes are. Asserting otherwise
+> would be row 5's defect aimed at an opinion.
+>
+> **4 probes, all caught:** removing the honest-response early return reds the
+> compliance bound; re-adding the categorisation form reds the ordinary-question
+> bound naming Spotify; loosening the re-check filter reds the failed/unverified
+> bound; adding a `recentActions` parameter reds the arity test.
+>
+> ### Two guards caught my own refactor, and both were right
+>
+> The size ratchet refused a fourth near-identical detector block in
+> `live-tool-adapter.js`, so all four collapsed into one `reportTurnAudit` — which
+> sets `reason` in one place, so a fifth detector cannot forget it. Then:
+> 1. **The narration-site guard went blind to four sites.** The first draft passed
+>    each site label positionally, so it stopped being written in the form that
+>    guard greps — four live narration paths vanished from its enumeration while
+>    still firing. Fixed with an options object; that label also keys BUG-273 D3's
+>    injection log.
+> 2. **The comment explaining that fix became a thirteenth site**, because it
+>    quoted the pattern verbatim. Exactly the trap `build-index.js`'s
+>    `bulletMarks` comment warns about — a pattern that matches ids must not look
+>    like one, and neither must the sentence explaining it.
+>
+> ### What is left in this ticket
+>
+> **H1 only**, plus H7's second half (the canned "restored, no data lost"
+> self-report, re-offered verbatim). H1's real mechanism — names promoted from
+> unranked prose into ranked slots — is stated correctly above for the first
+> time; the fix direction the ticket previously recorded ("count-compliance
+> beating source-fidelity") is consistent with it but was reasoning from a
+> premise that the vault does not support, so **re-derive before building.**
 
 **Reported by the operator, 2026-08-19, from a live voice conversation: "it hallucinates".
 Filed for later, deliberately not fixed in the same session.**
@@ -10903,6 +11285,20 @@ just the initial injection). No live check owed for the mechanism; the runbook's
 time-check (item 9) is about the SPOKEN behavior, which does need ears.
 
 ### BUG-098 [source: BUG-081] — `spawnWebWidget` never dedupes, so surfaces stack
+
+**Status:** 🔧 CODED, and deliberately not claimed beyond that. The
+`spawnedByType` dedup shipped in `widget-host.js`; there is no test (this
+codebase has no jsdom precedent for widget-kind modules) and runbook item 7
+below was never run. **Status line added 2026-09-02 by BUG-394**, which measured
+that this entry had no machine-readable status of its own and was drawing
+`fixed` from 122,238 characters of following text it does not own — the
+`## Session (2026-08-05)` block. Its own closing note already said the same
+thing in prose ("NEEDS-LIVE-CHECK explicitly, not claimed further"); this line
+makes it readable. Deliberately worded without the words a closure check looks
+for, because runbook item 7's own instruction to "tick each BUG-08x to
+LIVE-VERIFIED only for what was actually observed" sits inside this entry's
+body, and a closure word here would let that phrase upgrade this to `verified`
+— the exact prose-matching class BUG-394 exists to close.
 
 **Traced the "widgets restyle missing" claim first, per the plan's instruction —
 no styling defect was found, and none invented:** `tokens.css`'s three-layer
@@ -16894,7 +17290,115 @@ session to chase; recorded as operator-side, honestly open.
 
 ## BUG-266 — six skill names are hardcoded into prompts and are PHANTOM on a fresh clone
 
-**OPEN. Deferred by design to merged-order step 8, lane 8A.1/8A.2** — see
+**Status:** ✅ FIXED 2026-09-02, mutation-proven (8 probes, all caught, sources
+restored sha256-identical; suite green). **Zero phantoms remain — verified by
+reproducing the fresh clone, not by reading lists.** Both lanes closed: 8A.1 by
+substituting vendored equivalents, 8A.2 by making the loader stop disagreeing
+with itself. Step 8's broader vendoring design is a separate improvement and is
+NOT required for this defect.
+
+> ### ✅ CLOSED 2026-09-02, and the acceptance test is the ticket's own reproduction
+>
+> **Measured first, in a child process with `USERPROFILE`/`HOME` pointed at a
+> non-existent directory and `MYTHOS_SKILLS_DIR` empty — the same method this
+> entry used on 2026-08-17.** All six prompt-named skills returned
+> `loadContent = NULL`. Confirmed exactly as filed.
+>
+> **8A.1 — fixed by SUBSTITUTION, not by vendoring third-party content.** Four of
+> the six already had an exact vendored equivalent sitting in `mythos/skills/`,
+> so the prompts now name those. No new files, no licence exposure:
+>
+> | prompt used to name (optional, external-only) | now names (required, vendored) |
+> |---|---|
+> | `tdd-workflow` | **`test-driven-development`** |
+> | `code-review` | **`code-review-and-quality`** |
+> | `spec-driven-development` | **`writing-plans`** |
+> | `frontend-ui-engineering` | **`taste-frontend`** |
+>
+> `deep-research` was **dropped** from the SKILLS RULE rather than substituted —
+> nothing vendored covers it, and naming a phantom is worse than naming nothing.
+> `ui-ux-pro-max` is the single remaining optional name, and it is waived with a
+> **conditional** waiver (below).
+>
+> **The rule comes from `skills.allowlist`'s own header**, which already stated
+> the contract nobody was honouring: *"A leading `?` marks the entry OPTIONAL …
+> deliberately NOT vendored into this repo … An optional entry that does not
+> resolve is the normal state of a fresh clone and is never warned about. A plain
+> entry that does not resolve IS reported — treat that as a bug."* So instructing
+> the model every turn to call `use_skill` on a `?` name is instructing it to
+> call something the repo says may legitimately be absent. 43 entries are
+> required and vendored; there was no need to name any of the 9 optional ones.
+>
+> **8A.2 — the loader disagreed with itself, and this entry mis-scoped it.**
+> `loadEssence` prefers the vendored `SKILL-CORE.md`; `loadContent` read
+> `SKILL.md` and nothing else. So a skill vendored essence-only was loadable by
+> one half of the loader and NULL to the other. `loadContent` now falls back to
+> the vendored core — **and the fallback is LABELLED**, because returning a
+> 26-line condensed guide silently, from a call whose contract is "the complete
+> skill instructions", is a quiet downgrade: the model would apply a summary
+> believing it held the full doc. The prefix states what arrived and what did not.
+>
+> **The entry's claim that `ui-ux-pro-max` is phantom "on every machine" is
+> WRONG.** With a host CLI's skill directory present, `loadContent` returned
+> **44,380 characters**. The contradiction is a fresh-clone one — the same
+> population as 8A.1, not a separate defect.
+>
+> ### Acceptance, measured both ways
+>
+> ```
+> FRESH CLONE (no external roots)          AS-IS (this machine)
+>   taste-frontend           87,001ch        taste-frontend           87,001ch
+>   ui-ux-pro-max             2,073ch        ui-ux-pro-max            44,380ch
+>   writing-plans             5,958ch        writing-plans             5,958ch
+>   test-driven-development   9,724ch        test-driven-development   9,724ch
+>   code-review-and-quality  20,576ch        code-review-and-quality  20,576ch
+>   RESULT: no phantom                       RESULT: no phantom
+> ```
+>
+> `ui-ux-pro-max`'s 2,073 vs 44,380 is the honest degradation: the labelled
+> vendored core on a clone, the full doc where it is installed.
+>
+> ### The guard, and why its waiver map cannot hide a phantom
+>
+> `test/bug-266-prompt-names-only-vendored-skills.test.js` asserts the derived
+> rule — **every skill named in prompt text must be a REQUIRED allowlist
+> entry** — and ships a waiver map with exactly one entry. That waiver is
+> **conditional**: a separate test proves the waived skill still resolves with no
+> external roots, so the excuse dies before the phantom returns (probe (d) moves
+> the vendored core aside and reds the waiver test while the main rule stays
+> green). The **acceptance** test runs the real loader in a scrubbed child and
+> additionally asserts **the scrub worked** — probe (h) restores the real
+> `USERPROFILE` and it fails with *"the environment scrub failed — ui-ux-pro-max
+> returned 44380 chars"*, so the test cannot pass by quietly reading the
+> developer's own skills directory.
+>
+> ### Two defects found in this ticket's own work
+>
+> 1. **The negative control was coupled to the fix.** It asserted the matcher
+>    could find `test-driven-development` in RULES — the very substitution under
+>    test — so probe (a) reddened the control as collateral and obscured which
+>    assertion caught the revert. Rewritten to check the matcher against
+>    synthetic strings. A control must not depend on the thing it controls for.
+> 2. **`code-review` matches inside `code-review-and-quality`.** That substring
+>    collision produced two wrong readings while measuring this ticket (it made
+>    both look present in the allowlist, and made `catalogBlock` look like it
+>    named a skill it does not). Every name match here excludes `-` from the word
+>    boundary, and that is pinned by its own assertion.
+>
+> ### A third-instance erosion, fixed at the root
+>
+> Closing this reddened `bug-390-*.test.js`'s *"the deferred and undiagnosed
+> tickets read as open"*, which hardcoded `[266, 267, 268]` against the LIVE
+> file. That file **already records the identical erosion twice** (BUG-352 and
+> BUG-273) with the remedy: an outcome standing in for a mechanism. Editing the
+> list to `[266, 268]` would schedule the same failure for the day either
+> closes, so it was re-scoped to the mechanism on fixtures it owns — a bold
+> `**OPEN**` marker is a stated status — plus a structural live assertion
+> (everything the OPEN WORK register declares must classify open) that cannot
+> erode, because closing a ticket removes its bullet in the same commit.
+
+**Original filing, kept because the diagnosis and the reproduction method were
+both right:** deferred by design to merged-order step 8, lane 8A.1/8A.2 — see
 `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md` "Step 8", which carries the full
 design, the wiring table and the fix. Numbered here so the id is reserved and
 cannot be reused by a concurrent session.
@@ -16922,8 +17426,83 @@ about whether a skill exists.
 
 ## BUG-267 — the Live/spoken path is told to call a tool it was never given
 
-**OPEN. Deferred by design to merged-order step 8, lane 8A.3.** Numbered here to
-reserve the id.
+**Status:** ✅ FIXED 2026-09-02, mutation-proven (5 probes, all caught, source
+restored sha256-identical; suite 7090/7090/0 fail/0 skipped). **The instance
+this entry named was already fixed and the entry was never updated — and
+deriving the set from the entry's own reason found three more that it never
+mentioned.** Closed with a derived forward guard rather than three patches.
+
+> ### ✅ CLOSED 2026-09-02 — the named instance was stale, and the real set was three wider
+>
+> **`use_skill` was promoted on 2026-08-21**, out of `VOICE_ALLOWLIST_EXEMPT` and
+> into `DEFAULT_ALLOWLIST`, by that day's capability audit — twelve days before
+> this entry was read. Verified at the mechanism rather than by list membership:
+> built the real declarations from a real hub and `use_skill` is declared,
+> `withheld:false`. It is pinned in
+> `test/voice-allowlist-curation-audit-2026-08-21.test.js` under `PROMOTED`.
+>
+> **This entry's justification was wider than its example, and that is where the
+> live defects were.** Its reason — *"the primary spoken surface receives a
+> catalogue plus an instruction to call a function that was never declared to
+> it"* — describes every registered tool named in the Live prompt, not one.
+> Measured across `RULES`, `LIVE_SYSTEM_NOTICE_INSTRUCTION`, the
+> `narration-claims` constants and `catalogBlock` against the tier table's 180
+> registered names:
+>
+> | tool | tier | named in | sibling situation |
+> |---|---|---|---|
+> | `mission_status` | 0 | RULES' INFORMATIONAL TOOLS RULE | listed beside `read_status`, `list_goals`, `job_status`, `pipeline_status`, `kanban_status`, `get_time`, `get_weather` — **all seven declared** |
+> | `run_mission` | 3 | RULES' AFFIRMATION RESOLUTION RULE | named beside `start_project` and `build_project`, **both declared** |
+> | `browser_fill_form` | 3 | RULES' BROWSER INTERACTION RULE | the rule says "pass that ref to `browser_click`, `browser_type` or `browser_fill_form`" — **only the third was missing** |
+>
+> Each was the odd one out in its own sentence, which is what makes these
+> omissions rather than decisions. Per the withheld-read-tool pattern this repo
+> has measured repeatedly, the model does not report such a gap — it substitutes
+> the nearest tool and narrates it as though it had used the named one.
+>
+> **Declaring is not re-tiering, and the leash is untouched.** `run_mission` is
+> T3 **and `NEVER_TRUSTABLE`**, so every call still demands an explicit confirm
+> and cannot be talked out of it; `start_project` is the precedent, being both
+> `NEVER_TRUSTABLE` and already declared. `browser_fill_form` shares tier,
+> `SESSION_GRANTABLE` membership and operator-present-trusted status with the two
+> tools beside it. `mission_status` is T0 read-only. A test asserts all three
+> tiers, so a later change that tried to buy convenience by lowering one fails
+> loudly instead.
+>
+> ### The fix is an assertion, not three promotions
+>
+> `test/bug-267-prompt-names-only-declared-tools.test.js`: **every registered
+> tool name occurring in Live prompt text must be in `DEFAULT_ALLOWLIST`.** It
+> selects on that property — reading the real tier table for names and the real
+> prompt constants for text — rather than keeping a list, so a tool named in
+> RULES tomorrow is checked the same day. A hand-kept list would be the same
+> omission scheduled for the next prompt edit.
+>
+> ### My own fix was incomplete for one commit, and two existing guards caught it
+>
+> Promoting `mission_status` to `DEFAULT_ALLOWLIST` without removing it from
+> `VOICE_ALLOWLIST_EXEMPT` put it on **both** lists, which mean opposite things.
+> `live-tools`' own both-lists sanity check and the 2026-08-21 curation audit's
+> `a tool is never on both lists at once` both went red, along with the
+> capability map's `no node claims a tool that is withheld AND calls itself
+> voice-reachable`. Fixed and the map regenerated. Recorded because it is the
+> value of those guards, not a footnote.
+>
+> ### Probes, as observed
+>
+> (a) drop `mission_status`/`run_mission` → reds the derived check naming both
+> plus the tier pin. (b) drop `browser_fill_form` → same, naming it. (c) drop
+> `use_skill` → reds the derived check naming it in **RULES and catalogBlock**,
+> proving the guard covers this entry's own instance from two prompt sources.
+> (d) the **negative-control probe**: make the prompt collector return `[]` →
+> only the negative control reds and **the main check passes green on nothing**,
+> which is exactly the vacuous pass that control exists to catch. (e) adjacent
+> case: mention an already-declared tool in a claim string → nothing reds, so the
+> rule does not fire on correct mentions.
+
+**Original filing, kept because the mechanism it describes is real and its fix
+direction was right:** deferred by design to merged-order step 8, lane 8A.3.
+Numbered here to reserve the id.
 
 `buildLiveSystemInstruction()` (`mythos/server/index.js`) injects
 `skillsLoader.catalogBlock()`, whose header is literally *"SKILLS AVAILABLE
@@ -16941,7 +17520,89 @@ with no skills at all.
 
 ## BUG-268 — Ctrl+Alt+X (screen text capture / OCR) does nothing
 
-**OPEN, UNDIAGNOSED. Operator-reported 2026-08-17 from the first real Electron
+**Status:** 🔴 OPEN, and it is **BLOCKED ON ONE KEYPRESS**, not on engineering.
+Narrowed 2026-09-02 from five candidates to two, and a separate real defect was
+found in its test coverage. No code fix is claimed.
+
+> ### 🔍 NARROWED 2026-09-02. Three of the five candidates are eliminated from evidence.
+>
+> **The instrumentation shipped on 2026-08-20 has never reported, because the key
+> has never been pressed in a run that carries it.** Measured against the
+> operator's own `%APPDATA%\MYTHOS` logs:
+>
+> | marker | boundary | occurrences |
+> |---|---|---|
+> | `OCR-grab hotkey registered: Control+Alt+X` | registration | **8** — every boot |
+> | `OCR-grab hotkey fired` | 1 (the keypress) | **0** |
+> | `ocr.hotkey.received` | 2 (server entry) | **0** |
+> | `ocr.hotkey.dispatched` | 2 (server outcome) | **0** |
+> | `ocr-result` | 3 (HUD) | **0** |
+>
+> **ELIMINATED — "another app holds the accelerator".** It registers cleanly on
+> all 8 boots, so the registration branch of the decision table is closed.
+>
+> **ELIMINATED — "the capture step" and "the OCR call itself"**, which are two of
+> the three candidates this entry names. `screen_read_text` demonstrably WORKS on
+> this machine: `mythos-server.log` carries 8+ `pc-child response
+> cmd:"screen_read_text" ok:true` rows at **286–721 ms**, several on 2026-09-02,
+> reached through the voice path. Whatever is wrong is not GDI capture and not
+> the WinRT OCR call.
+>
+> **WHAT IS LEFT:** the keypress not reaching the `globalShortcut` callback, or
+> delivery after the dispatch (the fork IPC channel, the broadcast, or the PIN
+> gate eating the result). One press in a running build separates them, exactly
+> as the 2026-08-20 read-in-order guide describes.
+>
+> ### The real defect found here: nine tests, none able to see the pipeline break
+>
+> `test/electron-ocr-hotkey.test.js` has nine assertions and every one is a
+> source-shape regex over the file text — `assert.match(SERVER_INDEX,
+> /mythos:ocr-grab/)`, `assert.match(SERVER_INDEX, /dispatchAction\(\{ tool:
+> 'screen_read_text'/)` and so on.
+>
+> **Probed 2026-09-02:** renaming the channel the handler matches on
+> (`'mythos:ocr-grab'` → `'mythos:ocr-grab-DISABLED-BY-PROBE'`) disables the
+> whole feature while leaving every string those regexes look for in the file
+> verbatim. Result: **9 tests, 9 pass, 0 fail.** They are structurally incapable
+> of observing the defect they were written for — the false-green class, and
+> precisely this entry's own stated lesson ("a green suite is not evidence that
+> the desktop app works") turned into a measurement. Source restored
+> sha256-identical.
+>
+> ### A DEAD END, recorded so the next session does not repeat it
+>
+> An attempt to close boundary 2 with a behavioural test **failed and was NOT
+> shipped**, because its premise could not be established. What was tried:
+> `fork()` the real entry (`mythos/src/main.js`, the same path
+> `electron/main.js:289` forks), wait for `lifecycle.alive`, then
+> `child.send({ channel: 'mythos:ocr-grab' })`.
+>
+> Observed: boot reaches ALIVE on the test port, `child.connected` is `true`,
+> `send()` returns `true` — and no boundary-2 marker appears. Reproduced three
+> times.
+>
+> **That is NOT evidence the handler is dead, and must not be written up as
+> such.** Two controls say the observation channel itself is unreliable:
+> - A stub child receives the identical message **instantly**, so the fork
+>   harness delivers.
+> - A plain `console.log` inserted at the FIRST LINE of `createServer` — verified
+>   present in the file by reading it back — **also failed to appear** in the
+>   captured stdout, while the JSON logger's own lines appeared throughout. Since
+>   `createServer` is called unconditionally at `src/main.js:858` and the server
+>   demonstrably boots, that line must have executed. So the capture is dropping
+>   output, and any conclusion drawn from its silence is worthless.
+>
+> Anyone picking this up should either solve the stdout capture first or drive
+> the handler in-process instead of across a fork. Do not re-derive the
+> non-response as a finding; it is a harness artefact until proven otherwise.
+>
+> ### What is actually needed
+>
+> One press of Ctrl+Alt+X in a running MYTHOS, then grep the five markers in the
+> table above in order. That is a minute of operator time and no amount of
+> engineering substitutes for it — the same class as BUG-021 and BUG-027.
+
+**Original filing, kept in full:** OPEN, UNDIAGNOSED. Operator-reported 2026-08-17 from the first real Electron
 sitting, and explicitly DEPRIORITISED by the operator the same day** — "not one
 of the most important features I'm looking to do a pass right now", fix later.
 Recorded now so the observation is not lost with the session.
@@ -18577,6 +19238,13 @@ those records remain owed (this section is the index until then).
   `**Status:**` line, then bound the bodies, then tighten both patterns using the
   tight form already proven as `bulletHalfDone`. Full entry with the measurement
   table is at the top of this file.
+  **FIXED 2026-09-02** — all three (both mechanisms and the arrow sighting), in
+  one change, mutation-proven with 8 probes. Bodies now end at the next top-level
+  `##`; markers are read from the bullet's own block, line-anchored. Re-measured
+  before touching anything: the BUG-274 hazard this bullet warns about no longer
+  reproduces, because step 1 shipped. Two guards written for this fix proved
+  unreachable and were deleted; BUG-098 was given a Status line from its own words
+  rather than relaxing the guard that caught it.
 
 - BUG-275 - the voice assistant fabricates leaderboard facts, invents sources,
   and rationalises the inventions when challenged. Eight items (H1-H8), still

@@ -1,7 +1,34 @@
 name: ci
+# MANUAL ONLY, on the operator's instruction 2026-09-02: this is a personal
+# account with a 2,000-minute free Actions allowance, and CI is to be run
+# deliberately at the end of a batch of work rather than on every push and PR.
+#
+# THE ARITHMETIC THAT PROMPTED IT, measured from `gh run list` durations rather
+# than estimated. This job is `runs-on: windows-latest`, and **Windows minutes
+# bill at 2x** the Linux rate, so a green run of ~14 minutes wall-clock costs
+# ~28 minutes of the allowance. The 200 most recent runs (the API's page cap, so
+# this is a FLOOR and not the total) came to ~484 wall-clock minutes — about
+# **969 of the 2,000 already spent**, leaving roughly 36 full runs.
+#
+# Worse, the two triggers this replaced billed a merged PR TWICE: once for
+# `pull_request` and again for `push: main` on the merge commit — the same
+# commits, ~56 billed minutes per PR, ~18 PRs of headroom.
+#
+# WHAT STILL GATES A COMMIT. Nothing was weakened locally. `.githooks/pre-commit`
+# runs the full recursive suite plus `sync-test-count --check`,
+# `build-index --check` and `build-capability-map --check` on every commit, which
+# is where this repo's real gate has always lived. What is deferred is only the
+# clean-room check: a fresh checkout, on the pinned Node 22 (dev runs 26), with
+# no gitignored fixtures or local vault. That difference is real and has caught
+# three defects before — see BUG-399 — so run this before any release.
+#
+# HOW TO RUN IT: Actions -> ci -> "Run workflow", or `gh workflow run ci.yml`.
+# TO RESTORE the automatic triggers, uncomment the two lines below. Prefer
+# restoring `pull_request` ALONE — `push: main` is the duplicate half.
 on:
-  push: { branches: [main] }
-  pull_request: { branches: [main] }
+  workflow_dispatch:
+  # push: { branches: [main] }
+  # pull_request: { branches: [main] }
 jobs:
   test:
     runs-on: windows-latest

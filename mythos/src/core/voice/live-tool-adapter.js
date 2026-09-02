@@ -39,6 +39,18 @@ const {
   detectUnbackedClaims, buildSpokenGoAheadNotice, detectUnscheduledCommitments,
   detectFalseRetractions,
 } = require('./claim-check');
+// BUG-275 H3/H4 — its own module; see that file's header for why it is not in
+// claim-check.js.
+const {
+  detectUnsourcedRankedEntities, evidenceFor, detectDefendedChallenge,
+} = require('./ranked-claim-check');
+// The prose for onLiveTurnComplete's three turn-auditing detectors. Extracted
+// because the file-size ratchet refused this file and said, correctly, to move
+// the new code rather than raise the ceiling.
+const {
+  falseRetractionNotice, unscheduledCommitmentNotice, unsourcedRankingNotice,
+  defendedChallengeNotice,
+} = require('./turn-audit-notices');
 
 // BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
 // the file-size ratchet; full rationale in that module.
@@ -790,7 +802,11 @@ function createLiveToolAdapter(deps) {
           // instead of contradictory, and traceId is what lets a reader JOIN the
           // two records at all — until now nothing did, which is why the
           // disagreement could only be found by eye.
-          dispatchOk: ev.dispatchOk, traceId: call.id });
+          dispatchOk: ev.dispatchOk, traceId: call.id,
+          // BUG-275 H3/H4. THIS is a site that has to build it: `ev.result` is in
+          // scope here and nowhere downstream — the ledger dropped the result and
+          // the late re-narration at :525 says so ("long gone by now").
+          evidence: evidenceFor(call.name, ev.result) });
         responses.push({ id: call.id, name: call.name, response });
       } catch (err) {
         const reason = sanitize(err);
@@ -854,9 +870,17 @@ function createLiveToolAdapter(deps) {
     // too. This is where the ticket's own two examples (launch_app, open_web)
     // actually land, so omitting it here would have left the fix looking done
     // while the measured cases stayed unjoinable.
+    // BUG-275 H3/H4: the digest is built on BOTH commit paths, derived from the
+    // reason rather than from the one site the ticket's utterances happened to
+    // use. A web_search that breaches the 1500ms ack deadline lands here and
+    // nowhere else, and BUG-295 measured open_web breaching it 44 times in one
+    // session — more breaches than calls. A digest on the awaited path only
+    // would go quietly missing on exactly the slow lookups most likely to be
+    // narrated from memory.
     const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified,
       abortedInFlight: ev.abortedInFlight, summary: verdict,
-      dispatchOk: ev.dispatchOk, traceId: traceId || null };
+      dispatchOk: ev.dispatchOk, traceId: traceId || null,
+      evidence: evidenceFor(toolName, ev.result) };
     liveTurnActions.push(lateEntry);
     recentActionLedger.record(lateEntry);
     sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
@@ -1287,61 +1311,70 @@ function createLiveToolAdapter(deps) {
         );
       }
 
-      // BUG-398 row 7 (2026-09-02): the model retracting a PROVEN success
-      // because the operator contradicted it. Everything above guards against
-      // over-claiming; this is the only thing guarding the other direction, and
-      // a session with correction pressure in one direction only is how a
-      // verified `open_folder` (window-title oracle, pid 15816) got retracted.
-      for (const bad of detectFalseRetractions(
-        assistantText, actionsThisTurn, recentActionLedger.forClaims())) {
-        if (bus && typeof bus.emit === 'function') {
-          bus.emit('health.anomaly', {
-            kind: 'retracted-a-proven-action',
-            tool: 'false-retraction', target: 'false-retraction',
-            claim: bad.sentence, provenTools: bad.provenTools,
-          });
+      // ONE SHAPE FOR ALL FOUR TURN-AUDITING DETECTORS. Extracted when the
+      // file-size ratchet refused a fourth near-identical copy of it — and the
+      // ratchet was right: the blocks differed only in the detector, the anomaly
+      // kind, the label, the notice builder and one payload field.
+      // `reason` rides on EVERY anomaly here, set once in this reporter so a
+      // fifth detector cannot forget it — unplaybooked kinds are spoken aloud and
+      // the spoken sentence reads that field alone (turn-audit-notices.js).
+      // An OPTIONS object, not positional args: the site label must stay a
+      // quoted literal here or bug-297's narration-site guard cannot see it.
+      // That guard's own header records what happened when it could not.
+      function reportTurnAudit(rows, opts) {
+        for (const bad of rows) {
+          const n = opts.notice(bad);
+          if (bus && typeof bus.emit === 'function') {
+            bus.emit('health.anomaly', Object.assign({
+              kind: opts.claim, tool: opts.tool, target: opts.tool,
+              claim: bad.sentence, reason: n.reason,
+            }, opts.extra ? opts.extra(bad) : null));
+          }
+          sendSystemNotice(n.message, n.instruction,
+            { site: opts.site, tool: opts.tool, claim: opts.claim });
         }
-        sendSystemNotice(
-          `CORRECTION of your own prior statement — you said "${bad.sentence}", but ${bad.provenTools.join(', ')} `
-          + 'DID succeed and was confirmed by an independent oracle. Nothing in this turn failed. '
-          + 'You just took back something that was true.',
-          'Do NOT retract it. Tell the operator it did happen, name the evidence, and then RECONCILE the '
-          + 'disagreement instead of folding: the window may be behind another one, on another display, or '
-          + 'already closed since. Offer the next concrete step (focus_window, list_windows) rather than '
-          + 'apologising for a success.',
-          { site: 'bug398-row7-false-retraction', tool: 'false-retraction',
-            claim: 'retracted-a-proven-action' },
-        );
       }
 
-      // BUG-398 D1 (2026-09-02): a promised RECURRING commitment with nothing
-      // scheduled. Deliberately a second pass rather than a seventh claim
-      // category — the detector above skips future tense, correctly, and every
-      // instance of this was future tense. Measured: `reminder_add` ran ZERO
-      // times in the 2026-09-02 session while MYTHOS promised a daily 10 AM
-      // WhatsApp briefing three times; what it actually called was `remember`,
-      // which stores a fact, schedules nothing, and returns ok:true — so the
-      // evidence-based checks above saw a successful tool and stayed quiet.
-      for (const promise of detectUnscheduledCommitments(
-        assistantText, actionsThisTurn, recentActionLedger.forClaims())) {
-        if (bus && typeof bus.emit === 'function') {
-          bus.emit('health.anomaly', {
-            kind: 'promised-schedule-not-created',
-            tool: 'recurring-commitment', target: 'recurring-commitment',
-            claim: promise.sentence, sawTools: promise.sawTools,
-          });
-        }
-        sendSystemNotice(
-          `CORRECTION of your own prior statement — you said "${promise.sentence}" but NOTHING was scheduled. `
-          + 'No reminder, timer or daily plan was created this turn, so nothing will fire. '
-          + 'Note that `remember` stores a fact and schedules NOTHING.',
-          'Tell the operator now, plainly, that the recurring item is NOT set up yet. Do NOT repeat the '
-          + 'promise. If they still want it, call reminder_add (or timer_add / daily_plan) and say so only '
-          + 'once that has succeeded.',
-          { site: 'bug398-d1-unscheduled-commitment', tool: 'recurring-commitment',
-            claim: 'promised-schedule-not-created' },
-        );
-      }
+      // BUG-398 row 7: the model retracting a PROVEN success under operator
+      // pressure — the FOLD half of the missing "operator contradicts my
+      // evidence" policy. Its DIG-IN twin is the BUG-275 H2 call below.
+      reportTurnAudit(
+        detectFalseRetractions(assistantText, actionsThisTurn, recentActionLedger.forClaims()),
+        { claim: 'retracted-a-proven-action', tool: 'false-retraction',
+          site: 'bug398-row7-false-retraction', notice: falseRetractionNotice,
+          extra: (bad) => ({ provenTools: bad.provenTools }) });
+
+      // BUG-398 D1: a promised RECURRING commitment with nothing scheduled. A
+      // second pass rather than a claim category, because every instance was
+      // future tense and detectUnbackedClaims skips that, correctly. The
+      // measurement and the `remember`-schedules-nothing trap are in
+      // turn-audit-notices.js beside the wording.
+      reportTurnAudit(
+        detectUnscheduledCommitments(assistantText, actionsThisTurn, recentActionLedger.forClaims()),
+        { claim: 'promised-schedule-not-created', tool: 'recurring-commitment',
+          site: 'bug398-d1-unscheduled-commitment', notice: unscheduledCommitmentNotice,
+          extra: (p) => ({ sawTools: p.sawTools }) });
+
+      // BUG-275 H3/H4 (2026-09-02): a ranked position handed to a name that is
+      // not in the evidence. The three above ask whether a TOOL did something;
+      // this is the first that compares the CONTENT of a reply to the content of
+      // a result. Why it cannot be a claim-check category is in that detector's
+      // own header; the wording rules are in turn-audit-notices.js.
+      reportTurnAudit(
+        detectUnsourcedRankedEntities(assistantText, actionsThisTurn, recentActionLedger.forClaims()),
+        { claim: 'unsourced-ranked-entity', tool: 'unsourced-ranking',
+          site: 'bug275-h3-unsourced-ranking', notice: unsourcedRankingNotice,
+          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) });
+
+      // BUG-275 H2: the operator disputes a claim and the reply EXPLAINS it
+      // rather than re-checking — the DIG-IN twin of row 7 above. Its evidence
+      // window is THIS TURN only; a stale search is what the measured reply was
+      // defending with.
+      reportTurnAudit(
+        detectDefendedChallenge(assistantText, userText, actionsThisTurn),
+        { claim: 'defended-claim-under-challenge', tool: 'defended-challenge',
+          site: 'bug275-h2-defended-challenge', notice: defendedChallengeNotice,
+          extra: (b) => ({ sawTools: b.sawTools }) });
     }
 
     // BUG-120 follow-up: the per-turn signature set owns exactly the same

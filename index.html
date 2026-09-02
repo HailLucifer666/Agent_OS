@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7050,
+      "value": 7111,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -357,7 +357,7 @@
       "measuredAt": "2026-09-02"
     },
     "withheld": {
-      "value": 64,
+      "value": 61,
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
@@ -371,7 +371,7 @@
       "measuredAt": "2026-09-02"
     },
     "voiceReachable": {
-      "value": 115,
+      "value": 118,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
@@ -1830,7 +1830,7 @@
         "title": "`list_folder` of source dirs \"outside allowed folders\"",
         "detail": {
           "symptom": "MYTHOS cannot read its own source tree. `list_folder({path:\".\"})` and `list_folder({path:\"src/components/...\"})` return \"is outside the allowed folders.\" MYTHOS doesn't know where its own code lives.",
-          "files": "`mythos/src/core/effectors/from-computer.js` (verified, already fixed), `mythos/test/bug-018-list-folder-sandbox.test.js` (verification test, new) --- ## LOW — Quality / Polish"
+          "files": "`mythos/src/core/effectors/from-computer.js` (verified, already fixed), `mythos/test/bug-018-list-folder-sandbox.test.js` (verification test, new) ---"
         }
       },
       {
@@ -2058,12 +2058,11 @@
       {
         "n": 38,
         "shape": "entry",
-        "state": "fixed",
+        "state": "verified",
         "title": "`Handle-MediaStatus` hangs indefinitely when a track has album art (thumbnail extraction)",
         "detail": {
           "symptom": "With a track that has album art actively playing, `GET /api/media` fails with `\"[System.__ComObject] does not contain a method named 'GetBuffer'.\"` A fix attempt for that specific error introduced a full request timeout (20s+, no response, no error, no new server log lines) instead.",
-          "files": "`mythos/adapters/pc-child/ps-automation.ps1` (`Handle-MediaStatus`'s thumbnail block — currently disabled; `Read-WinRTStreamBytes` helper — written, proven in isolation, not currently called from anywhere). --- ## Phase 1 — Engagement Execution Engine (cherry-picked from 8706ccc) ### P1-001: command-type stage verification is SKIPPED, not run",
-          "verification": "`test/phase1-engagement-executor.test.js` \"emits health.anomaly and does NOT shell out\". ### P1-002: stage-approval checkpoint closures do not survive restart"
+          "files": "`mythos/adapters/pc-child/ps-automation.ps1` (`Handle-MediaStatus`'s thumbnail block — currently disabled; `Read-WinRTStreamBytes` helper — written, proven in isolation, not currently called from anywhere). ---"
         }
       },
       {
@@ -2344,11 +2343,10 @@
       {
         "n": 98,
         "shape": "entry",
-        "state": "fixed",
+        "state": "coded",
         "title": "[source: BUG-081] — `spawnWebWidget` never dedupes, so surfaces stack",
         "detail": {
-          "fix": "`spawnedByType` (widgetType → teardown) reuses/replaces the existing card for that surface. Deliberately exempt: `'dynamic'` (Item 11 generative-UI cards) are legitimately multi-instance and deduping them would be a regression. No new test: this codebase has zero DOM/jsdom precedent for any widget-kind module (`test/dynamic-widget-spec-validation.test.js`'s own header states this explicitly) — matching that existing convention rather than introducing new test infra for one fix. 🔧 FIXED,",
-          "files": "`mythos/src/core/effectors/from-browser.js`, `mythos/src/core/voice/live-tools.js`, `mythos/test/browser-target-honesty.test.js`. - **BUG-100 (`reminder_add` failed twice on a vet appointment; the operator heard only \"Failed\"):"
+          "fix": "`spawnedByType` (widgetType → teardown) reuses/replaces the existing card for that surface. Deliberately exempt: `'dynamic'` (Item 11 generative-UI cards) are legitimately multi-instance and deduping them would be a regression. No new test: this codebase has zero DOM/jsdom precedent for any widget-kind module (`test/dynamic-widget-spec-validation.test.js`'s own header states this explicitly) — matching that existing convention rather than introducing new test infra for one fix. 🔧 FIXED,"
         }
       },
       {
@@ -2865,7 +2863,7 @@
         "detail": {
           "symptom": "`whatsapp_send` failed at 17:29:26 and 17:31:11 with \"could not read its message box (No editable element found…)\", then succeeded at 17:31:47 — only because the operator told it to wait. Their diagnosis on the call: \"WhatsApp takes a couple of seconds to start.\"",
           "cause": "`from-whatsapp.js` — `focus_window` returns, then `readComposeBox` is called immediately with no settle. The pre-existing retry waits only 400 ms and is gated on a",
-          "verification": "`test/whatsapp-composer-settle.test.js`, 7 tests, verified red against the pre-fix source (4 failed). ## Deferred from the 2026-08-14 session (Wave B) — listed so nothing reads as covered Six lower-severity clusters from the same audit, with why each is deferred rather than quietly dropped: | # | cluster | evidence | why deferred | |---|---|---|---| | 5 | Health channel used as a metrics channel — 68 heal no-match vs 6 applied; `live-tool-outcome-late-for-turn` is now expected by design yet still raised as a fault; the provider-down playbook matches only `nim`, so groq/mistral down = no-match | audit + episodic tallies | needs a soak to establish which kinds are genuinely faults; non-faults belong on their own channel, which touches `ALLOWED_EVENTS` | | 6 | Goal budget ≈ one action — 31,272 tokens over 2 actions against a 20,000 default; two goals auto-paused 5 s after creation | `vault/…"
+          "verification": "`test/whatsapp-composer-settle.test.js`, 7 tests, verified red against the pre-fix source (4 failed)."
         }
       },
       {
@@ -2927,7 +2925,7 @@
         "detail": {
           "symptom": "A goal titled `Commitment: I'll get it right`, with MYTHOS's entire apology stored in its `reason` field: \"I hear you loud and clear, boss, my wires are definitely crossed today…\".",
           "cause": "`from-calendar.js`'s `COMMITMENT_PATTERNS` verb list included a bare `get`, so \"I'll get it right\", \"I'll get to it\" and \"I'll get that wrong again\" all matched. The file's own header states the rule this violates, and it is a recorded operator decision: \"EXPLICIT-ONLY detection. A missed commitment is merely today's behaviour; a FALSE entry teaches the operator to distrust the ledger, which is worse than not having one.\"",
-          "verification": "`test/commitment-verb-narrowing.test.js`, 25 cases sampled in both directions — 8 phrasings that must not match, 13 that must. ## What Wave B does not fix Stated so nothing reads as covered: `spend.estimate()`'s chars-based approximation of real provider usage; the say-before-act ordering (Wave A narrows the symptom, the architecture stands); NIM's upstream instability itself (the breaker routes around it, it does not repair it); `NO_EMBED_DOMAINS` missing `openai.com`/`youtube.com`; and the missing `onSpeakEnd` callback behind 29% of mic-gate watchdog releases — Wave A made it harmless, and finding it needs exactly the instrumentation BUG-233 unlocks. --- # Session 2026-08-15 — RCA of the 2026-08-14 live voice session (BUG-238..BUG-250) An ~80-minute operator session (21:30–22:25 UTC) against the packaged build carrying the `08b0e3e`/`34fbf90` model-routing rewire was reported as broadl…"
+          "verification": "`test/commitment-verb-narrowing.test.js`, 25 cases sampled in both directions — 8 phrasings that must not match, 13 that must."
         }
       },
       {
@@ -3195,18 +3193,18 @@
       {
         "n": 266,
         "shape": "entry",
-        "state": "open",
+        "state": "verified",
         "title": "six skill names are hardcoded into prompts and are PHANTOM on a fresh clone",
         "detail": {},
-        "excerpt": "**OPEN. Deferred by design to merged-order step 8, lane 8A.1/8A.2** — see `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md` \"Step 8\", which carries the full design, the wiring table and the fix. Numbered here so the id is reserved and cannot be reused by a concurrent session. `voice/voice-agent.js:275` (the SKILLS RULE paragraph), `voice/voice-agent.js:93` and `effectors/from-skills.js:37` name specific skills in prose the model reads every turn — `ui-ux-pro-max`, `frontend-ui-engineering`, `spec-driven-development`, `tdd-workflow`, `deep-research`, `code-review`. All six are `?`-optional in `skills.allowlist` and none is vendored, so they resolve only from a host CLI's `~/.claude/skills`. **Reproduced 2026-08-17** by running the real loader with `USERPROFILE`/`HOME` pointed at a non-existent directory and `MYTHOS_SKILLS_DIR` empty: 43 skills resolve, and all six prompt-named ones report PHAN…"
+        "excerpt": "**Status:** ✅ FIXED 2026-09-02, mutation-proven (8 probes, all caught, sources restored sha256-identical; suite green). **Zero phantoms remain — verified by reproducing the fresh clone, not by reading lists.** Both lanes closed: 8A.1 by substituting vendored equivalents, 8A.2 by making the loader stop disagreeing with itself. Step 8's broader vendoring design is a separate improvement and is NOT required for this defect. > ### ✅ CLOSED 2026-09-02, and the acceptance test is the ticket's own reproduction > > **Measured first, in a child process with `USERPROFILE`/`HOME` pointed at a > non-existent directory and `MYTHOS_SKILLS_DIR` empty — the same method this > entry used on 2026-08-17.** All six prompt-named skills returned > `loadContent = NULL`. Confirmed exactly as filed. > > **8A.1 — fixed by SUBSTITUTION, not by vendoring third-party content.** Four of > the six already had an exact…"
       },
       {
         "n": 267,
         "shape": "entry",
-        "state": "open",
+        "state": "verified",
         "title": "the Live/spoken path is told to call a tool it was never given",
         "detail": {},
-        "excerpt": "**OPEN. Deferred by design to merged-order step 8, lane 8A.3.** Numbered here to reserve the id. `buildLiveSystemInstruction()` (`mythos/server/index.js`) injects `skillsLoader.catalogBlock()`, whose header is literally *\"SKILLS AVAILABLE (methodology + design guides — call use_skill with the name to load full guidance)\"* (`loader.js:392`). But `use_skill` sits in `VOICE_ALLOWLIST_EXEMPT` (`voice/live-tools.js:252`, rationale \"internal/debugging surface\") and Live's `functionDeclarations` are built from `DEFAULT_ALLOWLIST` only. So the **primary spoken surface** receives a catalogue of 43 skills plus an instruction to call a function that was never declared to it. `use_skill` is T0 (`leash/tiers.js:71`, read-only), so there is no safety argument for withholding it — only the tool-count argument, which is already outweighed by the tokens the catalogue itself spends. Fix is to promote it t…"
+        "excerpt": "**Status:** ✅ FIXED 2026-09-02, mutation-proven (5 probes, all caught, source restored sha256-identical; suite 7090/7090/0 fail/0 skipped). **The instance this entry named was already fixed and the entry was never updated — and deriving the set from the entry's own reason found three more that it never mentioned.** Closed with a derived forward guard rather than three patches. > ### ✅ CLOSED 2026-09-02 — the named instance was stale, and the real set was three wider > > **`use_skill` was promoted on 2026-08-21**, out of `VOICE_ALLOWLIST_EXEMPT` and > into `DEFAULT_ALLOWLIST`, by that day's capability audit — twelve days before > this entry was read. Verified at the mechanism rather than by list membership: > built the real declarations from a real hub and `use_skill` is declared, > `withheld:false`. It is pinned in > `test/voice-allowlist-curation-audit-2026-08-21.test.js` under `PROMOTE…"
       },
       {
         "n": 268,
@@ -3214,7 +3212,7 @@
         "state": "open",
         "title": "Ctrl+Alt+X (screen text capture / OCR) does nothing",
         "detail": {},
-        "excerpt": "**OPEN, UNDIAGNOSED. Operator-reported 2026-08-17 from the first real Electron sitting, and explicitly DEPRIORITISED by the operator the same day** — \"not one of the most important features I'm looking to do a pass right now\", fix later. Recorded now so the observation is not lost with the session. **Observed, verbatim:** pressing `Ctrl+Alt+X` produces a popup/toast (the operator described it as looking like a clipboard notification from MYTHOS) and then **nothing further happens** — no captured text is returned, spoken, or surfaced anywhere. So the hotkey is registering and something in the chain is firing; what follows it is not. **Why this matters beyond the feature itself:** this is merged-order step 7's Slice 2/3 surface and it is fully green in the automated suite. It took a human at a real keyboard to find it — the same lesson as the Slice 5 boot crash that shipped behind 2598 pas…"
+        "excerpt": "**Status:** 🔴 OPEN, and it is **BLOCKED ON ONE KEYPRESS**, not on engineering. Narrowed 2026-09-02 from five candidates to two, and a separate real defect was found in its test coverage. No code fix is claimed. > ### 🔍 NARROWED 2026-09-02. Three of the five candidates are eliminated from evidence. > > **The instrumentation shipped on 2026-08-20 has never reported, because the key > has never been pressed in a run that carries it.** Measured against the > operator's own `%APPDATA%\\MYTHOS` logs: > > | marker | boundary | occurrences | > |---|---|---| > | `OCR-grab hotkey registered: Control+Alt+X` | registration | **8** — every boot | > | `OCR-grab hotkey fired` | 1 (the keypress) | **0** | > | `ocr.hotkey.received` | 2 (server entry) | **0** | > | `ocr.hotkey.dispatched` | 2 (server outcome) | **0** | > | `ocr-result` | 3 (HUD) | **0** | > > **ELIMINATED — \"another app holds the acceler…"
       },
       {
         "n": 269,
@@ -3251,13 +3249,10 @@
       {
         "n": 273,
         "shape": "entry",
-        "state": "verified",
+        "state": "fixed",
         "title": "the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust",
         "detail": {
-          "cause": "`unverified` carried two different epistemic states under one name: -",
-          "fix": "is a latch, `createBrainRecoveryNotice()`, polled from the 100ms VAD tick the loop already runs — polled rather than pushed from app.js because the module that made the claim should be the one to take it back, and it already reads `_brainOnline()`. Three rules, each a way to get this wrong and each pinned by a test: (1) it retracts ONLY after a real refusal, so a brain that blips while nobody is speaking leaves no stale caption and gets no announcement — `_brainOnline` starts `true` in app.js, so a boot-time flip would otherwise announce an outage that never happened; (2) it fires ONCE per outage, because a plain `refused && online` test on a 100ms tick repaints ten times a second; (3) it re-arms, because a session can survive more than one outage.",
-          "limits": "the latch is unit-driven (voice-loop.js imports cleanly under bare node, so this is behaviour and not source shape), but the tick that calls it needs `getUserMedia`, so a real brain outage and recovery in a running HUD is still operator-verified. The wiring is pinned by source shape for that reason. ### Medium (each needs its own design pass) - BUG-348 - media_status reads ONE SMTC session (ps-automation.ps1 Handle-MediaStatus ~:4275, $sessionManager.GetCurrentSession()). Enumerate the SMTC sessions and report the primary owner; kills \"song playing but says paused\" when another app owns the session. **CORRECTION 2026-08-27 — the repair plan’s stated mechanism is FALSE and must not be inherited.** The plan says *\"a GetSessions() enumerator already exists in the same file at :1586 and is used by the per-app volume path — the fix is present and unused\"*. Read: the :1586 `GetSessions()` is a…",
-          "verification": "33 assertions,"
+          "cause": "`unverified` carried two different epistemic states under one name: -"
         }
       },
       {
@@ -3266,8 +3261,7 @@
         "state": "open",
         "title": "dependency and licence remediation (OPEN on T3 only; T1, T2, T4, T5 shipped) — opened 2026-08-19",
         "detail": {
-          "fix": "`live-turn-complete` — the frame `server/index.js` has broadcast since it was written and which step 4 taught the HUD to read — is now also forwarded to the player as `endTurn()`, alongside `live-interrupted`. Growth is gated on `turnOpen` instead of `speaking`. A model turn is open or it is not;",
-          "files": "`mythos/adapters/pc-child/ps-automation.ps1` (`Handle-ListWindows`), `mythos/adapters/browser-agent/index.js` (`findChromePidByUserDataDir`, `writeBrowserPidFile` — see BUG-029 entry above for the pidfile fix found in the same session), `mythos/server/index.js` (perception relay — see BUG-040 entry above), `mythos/scripts/verify-{planner,memory-guard,youtube}.js` (harness fixes — see BUG-041/014/006 entries above). --- ## Legend - ✅"
+          "fix": "`live-turn-complete` — the frame `server/index.js` has broadcast since it was written and which step 4 taught the HUD to read — is now also forwarded to the player as `endTurn()`, alongside `live-interrupted`. Growth is gated on `turnOpen` instead of `speaking`. A model turn is open or it is not;"
         }
       },
       {
@@ -3276,7 +3270,7 @@
         "state": "open",
         "title": "the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19",
         "detail": {},
-        "excerpt": "**Status:** OPEN — the repair is NOT STARTED. All three of this entry's own \"check first\" items were answered 2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted) and the findings are in the sections below. **BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the words \"NOT STARTED\" appearing somewhere in its prose, so an editorial rewrite could have silently unrecorded it. H2 — defending an invention when challenged — is the highest-severity half. **Reported by the operator, 2026-08-19, from a live voice conversation: \"it hallucinates\". Filed for later, deliberately not fixed in the same session.** > ### ⚠️ THE FILE THIS TICKET TELLS YOU TO READ IS GONE. Re-measured 2026-08-28. > > **`vault\\Conversation\\session.json` is a SINGLE-SESSION file that is overwritten.** > It now holds **2 turns from 2026-08-27, in 350 bytes**. The 26-turn conver…"
+        "excerpt": "**Status:** 🔴 PARTIALLY FIXED — H2, H3 and H4 are closed with detectors and a mutation-proven test suite (2026-09-02); **H5 and H7 are REFUTED and were never defects**; H1's stated mechanism was measured and is WRONG; H1 and H2 remain genuinely open. All three of this entry's own \"check first\" items were answered 2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted). **BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the words \"NOT STARTED\" appearing somewhere in its prose, so an editorial rewrite could have silently unrecorded it. H2 — defending an invention when challenged — is the highest-severity half and is untouched. > ### ✅ H3 AND H4 CLOSED 2026-09-02 — and THREE of this ticket's findings were measured and are wrong > > Everything below was measured against > `%APPDATA%\\MYTHOS\\vault\\Episodic\\2026-08-19.jsonl` (667 records: 231 > `c…"
       },
       {
         "n": 276,
@@ -3582,7 +3576,7 @@
         "state": "diagnosed",
         "title": "the procedural-skills layer has never fired once: 0 of 3,065 recorded actions carry a skillRef",
         "detail": {},
-        "excerpt": "Operator asked after the 2026-08-24 session why MYTHOS never used its skills. Measured across the ENTIRE episodic history (`vault/Episodic/*.jsonl`, all days): **0 actions with a skillRef, 3,065 without**. This is not a bad session — the layer is completely inert, and always has been. **Why, precisely.** Three independent facts, each checked against source and data: 1. **Wiring: only one seam consults skills at all.** `goals/index.js` `plan()` step 2 (`goals/index.js:400`) is the sole caller of `skills.recall()` in the entire codebase. It runs only while planning GOAL steps, gated on term-overlap between the goal TITLE and skill file text scoring > 0.6 plus the successRate floor. The voice-live path (`live-tool-adapter.js` builds `{tool, args}` decisions directly), the voice batch path, the HUD confirm path, and the cortex brain loop (`cortex/index.js` contains zero skill references) NEV…"
+        "excerpt": "**Status:** 🔍 RE-MEASURED 2026-09-02 and all three findings hold — the layer is still completely inert. Still awaiting an **operator decision**, not engineering: this entry's own ruling is that wiring skills into the Live tool-selection surface is a design change needing its own safety story, and that both halves \"need the operator's call on what skills are FOR in a voice-first system before code moves.\" No code moved. The measurement is now repeatable: `node mythos/scripts/measure-skill-usage.js`. > ### 🔍 RE-MEASURED 2026-09-02. Every claim holds, and one is better news than filed. > > | claim (2026-08-25) | measured 2026-09-02 | > |---|---| > | 0 actions with a skillRef, 3,065 without | **0 with, 4,372 without**, across 43 day files. 1,307 more actions recorded since, still not one use | > | `goals/index.js:400` is the sole caller of `skills.recall()` | **still exactly one**, same fi…"
       },
       {
         "n": 359,
@@ -3642,7 +3636,7 @@
         "detail": {
           "limits": "The scrape rungs are still dead and still cost their timeouts when both keyless rungs are spent (BUG-361's cooldown limits how often). The local daemon still returns 0 results from every engine. Wikipedia still ships as `ok:true`. Google CSE and Brave remain unconfigured — CSE needs the Custom Search API enabled on the operator's Cloud project plus a `GOOGLE_CSE_ID`, and is a separate ~100/day pool that would take the ceiling to ~350/day across three vendors. And",
           "files": "`src/core/effectors/mcp-search.js` (new — both MCP rungs and the shared frame reader; `web-search.js` was at its 862-line ratchet ceiling, and moving exa-mcp out brought it to 801), `src/core/effectors/web-search.js`, `mythos/.env.example`.",
-          "verification": "`test/bug-365-search-has-a-second-free-quota.test.js` (20 tests). ## ⚠ NUMBERING COLLISION — BUG-360 is assigned twice (recorded 2026-08-26) It happened again, in the same shape the note above describes, between two sessions working on the same day. -"
+          "verification": "`test/bug-365-search-has-a-second-free-quota.test.js` (20 tests)."
         }
       },
       {
@@ -3925,10 +3919,10 @@
       {
         "n": 394,
         "shape": "entry",
-        "state": "open",
+        "state": "verified",
         "title": "an entry can wear text that is not its own: the last entry swallows the whole register, and the bullet patterns read nested follow-ups (FILED 2026-08-28, OPEN)",
         "detail": {},
-        "excerpt": "**Status:** OPEN — filed, measured, deliberately not repaired inside BUG-393's change. **Two mechanisms, ONE ticket, because they must be fixed together:** the parser fix is what exposes the pattern fix, and doing either alone reports a live licence ticket as done. ### Mechanism 1 — the last entry's body runs to end-of-file `parseBugs` ends an entry at the next `# BUG-` heading, and the final one at `text.length` (`scripts/build-index.js` :79): ```js const end = i + 1 \u003c marks.length ? marks[i + 1].at : text.length; ``` **BUG-273 is the last `## BUG-` heading in this file.** Everything after it — the entire `## OPEN WORK filed` register and its 14 bullets — is read as BUG-273's body. Its status is therefore computed partly from other tickets' bullets, and appending anything to the end of this file changes it. **That is not theoretical: it turned a test red on 2026-08-28 while BUG-273 itse…"
+        "excerpt": "**Status:** ✅ FIXED 2026-09-02, mutation-proven — 8 probes, all applied-verified, source restored sha256-identical, suite 7086/7086/0 fail/0 skipped. Both mechanisms and the third sighting are closed in one change, as the ticket required. Two of this entry's own guards turned out to be unreachable and were deleted rather than kept; one entry (BUG-098) was given a Status line read from its own words rather than relaxing a guard that caught it. > ### ✅ CLOSED 2026-09-02. What was measured first, and what it corrected. > > **Every number below was re-measured before any code changed**, because this > entry was filed 2026-08-28 and the file has moved since. > > | claim as filed | measured 2026-09-02 | > |---|---| > | \"BUG-273 is the last `## BUG-` heading\" | **STILL TRUE.** Its body ran 90,498 chars to EOF | > | bounding shrinks **18 of 243** entries | **18 of 237.** Exactly right | > | **fo…"
       },
       {
         "n": 395,
@@ -3972,10 +3966,10 @@
       }
     ],
     "counts": {
-      "verified": 63,
-      "fixed": 174,
-      "open": 6,
-      "coded": 2,
+      "verified": 66,
+      "fixed": 173,
+      "open": 3,
+      "coded": 3,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
@@ -3983,8 +3977,7 @@
     "total": 248,
     "openDeclared": [
       274,
-      275,
-      394
+      275
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"

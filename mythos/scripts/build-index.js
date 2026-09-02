@@ -66,9 +66,61 @@ const STATES = ['verified', 'fixed', 'open', 'coded', 'diagnosed', 'duplicate', 
 
 // ---------------------------------------------------------------------------
 
+// BUG-394 mechanism 1 — AN ENTRY ENDS AT THE NEXT TOP-LEVEL SECTION, not at the
+// next BUG heading.
+//
+// Before this, an entry ran to the next `# BUG-` heading and the final one ran to
+// `text.length`. BUG-273 is the last `## BUG-` heading in BUGS.md, so the whole
+// `## OPEN WORK filed` register and every `## Session (...)` section after it was
+// read as BUG-273's body — its status was computed partly from other tickets'
+// bullets, and appending anything to the end of the file changed it. That is not
+// theoretical: it turned a test red on 2026-08-28 while BUG-273 itself never
+// changed.
+//
+// EXACTLY TWO HASHES, AND THE COUNT IS THE WHOLE FIX. The first draft stopped at
+// the next heading of ANY depth (`#{1,6}`) and that is much worse than the bug:
+// entries own their own `###` subsections, so it cut BUG-273 at its own
+// "### Evidence — measured, not inferred" and discarded 89,125 characters
+// including its mutation proof, and BUG-278 at its own "### Root cause 1". 46
+// entries shrank and 7 changed state, four of them by losing evidence they had
+// written themselves. With `##` it is 18 entries and 3 state changes — the
+// figures the ticket filed. Found by inspecting the changes by hand, which is
+// what the ticket says to do, and NOT by counting them, which is what looked
+// fine.
+//
+// THIS PATTERN DELIBERATELY DOES NOT EXCLUDE BUG HEADINGS, and the first draft
+// did. It carried `(?!BUG-\d)` as well, which read like the load-bearing half and
+// was not: bug headings are removed from `sections` BY POSITION below
+// (`!bugAt.has(at)`), using the offsets the entry scan already produced, and that
+// is both exact and unavoidable. Mutation probe (c), 2026-09-02: deleting the
+// lookahead reddened NOTHING — 12/12 still passed — which is how it was found.
+// Two guards for one property, one of them unreachable, is worse than one: the
+// dead one reads as defence to the next reader while its test passes forever
+// proving nothing. Removed rather than kept as a backstop, and the position
+// filter is what the regression test now attacks.
+const SECTION_BOUNDARY_RE = /^## [^\n\r]*/gm;
+
 function parseBugs(text) {
   const marks = [...text.matchAll(/^#{1,6} BUG-(\d+)([^\n\r]*)/gm)]
     .map((m) => ({ n: +m[1], head: m[2], at: m.index }));
+
+  // Every top-level heading offset, INCLUDING bug entries' own headings — and
+  // that is deliberate rather than sloppy.
+  //
+  // Two drafts of this line filtered bug headings out, first with a `(?!BUG-\d)`
+  // lookahead in the pattern and then with a `!bugAt.has(at)` position check.
+  // Mutation probes (c) on 2026-09-02 deleted each in turn and reddened NOTHING,
+  // twice, and the reason is that the property is guaranteed by the `Math.min`
+  // below: `nextBug` is already the offset of the next bug heading, so a bug
+  // heading in this list can only ever tie with it and never win. Both guards
+  // were unreachable by construction.
+  //
+  // They are gone rather than kept as backstops. Two mechanisms for one property
+  // with one unreachable is worse than one: the dead half reads as live defence
+  // to the next reader while its test passes forever proving nothing. The
+  // regression test for this property is honest that it holds by construction
+  // and that no mutation can reach it.
+  const sections = [...text.matchAll(SECTION_BOUNDARY_RE)].map((m) => m.index);
 
   const seen = new Set();
   const out = [];
@@ -76,7 +128,9 @@ function parseBugs(text) {
   marks.forEach((m, i) => {
     if (seen.has(m.n)) return;
     seen.add(m.n);
-    const end = i + 1 < marks.length ? marks[i + 1].at : text.length;
+    const nextBug = i + 1 < marks.length ? marks[i + 1].at : text.length;
+    const nextSection = sections.find((at) => at > m.at);
+    const end = Math.min(nextBug, nextSection === undefined ? text.length : nextSection);
     out.push({ n: m.n, shape: 'entry', head: clean(m.head), body: text.slice(m.at, end) });
   });
 
@@ -244,34 +298,45 @@ function bulletMarks(n) {
   // look like one, and neither must the comment explaining it: the first draft of
   // this note tripped the same gate twice by quoting the string it warns about.
   const id = '[-*]\\s*' + 'BUG-' + '0*' + n + '\\b';
+  // BUG-394 step 3 — the gap no other bug number may cross, adopted from
+  // bulletHalfDone below where it was already proven. Applied to bulletPartial
+  // and bulletFixed TOGETHER: the ticket's whole reason for holding these in one
+  // change is that tightening either alone flips the winner between them, and on
+  // 2026-08-28 that would have reported the live licence ticket BUG-274 as done.
+  //
+  // MEASURED 2026-09-02 BEFORE CHANGING IT, in all four cells of
+  // {bounding on/off} x {tight on/off}: BUG-274, BUG-275 and BUG-394 read `open`
+  // in every one. Step 1 (an explicit Status line on 274 and 275, plus a register
+  // declaration for both) is what removed the hazard, so this is now safe.
+  //
+  // AND IT CHANGES NOTHING TODAY — 0 of 237 entries move. That is the honest
+  // description: this is a FORWARD guard against the class returning, not a
+  // repair of a present misreading, and a test asserting "the real file is
+  // unaffected" would pass vacuously. The regression tests use synthetic
+  // fixtures for exactly that reason.
+  const gap = '(?:(?!BUG-\\d)[^\\n])*';
   return {
-    bulletPartial: new RegExp(`${id}[^\\n]*\\bFIXED\\b[^\\n]*\\bNOT\\s+yet\\b`, 'i'),
+    bulletPartial: new RegExp(`${id}${gap}\\bFIXED\\b${gap}\\bNOT\\s+yet\\b`, 'i'),
     // SATISFIED reads the same as FIXED here, and for the same reason it was
     // added to openSetFrom's closure vocabulary: BUG-344's bullet states
     // "VERIFIED-SATISFIED 2026-08-24" and nothing could read it. Leaving it out
     // would move that entry from wrongly-open to wrongly-unrecorded, which is
     // trading one false report for another.
-    bulletFixed: new RegExp(`${id}[^\\n]*\\b(?:FIXED|SATISFIED)\\b`, 'i'),
-    // BUG-393 — the same half-done shape as bulletPartial, for openSetFrom, and
-    // deliberately TIGHTER in two ways.
+    bulletFixed: new RegExp(`${id}${gap}\\b(?:FIXED|SATISFIED)\\b`, 'i'),
+    // BUG-393 — the same half-done shape as bulletPartial, for openSetFrom.
     //
-    // Wider closure vocabulary, because openSetFrom's filter closes on any of
-    // FIXED/RESOLVED/CLOSED/SATISFIED; a pattern meant to hold that filter back
-    // must recognise every word the filter acts on, or it holds back one case in
-    // four.
+    // IT USED TO BE TIGHTER IN TWO WAYS AND NOW IT IS TIGHTER IN ONE. The gap
+    // guard it pioneered — `(?:(?!BUG-\d)[^\n])*` rather than `[^\n]*`, so no
+    // OTHER bug number may sit between this bullet's id and its qualifier — is
+    // now shared by all three patterns via `gap` above, which is BUG-394 step 3.
+    // This comment previously described a difference that no longer exists;
+    // corrected rather than left standing, because a confident wrong comment
+    // outlives the code.
     //
-    // And `(?:(?!BUG-\d)[^\n])*` rather than `[^\n]*`, so no OTHER bug number may
-    // sit between this bullet's id and its qualifier. These patterns run against
-    // a FLATTENED block, so `[^\n]*` spans nested follow-up lines — and measured
-    // on the real file, bulletPartial's loose form matches BUG-273 and BUG-274
-    // only because a nested `- BUG-nnn` follow-up says "NOT yet" about a
-    // different ticket. That is BUG-390's defect (one entry wearing another's
-    // status) surviving in the pattern built to fix it. It is NOT repaired here:
-    // BUG-274 currently draws its `open` from that wrong match, so tightening
-    // bulletPartial without tightening bulletFixed alongside it would close a
-    // live licence ticket. Filed as BUG-394. Across the 13 register bullets the
-    // loose and tight forms agree exactly, so this call site pays nothing for
-    // being correct.
+    // What still differs is the CLOSURE VOCABULARY, and that is not cosmetic:
+    // openSetFrom's filter closes on any of FIXED/RESOLVED/CLOSED/SATISFIED, so
+    // a pattern meant to hold that filter back must recognise every word the
+    // filter acts on, or it holds back one case in four.
     bulletHalfDone: new RegExp(
       `${id}(?:(?!BUG-\\d)[^\\n])*\\b(?:FIXED|RESOLVED|CLOSED|SATISFIED)\\b`
       + '(?:(?!BUG-\\d)[^\\n])*\\bNOT\\s+yet\\b',
@@ -280,11 +345,62 @@ function bulletMarks(n) {
   };
 }
 
+// BUG-394 mechanism 2 and its third sighting — A BULLET'S MARKER IS READ FROM
+// THAT BULLET'S OWN BLOCK, and a bullet must start a line.
+//
+// Two defects, one shape, and scoping fixes both at once instead of guarding
+// each:
+//
+//   THE FLATTENED BODY. The patterns used to run against the whole body with
+//   every newline collapsed, so `[^\n]*` spanned nested follow-up lines and the
+//   marker word could be drawn from a `- BUG-nnn` bullet about a DIFFERENT
+//   ticket. Measured on the real file, that is how BUG-273 and BUG-274 both drew
+//   a marker from someone else's bullet.
+//
+//   THE ARROW. The id anchor is `[-*]\s*BUG-0*<n>\b` and an ASCII arrow
+//   satisfies it. Writing `brain calls=1  <- BUG-278 measured 1` inside BUG-278's
+//   own entry made the `-` of `<-` read as a bullet marker, and BUG-278
+//   classified `open` immediately after being live-verified. Nothing in the entry
+//   was a bullet. 27 entries currently carry a dash before a bug id on a line
+//   that does not start with one.
+//
+// SO THE BAD STATE IS MADE UNREPRESENTABLE RATHER THAN DETECTABLE. Find lines
+// that START with a bullet naming THIS entry, take that bullet's own block
+// (itself plus its continuation lines, via the same blockAt the pointer path
+// uses), and test the marker inside it. Another bullet's marker is then not
+// something the pattern can reach, rather than something a lookahead has to
+// notice. The block flatten is kept because it is load-bearing for a different
+// reason the file already records: a wrapped bullet states the qualifier two
+// lines down ("...**COUNTER FIXED …;\n the README catalog table and pie are NOT
+// yet generated**"), and reading line by line closes a ticket on the half that
+// landed.
+//
+// THE `(?!BUG-\d)` GAP IS STILL NOT REDUNDANT, and this is worth stating because
+// it looks it. Scoping excludes a SEPARATE bullet about another ticket; it does
+// nothing about one bullet that mentions two ids — `- BUG-274 — see BUG-345,
+// which is FIXED` is a single block, and only the gap guard stops BUG-345's
+// marker being read as BUG-274's. Both are kept, deliberately.
+const BULLET_LINE_RE = /^\s{0,8}[-*]\s+BUG-0*(\d+)\b/;
+
+function ownBulletBlocks(body, n) {
+  const lines = body.split(/\r?\n/);
+  const blocks = [];
+  let offset = 0;
+  for (const line of lines) {
+    const m = BULLET_LINE_RE.exec(line);
+    if (m && Number(m[1]) === n) blocks.push(blockAt(body, offset).replace(/\s+/g, ' '));
+    offset += line.length + 1;
+  }
+  return blocks;
+}
+
 function firstMarkerLine(body, n) {
-  const flat = body.replace(/\s+/g, ' ');
   const bullets = bulletMarks(n);
+  const blocks = ownBulletBlocks(body, n);
   for (const state of ['bulletPartial', 'bulletFixed']) {
-    if (bullets[state].test(flat)) return { state, line: flat.slice(0, 120) };
+    for (const block of blocks) {
+      if (bullets[state].test(block)) return { state, line: block.slice(0, 120) };
+    }
   }
   for (const line of body.split(/\r?\n/)) {
     for (const [state, re] of Object.entries(MARK)) {

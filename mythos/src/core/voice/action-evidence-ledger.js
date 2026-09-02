@@ -69,6 +69,23 @@ function createRecentActionLedger() {
       unverified: entry.unverified === true,
       status: actionStatus(entry),
       ts: Date.now(),
+      // BUG-275 H3/H4. Until this field, every consumer of this ledger could ask
+      // "did a lookup succeed" and none could ask "is this name in what it
+      // returned" — the result content was dropped here, so the content check
+      // the BUG-275 entry calls for was structurally impossible rather than
+      // merely unwritten. Only detectUnsourcedRankedEntities reads it.
+      //
+      // A normalised digest, NOT the raw result: capped and punctuation-free
+      // (evidence-digest.js), so what is retained is bounded and useful for
+      // exactly one question. It is set only for the fact-finding tools whose
+      // results ARE external evidence, so a window of ordinary desktop actions
+      // carries none and costs nothing.
+      //
+      // It does NOT reach the vault: the turn record at live-tool-adapter.js
+      // ~:1392 names the fields it persists one by one, and this is not among
+      // them. Checked before adding, not assumed — a 20k digest per action row
+      // in the episodic log would be a real cost for no reader.
+      evidence: entry.evidence || null,
     });
     if (entries.length > RECENT_ACTION_LEDGER_MAX) {
       entries.splice(0, entries.length - RECENT_ACTION_LEDGER_MAX);
