@@ -58,6 +58,26 @@ const STATE_CLASS = {
   speaking: 'text-gold',
 };
 
+// BUG-401 (2026-09-03): the /api/config/s2s handler wrote rows[2] — which is
+// `browser tts`, not `live s2s`. So `live s2s` never left its initial
+// 'checking…' and the TTS row displayed the S2S boolean under the wrong label.
+// Confirmed on the operator's screenshot while the server log showed a Live turn
+// completing 14s later. An index cannot be checked by reading it; a key can, so
+// the row is addressed BY KEY and this function is pure and exported so
+// node:test can drive it with no DOM (ui/public is a no-build ESM tree — see
+// ui/CLAUDE.md). Same class as BUG-175, inverted: false discouragement rather
+// than false reassurance, in the file whose header is about BUG-175.
+//
+// cfg is the parsed /api/config/s2s body, or null when the route was
+// unreachable. Unreachable is NOT 'disabled' — we never learned the setting,
+// and reporting it as disabled would be a synthesized fact (AD-5).
+export function applyS2sResult(rows, cfg) {
+  const row = (rows || []).find((r) => r && r.key === 's2s');
+  if (!row) return rows;
+  if (cfg === null || cfg === undefined) row.value = UNAVAILABLE;
+  else row.value = cfg.enabled ? 'enabled' : 'disabled';
+  return rows;
+}
 export function mountVoice(el, ctx) {
   const bag = cleanupBag();
 
@@ -144,14 +164,14 @@ export function mountVoice(el, ctx) {
     .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
     .then((cfg) => {
       if (disposed) return;
-      rows[2].value = cfg && cfg.enabled ? 'enabled' : 'disabled';
+      applyS2sResult(rows, cfg || null);
       paintRows();
     })
     .catch(() => {
       if (disposed) return;
       // The route was unreachable, so we never learned the setting. Distinct
       // from "disabled" and must not be reported as it.
-      rows[2].value = UNAVAILABLE;
+      applyS2sResult(rows, null);
       paintRows();
     });
 
