@@ -229,6 +229,13 @@ describe('BUG-297 — the late-for-turn re-narration is the fourth path', () => 
       // purpose: that file enumerates the paths that narrate a TOOL OUTCOME, and
       // this site narrates the absence of one.
       'bug398-d1-unscheduled-commitment',
+      // Added by BUG-398 row 7 (2026-09-02) — the model retracting a PROVEN
+      // action under operator pressure. The only site in this list whose
+      // prohibition runs the OTHER way: it forbids taking a true claim back
+      // rather than making a false one. Its wording ("Do NOT retract it",
+      // RECONCILE, and the concrete next step) is pinned in
+      // bug-398-cluster-b-narration.test.js.
+      'bug398-row7-false-retraction',
       'confirm-rejected-by-voice',
       'confirm-resolved',
       'late-for-turn',

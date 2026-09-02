@@ -35,7 +35,10 @@ const { logCommitmentIfPresent } = require('../effectors/from-calendar');
 
 // F3: detector-only sibling of the unverified/started evidence discipline
 // above — see claim-check.js for the full contract.
-const { detectUnbackedClaims, buildSpokenGoAheadNotice, detectUnscheduledCommitments } = require('./claim-check');
+const {
+  detectUnbackedClaims, buildSpokenGoAheadNotice, detectUnscheduledCommitments,
+  detectFalseRetractions,
+} = require('./claim-check');
 
 // BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
 // the file-size ratchet; full rationale in that module.
@@ -46,6 +49,7 @@ const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = 
 // are the record of the four incidents that produced them.
 const {
   NO_SUCCESS_CLAIM, UNVERIFIED_NO_PROOF_CLAIM, ABORTED_IN_FLIGHT_CLAIM, failedNarration,
+  SYSTEM_NOTICE_PREFIX, LIVE_SYSTEM_NOTICE_INSTRUCTION,
   UNVERIFIED_PARTIAL_CLAIM, NO_CONTENT_CLAIM, returnsNoReadableContent,
 } = require('./narration-claims');
 
@@ -53,41 +57,6 @@ const {
 // than keep a second, driftable copy of the same regex in this module.
 const { NEGATIVE_RE } = require('./voice-agent');
 
-// BUG-117 — 2026-08-05: MYTHOS blamed the operator for messages the pipeline
-// injected itself ("you said the click failed"). It is not the model being
-// careless: the frozen Gemini Live wire protocol (V2 spine §3) has NO
-// system-role channel after setup. Everything sent post-setup through
-// liveSession.sendText() leaves as realtimeInput:{text}, which Gemini attributes
-// to the USER role — there is no frame we are allowed to send that says
-// otherwise. Reusing a functionResponse is not an option either: both injection
-// sites fire AFTER the original toolResponse for that call has already gone.
-//
-// So the only honest fix is framing, and it has two halves that must agree:
-//   1. this prefix, which is self-describing on its own, and
-//   2. LIVE_SYSTEM_NOTICE_INSTRUCTION below, which the Live system instruction
-//      carries so the model knows what the prefix means before it ever sees one.
-// They live together in this module so the two can never drift apart. All three
-// injection sites use them: reportLateOutcome(), resolveLiveConfirm(), and
-// server/index.js's proactiveSpeak() Live route.
-const SYSTEM_NOTICE_PREFIX =
-  '[SYSTEM NOTICE — automated message from MYTHOS\'s own pipeline, NOT the operator speaking]';
-
-const LIVE_SYSTEM_NOTICE_INSTRUCTION =
-  `AUTOMATED SYSTEM NOTICES. Some messages that arrive in this conversation as if the operator ` +
-  `spoke them begin with "${SYSTEM_NOTICE_PREFIX}". They are NOT the operator speaking. They are ` +
-  `automated notices from MYTHOS's own pipeline — the real outcome of a tool you called, the ` +
-  `operator's answer to an approval prompt, or a proactive alert. The transport has no separate ` +
-  `system channel, which is the only reason they look like operator speech. Treat them as ground ` +
-  `truth about what happened, act on them, but NEVER say or imply the operator told you any of it, ` +
-  `and never blame the operator for their content. A notice reporting that a reminder or timer has ` +
-  `just fired and is complete is a REPORT of something that ALREADY happened — it is NEVER a request ` +
-  `to create a new one, and must never cause you to call reminder_add or timer_add. A notice may also ` +
-  `be a CORRECTION of something YOU JUST SAID in this same conversation, not a report about the ` +
-  `operator — when it is, retract the earlier claim aloud instead of repeating it. A proactive alert ` +
-  `notice (including your own boot greeting, delivered this same way) is still YOUR OWN SPEECH once ` +
-  `you say it — the notice only tells you WHAT to say, the same as any other instruction reaching you ` +
-  `through this channel. If asked to repeat, explain, or clarify something you said via a notice like ` +
-  `this, own it as your own words; never say the operator told you to say it or that you don't recall it.`;
 
 function createLiveToolAdapter(deps) {
   const {
@@ -1301,6 +1270,33 @@ function createLiveToolAdapter(deps) {
           `CORRECTION of your own prior statement — you said "${claim.phrase}" but that action did NOT happen (${detail}).`,
           'Retract this aloud now: tell the operator plainly that it did not happen. Do NOT repeat the claim again later in this conversation.',
           { site: 'ad4-correction-retract', tool: failedTool || null, claim: 'retract' },
+        );
+      }
+
+      // BUG-398 row 7 (2026-09-02): the model retracting a PROVEN success
+      // because the operator contradicted it. Everything above guards against
+      // over-claiming; this is the only thing guarding the other direction, and
+      // a session with correction pressure in one direction only is how a
+      // verified `open_folder` (window-title oracle, pid 15816) got retracted.
+      for (const bad of detectFalseRetractions(
+        assistantText, actionsThisTurn, recentActionLedger.forClaims())) {
+        if (bus && typeof bus.emit === 'function') {
+          bus.emit('health.anomaly', {
+            kind: 'retracted-a-proven-action',
+            tool: 'false-retraction', target: 'false-retraction',
+            claim: bad.sentence, provenTools: bad.provenTools,
+          });
+        }
+        sendSystemNotice(
+          `CORRECTION of your own prior statement — you said "${bad.sentence}", but ${bad.provenTools.join(', ')} `
+          + 'DID succeed and was confirmed by an independent oracle. Nothing in this turn failed. '
+          + 'You just took back something that was true.',
+          'Do NOT retract it. Tell the operator it did happen, name the evidence, and then RECONCILE the '
+          + 'disagreement instead of folding: the window may be behind another one, on another display, or '
+          + 'already closed since. Offer the next concrete step (focus_window, list_windows) rather than '
+          + 'apologising for a success.',
+          { site: 'bug398-row7-false-retraction', tool: 'false-retraction',
+            claim: 'retracted-a-proven-action' },
         );
       }
 
