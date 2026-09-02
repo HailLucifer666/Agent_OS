@@ -103,10 +103,51 @@ describe('BUG-390 — against the real BUGS.md', () => {
   const openSet = openSetFrom(text).set;
   const states = new Map(bugs.map((b) => [b.n, classify(b, openSet)]));
 
-  it('the deferred and undiagnosed tickets read as open, not as nothing', () => {
-    for (const n of [266, 267, 268]) {
+  it('a bold **OPEN** marker is a stated status — the mechanism, on a fixture', () => {
+    // RE-SCOPED 2026-09-02 by BUG-267, and this is the THIRD instance of the
+    // erosion the two cases below already record. It asserted
+    // `states.get(n) === 'open'` for a hardcoded [266, 267, 268] against the
+    // LIVE file, which is an OUTCOME standing in for a MECHANISM: it passed
+    // only while all three happened to be open. BUG-267 was then fixed — its
+    // named instance had already shipped on 2026-08-21 and three more were
+    // found and closed — and this guard went red against a CORRECT register,
+    // exactly as the BUG-352 and BUG-273 cases did before it.
+    //
+    // Editing the list to [266, 268] would schedule the same failure for the
+    // day either of those closes. The mechanism this test is actually for is
+    // that a bold `**OPEN**` marker line counts as a stated status, so drive
+    // THAT, on text this test owns. Both real shapes from BUGS.md:
+    assert.equal(
+      stateOf('## BUG-390 — a deferred ticket\n\n'
+        + '**OPEN. Deferred by design to merged-order step 8, lane 8A.3.** Numbered here.\n'),
+      'open', 'a bold OPEN marker with a deferral is still open work');
+    assert.equal(
+      stateOf('## BUG-390 — an undiagnosed ticket\n\n'
+        + '**OPEN, UNDIAGNOSED. Operator-reported and deprioritised the same day.**\n'),
+      'open', 'a bold OPEN marker with UNDIAGNOSED is still open work');
+  });
+
+  it('BOUND: the same marker shape does not make a FIXED entry open', () => {
+    // The false-positive half. Without it the rule above could be firing on any
+    // bold line and would report closed work as open — the direction that makes
+    // a register untrustworthy in the other direction.
+    assert.equal(
+      stateOf('## BUG-390 — a fixed ticket that mentions open work elsewhere\n\n'
+        + '**Status:** ✅ FIXED 2026-01-01. Handed the rest to another ticket which is still open.\n'),
+      'fixed', 'prose about other open work must not reopen a fixed entry');
+  });
+
+  it('the real register still classifies every declared open ticket as open', () => {
+    // What survives as a LIVE-file assertion, and it is deliberately structural
+    // rather than per-ticket: whatever the OPEN WORK register declares must read
+    // open. That cannot erode when a ticket closes, because closing it removes
+    // it from the register in the same commit.
+    const declared = openSetFrom(text).openDeclared
+      || [...openSet];
+    assert.ok(declared.length > 0, 'the register declared nothing; openSetFrom is broken');
+    for (const n of declared) {
       assert.equal(states.get(n), 'open',
-        `BUG-${n} states **OPEN** and must be tracked as open work`);
+        `BUG-${n} is declared in the OPEN WORK register but classifies as ${states.get(n)}`);
     }
   });
 

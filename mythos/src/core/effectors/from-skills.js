@@ -34,7 +34,7 @@ function buildTools() {
 
   return [{
     name: 'use_skill',
-    description: 'Load the full guidance text for a skill (methodology or design guide) by name. Use this when a task fits a skill listed in SKILLS AVAILABLE — e.g. use_skill({name:"ui-ux-pro-max"}) before building a UI, use_skill({name:"spec-driven-development"}) before starting a project, use_skill({name:"tdd-workflow"}) before writing tests. Returns the complete skill instructions to apply.',
+    description: 'Load the full guidance text for a skill (methodology or design guide) by name. Use this when a task fits a skill listed in SKILLS AVAILABLE — e.g. use_skill({name:"ui-ux-pro-max"}) before building a UI, use_skill({name:"writing-plans"}) before starting a project, use_skill({name:"test-driven-development"}) before writing tests. Returns the complete skill instructions to apply.',
     params: { name: 'string - the skill name from the SKILLS AVAILABLE list' },
     danger: false,
     fn: useSkill,

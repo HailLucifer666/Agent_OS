@@ -17165,7 +17165,115 @@ session to chase; recorded as operator-side, honestly open.
 
 ## BUG-266 — six skill names are hardcoded into prompts and are PHANTOM on a fresh clone
 
-**OPEN. Deferred by design to merged-order step 8, lane 8A.1/8A.2** — see
+**Status:** ✅ FIXED 2026-09-02, mutation-proven (8 probes, all caught, sources
+restored sha256-identical; suite green). **Zero phantoms remain — verified by
+reproducing the fresh clone, not by reading lists.** Both lanes closed: 8A.1 by
+substituting vendored equivalents, 8A.2 by making the loader stop disagreeing
+with itself. Step 8's broader vendoring design is a separate improvement and is
+NOT required for this defect.
+
+> ### ✅ CLOSED 2026-09-02, and the acceptance test is the ticket's own reproduction
+>
+> **Measured first, in a child process with `USERPROFILE`/`HOME` pointed at a
+> non-existent directory and `MYTHOS_SKILLS_DIR` empty — the same method this
+> entry used on 2026-08-17.** All six prompt-named skills returned
+> `loadContent = NULL`. Confirmed exactly as filed.
+>
+> **8A.1 — fixed by SUBSTITUTION, not by vendoring third-party content.** Four of
+> the six already had an exact vendored equivalent sitting in `mythos/skills/`,
+> so the prompts now name those. No new files, no licence exposure:
+>
+> | prompt used to name (optional, external-only) | now names (required, vendored) |
+> |---|---|
+> | `tdd-workflow` | **`test-driven-development`** |
+> | `code-review` | **`code-review-and-quality`** |
+> | `spec-driven-development` | **`writing-plans`** |
+> | `frontend-ui-engineering` | **`taste-frontend`** |
+>
+> `deep-research` was **dropped** from the SKILLS RULE rather than substituted —
+> nothing vendored covers it, and naming a phantom is worse than naming nothing.
+> `ui-ux-pro-max` is the single remaining optional name, and it is waived with a
+> **conditional** waiver (below).
+>
+> **The rule comes from `skills.allowlist`'s own header**, which already stated
+> the contract nobody was honouring: *"A leading `?` marks the entry OPTIONAL …
+> deliberately NOT vendored into this repo … An optional entry that does not
+> resolve is the normal state of a fresh clone and is never warned about. A plain
+> entry that does not resolve IS reported — treat that as a bug."* So instructing
+> the model every turn to call `use_skill` on a `?` name is instructing it to
+> call something the repo says may legitimately be absent. 43 entries are
+> required and vendored; there was no need to name any of the 9 optional ones.
+>
+> **8A.2 — the loader disagreed with itself, and this entry mis-scoped it.**
+> `loadEssence` prefers the vendored `SKILL-CORE.md`; `loadContent` read
+> `SKILL.md` and nothing else. So a skill vendored essence-only was loadable by
+> one half of the loader and NULL to the other. `loadContent` now falls back to
+> the vendored core — **and the fallback is LABELLED**, because returning a
+> 26-line condensed guide silently, from a call whose contract is "the complete
+> skill instructions", is a quiet downgrade: the model would apply a summary
+> believing it held the full doc. The prefix states what arrived and what did not.
+>
+> **The entry's claim that `ui-ux-pro-max` is phantom "on every machine" is
+> WRONG.** With a host CLI's skill directory present, `loadContent` returned
+> **44,380 characters**. The contradiction is a fresh-clone one — the same
+> population as 8A.1, not a separate defect.
+>
+> ### Acceptance, measured both ways
+>
+> ```
+> FRESH CLONE (no external roots)          AS-IS (this machine)
+>   taste-frontend           87,001ch        taste-frontend           87,001ch
+>   ui-ux-pro-max             2,073ch        ui-ux-pro-max            44,380ch
+>   writing-plans             5,958ch        writing-plans             5,958ch
+>   test-driven-development   9,724ch        test-driven-development   9,724ch
+>   code-review-and-quality  20,576ch        code-review-and-quality  20,576ch
+>   RESULT: no phantom                       RESULT: no phantom
+> ```
+>
+> `ui-ux-pro-max`'s 2,073 vs 44,380 is the honest degradation: the labelled
+> vendored core on a clone, the full doc where it is installed.
+>
+> ### The guard, and why its waiver map cannot hide a phantom
+>
+> `test/bug-266-prompt-names-only-vendored-skills.test.js` asserts the derived
+> rule — **every skill named in prompt text must be a REQUIRED allowlist
+> entry** — and ships a waiver map with exactly one entry. That waiver is
+> **conditional**: a separate test proves the waived skill still resolves with no
+> external roots, so the excuse dies before the phantom returns (probe (d) moves
+> the vendored core aside and reds the waiver test while the main rule stays
+> green). The **acceptance** test runs the real loader in a scrubbed child and
+> additionally asserts **the scrub worked** — probe (h) restores the real
+> `USERPROFILE` and it fails with *"the environment scrub failed — ui-ux-pro-max
+> returned 44380 chars"*, so the test cannot pass by quietly reading the
+> developer's own skills directory.
+>
+> ### Two defects found in this ticket's own work
+>
+> 1. **The negative control was coupled to the fix.** It asserted the matcher
+>    could find `test-driven-development` in RULES — the very substitution under
+>    test — so probe (a) reddened the control as collateral and obscured which
+>    assertion caught the revert. Rewritten to check the matcher against
+>    synthetic strings. A control must not depend on the thing it controls for.
+> 2. **`code-review` matches inside `code-review-and-quality`.** That substring
+>    collision produced two wrong readings while measuring this ticket (it made
+>    both look present in the allowlist, and made `catalogBlock` look like it
+>    named a skill it does not). Every name match here excludes `-` from the word
+>    boundary, and that is pinned by its own assertion.
+>
+> ### A third-instance erosion, fixed at the root
+>
+> Closing this reddened `bug-390-*.test.js`'s *"the deferred and undiagnosed
+> tickets read as open"*, which hardcoded `[266, 267, 268]` against the LIVE
+> file. That file **already records the identical erosion twice** (BUG-352 and
+> BUG-273) with the remedy: an outcome standing in for a mechanism. Editing the
+> list to `[266, 268]` would schedule the same failure for the day either
+> closes, so it was re-scoped to the mechanism on fixtures it owns — a bold
+> `**OPEN**` marker is a stated status — plus a structural live assertion
+> (everything the OPEN WORK register declares must classify open) that cannot
+> erode, because closing a ticket removes its bullet in the same commit.
+
+**Original filing, kept because the diagnosis and the reproduction method were
+both right:** deferred by design to merged-order step 8, lane 8A.1/8A.2 — see
 `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan.md` "Step 8", which carries the full
 design, the wiring table and the fix. Numbered here so the id is reserved and
 cannot be reused by a concurrent session.
@@ -17193,8 +17301,83 @@ about whether a skill exists.
 
 ## BUG-267 — the Live/spoken path is told to call a tool it was never given
 
-**OPEN. Deferred by design to merged-order step 8, lane 8A.3.** Numbered here to
-reserve the id.
+**Status:** ✅ FIXED 2026-09-02, mutation-proven (5 probes, all caught, source
+restored sha256-identical; suite 7090/7090/0 fail/0 skipped). **The instance
+this entry named was already fixed and the entry was never updated — and
+deriving the set from the entry's own reason found three more that it never
+mentioned.** Closed with a derived forward guard rather than three patches.
+
+> ### ✅ CLOSED 2026-09-02 — the named instance was stale, and the real set was three wider
+>
+> **`use_skill` was promoted on 2026-08-21**, out of `VOICE_ALLOWLIST_EXEMPT` and
+> into `DEFAULT_ALLOWLIST`, by that day's capability audit — twelve days before
+> this entry was read. Verified at the mechanism rather than by list membership:
+> built the real declarations from a real hub and `use_skill` is declared,
+> `withheld:false`. It is pinned in
+> `test/voice-allowlist-curation-audit-2026-08-21.test.js` under `PROMOTED`.
+>
+> **This entry's justification was wider than its example, and that is where the
+> live defects were.** Its reason — *"the primary spoken surface receives a
+> catalogue plus an instruction to call a function that was never declared to
+> it"* — describes every registered tool named in the Live prompt, not one.
+> Measured across `RULES`, `LIVE_SYSTEM_NOTICE_INSTRUCTION`, the
+> `narration-claims` constants and `catalogBlock` against the tier table's 180
+> registered names:
+>
+> | tool | tier | named in | sibling situation |
+> |---|---|---|---|
+> | `mission_status` | 0 | RULES' INFORMATIONAL TOOLS RULE | listed beside `read_status`, `list_goals`, `job_status`, `pipeline_status`, `kanban_status`, `get_time`, `get_weather` — **all seven declared** |
+> | `run_mission` | 3 | RULES' AFFIRMATION RESOLUTION RULE | named beside `start_project` and `build_project`, **both declared** |
+> | `browser_fill_form` | 3 | RULES' BROWSER INTERACTION RULE | the rule says "pass that ref to `browser_click`, `browser_type` or `browser_fill_form`" — **only the third was missing** |
+>
+> Each was the odd one out in its own sentence, which is what makes these
+> omissions rather than decisions. Per the withheld-read-tool pattern this repo
+> has measured repeatedly, the model does not report such a gap — it substitutes
+> the nearest tool and narrates it as though it had used the named one.
+>
+> **Declaring is not re-tiering, and the leash is untouched.** `run_mission` is
+> T3 **and `NEVER_TRUSTABLE`**, so every call still demands an explicit confirm
+> and cannot be talked out of it; `start_project` is the precedent, being both
+> `NEVER_TRUSTABLE` and already declared. `browser_fill_form` shares tier,
+> `SESSION_GRANTABLE` membership and operator-present-trusted status with the two
+> tools beside it. `mission_status` is T0 read-only. A test asserts all three
+> tiers, so a later change that tried to buy convenience by lowering one fails
+> loudly instead.
+>
+> ### The fix is an assertion, not three promotions
+>
+> `test/bug-267-prompt-names-only-declared-tools.test.js`: **every registered
+> tool name occurring in Live prompt text must be in `DEFAULT_ALLOWLIST`.** It
+> selects on that property — reading the real tier table for names and the real
+> prompt constants for text — rather than keeping a list, so a tool named in
+> RULES tomorrow is checked the same day. A hand-kept list would be the same
+> omission scheduled for the next prompt edit.
+>
+> ### My own fix was incomplete for one commit, and two existing guards caught it
+>
+> Promoting `mission_status` to `DEFAULT_ALLOWLIST` without removing it from
+> `VOICE_ALLOWLIST_EXEMPT` put it on **both** lists, which mean opposite things.
+> `live-tools`' own both-lists sanity check and the 2026-08-21 curation audit's
+> `a tool is never on both lists at once` both went red, along with the
+> capability map's `no node claims a tool that is withheld AND calls itself
+> voice-reachable`. Fixed and the map regenerated. Recorded because it is the
+> value of those guards, not a footnote.
+>
+> ### Probes, as observed
+>
+> (a) drop `mission_status`/`run_mission` → reds the derived check naming both
+> plus the tier pin. (b) drop `browser_fill_form` → same, naming it. (c) drop
+> `use_skill` → reds the derived check naming it in **RULES and catalogBlock**,
+> proving the guard covers this entry's own instance from two prompt sources.
+> (d) the **negative-control probe**: make the prompt collector return `[]` →
+> only the negative control reds and **the main check passes green on nothing**,
+> which is exactly the vacuous pass that control exists to catch. (e) adjacent
+> case: mention an already-declared tool in a claim string → nothing reds, so the
+> rule does not fire on correct mentions.
+
+**Original filing, kept because the mechanism it describes is real and its fix
+direction was right:** deferred by design to merged-order step 8, lane 8A.3.
+Numbered here to reserve the id.
 
 `buildLiveSystemInstruction()` (`mythos/server/index.js`) injects
 `skillsLoader.catalogBlock()`, whose header is literally *"SKILLS AVAILABLE

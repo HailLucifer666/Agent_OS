@@ -45,6 +45,24 @@ const DEFAULT_ALLOWLIST = [
   'capture_idea','pipeline_status','pipeline_advance',
   'kanban_status','kanban_add_card','kanban_move_card',
   'start_project','build_project','project_status','job_status','open_artifact',
+  // BUG-267 (2026-09-02) — NAMED IN THE PROMPT, NEVER DECLARED. The ticket
+  // named one instance (use_skill, already promoted on 2026-08-21) and the
+  // reason it gave — "the spoken surface is told to call a function that was
+  // never declared to it" — covers a wider set. Deriving that set from the
+  // reason instead of from the ticket found three more, and both of these:
+  //
+  //   mission_status  RULES' INFORMATIONAL TOOLS RULE lists it among the
+  //     read-only lookups the model must "call in the SAME turn the user asks"
+  //     — beside read_status, list_goals, job_status, pipeline_status,
+  //     kanban_status, get_time and get_weather, every one of which IS declared.
+  //     T0, read-only. It was the only name in its own sentence that the
+  //     spoken surface could not reach.
+  //   run_mission  RULES' AFFIRMATION RESOLUTION RULE names it beside
+  //     start_project and build_project, both declared. T3 AND NEVER_TRUSTABLE,
+  //     so declaring it changes nothing about safety: the leash demands an
+  //     explicit confirm on every call and cannot be talked out of it.
+  //     start_project is the precedent — also NEVER_TRUSTABLE, also declared.
+  'mission_status','run_mission',
   'get_time','get_weather','get_directions','web_search','web_fetch',
   // BUG-171: list_incidents/incident_status are the read + close half of
   // log_incident. Allowlisting the write without them is exactly the
@@ -174,6 +192,14 @@ const DEFAULT_ALLOWLIST = [
   // utterance cannot open a webcam.
   'camera_look','camera_on',
   'browser_navigate','browser_click','browser_type','browser_get_text',
+  // BUG-267 (2026-09-02), third instance of the same omission. RULES' BROWSER
+  // INTERACTION RULE says in as many words: "Pass that ref to browser_click,
+  // browser_type or browser_fill_form" — and only the third was undeclared, so
+  // the one tool the rule names for job-application forms was the one the
+  // spoken surface could not call. Same tier (3), same SESSION_GRANTABLE and
+  // operator-present-trusted status as the two beside it, so there is no safety
+  // property that distinguishes it from them.
+  'browser_fill_form',
   // Snapshot-and-refs (2026-08-06). browser_snapshot is the READ half of every
   // browser interaction: the model takes a snapshot, sees the page as an
   // accessibility tree with element refs, and acts on a ref instead of guessing
@@ -273,7 +299,16 @@ const VOICE_ALLOWLIST_EXEMPT = [
   // see its DEFAULT_ALLOWLIST entry; the claim that read_status covered it was
   // simply false, and it is the only reader of the boot-written capabilities
   // manifest.)
-  'mission_status','persona_status',
+  // (mission_status left this group on 2026-09-02, BUG-267. The claim above —
+  // "read_status-style summaries cover these" — is the same claim that was made
+  // for self_capabilities and was simply false, and here RULES' own
+  // INFORMATIONAL TOOLS RULE names mission_status in a list of lookups the
+  // model must call in the same turn it is asked, beside seven siblings that
+  // were all declared. A tool the prompt instructs by name is not covered by
+  // another tool's summary. It was on BOTH lists for the length of one commit
+  // and two guards caught it — this file's own both-lists sanity check and the
+  // 2026-08-21 curation audit's.)
+  'persona_status',
   // BUG-161: get_app_volume is the read oracle set_app_volume/spotify_volume
   // call internally to step a per-app level through a read-back. Neither of
   // its act-side siblings (set_app_volume, set_app_mute) is on the voice

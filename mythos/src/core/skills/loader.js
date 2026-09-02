@@ -335,12 +335,47 @@ function loadCatalog(opts) {
 
 // Load the full SKILL.md body (frontmatter stripped) for on-demand use.
 // Called by the use_skill tool when the model decides to apply a skill.
+// BUG-266 lane 8A.2 — THE LOADER USED TO DISAGREE WITH ITSELF ABOUT WHETHER A
+// SKILL EXISTS.
+//
+// `loadEssence` prefers the repo-vendored `SKILL-CORE.md` and falls back to an
+// installed `SKILL.md`. This function read `SKILL.md` and nothing else. So a
+// skill vendored essence-only — `ui-ux-pro-max` is the deliberate case, holding
+// `LICENSE` + `SKILL-CORE.md` because the full 45 KB doc needs a Python CSV
+// database this repo does not carry — was loadable by one half of the loader and
+// NULL to the other. `use_skill('ui-ux-pro-max')` answered "not found" for a
+// skill that IS vendored and IS driving every UI build through `loadEssence()`.
+//
+// MEASURED 2026-09-02, and it corrects this ticket's own claim. The entry says
+// `ui-ux-pro-max` is phantom "on every machine". It is not: with a host CLI's
+// skill directory present, `skillPath` falls through to the external root and
+// this returned 44,380 characters. The contradiction reproduces on a FRESH
+// CLONE — external roots absent, `loadContent` NULL, `loadEssence` 1,807 chars —
+// which is the same population as lane 8A.1 rather than a separate "every
+// machine" defect.
+//
+// THE FALLBACK IS LABELLED, AND THAT IS THE LOAD-BEARING PART. Returning the
+// condensed core silently, in a call whose contract is "the complete skill
+// instructions", is a quiet downgrade of exactly the kind this repo keeps
+// finding: the model would apply a 26-line summary believing it held the full
+// guide, and report accordingly. The prefix states what arrived and what did
+// not, so a thin answer is legible as thin.
+var ESSENCE_ONLY_NOTICE =
+  '[CONDENSED CORE ONLY — the full skill is not installed on this machine, so this is the '
+  + "repo-vendored essence (SKILL-CORE.md), not the complete guide. Apply it, but do not claim "
+  + 'you consulted the full skill, and say so if the task needs detail this does not cover.]';
+
 function loadContent(name) {
   if (!name) return null;
   try {
     var raw = fs.readFileSync(skillPath(name), 'utf8');
     // Strip frontmatter for prompt injection — the body is the guidance.
     return raw.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '').trim();
+  } catch (_) { /* no SKILL.md anywhere — fall through to the vendored essence */ }
+  try {
+    var core = fs.readFileSync(path.join(REPO_SKILLS_DIR, name, 'SKILL-CORE.md'), 'utf8');
+    var body = core.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '').trim();
+    return body ? ESSENCE_ONLY_NOTICE + '\n\n' + body : null;
   } catch (_) {
     return null;
   }
