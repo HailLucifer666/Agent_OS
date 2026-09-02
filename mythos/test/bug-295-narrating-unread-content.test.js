@@ -37,6 +37,12 @@ const path = require('node:path');
 const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
 
 const ADAPTER_SRC = path.join(__dirname, '..', 'src', 'core', 'voice', 'live-tool-adapter.js');
+// BUG-398 R5a: every file a `*_CLAIM` may be declared in. The fifth-constant
+// guard below reads all of them.
+const SOURCES = [
+  ADAPTER_SRC,
+  path.join(__dirname, '..', 'src', 'core', 'voice', 'narration-claims.js'),
+];
 
 // The prohibition has three jobs, and a test that checks one of them passes on a
 // sentence that does not work. It must (a) say no content came back, (b) say the
@@ -271,10 +277,19 @@ describe('BUG-295 — Q6: the claim-constant population is pinned', () => {
     UNVERIFIED_NO_PROOF_CLAIM: 'bug-273-unverified-payload.test.js, all three paths',
     UNVERIFIED_PARTIAL_CLAIM: 'bug-273-b2-handoff-wording.test.js',
     NO_CONTENT_CLAIM: 'this file, all three paths',
+    // BUG-398 R5a (2026-09-02). This guard fired on exactly the case it was
+    // written for: a fifth constant added to four narration branches with no
+    // matrix entry. Its matrix is all four paths plus the two record sites.
+    ABORTED_IN_FLIGHT_CLAIM: 'bug-398-aborted-in-flight-is-not-a-failure.test.js, '
+      + 'all four narration paths + actionStatus + the action-outcomes note, with 7 mutation probes',
   };
 
   test('no claim constant exists without a path-matrix test naming it', () => {
-    const src = fs.readFileSync(ADAPTER_SRC, 'utf8');
+    // BUG-398 R5a: the constants now live in voice/narration-claims.js (the size
+    // ratchet forced them out of the adapter). Both files are scanned, so this
+    // guard covers a constant declared in EITHER — moving a declaration can no
+    // longer make it invisible, which reading only ADAPTER_SRC would have allowed.
+    const src = SOURCES.map((f) => fs.readFileSync(f, 'utf8')).join('\n');
     const found = new Set();
     const re = /const ([A-Z][A-Z0-9_]*_CLAIM)\s*=/g;
     let m = re.exec(src);

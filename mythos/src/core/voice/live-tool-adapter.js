@@ -40,6 +40,14 @@ const { detectUnbackedClaims, buildSpokenGoAheadNotice } = require('./claim-chec
 // BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
 // the file-size ratchet; full rationale in that module.
 const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger');
+// BUG-398 R5a: the five claim sentences moved to their own module when adding a
+// fifth pushed this file past the size ratchet's ceiling. Pure text, no closure
+// use — the comments explaining each one moved with it, verbatim, because they
+// are the record of the four incidents that produced them.
+const {
+  NO_SUCCESS_CLAIM, UNVERIFIED_NO_PROOF_CLAIM, ABORTED_IN_FLIGHT_CLAIM, failedNarration,
+  UNVERIFIED_PARTIAL_CLAIM, NO_CONTENT_CLAIM, returnsNoReadableContent,
+} = require('./narration-claims');
 
 // B3 (2026-08-12 diagnosis, G4): reuse voice-agent.js's own NEGATIVE_RE rather
 // than keep a second, driftable copy of the same regex in this module.
@@ -427,6 +435,14 @@ function createLiveToolAdapter(deps) {
       ok: dispatchOk && !isUnverified,
       dispatchOk,
       unverified: isUnverified,
+      // BUG-398 R5a: the fourth outcome class. hub.js sets this when the caller
+      // budget expired without cancelling the effector, so "it failed" and "it
+      // worked" are BOTH unproven. Read straight off the outcome like
+      // `unverified` — and deliberately NOT folded into `unverified`, because
+      // this one also forbids a retry (an unverified action is safe to attempt
+      // again; one that may already have sent a WhatsApp message is not).
+      abortedInFlight: !dispatchOk && Boolean(outcome && outcome.effectMayHaveLanded),
+      abortReason: (outcome && typeof outcome.reason === 'string' && outcome.reason) || null,
       result,
       rawError,
       reason: isUnverified ? String(outcome.reason || 'no confirmation available') : null,
@@ -454,134 +470,6 @@ function createLiveToolAdapter(deps) {
     return `${toolName} ran but could NOT be confirmed: ${reason || 'no confirmation available'}. Do not tell the operator it worked.`;
   }
 
-  // BUG-116 — 2026-08-05 17:13:04: "The click went through, and the screen did
-  // change afterwards", 49 seconds after see_and_click came back ok:false. Same
-  // shape at 17:10 twice ("I've played Starboy" over error 153, "YouTube is now
-  // present" over a Chrome window).
-  //
-  // On Live there is no turn boundary of ours to correct at — Gemini speaks its
-  // own audio as results arrive, so the text inside the functionResponse is the
-  // ONLY thing that teaches it what happened, both for the sentence it is
-  // speaking now and for the rest of the retained session. status:'started' and
-  // status:'unverified' both carried an explicit prohibition; the failure
-  // branches — the ones with the strongest reason to — carried a bare error
-  // string and nothing else. The status field is for us; the model reasons over
-  // the prose. Hence one shared sentence, used on every "this did not happen"
-  // reply, awaited or late.
-  const NO_SUCCESS_CLAIM = 'This action did NOT succeed. Tell the operator plainly that it failed and what ' +
-    'failed. Do NOT claim it worked, do NOT claim the screen or anything else changed as a result, and do ' +
-    'NOT describe it as done later in this conversation either.';
-
-  function failedNarration(toolName, detail) {
-    return `${toolName} FAILED: ${detail} ${NO_SUCCESS_CLAIM}`;
-  }
-
-  // BUG-273 B1 — 2026-08-18. The operator logged an incident reading "Your tools
-  // are lying. Your tools are not wired properly." immediately after
-  // launch_app('wt'). The effector was already honest: ok:true + unverified:true,
-  // reason "launched, but no windowed process matching the name could be
-  // confirmed; a later focus_window/ui_type has no trustworthy target." MYTHOS
-  // told the operator it had opened Windows Terminal.
-  //
-  // ROOT CAUSE, and it is NOT the instruction-following failure it looks like.
-  // Three paths narrate an unverified outcome to a Live model, and they did not
-  // agree with each other:
-  //   * the awaited branch below appended 'Report only that it was attempted.'
-  //   * reportLateOutcome appended NOTHING — it kept the neutral default
-  //     'Report this to the operator accurately.', because only its FAILURE
-  //     branch escalated to NO_SUCCESS_CLAIM.
-  //   * resolveLiveConfirm inlined its prohibition into `verdict`, i.e. into the
-  //     audit record, and also left its instruction neutral.
-  // BUG-272 slice 4 (190cd74) then moved launch_app into SLOW_TOOLS for sound
-  // duration reasons — which silently moved its narration off the strongest of
-  // those three paths and onto the weakest. The tool did not get less honest; the
-  // sentence carrying its honesty did. Everything else in SLOW_TOOLS that can
-  // return unverified had the same hole: spotify_play, cua_click, screen_look,
-  // camera_look, browser_switch, dsh_task.
-  //
-  // Q6 — WHAT CLASS IS THIS AN INSTANCE OF? The third occurrence of one invariant.
-  // BUG-068: only the late path honored `unverified`, so the awaited path reported
-  // status:'ok' over an unprovable ui_type. BUG-116: the failure branches carried a
-  // bare error string and nothing else, so the model narrated a click it had just
-  // failed to make. Both were closed by making ONE shared sentence mandatory on
-  // EVERY branch of one kind. Twice is a pattern, so this is deliberately not a
-  // third per-branch patch: test/bug-273-unverified-payload.test.js enumerates all
-  // three narration paths and asserts the sentence on each — the assertion those
-  // two fixes never wrote down.
-  //
-  // Q8 — DELIBERATELY NOT COLLAPSED INTO A FAILURE. effectors/evidence.js is
-  // explicit that unverified means "it may well have landed, we simply cannot
-  // prove it", and reporting that as a failure would make MYTHOS deny things it
-  // actually did — its own kind of lying. So this forbids BOTH claims, and the
-  // test pins that both halves are present. Reusing NO_SUCCESS_CLAIM verbatim here
-  // was the easy move and would have been wrong.
-  const UNVERIFIED_NO_PROOF_CLAIM = 'There is NO proof either way about this action. Tell the operator ' +
-    'plainly what was attempted and what could not be confirmed. Do NOT say it worked, is done, is open, ' +
-    'or is ready, and do NOT describe it as done later in this conversation either. Do NOT claim it FAILED ' +
-    'either — that is equally unproven.';
-
-  // BUG-273 B2 — the sibling claim, for an outcome with a CONFIRMED step.
-//
-  // The claim above is correct when nothing is known and wrong when something is:
-  // applied to a working browser hand-off it forbids "is open" and "is ready",
-  // i.e. it gags the model about the fact the operator actually asked for. This one
-  // permits exactly the confirmed part and fences off the rest, so the honesty
-  // invariant is preserved without inventing doubt about a step that is not in
-  // doubt. B1s rule still holds — every unverified branch carries A prohibition —
-  // and bug-273-b2-handoff-wording.test.js pins that the no-proof case keeps the
-  // stricter wording verbatim.
-  const UNVERIFIED_PARTIAL_CLAIM = 'State the confirmed part plainly — it happened. Then say the rest is ' +
-    'not confirmed, and do not claim the rest: not now, and not later in this conversation. Do NOT report ' +
-    'the whole action as done, and do NOT report it as FAILED either.';
-
-  // BUG-295 — 2026-08-20. THE MISSING THIRD CASE. The two claims above cover an
-  // outcome that FAILED and an outcome that is UNVERIFIED. Neither covers a tool
-  // that SUCCEEDS and hands back no readable body, and that is the shape that
-  // produced the worst narration this project has logged.
-  //
-  // browser_navigate returned, verbatim from the session log:
-  //   {"url":"https://www.google.com/search?q=weather+in+Kolkata+current",
-  //    "title":"weather in Kolkata current - Google Search","newTab":true,"browser":"chrome"}
-  // ok:true, no error, nothing unverified — a truthful report of a NAVIGATION.
-  // MYTHOS then told the operator it was 28C with thunderstorms and high
-  // humidity. Every number and every condition was invented. Nothing in that
-  // payload says "you have not read this page", so a successful navigate reads
-  // to the model as having SEEN the page, and it supplies the rest from weights.
-  //
-  // Q1 — WHAT ELSE MATCHES THIS? Every tool that can succeed while returning no
-  // readable body. The population is larger than this list: browser_click and
-  // browser_type change a page and return no body; cua_click and focus_window do
-  // the same to a window. THE NARROWNESS IS DELIBERATE — these two are the only
-  // two with a LOGGED fabrication behind them, and a guard that quietly
-  // generalises is a guard nobody can reason about. Those others are known-blind;
-  // widening this list needs its own evidence, and the bug-291 path matrix is
-  // where the widening gets asserted.
-  //
-  // Q2 — DOES THIS HIDE EVIDENCE? No. It appends an instruction and leaves the
-  // payload whole: the URL, the title and the browser still reach the model, so
-  // the diagnostic trail is unchanged. And it is the LAST branch on every path,
-  // so a failure or an unverified outcome keeps its stronger prohibition — two
-  // prohibitions on one outcome would disagree with each other.
-  //
-  // Q8 — get_weather is DELIBERATELY NOT TOUCHED. It returned ok ten times that
-  // same day; the model bypassed a working tool. The defect is narration, not the
-  // effector, and nobody should "fix" from-system.js on the strength of this bug.
-  const NO_CONTENT_CLAIM = 'This returned NO page content — you have NOT read this page, only opened it. ' +
-    'Report only that it is open, and call a read tool if you need what it says. Do NOT state, summarise ' +
-    'or answer from anything on the page: not now, and not later in this conversation either.';
-
-  // Keyed on tool NAME, not on payload shape. A shape probe would have to decide
-  // what counts as "readable", and every one of these payloads is a legitimate
-  // success object — the thing that makes them content-free is what the tool
-  // does, which only its name knows. See Q1 above for why the list is this short.
-  const NO_CONTENT_TOOLS = {
-    browser_navigate: true,
-    open_web: true,
-  };
-
-  function returnsNoReadableContent(toolName) {
-    return NO_CONTENT_TOOLS[toolName] === true;
-  }
 
   // BUG-273 B1, second half. Q4 — WHAT IS STANDING NEXT TO IT? On the awaited
   // branch the hedge lived in `message` while the effector's raw, success-shaped
@@ -691,7 +579,14 @@ function createLiveToolAdapter(deps) {
           const noContent = returnsNoReadableContent(entry.tool);
           let instruction;
           let claim;
-          if (entry.unverified) {
+          if (entry.abortedInFlight) {
+            // BUG-398 R5a, path 3 of 4. First, for the same reason BUG-297 had
+            // to put `unverified` first: this entry carries ok:false, so the
+            // failure branch below would tell the model an action that may have
+            // sent a message did not happen.
+            instruction = ABORTED_IN_FLIGHT_CLAIM;
+            claim = 'aborted-in-flight';
+          } else if (entry.unverified) {
             instruction = entry.confirmedStep ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
             claim = entry.confirmedStep ? 'unverified-partial' : 'unverified';
           } else if (!entry.ok) {
@@ -860,7 +755,20 @@ function createLiveToolAdapter(deps) {
         const outcome = settled.outcome;
         const ev = evaluateOutcome(outcome);
         let summary, response;
-        if (!ev.dispatchOk) {
+        if (ev.abortedInFlight) {
+          // BUG-398 R5a, path 1 of 4. Checked BEFORE the failure branch: this
+          // outcome IS `ok:false`, so the branch below would otherwise claim it
+          // failed. status:'unverified' rather than a new value — the model
+          // already knows that one means "no proof either way", and inventing a
+          // fourth status would be vocabulary nothing else in this file reads.
+          const why = ev.abortReason || sanitizeResultError(ev.rawError);
+          summary = `${call.name} was not confirmed: ${why}`.slice(0, 200);
+          response = {
+            status: 'unverified',
+            message: `${call.name} was NOT CONFIRMED: ${why}. ${ABORTED_IN_FLIGHT_CLAIM}`,
+            result: unverifiedPayload(call.name, why, ev.result, null),
+          };
+        } else if (!ev.dispatchOk) {
           const reason = sanitizeResultError(ev.rawError);
           summary = reason.slice(0, 200);
           // BUG-116: `error` alone left the model free to narrate the click it
@@ -904,7 +812,7 @@ function createLiveToolAdapter(deps) {
         // tell a partial hand-off from a wholly unproven outcome exactly as the other
         // three paths do.
         commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified,
-          confirmedStep: ev.confirmedStep, summary });
+          abortedInFlight: ev.abortedInFlight, confirmedStep: ev.confirmedStep, summary });
         responses.push({ id: call.id, name: call.name, response });
       } catch (err) {
         const reason = sanitize(err);
@@ -930,7 +838,14 @@ function createLiveToolAdapter(deps) {
     // also the liveTurnActions summary, i.e. the audit/episodic record, which
     // must stay a plain statement of what happened.
     let instruction = 'Report this to the operator accurately.';
-    if (!ev.dispatchOk) {
+    if (ev.abortedInFlight) {
+      // BUG-398 R5a, path 2 of 4 — the SLOW_TOOLS path. whatsapp_send is not in
+      // SLOW_TOOLS today, but spotify_play/cua_click/dsh_task are, and any of
+      // them can blow the budget after acting. Before the failure branch, same
+      // reason as the awaited site.
+      verdict = `${toolName} was NOT CONFIRMED: ${ev.abortReason || sanitizeResultError(ev.rawError)}`;
+      instruction = ABORTED_IN_FLIGHT_CLAIM;
+    } else if (!ev.dispatchOk) {
       // Same unwrapping as the awaited path above: effectors put the message in
       // result.error, and handing the whole object to sanitizeResultError loses it.
       verdict = `${toolName} FAILED: ${sanitizeResultError(ev.rawError)}`;
@@ -954,11 +869,16 @@ function createLiveToolAdapter(deps) {
       if (returnsNoReadableContent(toolName)) instruction = NO_CONTENT_CLAIM;
     }
     // BUG-357: late outcomes are cross-turn facts by definition.
-    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified, summary: verdict };
+    // BUG-398 R5a: `abortedInFlight` rides on the entry for the same reason
+    // BUG-297 put `unverified` there — the late-for-turn site re-narrates from
+    // the entry alone, and a discriminator it cannot see is one it gets wrong.
+    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified,
+      abortedInFlight: ev.abortedInFlight, summary: verdict };
     liveTurnActions.push(lateEntry);
     recentActionLedger.record(lateEntry);
     sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
-      claim: !ev.dispatchOk ? 'failed' : (ev.unverified ? (ev.confirmedStep ? 'unverified-partial' : 'unverified') : 'ok') });
+      claim: ev.abortedInFlight ? 'aborted-in-flight'
+        : (!ev.dispatchOk ? 'failed' : (ev.unverified ? (ev.confirmedStep ? 'unverified-partial' : 'unverified') : 'ok')) });
   }
 
   // The one way to reach a model whose turn has already closed. A
@@ -1048,6 +968,21 @@ function createLiveToolAdapter(deps) {
       verdict = expired
         ? `The confirmation request for ${pending.name} EXPIRED — nobody answered it in time. This is NOT a decline.`
         : 'The operator DECLINED that action.';
+    } else if (accepted && outcome && outcome.effectMayHaveLanded) {
+      // BUG-398 R5a, path 4 of 4 — AND THE ONE THE MEASURED INCIDENT CAME
+      // THROUGH. whatsapp_send is tier 3 and NEVER_TRUSTABLE (leash/index.js),
+      // so it is always confirmed and its outcome always arrives here, not on
+      // the awaited branch. On 2026-09-02 this said "APPROVED … but it FAILED:
+      // tool-timeout" over a message the operator had already received, and the
+      // model offered to send it again.
+      //
+      // Read off `outcome` rather than an `ev` because this path never calls
+      // evaluateOutcome — it computes its own two booleans above, which is
+      // exactly the divergence BUG-273 B1 found here. The flag is checked before
+      // `!ok` for the same reason it is on the other three paths.
+      verdict = `The operator APPROVED ${pending.name} and it RAN, but the outcome could NOT be confirmed: `
+        + String((outcome && outcome.reason) || 'the caller budget expired before it reported back');
+      instruction = ABORTED_IN_FLIGHT_CLAIM;
     } else if (!ok) {
       verdict = `The operator APPROVED ${pending.name} but it FAILED: ${String((outcome && outcome.result) || 'unknown')}`;
       instruction = NO_SUCCESS_CLAIM;
