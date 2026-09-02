@@ -17395,7 +17395,89 @@ with no skills at all.
 
 ## BUG-268 — Ctrl+Alt+X (screen text capture / OCR) does nothing
 
-**OPEN, UNDIAGNOSED. Operator-reported 2026-08-17 from the first real Electron
+**Status:** 🔴 OPEN, and it is **BLOCKED ON ONE KEYPRESS**, not on engineering.
+Narrowed 2026-09-02 from five candidates to two, and a separate real defect was
+found in its test coverage. No code fix is claimed.
+
+> ### 🔍 NARROWED 2026-09-02. Three of the five candidates are eliminated from evidence.
+>
+> **The instrumentation shipped on 2026-08-20 has never reported, because the key
+> has never been pressed in a run that carries it.** Measured against the
+> operator's own `%APPDATA%\MYTHOS` logs:
+>
+> | marker | boundary | occurrences |
+> |---|---|---|
+> | `OCR-grab hotkey registered: Control+Alt+X` | registration | **8** — every boot |
+> | `OCR-grab hotkey fired` | 1 (the keypress) | **0** |
+> | `ocr.hotkey.received` | 2 (server entry) | **0** |
+> | `ocr.hotkey.dispatched` | 2 (server outcome) | **0** |
+> | `ocr-result` | 3 (HUD) | **0** |
+>
+> **ELIMINATED — "another app holds the accelerator".** It registers cleanly on
+> all 8 boots, so the registration branch of the decision table is closed.
+>
+> **ELIMINATED — "the capture step" and "the OCR call itself"**, which are two of
+> the three candidates this entry names. `screen_read_text` demonstrably WORKS on
+> this machine: `mythos-server.log` carries 8+ `pc-child response
+> cmd:"screen_read_text" ok:true` rows at **286–721 ms**, several on 2026-09-02,
+> reached through the voice path. Whatever is wrong is not GDI capture and not
+> the WinRT OCR call.
+>
+> **WHAT IS LEFT:** the keypress not reaching the `globalShortcut` callback, or
+> delivery after the dispatch (the fork IPC channel, the broadcast, or the PIN
+> gate eating the result). One press in a running build separates them, exactly
+> as the 2026-08-20 read-in-order guide describes.
+>
+> ### The real defect found here: nine tests, none able to see the pipeline break
+>
+> `test/electron-ocr-hotkey.test.js` has nine assertions and every one is a
+> source-shape regex over the file text — `assert.match(SERVER_INDEX,
+> /mythos:ocr-grab/)`, `assert.match(SERVER_INDEX, /dispatchAction\(\{ tool:
+> 'screen_read_text'/)` and so on.
+>
+> **Probed 2026-09-02:** renaming the channel the handler matches on
+> (`'mythos:ocr-grab'` → `'mythos:ocr-grab-DISABLED-BY-PROBE'`) disables the
+> whole feature while leaving every string those regexes look for in the file
+> verbatim. Result: **9 tests, 9 pass, 0 fail.** They are structurally incapable
+> of observing the defect they were written for — the false-green class, and
+> precisely this entry's own stated lesson ("a green suite is not evidence that
+> the desktop app works") turned into a measurement. Source restored
+> sha256-identical.
+>
+> ### A DEAD END, recorded so the next session does not repeat it
+>
+> An attempt to close boundary 2 with a behavioural test **failed and was NOT
+> shipped**, because its premise could not be established. What was tried:
+> `fork()` the real entry (`mythos/src/main.js`, the same path
+> `electron/main.js:289` forks), wait for `lifecycle.alive`, then
+> `child.send({ channel: 'mythos:ocr-grab' })`.
+>
+> Observed: boot reaches ALIVE on the test port, `child.connected` is `true`,
+> `send()` returns `true` — and no boundary-2 marker appears. Reproduced three
+> times.
+>
+> **That is NOT evidence the handler is dead, and must not be written up as
+> such.** Two controls say the observation channel itself is unreliable:
+> - A stub child receives the identical message **instantly**, so the fork
+>   harness delivers.
+> - A plain `console.log` inserted at the FIRST LINE of `createServer` — verified
+>   present in the file by reading it back — **also failed to appear** in the
+>   captured stdout, while the JSON logger's own lines appeared throughout. Since
+>   `createServer` is called unconditionally at `src/main.js:858` and the server
+>   demonstrably boots, that line must have executed. So the capture is dropping
+>   output, and any conclusion drawn from its silence is worthless.
+>
+> Anyone picking this up should either solve the stdout capture first or drive
+> the handler in-process instead of across a fork. Do not re-derive the
+> non-response as a finding; it is a harness artefact until proven otherwise.
+>
+> ### What is actually needed
+>
+> One press of Ctrl+Alt+X in a running MYTHOS, then grep the five markers in the
+> table above in order. That is a minute of operator time and no amount of
+> engineering substitutes for it — the same class as BUG-021 and BUG-027.
+
+**Original filing, kept in full:** OPEN, UNDIAGNOSED. Operator-reported 2026-08-17 from the first real Electron
 sitting, and explicitly DEPRIORITISED by the operator the same day** — "not one
 of the most important features I'm looking to do a pass right now", fix later.
 Recorded now so the observation is not lost with the session.
