@@ -35,7 +35,7 @@ const { logCommitmentIfPresent } = require('../effectors/from-calendar');
 
 // F3: detector-only sibling of the unverified/started evidence discipline
 // above — see claim-check.js for the full contract.
-const { detectUnbackedClaims, buildSpokenGoAheadNotice } = require('./claim-check');
+const { detectUnbackedClaims, buildSpokenGoAheadNotice, detectUnscheduledCommitments } = require('./claim-check');
 
 // BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
 // the file-size ratchet; full rationale in that module.
@@ -1301,6 +1301,35 @@ function createLiveToolAdapter(deps) {
           `CORRECTION of your own prior statement — you said "${claim.phrase}" but that action did NOT happen (${detail}).`,
           'Retract this aloud now: tell the operator plainly that it did not happen. Do NOT repeat the claim again later in this conversation.',
           { site: 'ad4-correction-retract', tool: failedTool || null, claim: 'retract' },
+        );
+      }
+
+      // BUG-398 D1 (2026-09-02): a promised RECURRING commitment with nothing
+      // scheduled. Deliberately a second pass rather than a seventh claim
+      // category — the detector above skips future tense, correctly, and every
+      // instance of this was future tense. Measured: `reminder_add` ran ZERO
+      // times in the 2026-09-02 session while MYTHOS promised a daily 10 AM
+      // WhatsApp briefing three times; what it actually called was `remember`,
+      // which stores a fact, schedules nothing, and returns ok:true — so the
+      // evidence-based checks above saw a successful tool and stayed quiet.
+      for (const promise of detectUnscheduledCommitments(
+        assistantText, actionsThisTurn, recentActionLedger.forClaims())) {
+        if (bus && typeof bus.emit === 'function') {
+          bus.emit('health.anomaly', {
+            kind: 'promised-schedule-not-created',
+            tool: 'recurring-commitment', target: 'recurring-commitment',
+            claim: promise.sentence, sawTools: promise.sawTools,
+          });
+        }
+        sendSystemNotice(
+          `CORRECTION of your own prior statement — you said "${promise.sentence}" but NOTHING was scheduled. `
+          + 'No reminder, timer or daily plan was created this turn, so nothing will fire. '
+          + 'Note that `remember` stores a fact and schedules NOTHING.',
+          'Tell the operator now, plainly, that the recurring item is NOT set up yet. Do NOT repeat the '
+          + 'promise. If they still want it, call reminder_add (or timer_add / daily_plan) and say so only '
+          + 'once that has succeeded.',
+          { site: 'bug398-d1-unscheduled-commitment', tool: 'recurring-commitment',
+            claim: 'promised-schedule-not-created' },
         );
       }
     }

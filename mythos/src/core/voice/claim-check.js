@@ -340,4 +340,99 @@ function buildSpokenGoAheadNotice(utterance, pendingToolNames, opts) {
   };
 }
 
-module.exports = { detectUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice };
+// ---------------------------------------------------------------------------
+// BUG-398 D1 — a promised RECURRING commitment with nothing scheduled.
+//
+// A DIFFERENT PREDICATE FROM EVERYTHING ABOVE, which is why it is its own
+// function rather than a seventh CLAIM_CATEGORY. detectUnbackedClaims asks "did
+// this completed-aspect claim have a successful tool behind it", and it is right
+// to skip future tense (FUTURE_RE) — "I'll open that next" is a plan, not a lie.
+// But a recurring commitment is a promise about the FUTURE that is already false
+// when it is made, because the thing that would honour it was never created.
+// Skipping future tense is exactly what let all three of these through.
+//
+// MEASURED, 2026-09-02 session, and re-measured against this file before writing
+// a line of it — all three of these returned [] from detectUnbackedClaims:
+//   "The news will be delivered daily at 10 AM precisely."
+//   "I will update you tomorrow at 10 AM as scheduled."
+//   "I've set up a daily briefing for you at 10 AM every morning."
+// `reminder_add` ran ZERO times all session. There was no reminder store in the
+// vault at all. What the model called instead was `remember`, which stores a
+// FACT and schedules nothing — and which returns ok:true, so every
+// evidence-based check in this file sees a successful tool and stays quiet. The
+// system caught its own lie one turn later, when `reminder_approve_action`
+// answered `No reminder matching "Daily 10 AM AI news briefing…"`.
+//
+// Q1 — WHAT ELSE MATCHES THIS? Any commitment MYTHOS cannot keep without a
+// scheduler: daily, weekly, hourly, "every morning", "each Monday". Keyed on the
+// recurrence marker plus a first-person or delivery-promise shape in the SAME
+// sentence, never on the word "daily" alone — "your daily briefing is usually
+// quiet" is not a promise.
+//
+// Q8 — A READ SATISFIES IT TOO, DELIBERATELY. If the model called reminder_list
+// or timer_list this turn it has grounds to TALK about a schedule that already
+// exists ("it's set for 10 AM daily"), and firing there would be the
+// existence-vs-agreement trap in reverse: punishing an accurate report. Only a
+// turn that promises recurrence while neither creating nor reading a schedule is
+// flagged.
+const RECURRENCE_RE = /\b(?:dail(?:y|ies)|every\s+(?:day|morning|evening|night|week|month|hour|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d+\s*(?:minutes?|hours?|days?))|each\s+(?:day|morning|evening|week|month)|weekly|hourly|monthly|every\s+single\s+day)\b/i;
+
+// The commitment shape: MYTHOS undertaking to do it, or promising delivery.
+// "will be delivered/sent/posted" is included because the session's worst
+// instance was passive ("The news will be delivered daily at 10 AM").
+const COMMITMENT_RE = /\b(?:i'll|i will|i've|i have|i am going to|i'm going to)\b|\bwill be (?:delivered|sent|posted|shared|updated|briefed)\b|\byou'll (?:get|receive|have)\b/i;
+
+// Tested BEFORE the positive above it, the same rule the MARK table in
+// build-index.js states and for the same reason. Found by attacking this guard
+// after it was written and green: "I will NOT send it daily unless you ask" is a
+// REFUSAL to schedule, and it flagged as a broken promise. Harmless in effect —
+// the model would get a notice agreeing with it — but a guard that fires on
+// correct behaviour is a guard that gets muted, and this one has to survive the
+// turns where MYTHOS is being careful.
+const NOT_A_COMMITMENT_RE = /\b(?:i\s+(?:will|'ll)\s+not|i\s+won'?t|i\s+am\s+not\s+going\s+to|i'?m\s+not\s+going\s+to|i\s+(?:can'?t|cannot|could\s+not|couldn'?t))\b|\bwill\s+not\s+be\s+(?:delivered|sent|posted|shared|updated|briefed)\b/i;
+
+// Tools that actually create a schedule. Taken from the voice allowlist in
+// live-tools.js — a name not reachable by voice could never satisfy this.
+const SCHEDULE_WRITE_TOOLS = ['reminder_add', 'timer_add', 'daily_plan'];
+// Tools that READ one. See Q8 above.
+const SCHEDULE_READ_TOOLS = ['reminder_list', 'timer_list'];
+
+// Pure, exported, separately testable — same contract as detectUnbackedClaims.
+// Returns [] when nothing is flagged, or one entry per flagged sentence:
+// { category:'recurring-commitment', sentence, sawTools }.
+function detectUnscheduledCommitments(assistantText, actionsThisTurn, recentActions) {
+  const text = String(assistantText || '');
+  if (!text) return [];
+
+  const current = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
+  const recent = Array.isArray(recentActions) ? recentActions : [];
+  const actions = current.concat(recent);
+
+  // `ok === true` and not unverified: a scheduling call that FAILED or could not
+  // be confirmed has not created anything, so it must not silence the promise.
+  // This is the one place in this file where `unverified` is checked explicitly
+  // rather than through ok — an unverified reminder_add is precisely the state
+  // where a confident recurring promise is still wrong.
+  const satisfied = actions.some((a) => a && a.ok === true && a.unverified !== true
+    && (SCHEDULE_WRITE_TOOLS.indexOf(a.tool) !== -1 || SCHEDULE_READ_TOOLS.indexOf(a.tool) !== -1));
+  if (satisfied) return [];
+
+  const out = [];
+  for (const sentence of splitSentences(text)) {
+    if (!RECURRENCE_RE.test(sentence)) continue;
+    if (NOT_A_COMMITMENT_RE.test(sentence)) continue; // negative before the positive
+    if (!COMMITMENT_RE.test(sentence)) continue;
+    out.push({
+      category: 'recurring-commitment',
+      sentence: sentence.trim().slice(0, 300),
+      sawTools: actions.map((a) => a && a.tool).filter(Boolean),
+    });
+    break; // one flag per reply, same rule the categories above follow
+  }
+  return out;
+}
+
+module.exports = {
+  detectUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice,
+  detectUnscheduledCommitments, SCHEDULE_WRITE_TOOLS, SCHEDULE_READ_TOOLS,
+};
