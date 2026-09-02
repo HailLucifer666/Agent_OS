@@ -3957,10 +3957,10 @@
       {
         "n": 398,
         "shape": "entry",
-        "state": "open",
-        "title": "the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation (🔴 NOT STARTED — diagnosis complete)",
+        "state": "verified",
+        "title": "the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation",
         "detail": {},
-        "excerpt": "**NOT STARTED — no code has been written for any finding below.** **Status:** 🔴 PARTIALLY FIXED — row 1 closed 2026-09-02 (commit `60c98ed`), the rest still open. Full dossier with verbatim errors, measurements and per-finding prevention notes: [`LIVE-SESSION-FINDINGS-2026-09-02.md`](LIVE-SESSION-FINDINGS-2026-09-02.md). **Read that file's section 0 (what already works — do not break it) and section 9 (five ways the measurements were wrong) before planning.** ### What is closed, and what the root-cause pass changed about the plan **Closed:** row 1, the duplicate-WhatsApp path — the only irreversible failure mode in the session. It was not an effector bug. `hub.js`'s caller-abort returned a bare `ok:false`, so all four narration sites in `live-tool-adapter.js` reported an uncancelled, possibly-completed action as FAILED. It now carries `effectMayHaveLanded` alongside `ok`/`result` (never…"
+        "excerpt": "**Status:** ✅ FIXED 2026-09-02, mutation-proven. Every one of the 13 measured rows is closed, and three of them closed by DISPROVING the finding rather than by writing code — those are called out below, because a wrong premise left in a ticket is worse than no premise. Full suite 7050 pass / 0 fail / 0 skipped. Nine commits on `fix/bug-398-r5a-aborted-in-flight`: | Commit | Rows | |---|---| | `60c98ed` | 1 — the aborted-in-flight outcome (the only irreversible path) | | `4e4e663` | BUG-399 cause 2, found while measuring this ticket | | `38e884c` | BUG-399 causes 1 and 3 | | `e28c03a` | 11 — the register read a partially-fixed ticket as done; plus the corrected causes | | `aff8011` | 8 — a promised recurring commitment with nothing scheduled | | `45bb24a` | 4, 5, 6, 7 — the narration cluster | | `cd3fec3` | 13 + E4 — the shared reasoning budget, and voice can scroll | | `c13a1c8` | 2 — tw…"
       },
       {
         "n": 399,
@@ -3972,9 +3972,9 @@
       }
     ],
     "counts": {
-      "verified": 62,
+      "verified": 63,
       "fixed": 174,
-      "open": 7,
+      "open": 6,
       "coded": 2,
       "diagnosed": 1,
       "duplicate": 2,

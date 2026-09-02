@@ -147,15 +147,95 @@ Two genuinely load-sensitive tests were also observed locally and are recorded s
 
 ---
 
-## BUG-398 — the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation (🔴 NOT STARTED — diagnosis complete)
+## BUG-398 — the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation (✅ FIXED 2026-09-02 — all 13 rows addressed, 3 of them by correcting the diagnosis)
 
-**NOT STARTED — no code has been written for any finding below.**
+**Status:** ✅ FIXED 2026-09-02, mutation-proven. Every one of the 13 measured
+rows is closed, and three of them closed by DISPROVING the finding rather than
+by writing code — those are called out below, because a wrong premise left in a
+ticket is worse than no premise. Full suite 7050 pass / 0 fail / 0 skipped.
 
-**Status:** 🔴 PARTIALLY FIXED — row 1 closed 2026-09-02 (commit `60c98ed`), the
-rest still open. Full dossier with verbatim errors, measurements and per-finding
-prevention notes: [`LIVE-SESSION-FINDINGS-2026-09-02.md`](LIVE-SESSION-FINDINGS-2026-09-02.md).
-**Read that file's section 0 (what already works — do not break it) and section 9
-(five ways the measurements were wrong) before planning.**
+Nine commits on `fix/bug-398-r5a-aborted-in-flight`:
+
+| Commit | Rows |
+|---|---|
+| `60c98ed` | 1 — the aborted-in-flight outcome (the only irreversible path) |
+| `4e4e663` | BUG-399 cause 2, found while measuring this ticket |
+| `38e884c` | BUG-399 causes 1 and 3 |
+| `e28c03a` | 11 — the register read a partially-fixed ticket as done; plus the corrected causes |
+| `aff8011` | 8 — a promised recurring commitment with nothing scheduled |
+| `45bb24a` | 4, 5, 6, 7 — the narration cluster |
+| `cd3fec3` | 13 + E4 — the shared reasoning budget, and voice can scroll |
+| `c13a1c8` | 2 — two predicates under one name, and nothing to join them |
+| `f259619` | E5 + E3 — the widget that was always reachable, and the browser limit |
+
+Full dossier with verbatim errors and measurements:
+[`LIVE-SESSION-FINDINGS-2026-09-02.md`](LIVE-SESSION-FINDINGS-2026-09-02.md).
+**Read that file's section 0 (what already works) and section 9 (five ways the
+measurements were wrong) before touching this area** — and note that this pass
+added a sixth and seventh instance of section 9's own lesson.
+
+### THREE FINDINGS WERE WRONG. Do not rebuild them.
+
+1. **Row 2 did not cause row 1, and the guard it asked for would assert a
+   falsehood.** The two `ok` fields measure different things — the Audit row's
+   is dispatch-level, the turn record's is evidence-level — and both are correct
+   for an unverified action. `claim-check.js` depends on that fold to stop an
+   unverified action backing a completion claim, so unfolding it would have
+   weakened the honesty detector. What was actually missing: nothing could JOIN
+   the two records. Fixed by carrying `dispatchOk` under its own name and a
+   `traceId`, then asserting the comparison that IS correct.
+2. **Row 12 (`browser_launch_debug` returning ok with no CDP) never happened.**
+   Settled by reading the vault, not the code: the episodic payload is
+   `{"launched":true,"mode":"cdp","pageCount":1,…}`, so `connectOverCDP`
+   genuinely succeeded and saw a page. Two calls, not three. The "port
+   unreachable, chrome.exe count 0" was measured at a different time than the
+   call — a sixth instance of section 9's instrument traps. The ECONNREFUSED
+   spam all session is the auto-connect poller, which runs every 15s while
+   offline by design.
+3. **E5 (the media widget "unreachable") was reachable the whole time.**
+   `manage_widget` is tier 1, on the voice allowlist, and its synonym table maps
+   "music", "music player", "now playing", "player" and "spotify" to the media
+   widget. MYTHOS's "there isn't a specific music widget I can open" was a FALSE
+   CAPABILITY DENIAL — row 5's class, one step earlier: a confident claim about
+   itself made without calling anything. Nothing to build; the route is now
+   pinned so a refactor cannot make the denial retroactively true.
+
+### Row 4 and 5 were LARGER than filed, measured before fixing
+
+The nine verbatim overstatements were fed to `detectUnbackedClaims` with their
+real tool batches. **It caught one.** The dossier pointed at the right turns and
+named the wrong mechanism: the phrasing that actually appeared was PROGRESSIVE
+("Google News is opening on a new tab"), not completed-aspect, so no existing
+tier could see it however it was worded — and one sentence ("Closing the music
+news widget") had no category owning its verb at all. A progressive tier and a
+`window-control` category close both. Also found live and fixed: `open_folder`
+and `open_file` were in NO claim category, so a SUCCESSFUL `open_folder` could
+not back "I opened the Downloads folder" and a true statement was being flagged.
+
+### Still open, and deliberately not decided here
+
+- **E7 — Gemini TTS is first in `VOICE_TTS_CHAIN` with an exhausted quota** (20
+  failovers, and the operator heard two voices at once). The fix is a config
+  change to the operator's own gitignored `.env`
+  (`VOICE_TTS_PROVIDER=kokoro`, chain `kokoro,edge,piper,gemini`) plus a
+  restart. **Operator action, not a code change.** The separate half — one TTS
+  engine cannot be reliably cancelled, so failover can double-speak — is a real
+  defect and is NOT fixed here.
+- **Row 13's honesty correlation is still unvalidated.** The confirmed half (one
+  shared budget across every surface, and a refusal that implied the caller
+  spent it) is fixed. Raising the budget for voice turns doubles what an
+  expensive lane can spend and rests on 5 samples the dossier itself says to
+  validate first — a cost decision for the operator.
+- **E8 `gmail_unread`** — one `T1 fail` with no reason captured. Re-measure
+  before investigating; there is nothing to act on.
+- **E9 `navigate` chosen for a URL** — the tool already refuses honestly and
+  names why. Refusing at schema level would buy nothing over an honest refusal.
+- **E10 `loop.stalled` ×255** — event-loop lag, log-only by design. Not a
+  defect; a performance follow-up if voice sluggishness is ever measured.
+- **`ok` is not renamed to `proven`.** It would read better than an
+  evidence-level field called `ok`, but four test files assert the current name
+  as AD-4's guarantee and the added `dispatchOk` removes the ambiguity that
+  mattered. A choice, not an oversight.
 
 ### What is closed, and what the root-cause pass changed about the plan
 

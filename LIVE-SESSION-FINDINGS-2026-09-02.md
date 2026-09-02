@@ -15,7 +15,25 @@ such and were decisive twice (the WhatsApp delivery, the app-picker dialog).
 Section 0 lists what is working and must survive. Section 9 lists five ways my own
 measurements were wrong today, so the next session does not repeat them.
 
-> **UPDATE 2026-09-02, after a root-cause pass. Three things in this dossier are
+> **CLOSED 2026-09-02. All 13 rows of BUG-398 are addressed — see that ticket for
+> the commit table. FIVE things in this dossier turned out to be wrong, and the
+> measurements are still not among them: every correction below came from
+> re-measuring something this file recorded accurately.**
+>
+> 4. **E5 was reachable the whole time.** `manage_widget` is tier 1, on the voice
+>    allowlist, and maps "music", "music player", "now playing", "player" and
+>    "spotify" to the media widget. "There isn't a specific music widget I can
+>    open" was a FALSE CAPABILITY DENIAL, not a missing tool — §2's class, one
+>    step earlier.
+> 5. **§9 needs a sixth and seventh entry, both earned during the fix.** (6) Two
+>    of E1's three "ok with no CDP" calls were two calls, and their episodic
+>    payload proves CDP connected — the machine was measured at a different
+>    moment than the call. (7) The claim detector caught **1 of the 9**
+>    overstatements when they were replayed against it, so §2's counts were right
+>    and its stated mechanism was not: the sentences were PROGRESSIVE, which no
+>    tier could see.
+>
+> **UPDATE 2026-09-02, after the root-cause pass. Three things in this dossier are
 > wrong; the measurements are not.**
 >
 > 1. **D2 is FIXED** (commit `60c98ed`) — and it was never a `whatsapp_send`
