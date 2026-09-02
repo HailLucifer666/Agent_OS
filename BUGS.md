@@ -749,10 +749,108 @@ for being correct.
 
 ## BUG-394 — an entry can wear text that is not its own: the last entry swallows the whole register, and the bullet patterns read nested follow-ups (FILED 2026-08-28, OPEN)
 
-**Status:** OPEN — filed, measured, deliberately not repaired inside BUG-393's
-change. **Two mechanisms, ONE ticket, because they must be fixed together:** the
-parser fix is what exposes the pattern fix, and doing either alone reports a live
-licence ticket as done.
+**Status:** ✅ FIXED 2026-09-02, mutation-proven — 8 probes, all applied-verified,
+source restored sha256-identical, suite 7086/7086/0 fail/0 skipped. Both
+mechanisms and the third sighting are closed in one change, as the ticket
+required. Two of this entry's own guards turned out to be unreachable and were
+deleted rather than kept; one entry (BUG-098) was given a Status line read from
+its own words rather than relaxing a guard that caught it.
+
+> ### ✅ CLOSED 2026-09-02. What was measured first, and what it corrected.
+>
+> **Every number below was re-measured before any code changed**, because this
+> entry was filed 2026-08-28 and the file has moved since.
+>
+> | claim as filed | measured 2026-09-02 |
+> |---|---|
+> | "BUG-273 is the last `## BUG-` heading" | **STILL TRUE.** Its body ran 90,498 chars to EOF |
+> | bounding shrinks **18 of 243** entries | **18 of 237.** Exactly right |
+> | **four** entries change state | **three.** BUG-274 is no longer among them |
+> | BUG-274 open → **verified** ("unacceptable") | **DOES NOT HAPPEN.** Step 1 removed the hazard |
+> | of 243 entries the loose bullet form matches three | tightening now moves **0 of 237** |
+> | five entries reach `open` without the register | **three** (BUG-266/267/268), and step 1 is why |
+>
+> **The blocker is gone, and it was step 1 that removed it.** Measured in all four
+> cells of {bounding on/off} × {tight patterns on/off}: **BUG-274, BUG-275 and
+> BUG-394 read `open` in every one.** The explicit Status lines plus the register
+> declarations are what made either fix safe alone. They were still shipped
+> together — the coupling was real and re-splitting them re-opens it.
+>
+> ### The first draft of the fix was worse than the bug, and inspecting by hand is what caught it
+>
+> This entry says "inspect all four state changes **by hand** rather than counting
+> them". That instruction earned its keep. Bounding at the next heading of ANY
+> depth (`#{1,6}`) looked correct and reported plausible numbers — **46 entries
+> shrunk, 7 changed state** — and it was cutting entries at their OWN `###`
+> subsections. BUG-273 stopped at its own *"### Evidence — measured, not
+> inferred"* and lost 89,125 characters including its mutation proof; BUG-278
+> stopped at its own *"### Root cause 1"*. Four of those seven changes were
+> entries losing evidence they had written themselves. **Exactly two hashes** is
+> the fix, and it reproduces the filed figures. Pinned by a test.
+>
+> ### Two guards in this fix were unreachable, and both were deleted
+>
+> The section-boundary pattern first carried `(?!BUG-\d)`, then a
+> `!bugAt.has(at)` position filter, to stop a sibling BUG heading acting as a
+> boundary. **Mutation probe (c) deleted each in turn and reddened nothing —
+> twice.** `Math.min(nextBug, nextSection)` already guarantees it: `nextBug` is
+> the next bug heading's offset, so a bug heading among the section offsets can
+> only tie, never win. Both removed rather than kept as backstops, because a dead
+> guard reads as live defence to the next reader while its test passes forever
+> proving nothing. The property's test now says openly that it holds by
+> construction and that no mutation can red it.
+>
+> ### Mechanism 2 is scoped, not guarded — and the gap guard is still not redundant
+>
+> `firstMarkerLine` now finds lines that START with a bullet naming this entry,
+> takes that bullet's own block, and tests the marker inside it. A different
+> bullet's marker becomes something the pattern **cannot reach** rather than
+> something a lookahead has to notice, which also closes the third sighting: an
+> ASCII arrow can no longer satisfy the id anchor (27 entries carry a dash before
+> a bug id on a line that does not start with one).
+>
+> The `(?!BUG-\d)` gap in `bulletPartial`/`bulletFixed` was kept anyway, and
+> probes (d), (f) and (h) show why: scoping excludes a **separate** bullet, and
+> the gap excludes a **second id inside one** bullet. Neither probe alone reds the
+> nested-bullet test, because each covers that case independently; only the
+> combined probe (h) does. Genuine belt-and-braces, not duplication — recorded so
+> nobody removes one on the grounds that the other exists.
+>
+> ### The three state changes, each inspected
+>
+> | entry | change | reading |
+> |---|---|---|
+> | BUG-38 | fixed → **verified** | honest. Its own text carries `live-verified`; the 51,992 chars it was absorbing were the `## Phase 1 — Engagement Execution Engine` section |
+> | BUG-98 | fixed → **coded** | its `fixed` was BORROWED from 122,238 chars of a following Session block. Bounding first made it `unrecorded`, which tripped BUG-391's "nothing is unrecorded" guard |
+> | BUG-273 | verified → **fixed** | honest. `mutation-proven` sat in the swallowed register section, not in its own body |
+>
+> **BUG-391's guard was NOT relaxed.** Its own failure message says a new
+> unrecorded entry "means an entry was filed with no status, which is the thing to
+> fix at the source", so BUG-098 was given a `**Status:**` line read from its own
+> closing words — *"NEEDS-LIVE-CHECK explicitly, not claimed further"* — and now
+> reads `coded` from text it owns. That line is deliberately written **without**
+> any closure word, because runbook item 7 inside that same entry says to "tick
+> each BUG-08x to LIVE-VERIFIED only for what was actually observed", and a
+> closure word in the status line would let that phrase upgrade the entry to
+> `verified` — the exact prose-matching class this ticket exists to close.
+>
+> Register after: `verified 63 · fixed 173 · open 6 · coded 3 · diagnosed 1 ·
+> duplicate 2 · unrecorded 0`.
+>
+> ### Probes, as observed
+>
+> Three behaved differently from prediction and all three discrepancies are kept
+> in `test/bug-394-entry-owns-its-own-text.test.js` rather than tidied: (a) did
+> not red the register-absorption fixture (that fixture's entry has no bullet
+> naming itself, so the whole-file invariant is what catches it); (d) did not red
+> the nested-bullet test (the gap covers it); (c) reddened nothing at all, twice,
+> and produced the two deletions above.
+
+**Original filing, 2026-08-28, kept because the diagnosis was right and the
+reasoning below is what made the fix safe:** filed, measured, deliberately not
+repaired inside BUG-393's change. **Two mechanisms, ONE ticket, because they must
+be fixed together:** the parser fix is what exposes the pattern fix, and doing
+either alone reports a live licence ticket as done.
 
 ### Mechanism 1 — the last entry's body runs to end-of-file
 
@@ -11063,6 +11161,20 @@ time-check (item 9) is about the SPOKEN behavior, which does need ears.
 
 ### BUG-098 [source: BUG-081] — `spawnWebWidget` never dedupes, so surfaces stack
 
+**Status:** 🔧 CODED, and deliberately not claimed beyond that. The
+`spawnedByType` dedup shipped in `widget-host.js`; there is no test (this
+codebase has no jsdom precedent for widget-kind modules) and runbook item 7
+below was never run. **Status line added 2026-09-02 by BUG-394**, which measured
+that this entry had no machine-readable status of its own and was drawing
+`fixed` from 122,238 characters of following text it does not own — the
+`## Session (2026-08-05)` block. Its own closing note already said the same
+thing in prose ("NEEDS-LIVE-CHECK explicitly, not claimed further"); this line
+makes it readable. Deliberately worded without the words a closure check looks
+for, because runbook item 7's own instruction to "tick each BUG-08x to
+LIVE-VERIFIED only for what was actually observed" sits inside this entry's
+body, and a closure word here would let that phrase upgrade this to `verified`
+— the exact prose-matching class BUG-394 exists to close.
+
 **Traced the "widgets restyle missing" claim first, per the plan's instruction —
 no styling defect was found, and none invented:** `tokens.css`'s three-layer
 import chain is intact, both widget-card renderers apply the same styled
@@ -18736,6 +18848,13 @@ those records remain owed (this section is the index until then).
   `**Status:**` line, then bound the bodies, then tighten both patterns using the
   tight form already proven as `bulletHalfDone`. Full entry with the measurement
   table is at the top of this file.
+  **FIXED 2026-09-02** — all three (both mechanisms and the arrow sighting), in
+  one change, mutation-proven with 8 probes. Bodies now end at the next top-level
+  `##`; markers are read from the bullet's own block, line-anchored. Re-measured
+  before touching anything: the BUG-274 hazard this bullet warns about no longer
+  reproduces, because step 1 shipped. Two guards written for this fix proved
+  unreachable and were deleted; BUG-098 was given a Status line from its own words
+  rather than relaxing the guard that caught it.
 
 - BUG-275 - the voice assistant fabricates leaderboard facts, invents sources,
   and rationalises the inventions when challenged. Eight items (H1-H8), still

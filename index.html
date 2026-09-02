@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7074,
+      "value": 7086,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -1830,7 +1830,7 @@
         "title": "`list_folder` of source dirs \"outside allowed folders\"",
         "detail": {
           "symptom": "MYTHOS cannot read its own source tree. `list_folder({path:\".\"})` and `list_folder({path:\"src/components/...\"})` return \"is outside the allowed folders.\" MYTHOS doesn't know where its own code lives.",
-          "files": "`mythos/src/core/effectors/from-computer.js` (verified, already fixed), `mythos/test/bug-018-list-folder-sandbox.test.js` (verification test, new) --- ## LOW — Quality / Polish"
+          "files": "`mythos/src/core/effectors/from-computer.js` (verified, already fixed), `mythos/test/bug-018-list-folder-sandbox.test.js` (verification test, new) ---"
         }
       },
       {
@@ -2058,12 +2058,11 @@
       {
         "n": 38,
         "shape": "entry",
-        "state": "fixed",
+        "state": "verified",
         "title": "`Handle-MediaStatus` hangs indefinitely when a track has album art (thumbnail extraction)",
         "detail": {
           "symptom": "With a track that has album art actively playing, `GET /api/media` fails with `\"[System.__ComObject] does not contain a method named 'GetBuffer'.\"` A fix attempt for that specific error introduced a full request timeout (20s+, no response, no error, no new server log lines) instead.",
-          "files": "`mythos/adapters/pc-child/ps-automation.ps1` (`Handle-MediaStatus`'s thumbnail block — currently disabled; `Read-WinRTStreamBytes` helper — written, proven in isolation, not currently called from anywhere). --- ## Phase 1 — Engagement Execution Engine (cherry-picked from 8706ccc) ### P1-001: command-type stage verification is SKIPPED, not run",
-          "verification": "`test/phase1-engagement-executor.test.js` \"emits health.anomaly and does NOT shell out\". ### P1-002: stage-approval checkpoint closures do not survive restart"
+          "files": "`mythos/adapters/pc-child/ps-automation.ps1` (`Handle-MediaStatus`'s thumbnail block — currently disabled; `Read-WinRTStreamBytes` helper — written, proven in isolation, not currently called from anywhere). ---"
         }
       },
       {
@@ -2344,11 +2343,10 @@
       {
         "n": 98,
         "shape": "entry",
-        "state": "fixed",
+        "state": "coded",
         "title": "[source: BUG-081] — `spawnWebWidget` never dedupes, so surfaces stack",
         "detail": {
-          "fix": "`spawnedByType` (widgetType → teardown) reuses/replaces the existing card for that surface. Deliberately exempt: `'dynamic'` (Item 11 generative-UI cards) are legitimately multi-instance and deduping them would be a regression. No new test: this codebase has zero DOM/jsdom precedent for any widget-kind module (`test/dynamic-widget-spec-validation.test.js`'s own header states this explicitly) — matching that existing convention rather than introducing new test infra for one fix. 🔧 FIXED,",
-          "files": "`mythos/src/core/effectors/from-browser.js`, `mythos/src/core/voice/live-tools.js`, `mythos/test/browser-target-honesty.test.js`. - **BUG-100 (`reminder_add` failed twice on a vet appointment; the operator heard only \"Failed\"):"
+          "fix": "`spawnedByType` (widgetType → teardown) reuses/replaces the existing card for that surface. Deliberately exempt: `'dynamic'` (Item 11 generative-UI cards) are legitimately multi-instance and deduping them would be a regression. No new test: this codebase has zero DOM/jsdom precedent for any widget-kind module (`test/dynamic-widget-spec-validation.test.js`'s own header states this explicitly) — matching that existing convention rather than introducing new test infra for one fix. 🔧 FIXED,"
         }
       },
       {
@@ -2865,7 +2863,7 @@
         "detail": {
           "symptom": "`whatsapp_send` failed at 17:29:26 and 17:31:11 with \"could not read its message box (No editable element found…)\", then succeeded at 17:31:47 — only because the operator told it to wait. Their diagnosis on the call: \"WhatsApp takes a couple of seconds to start.\"",
           "cause": "`from-whatsapp.js` — `focus_window` returns, then `readComposeBox` is called immediately with no settle. The pre-existing retry waits only 400 ms and is gated on a",
-          "verification": "`test/whatsapp-composer-settle.test.js`, 7 tests, verified red against the pre-fix source (4 failed). ## Deferred from the 2026-08-14 session (Wave B) — listed so nothing reads as covered Six lower-severity clusters from the same audit, with why each is deferred rather than quietly dropped: | # | cluster | evidence | why deferred | |---|---|---|---| | 5 | Health channel used as a metrics channel — 68 heal no-match vs 6 applied; `live-tool-outcome-late-for-turn` is now expected by design yet still raised as a fault; the provider-down playbook matches only `nim`, so groq/mistral down = no-match | audit + episodic tallies | needs a soak to establish which kinds are genuinely faults; non-faults belong on their own channel, which touches `ALLOWED_EVENTS` | | 6 | Goal budget ≈ one action — 31,272 tokens over 2 actions against a 20,000 default; two goals auto-paused 5 s after creation | `vault/…"
+          "verification": "`test/whatsapp-composer-settle.test.js`, 7 tests, verified red against the pre-fix source (4 failed)."
         }
       },
       {
@@ -2927,7 +2925,7 @@
         "detail": {
           "symptom": "A goal titled `Commitment: I'll get it right`, with MYTHOS's entire apology stored in its `reason` field: \"I hear you loud and clear, boss, my wires are definitely crossed today…\".",
           "cause": "`from-calendar.js`'s `COMMITMENT_PATTERNS` verb list included a bare `get`, so \"I'll get it right\", \"I'll get to it\" and \"I'll get that wrong again\" all matched. The file's own header states the rule this violates, and it is a recorded operator decision: \"EXPLICIT-ONLY detection. A missed commitment is merely today's behaviour; a FALSE entry teaches the operator to distrust the ledger, which is worse than not having one.\"",
-          "verification": "`test/commitment-verb-narrowing.test.js`, 25 cases sampled in both directions — 8 phrasings that must not match, 13 that must. ## What Wave B does not fix Stated so nothing reads as covered: `spend.estimate()`'s chars-based approximation of real provider usage; the say-before-act ordering (Wave A narrows the symptom, the architecture stands); NIM's upstream instability itself (the breaker routes around it, it does not repair it); `NO_EMBED_DOMAINS` missing `openai.com`/`youtube.com`; and the missing `onSpeakEnd` callback behind 29% of mic-gate watchdog releases — Wave A made it harmless, and finding it needs exactly the instrumentation BUG-233 unlocks. --- # Session 2026-08-15 — RCA of the 2026-08-14 live voice session (BUG-238..BUG-250) An ~80-minute operator session (21:30–22:25 UTC) against the packaged build carrying the `08b0e3e`/`34fbf90` model-routing rewire was reported as broadl…"
+          "verification": "`test/commitment-verb-narrowing.test.js`, 25 cases sampled in both directions — 8 phrasings that must not match, 13 that must."
         }
       },
       {
@@ -3251,13 +3249,10 @@
       {
         "n": 273,
         "shape": "entry",
-        "state": "verified",
+        "state": "fixed",
         "title": "the first post-BUG-272 live sessions: three fixes verified, three plan diagnoses corrected, and the honesty defect that costs trust",
         "detail": {
-          "cause": "`unverified` carried two different epistemic states under one name: -",
-          "fix": "is a latch, `createBrainRecoveryNotice()`, polled from the 100ms VAD tick the loop already runs — polled rather than pushed from app.js because the module that made the claim should be the one to take it back, and it already reads `_brainOnline()`. Three rules, each a way to get this wrong and each pinned by a test: (1) it retracts ONLY after a real refusal, so a brain that blips while nobody is speaking leaves no stale caption and gets no announcement — `_brainOnline` starts `true` in app.js, so a boot-time flip would otherwise announce an outage that never happened; (2) it fires ONCE per outage, because a plain `refused && online` test on a 100ms tick repaints ten times a second; (3) it re-arms, because a session can survive more than one outage.",
-          "limits": "the latch is unit-driven (voice-loop.js imports cleanly under bare node, so this is behaviour and not source shape), but the tick that calls it needs `getUserMedia`, so a real brain outage and recovery in a running HUD is still operator-verified. The wiring is pinned by source shape for that reason. ### Medium (each needs its own design pass) - BUG-348 - media_status reads ONE SMTC session (ps-automation.ps1 Handle-MediaStatus ~:4275, $sessionManager.GetCurrentSession()). Enumerate the SMTC sessions and report the primary owner; kills \"song playing but says paused\" when another app owns the session. **CORRECTION 2026-08-27 — the repair plan’s stated mechanism is FALSE and must not be inherited.** The plan says *\"a GetSessions() enumerator already exists in the same file at :1586 and is used by the per-app volume path — the fix is present and unused\"*. Read: the :1586 `GetSessions()` is a…",
-          "verification": "33 assertions,"
+          "cause": "`unverified` carried two different epistemic states under one name: -"
         }
       },
       {
@@ -3266,8 +3261,7 @@
         "state": "open",
         "title": "dependency and licence remediation (OPEN on T3 only; T1, T2, T4, T5 shipped) — opened 2026-08-19",
         "detail": {
-          "fix": "`live-turn-complete` — the frame `server/index.js` has broadcast since it was written and which step 4 taught the HUD to read — is now also forwarded to the player as `endTurn()`, alongside `live-interrupted`. Growth is gated on `turnOpen` instead of `speaking`. A model turn is open or it is not;",
-          "files": "`mythos/adapters/pc-child/ps-automation.ps1` (`Handle-ListWindows`), `mythos/adapters/browser-agent/index.js` (`findChromePidByUserDataDir`, `writeBrowserPidFile` — see BUG-029 entry above for the pidfile fix found in the same session), `mythos/server/index.js` (perception relay — see BUG-040 entry above), `mythos/scripts/verify-{planner,memory-guard,youtube}.js` (harness fixes — see BUG-041/014/006 entries above). --- ## Legend - ✅"
+          "fix": "`live-turn-complete` — the frame `server/index.js` has broadcast since it was written and which step 4 taught the HUD to read — is now also forwarded to the player as `endTurn()`, alongside `live-interrupted`. Growth is gated on `turnOpen` instead of `speaking`. A model turn is open or it is not;"
         }
       },
       {
@@ -3642,7 +3636,7 @@
         "detail": {
           "limits": "The scrape rungs are still dead and still cost their timeouts when both keyless rungs are spent (BUG-361's cooldown limits how often). The local daemon still returns 0 results from every engine. Wikipedia still ships as `ok:true`. Google CSE and Brave remain unconfigured — CSE needs the Custom Search API enabled on the operator's Cloud project plus a `GOOGLE_CSE_ID`, and is a separate ~100/day pool that would take the ceiling to ~350/day across three vendors. And",
           "files": "`src/core/effectors/mcp-search.js` (new — both MCP rungs and the shared frame reader; `web-search.js` was at its 862-line ratchet ceiling, and moving exa-mcp out brought it to 801), `src/core/effectors/web-search.js`, `mythos/.env.example`.",
-          "verification": "`test/bug-365-search-has-a-second-free-quota.test.js` (20 tests). ## ⚠ NUMBERING COLLISION — BUG-360 is assigned twice (recorded 2026-08-26) It happened again, in the same shape the note above describes, between two sessions working on the same day. -"
+          "verification": "`test/bug-365-search-has-a-second-free-quota.test.js` (20 tests)."
         }
       },
       {
@@ -3925,10 +3919,10 @@
       {
         "n": 394,
         "shape": "entry",
-        "state": "open",
+        "state": "verified",
         "title": "an entry can wear text that is not its own: the last entry swallows the whole register, and the bullet patterns read nested follow-ups (FILED 2026-08-28, OPEN)",
         "detail": {},
-        "excerpt": "**Status:** OPEN — filed, measured, deliberately not repaired inside BUG-393's change. **Two mechanisms, ONE ticket, because they must be fixed together:** the parser fix is what exposes the pattern fix, and doing either alone reports a live licence ticket as done. ### Mechanism 1 — the last entry's body runs to end-of-file `parseBugs` ends an entry at the next `# BUG-` heading, and the final one at `text.length` (`scripts/build-index.js` :79): ```js const end = i + 1 \u003c marks.length ? marks[i + 1].at : text.length; ``` **BUG-273 is the last `## BUG-` heading in this file.** Everything after it — the entire `## OPEN WORK filed` register and its 14 bullets — is read as BUG-273's body. Its status is therefore computed partly from other tickets' bullets, and appending anything to the end of this file changes it. **That is not theoretical: it turned a test red on 2026-08-28 while BUG-273 itse…"
+        "excerpt": "**Status:** ✅ FIXED 2026-09-02, mutation-proven — 8 probes, all applied-verified, source restored sha256-identical, suite 7086/7086/0 fail/0 skipped. Both mechanisms and the third sighting are closed in one change, as the ticket required. Two of this entry's own guards turned out to be unreachable and were deleted rather than kept; one entry (BUG-098) was given a Status line read from its own words rather than relaxing a guard that caught it. > ### ✅ CLOSED 2026-09-02. What was measured first, and what it corrected. > > **Every number below was re-measured before any code changed**, because this > entry was filed 2026-08-28 and the file has moved since. > > | claim as filed | measured 2026-09-02 | > |---|---| > | \"BUG-273 is the last `## BUG-` heading\" | **STILL TRUE.** Its body ran 90,498 chars to EOF | > | bounding shrinks **18 of 243** entries | **18 of 237.** Exactly right | > | **fo…"
       },
       {
         "n": 395,
@@ -3972,10 +3966,10 @@
       }
     ],
     "counts": {
-      "verified": 63,
-      "fixed": 174,
-      "open": 6,
-      "coded": 2,
+      "verified": 64,
+      "fixed": 173,
+      "open": 5,
+      "coded": 3,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
@@ -3983,8 +3977,7 @@
     "total": 248,
     "openDeclared": [
       274,
-      275,
-      394
+      275
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
