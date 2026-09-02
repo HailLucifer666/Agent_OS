@@ -194,9 +194,66 @@ probes each reding exactly one site, 11 hostile shapes attacked afterwards.
    is prompt wording plus stripping every fragment, and that test has to be
    rewritten deliberately rather than deleted.
 
+**Also closed:** row 8 (`remember` used instead of scheduling) — commit
+`aff8011`. `detectUnscheduledCommitments()` in `claim-check.js` flags a turn that
+promises a recurring commitment while no scheduling tool succeeded, and the
+correction names why a successful tool did not help: `remember` stores a fact and
+schedules nothing. A read (`reminder_list`) satisfies it; an **unverified**
+`reminder_add` does not. 16 assertions, 3 mutation probes, 12 hostile shapes
+attacked afterwards — one real false positive found and fixed (a *refusal* to
+schedule flagged as a broken promise).
+
 **The one-sentence shape of everything left:** a many-valued fact passing through
 a joint that holds two values, checked by a test whose fixture never presented
 the third value. Row 1 was that; so were all three of BUG-399's causes.
+
+### R5b — CORRECTED DIAGNOSIS, and the guard first proposed for it would have been wrong
+
+Written down because a plan reviewed and approved on 2026-09-02 said "add the
+guard: assert the two ledgers agree on `ok` for the same `traceId`". **Do not
+build that.** Reading the consumers first showed why:
+
+- **The two `ok` fields mean different things and are correctly valued.** The
+  Audit action record's `outcome:'ok'` is *dispatch-level*: the effector returned
+  without failing. The turn record's `ok:false` is *evidence-level*: this is not
+  a proven success. For an unverified action both are true. A guard asserting
+  they agree would be asserting a falsehood, and the honest fix is to stop giving
+  two different predicates the same name — not to make them match.
+- **The fold is load-bearing and must stay.** `claim-check.js:254` and `:262`
+  decide which claims are backed using `a.ok === true` / `a.ok !== true`. That is
+  what stops an *unverified* action from backing a completion claim, and
+  `live-tool-adapter.test.js:157` pins it deliberately. Unfolding `ok` on the
+  in-memory entries would silently weaken the honesty detector — the opposite of
+  the intent.
+
+So R5b's real content is narrower and mostly naming: in the persisted turn record
+(`live-tool-adapter.js:1419`) a field called `ok` sits beside a correct `status`
+and means "proven", while a field called `ok` in the Audit row means "dispatched".
+A session reading the vault sees them disagree, which is how this was found.
+`action-outcome-summary.js` has the same shape one field over: an `unverified`
+entry still renders **"FAILED"** in the history note the next turn reads (the
+aborted-in-flight case was fixed there; this one is deliberately left, flagged in
+code). Any fix should rename rather than re-value, and should carry the
+`traceId` so the two records can be joined at all — they currently cannot be.
+
+### Rows 4 and 5 — measured, and larger than the dossier states
+
+Before writing D1, the nine verbatim overstatements from the session were fed to
+`detectUnbackedClaims` with their real tool batches. **It caught one.** Two
+specific gaps beyond the future-tense one D1 closed:
+
+- **Present progressive with an empty batch.** *"Rectifying that now — Google
+  News is opening on a new tab, for real this time"* and *"Closing the music news
+  widget on the HUD now"* both pass. The dossier's cheapest-guard framing (a
+  zero-tool turn may not contain completion language) is right, but the phrasing
+  that actually appeared is progressive, not completed-aspect, so it needs its
+  own tier rather than the existing categories.
+- **Completion language over a `fail` batch still passes** in four of the
+  measured cases, e.g. *"Sending now… That one is on its way"* over a failed
+  `whatsapp_send`.
+
+That corpus (nine sentences with their batches) is the test fixture for whoever
+takes rows 4 and 5.
 
 **Highest-value remaining, in order:** R5b (one `ok` per action, plus the guard
 that Audit and turn records agree on one `traceId`); the two cheapest narration
