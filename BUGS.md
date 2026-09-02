@@ -41,6 +41,115 @@ it is committed.
 
 ---
 
+## BUG-400 — the HUD asked for a token the server no longer had: the token prompt reopened on every 401 of a PIN-only deployment and hid the PIN screen (✅ FIXED 2026-09-03, mutation-proven)
+
+**Status:** ✅ FIXED 2026-09-03, five mutation probes recorded in `test/bug-400-auth-gate-no-401-listener-without-a-token.test.js`. Three defects under one symptom; each fixed at its cause.
+
+**Symptom (operator, packaged build).** "MYTHOS needs your access token … Entered once per browser." on every launch of `MYTHOS.exe`. Entering the correct token from `mythos/.env` answered *"This deployment requires both a PIN session and the bearer token … the cookie channel is reserved for the PIN session"* (409). After the token was removed from the keystore at the operator's request ("keep the PIN"), the same prompt still appeared and its exchange endpoint answered 404 — nothing typed could pass it.
+
+**Measured from outside the app, 2026-09-03, same server:** `GET /health` → `{"authRequired":false}`; `GET /api/pin/status` → `{"configured":true}`; `GET /api/health` → 401 *"set MYTHOS_AUTH_TOKEN …"*; `POST /api/auth/session` → 404. So the missing credential was a PIN session and every surface said "token".
+
+**Why only the .exe.** The packaged app resolves its vault to userData, which carries `Identity/pin.json`; the repo vault has none. `pinSessionRequired()` is therefore true only in the packaged build and `npm start` cannot reproduce any of this. (Combined mode — token AND PIN — was the operator's starting state, and its 409 is the H1 security fix of 2026-08-08 working as designed; the operator chose to drop the token. That cell stays a 409 by design and is pinned by the BOUND cases.)
+
+**Defect 1 — `ui/public/js/auth/auth-gate.js`.** Subscribed to `onUnauthorized` ABOVE its `/health` probe; the `not-required` branch `return`ed out of the async IIFE only, so the subscription outlived the decision. Its own comment promised "do nothing at all, ever." Fix: subscribe only after the probe says a token is configured (holder + null-checked cleanup). No listener beats a guarded listener — nothing left to fail open.
+
+**Defect 2 — `ui/public/js/status-banner.js`, found by GATES.md gate B.** Same store, same 401s, offered **Enter token** → `openAuthGate()`. Fixed at the STORE: `auth-state.js` gains `setTokenRequired()`; once `false`, `markUnauthorized()` cannot raise the flag, and a 401 that raced the probe is cleared. Every present or future subscriber is covered without knowing about it. Real behavioural tests (pure ESM), not source-shape.
+
+**Defect 3 — `server/index.js` `requireToken()`.** Three deployments, two sentences: PIN-only fell to *"set MYTHOS_AUTH_TOKEN"*, naming a secret the server did not hold — the sentence that sent the operator to `.env`. Now: *"this deployment is PIN-locked. Unlock it with POST /api/pin/verify (the HUD PIN screen). No MYTHOS_AUTH_TOKEN is configured, so there is no token to enter."* Token-only and combined sentences unchanged, pinned verbatim.
+
+**Not fixed here, recorded so it is not re-derived:** after a correct PIN the lock screen runs `teardown(); onUnlock();` with no reload, and nothing in `app.js` re-runs the one-shot boot fetches that 401'd (`/api/config/vad`, wake-word config). The token path reloads for exactly this reason. A naive reload would re-lock, because `derivePinGate` locks on `configured:true` alone and `/api/pin/status` does not report session validity. To be measured live before deciding.
+
+**Verification:** `node --test test/bug-400-…` 14/14; neighbours `auth-gate-state`, `server-auth`, `pin-gate-state`, `pin-session` 69/69; `actions-widget-glyph`, `bug-317`, `compose-caption-clear`, `open-artifact-auth` 36/36. Probes (a)–(e) each red on exactly the predicted cases, restores hash-verified.
+
+## BUG-401 — the VOICE widget wrote the live-S2S result into the browser-TTS row, so `live s2s` read `checking…` forever and `browser tts` showed a value that was not its own (✅ FIXED 2026-09-03, mutation-proven — the s2s row; the state-line latch is SPLIT OUT and still open)
+
+**Status:** ✅ FIXED 2026-09-03 for the off-by-one. Three probes recorded in `test/bug-401-voice-widget-s2s-row.test.js`. The second half of the original diagnosis — the top-line state latching `unavailable` — is **not fixed** and is restated at the end of this entry so it is not lost inside a ticket marked fixed.
+
+**Symptom, from the operator's HUD screenshot at 03:00:54.** `browser tts  enabled` and `live s2s  checking…`, while the server log recorded a completed Gemini Live turn 14 s later (`live.turn-parts turnId:1 audioParts:27`) plus a Live tool call. S2S was demonstrably ON, the row for it claimed it was still being checked, and its value was displayed under a different row's label.
+
+**Mechanism.** `ui/public/js/widgets/kinds/voice.js` builds `rows` as `[wakeword, recognition, synthesis, s2s]`, and the `/api/config/s2s` handler assigned `rows[2].value` — `synthesis`, labelled `browser tts` — in **both** its success and its `.catch()` path. `rows[3]` was therefore never written and kept its initial `checking…`, and a browser capability read from `window.speechSynthesis` was overwritten with a server setting. Two wrong readings from one off-by-one, which is why it is not cosmetic: an operator debugging voice is told S2S is still being checked (it is running) and that browser TTS is enabled (that was never measured).
+
+**Fix.** A new pure exported `applyS2sResult(rows, cfg)` selects the row by `key === 's2s'` and is the only writer; both call sites go through it. **A key, not a corrected index** — `rows[3]` is right today and wrong the moment a row is inserted, and an index cannot be checked by reading it (GATES.md gate D: derive the selector from a property in the code). Pure and exported so `node:test` drives it with no DOM, since `ui/public` is a no-build ESM tree with no jsdom in the repo.
+
+**The test is deliberately NOT source-shape.** A grep for `rows[2]` would now match the explanatory *comment* the fix added, which still contains that string — the exact false-anchor failure this repo has already had. Probes: (a) reinstating the shipped assignment reds 5 of 6 cases; (b) writing `disabled` instead of `unavailable` on the unreachable path reds only the honesty case; (c) swapping the key selector for `rows[3]` leaves the four ordered cases green and reds only "addresses by key, not position" — the one assertion that can distinguish a derived selector from a corrected index.
+
+**Class.** BUG-175 inverted — false discouragement instead of false reassurance — in the file whose own header is about BUG-175.
+
+### STILL OPEN, split out of this ticket: the state line latches `unavailable`
+
+`mountVoice`'s top-line state is painted from `document.querySelector('[data-voice-state]')`. When the compose bar has not mounted yet the `else` branch writes `UNAVAILABLE` and **never re-checks** — there is no observer and no retry on that path, while the success path installs a `MutationObserver`. The file's own comment acknowledges the race ("compose-bar mounts in the same boot pass as the widgets, so it may not exist yet on first paint") without closing it. Confirmed on the same screenshot: `VOICE unavailable` while the wake-word row beneath it was updating normally, so the widget was alive and only that line was stuck. Not fixed here because the fix is a real choice (poll for the pill, observe `#compose-root` for insertion, or have compose-bar publish its state to the store the way BUG-400 made `auth-state.js` do) and it should not ride inside an off-by-one fix.
+
+## BUG-402 — the packaged build cannot find the build engine it installed: `setup-dsh.js` writes to `MYTHOS_TOOLS_DIR`, `adapters/dsh-agent` never reads it (🔴 DIAGNOSED 2026-09-03, not yet fixed)
+
+**Status:** 🔴 diagnosed from source and confirmed in the packaged boot log 2026-09-03; no code change yet.
+
+`scripts/setup-dsh.js` `dshSearchHomes()` considers four homes — `MYTHOS_DSH_INSTALL_DIR`, `MYTHOS_TOOLS_DIR/DeepSeek Harness`, `<repo>/DeepSeek Harness`, `mythos/` — and WRITES to the tools dir whenever Electron sets it. `adapters/dsh-agent/index.js` `DSH_INSTALL_ROOTS` has two: `<repo>/DeepSeek Harness` and `mythos/node_modules`, both derived from `__dirname`. In a packaged build `__dirname` is `resources/app.asar.unpacked/…`, neither exists there, and the harness is not shipped (`build.files`). Boot log: `dsh-agent.offline … Looked in: …app.asar.unpacked\DeepSeek Harness…, …app.asar.unpacked\mythos\node_modules…` and `impact: every build will fail`. The HUD banner offers **Finish setup**, which installs to the tools dir the adapter will not look in — so the offered remedy cannot work. `%APPDATA%\MYTHOS\tools\DeepSeek Harness` holds only the vendor `package.json`. Writer and reader disagree on a path. Fix: the adapter must consume the same `dshSearchHomes()` (one function, both callers) and a test must assert the two lists are the same list, not two lists that happen to agree in a dev checkout.
+
+## BUG-403 — `primeAuthSession()` produced no log line on a boot where its token was present and its exchange would have answered 409 (🔴 UNDIAGNOSED 2026-09-03)
+
+**Status:** 🔴 open, unexplained. Recorded so the next session does not inherit the assumption that the prime ran.
+
+On the 21:30Z and 21:43Z boots of the packaged build, `%APPDATA%\MYTHOS\logs\main.log` carried no `auth.session-prime:` line at all, and a grep of the whole file finds none ever. `resolveAuthTokenForPriming()` has no loopback guard and `decryptedKeysForChild()` has no key filter; `keystore-recrypt` reported all 9 keys decrypting; the server demanded a token, so the child received one. Every non-success path of `primeAuthSession()` logs, and a 409 from the combined-mode server was certain — yet nothing was written. Either the function is not reached on the path `whenReady()` actually takes when a PIN is configured, or `log()` is not bound to the file at that moment. Check that settles it: a temporary `log('auth.session-prime: entered')` as its first line, one boot. Not investigated further because the operator's fix (BUG-400) does not depend on it.
+
+## BUG-404 — the adb fork-server outlives MYTHOS with its cwd inside the install tree, so the tree cannot be rebuilt, updated or uninstalled until someone finds and kills it (🔴 DIAGNOSED 2026-09-03, not yet fixed)
+
+**Status:** 🔴 diagnosed live 2026-09-03; no code change yet.
+
+Measured while rebuilding the packaged app: three consecutive `electron-builder --win --dir` runs failed with `EBUSY: resource busy or locked, rmdir …\app.asar.unpacked\mythos` after every `MYTHOS.exe` process had been stopped. The directory could be emptied but not removed — the signature of a live process whose *current working directory* is that folder. It was `adb.exe -L tcp:5037 fork-server server` (pid 4388, started 6 s after the app, from `%APPDATA%\MYTHOS\tools\Android Platform Tools`). `android-child` spawns adb from the server child, which the Electron main process forks with `cwd: MYTHOS_DIR`; adb's daemon inherits that cwd and, by design, detaches and survives its parent. Killing it released the lock and the fourth build succeeded. The `pc-child` PowerShell (pid 17688) also survived the parent kill and held the tree first — same class, second instance.
+
+Consequences beyond a developer rebuild: the NSIS updater replaces the install tree and will meet the same `EBUSY`; an uninstall will leave `resources\app.asar.unpacked\mythos` behind. Fix: spawn adb (and every long-lived child) with a cwd outside the install tree — `MYTHOS_TOOLS_DIR` or userData — and run `adb kill-server` in the app's before-quit path; test by asserting the spawn options' `cwd` is not under `MYTHOS_DIR`. Related: BUG-402 (the tools dir already exists for exactly this kind of thing).
+
+## BUG-405 — a dead pid cost ninety-two seconds and four turns because the failure named the recovery tool instead of running it (✅ FIXED 2026-09-03, mutation-proven)
+
+**Status:** ✅ FIXED 2026-09-03. Six mutation probes recorded in `test/bug-405-dead-pid-returns-the-window-list.test.js`. Two halves: the trigger (`open_web`) and the recovery (`delegate`).
+
+**Measured from the operator's live voice session, audit vault 2026-09-03:**
+
+```
+22:34:57  cua_bring_to_front{pid:6960}   ok     <- 6960 was real
+22:35:18  open_web{browser:true, ...}    ok     <- relaunched Brave
+22:35:38  open_web{browser:true, ...}    ok        6960 is now dead
+22:36:27  ui_elements{pid:6960}          fail   (24ms)
+22:36:58  focus_window{pid:6960}         fail   (4ms)
+22:37:45  list_windows{}                 ok     <- recovery, turn 1
+22:37:56  list_windows{}                 ok     <- recovery, turn 2
+22:38:30  cua_bring_to_front{pid:16652}  ok     <- correct at last
+```
+
+Every Brave process on the machine carried a start time of 22:35:18 and pid 6960 no longer existed, so the two instant failures (24ms, 4ms) were **correct**. The defect is the ninety-two seconds and four turns spent re-deriving a pid the failing call already had the means to return — during which MYTHOS logged two incidents about its own confusion, one reading *"resulting in perception of hallucination by operator"*. Nothing was hallucinating.
+
+**Cause 1 — the trigger.** `open_web(browser:true)` hands a URL to the OS default browser via `externalOpener`. If that browser is not already running this LAUNCHES it, invalidating every window pid the model holds, and the return value said nothing about it. Now returns `windowPidsMayBeStale: true` and says so in the confirmed step.
+
+**Cause 2 — the recovery.** All three dead-pid failures in `from-pc.js` ended with "call list_windows". Correct advice, and the model obeys it — the cost is the round-trips.
+
+**Why the fix is at the delegate seam, and what the first attempt missed.** The first version decorated those three sites. That set was chosen by *which sites happened to carry the advice sentence*, not by the reason, and the reason covers every tool that takes a pid — there are **twelve**. `ui_elements` is not one of the three, does not route through `foregroundThenRetry`, and returns PowerShell's bare text straight from `delegate()`. That is precisely why the operator's FIRST failure (22:36:27) carried no recovery advice at all while `focus_window`'s did. One guard at the seam every pid-taking tool already passes through covers all twelve, including any added later. GATES.md gate B caught this; the `ui_elements` test case is the one that fails against the three-site design.
+
+**Regression found by an existing guard, worth recording.** Removing the per-site advice in favour of the seam's dropped the recovery step entirely whenever `list_windows` itself could not be read — `test/close-window-honesty.test.js` had guarded that sentence since `close_window`'s own incident and went red. The contract is now explicit: **the ADVICE is unconditional for a dead pid; only the LIST depends on the lookup.**
+
+**Scope.** `from-pc.js` and `from-dashboard.js` both sat exactly at their file-size ratchet ceilings (1552 and 1418), so the logic went into a new `src/core/effectors/window-recovery.js` and both files ended at or under their ceilings — no baseline was raised. `see_and_click` failing at 22:38:31 with the CORRECT pid 16652 is NOT this bug: it read the screen fine and honestly reported the requested text was not on it.
+
+## BUG-406 — the half-duplex gate held the operator's microphone for 40% of a conversation, and 92 seconds of that ended in a timeout rather than in actual echo (🔴 DIAGNOSED 2026-09-03, deliberately NOT fixed here)
+
+**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note.
+
+**Measured from `voice.capture-suspend` releases, operator session 2026-09-03 (~11 minutes of conversation):**
+
+| release reason | n | total held | worst single hold | frames zeroed |
+|---|---|---|---|---|
+| `own-voice-ended` (normal) | 25 | 159.4s | 11.0s | 37,918 |
+| `own-voice-ceiling-near-field-energy` | 5 | 68.1s | **21.4s** | 6,810 |
+| `own-voice-ceiling-no-evidence-of-echo` | 2 | 24.2s | 13.1s | 2,235 |
+| `suspend-window-elapsed` | 2 | 16.0s | 8.0s | 0 |
+| **total** | **34** | **267.7s** | | **46,963** |
+
+`framesDropped` was 0 throughout — nothing was lost in transport. The audio was **zeroed**, deliberately, by the own-voice gate.
+
+**The signal is the ceiling releases, not the total.** Holding the mic while MYTHOS is genuinely speaking is correct half-duplex behaviour, and `own-voice-ended` is that working. The 7 releases that hit a CEILING are the gate being wrong: `own-voice-ceiling-no-evidence-of-echo` is the gate stating it held for up to 13.1s and **never found the echo that would justify it**, and `own-voice-ceiling-near-field-energy` held up to 21.4s on energy that near-field is most likely the operator's own voice. Together, 92.3 seconds of a ~660-second conversation.
+
+**Corroborating, from the same session:** three `live-turn-no-user-transcript` anomalies whose healer playbook already names this exact mechanism — *"the operator's speech reaches Gemini but is not transcribed, most often because the half-duplex gate held it past the preroll ring"* — plus one `audio-duck-suppressed` reading *"mic-hot windows keep closing with no speech — ducking is arming on playback, not on you"*.
+
+**WHY THIS IS NOT FIXED IN THE SAME PASS, recorded so it is not read as an oversight.** Loosening this gate wrongly makes MYTHOS hear its own voice and answer itself, which is a worse failure than the one being fixed, and this repo has already mis-diagnosed this area twice (`bleedPeak measured the operator`; `own voice fed Gemini's VAD`). A correct fix needs a recorded audio corpus, the two ceiling constants traced to their real justification, and a replay harness — not a constant nudged at the end of a long session. **Revisit trigger:** any session that can capture mic + speaker audio together. **Durable form:** a replay test over captured frames that asserts the gate opens within N ms of the last real speaker frame, with the near-field case as its adjacent must-keep-passing.
+
 ## BUG-399 — CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable (✅ FIXED 2026-09-02 — three causes, none of them the one this ticket first named)
 
 **Status:** ✅ FIXED 2026-09-02. Three ordinary test defects, each masked on a

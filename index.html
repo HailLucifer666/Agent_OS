@@ -339,11 +339,11 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-02",
+  "generated": "2026-09-03",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7111,
+      "value": 7160,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -361,28 +361,28 @@
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-02"
+      "measuredAt": "2026-09-03"
     },
     "registered": {
       "value": 179,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-02"
+      "measuredAt": "2026-09-03"
     },
     "voiceReachable": {
       "value": 118,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-02"
+      "measuredAt": "2026-09-03"
     },
     "untriaged": {
       "value": 1,
       "label": "untriaged incidents",
       "tone": "fail",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-09-02",
+      "measuredAt": "2026-09-03",
       "stale": false
     }
   },
@@ -461,7 +461,7 @@
       "tools": [
         "think_deeply"
       ],
-      "ok": 70,
+      "ok": 71,
       "f": 8,
       "note": "Deep reasoning. Both 'failures' are the new rate-limit refusing correctly after it was reached ten times in one conversation.",
       "ev": "\"Deep reasoning was used 8s ago and is rate-limited for another 53s. Nothing is wrong. Answer this yourself now.\"  (BUG-287, shipped 2026-08-20 23:27, observed working in the final session)"
@@ -484,7 +484,7 @@
       "tools": [
         "self_capabilities"
       ],
-      "ok": 22,
+      "ok": 23,
       "f": 0,
       "note": "Honest self-description. Reachable from voice and never failed.",
       "ev": "17 ok / 0 fail"
@@ -622,7 +622,7 @@
       ],
       "note": "Logging is perfect. The backlog it produces is not being drained.",
       "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN",
-      "ok": 207,
+      "ok": 211,
       "f": 0
     },
     {
@@ -645,7 +645,7 @@
       "tools": [
         "screen_look"
       ],
-      "ok": 56,
+      "ok": 57,
       "f": 11,
       "note": "Vision over the screen. GREEN WITH CAVEAT: every recorded failure is historical and 26 consecutive calls have succeeded. The caveat is the free-tier daily cap.",
       "ev": "RE-MEASURED 2026-08-27 (Track D-3) against the live vault: 52 ok / 11 fail, not 49/11 -- and ALL ELEVEN FAILURES FALL BETWEEN 2026-08-06 AND 2026-08-18. Newest failure 2026-08-18T11:38:48; newest success 2026-08-24T20:12:01. Since 2026-08-19 there have been 26 look calls (screen_look + camera_look) across five separate days with 26 ok and 0 fail. Cause of the historical failures and why they stopped: B1 (2026-08-14) fixed two things -- an attempt hitting its own per-attempt timeout now feeds the cooldown decision (it previously matched none of the 429/5xx/network arms), and per-(provider,model) breakers escalate with x2 backoff so an all-day outage is skipped for minutes rather than re-paid every few minutes. The vision lane head is now google/gemini-3.5-flash-lite with NIM demoted to position 3; the 8s-per-look precedent the work order cites was NIM at position 0. Caveat, per the no-spend decision: google free tier caps at 10/day, so a heavy day still falls through to mistral."
@@ -682,7 +682,7 @@
         "see_and_click"
       ],
       "ok": 4,
-      "f": 12,
+      "f": 13,
       "note": "Find a named thing on screen and click it. Cannot locate elements; the text it reads back is fragmented.",
       "ev": "1 ok / 5 fail over the last three days.\n\"I cannot see 'Video call' on screen. What I can read: MYTHOS | File Edit View | Window | WhatsApp | VOICE | unavailable | 21:12 ...\""
     },
@@ -770,7 +770,7 @@
       "tools": [
         "list_windows"
       ],
-      "ok": 106,
+      "ok": 110,
       "f": 1,
       "note": "Window enumeration. The recovery step every other desktop tool points at.",
       "ev": "88 ok / 1 fail"
@@ -794,8 +794,8 @@
       "tools": [
         "focus_window"
       ],
-      "ok": 35,
-      "f": 7,
+      "ok": 36,
+      "f": 8,
       "note": "DISPOSITION CLOSED 2026-08-28, and it stays warn on purpose: the escalation ladder is exhausted, Windows refuses deliberately, and no fourth rung may be added. Every failure now names a recovery.",
       "ev": "DISPOSITION 2026-08-28 (Track C-2, BUG-385). THE PREVIOUS NOTE HERE WAS WRONG ABOUT ITS OWN EVIDENCE. It read \"Five of six failures are stale PIDs it created itself. One is a genuine OS refusal.\" Re-derived from the union of both vault roots, the six failures are THREE classes, not two: 3 stale pid (\"Cannot focus PID 18832: ... That pid no longer exists, so nothing was focused. Call list_windows again\"), 2 no-main-window (\"Process 4420 has no main window.\"), 1 foreground-lock (\"...blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore\"). Two corrections: the count is 3/2/1, and \"stale PIDs it created itself\" is false for at least one — the model asked to focus PID 1, which focus_window never handed out. THE DISPOSITION: the ladder (thread-attach, then a foreground-lock-timeout override that is restored in a finally so it never leaks a machine-wide setting, then minimize/restore) is exhausted. Root CLAUDE.md records that the question of whether the denial reproduces in real voice-driven use was CLOSED on 2026-08-17 and the answer is yes; the alternatives are unreliable or user-hostile. A test now asserts the ladder has EXACTLY three rungs, that the refusal names all three, and that the saved timeout is restored inside a finally. ONE REAL GAP FIXED: of the three failure classes, no-main-window was the only one that told the caller nothing to do next, so the model retries the same pid. It now names list_windows, for the same reason the stale-pid failure does — list_windows enumerates WINDOWED processes, so a pid missing from it settles the question. STAYS WARN because it genuinely fails sometimes, for a reason nobody can fix; the failures are honest, not absent."
     },
@@ -836,7 +836,7 @@
         "scroll_at"
       ],
       "ok": 16,
-      "f": 6,
+      "f": 7,
       "note": "OPEN after 2026-08-27 triage. Needs a MEASURED desktop run against a fixed target script, not a code change. 10 calls is too small to mean anything.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and the work order says why: \"needs a MEASURED run against a fixed target script, not a code change. The ladder went 2 rungs to 5 on 08-20 and 10 calls is too small to mean anything.\" Measured: 5 ok / 5 fail across 4 distinct failure reasons, newest failure 2026-08-01 — nearly a month old, and 10 calls total. A 50% rate over 10 samples has a confidence interval wide enough to contain almost anything, so both \"it is broken\" and \"it is fine\" are unsupported. Any code change here would be tuning against noise. Needs the operator at a desktop with a fixed target script; the harness in scripts/verify-dark-nodes.js deliberately does not attempt it, because clicking real windows is not something a test run should do unattended."
     },
@@ -952,7 +952,7 @@
       "tools": [
         "open_web"
       ],
-      "ok": 142,
+      "ok": 144,
       "f": 26,
       "note": "Renders search, weather, flight and YouTube cards. 17 distinct failure strings, now all typed with a machine-readable code. Five YouTube URL shapes were unreadable and now parse.",
       "ev": "RE-MEASURED 2026-08-27 (BUG-381 / Track D-4) against the live vault: 135 ok / 25 fail, not 131/19 -- the map was stale AND under-counted the failures. 17 distinct failure strings, not twelve. Grouped by real cause: 9 correct refusals of a malformed call (no url / no type / no query), 10 where upstream genuinely returned nothing, 3 \"could not extract a YouTube video ID\", 3 provider fetch failures. So D-4's named cause is the SMALLEST of the four, but it was real: the extractor regex knew four YouTube URL shapes and missed five. Measured -- MISS on youtube.com/live/ID (a livestream, and the failing queries included \"CNN live news\", \"CNN news dashboard\" and \"today's news\"), MISS on watch?app=desktop&v=ID and watch?feature=share&v=ID (v had to be the FIRST query param, which a share sheet and a mobile redirect both break), MISS on youtube-nocookie.com/embed/ and on the legacy /v/ path. All five now read, extracted to util/youtube-id.js with a host guard so an unrelated URL containing an 11-char path segment cannot yield a fake id. Second half of D-4 also done: all 22 failure sites in the open_web handler now carry a typed `code` (bad-request / no-results / unplayable-results / provider-error, one per measured cause group) beside the unchanged prose, so a caller can finally branch. STILL WARN, not green: the extractor is unit-verified over the real URL shapes but no live search has been driven through it, and 84% (135/160) is not a green number even when most of the remainder is correct refusal."
@@ -994,7 +994,7 @@
         "browser_launch_debug",
         "browser_switch"
       ],
-      "ok": 145,
+      "ok": 147,
       "f": 33,
       "note": "OPEN after 2026-08-27 triage. browser_launch_debug works (15 ok / 1 fail) but nothing auto-launches it on first need. The wiring is the work, and it is not done.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and said plainly rather than left ambiguous. D-6: \"wire the EXISTING browser_launch_debug (15/1) to auto-launch on first need. Do not build a launcher.\" Measured: browser_launch_debug 15 ok / 1 fail, newest failure 2026-08-05 — the tool itself is sound. What is missing is the wiring, so a browser_* call on a cold machine still reports the debug port unreachable instead of starting Chrome once and retrying. Deliberately not attempted in this pass: the change spawns a real browser process on first use, which is a live-behaviour change to a T3 surface that wants its own verification sitting (a harness cannot prove \"launched once, then the retry succeeded\" without actually launching). Left open with the mechanism named rather than half-wired."
@@ -1032,7 +1032,7 @@
         "gmail_read"
       ],
       "ok": 112,
-      "f": 100,
+      "f": 103,
       "note": "gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
       "ev": "LIVE-VERIFIED 2026-08-28 (Track A, BUG-387) — the first time this node has been checked against the provider rather than against its own history. `node mythos/scripts/verify-google-grant.js` reports INVALID: the refresh token minted no access token and Gmail refused. The real effector agrees, which is the two-routes-one-answer cross-check: calling gmail_unread through the registered tool returns \"invalid_grant: Token has been expired or revoked.\" So this row is correct and stays red. THE CODE AROUND IT IS NOT AT FAULT, measured rather than assumed: from-gmail classifies invalid_grant as TERMINAL and its remedy text names the literal command plus the 7-day Testing-publishing-status trap; hub.js latches the terminal result per tool so the provider is not hammered — the 88 recorded failures fall into 60 bursts, nearly all of size ONE, i.e. one attempt per process rather than a retry storm; gmail-sensor raises health.anomaly with needsOperator:true; and explainer.js speaks the whole remedy aloud, verbatim, including `node scripts/google-auth.js`. Nine test files already cover that chain, two of them asserting the SPOKEN text contains the command. WHAT WAS ACTUALLY BROKEN was the one thing an operator would check: `doctor` reported \"OK Gmail / Calendar sensors — configured\" for three weeks while all of the above was failing, because it tests that three strings are PRESENT in .env and presence is not validity. Fixed under BUG-387: doctor now says validity is unchecked and names the verifier. A CORRECTION worth recording: from the episodic `summary` field it looked as though MYTHOS had announced this nine times over eight days and never said what to do — that was WRONG, `summary` truncates at ~100 characters and `detail.text` carries the full remedy. Only the 2026-08-18 utterance is genuinely deficient and it predates the BUG-273 C2 / BUG-278 fixes that repaired exactly it. NEEDS THE OPERATOR: run `node mythos/scripts/google-auth.js`, put the new GOOGLE_REFRESH_TOKEN in mythos/.env, then confirm with `node mythos/scripts/verify-google-grant.js` — which is the point of the new script, since before it there was no way to tell whether the three minutes had worked."
     },
@@ -1162,7 +1162,7 @@
         "get_app_volume",
         "set_app_mute"
       ],
-      "ok": 190,
+      "ok": 205,
       "f": 1,
       "note": "set_volume, get_volume and media_key. Not one failure in 154 calls.",
       "ev": "set_volume 68/0, get_volume 37/0, media_key 49/0, media_status 28/1"
@@ -1278,7 +1278,7 @@
         "toggle_goal",
         "delete_goal"
       ],
-      "ok": 282,
+      "ok": 302,
       "f": 3,
       "note": "Read, create, propose and toggle all work at the data layer. The HUD panel did not reflect a toggle it did not make itself - fixed after the last session, unproven.",
       "ev": "list_goals 60/0, propose_goal 37/1, create_goal 8/0, rest.goals.toggle 13/0\nBUG-290 fixed 2026-08-21 01:00 -- NOT live-verified."
@@ -1294,7 +1294,7 @@
         "reminder_approve_action",
         "calendar_upcoming"
       ],
-      "ok": 70,
+      "ok": 72,
       "f": 3,
       "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
@@ -1335,7 +1335,7 @@
       ],
       "note": "OPEN after 2026-08-27 triage. Needs >=5 real boots before anything is touched; a harness cannot supply them.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED. D-6 is explicit about why: \"Add a first-line ready handshake with a timestamp; sample >=5 boots before touching the timeout — one run is not a mechanism.\" That instruction is the blocker. The observation is two live boots minutes apart on the same commit, one OFFLINE on a startup handshake that timed out and one fine, which is a sample of two and cannot distinguish a race from a slow machine. Changing the timeout on that evidence would be exactly the \"one run is not a mechanism\" mistake the work order warns against. Needs the operator to boot the driver >=5 times; then the handshake timestamp is worth adding, because it would say WHERE the time went.",
-      "ok": 55,
+      "ok": 59,
       "f": 9
     },
     {
@@ -1492,7 +1492,7 @@
       ],
       "note": "read_status, read_system_specs, system_status, job_status. 2 of 4 verified 2026-08-28: read_status and job_status reach through to the build engine, which a harness cannot supply.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. read_system_specs PASSES on a real oracle: its answer must agree with node's own os.cpus()/platform. That is the point of the tool — BUG-273 records that it exists so the model reads real numbers instead of screenshotting a dashboard to read them off it — so \"it returned something\" would have been the wrong check. system_status also passes (2.2 KB of real payload). read_status and job_status are n/a, not failing: both call buildRunner.listJobs(), and createBuildRunner requires the build engine or a brain lane, neither of which a harness may conjure under the no-spend decision. With it absent they report a failure rather than throwing, which is the honest degradation. Worth recording so nobody re-derives it: the first version of the harness passed buildRunner:null and wrote the resulting message up as a product problem — main.js constructs buildRunner unconditionally and a brain always exists, so null never reaches these in production.",
-      "ok": 186,
+      "ok": 188,
       "f": 0
     },
     {
@@ -1595,8 +1595,8 @@
       ],
       "note": "get_time, get_weather, get_directions. GREEN 2026-08-28: all three exercised against oracles, and get_time is checked against this process's own clock.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. This node reached the acceptance contract, so it is the strongest of the four promotions. get_time is not merely \"ok:true\": the answer must carry THIS process's current year, and passing timezone:\"Asia/Tokyo\" must actually change it — a tool returning a plausible date is precisely what a self-report cannot rule out, and the mutation that returned a fixed 1999 date was caught. get_weather and get_directions answered over their free lanes (346 and 143 bytes); their CONTENT is not verified against a second source and the harness says so rather than implying it did. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back.",
-      "ok": 157,
-      "f": 4
+      "ok": 158,
+      "f": 5
     },
     {
       "c": "build",
@@ -3963,18 +3963,77 @@
         "title": "CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable",
         "detail": {},
         "excerpt": "**Status:** ✅ FIXED 2026-09-02. Three ordinary test defects, each masked on a developer machine by a different environmental accident. Commits `4e4e663` (cause 2) and `38e884c` (causes 1 and 3). The original diagnosis below is kept because its measurements were right and are what made the causes findable — but **its stated root-cause hypothesis was wrong and has been struck.** ### THE CORRECTION — read this before the original text **The fork/commit-limit exhaustion hypothesis is wrong.** `node --test`'s default concurrency is `availableParallelism() - 1`, so the 4-vCPU hosted runner runs **3 workers against this machine's 7**. CI runs *less* in parallel, not more. Bounding concurrency, sharding, or moving to a self-hosted runner would have changed nothing. The errors were also assertion- and cancellation-shaped throughout, never the exit-127-with-no-summary signature the root `CLAUDE.md…"
+      },
+      {
+        "n": 400,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the HUD asked for a token the server no longer had: the token prompt reopened on every 401 of a PIN-only deployment and hid the PIN screen",
+        "detail": {
+          "verification": "`node --test test/bug-400-…` 14/14; neighbours `auth-gate-state`, `server-auth`, `pin-gate-state`, `pin-session` 69/69; `actions-widget-glyph`, `bug-317`, `compose-caption-clear`, `open-artifact-auth` 36/36. Probes (a)–(e) each red on exactly the predicted cases, restores hash-verified."
+        }
+      },
+      {
+        "n": 401,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the VOICE widget wrote the live-S2S result into the browser-TTS row, so `live s2s` read `checking…` forever and `browser tts` showed a value that was not its own",
+        "detail": {
+          "cause": "`ui/public/js/widgets/kinds/voice.js` builds `rows` as `[wakeword, recognition, synthesis, s2s]`, and the `/api/config/s2s` handler assigned `rows[2].value` — `synthesis`, labelled `browser tts` — in",
+          "fix": "A new pure exported `applyS2sResult(rows, cfg)` selects the row by `key === 's2s'` and is the only writer; both call sites go through it."
+        }
+      },
+      {
+        "n": 402,
+        "shape": "entry",
+        "state": "open",
+        "title": "the packaged build cannot find the build engine it installed: `setup-dsh.js` writes to `MYTHOS_TOOLS_DIR`, `adapters/dsh-agent` never reads it (🔴 DIAGNOSED 2026-09-03, not yet fixed)",
+        "detail": {},
+        "excerpt": "**Status:** 🔴 diagnosed from source and confirmed in the packaged boot log 2026-09-03; no code change yet. `scripts/setup-dsh.js` `dshSearchHomes()` considers four homes — `MYTHOS_DSH_INSTALL_DIR`, `MYTHOS_TOOLS_DIR/DeepSeek Harness`, `\u003crepo>/DeepSeek Harness`, `mythos/` — and WRITES to the tools dir whenever Electron sets it. `adapters/dsh-agent/index.js` `DSH_INSTALL_ROOTS` has two: `\u003crepo>/DeepSeek Harness` and `mythos/node_modules`, both derived from `__dirname`. In a packaged build `__dirname` is `resources/app.asar.unpacked/…`, neither exists there, and the harness is not shipped (`build.files`). Boot log: `dsh-agent.offline … Looked in: …app.asar.unpacked\\DeepSeek Harness…, …app.asar.unpacked\\mythos\\node_modules…` and `impact: every build will fail`. The HUD banner offers **Finish setup**, which installs to the tools dir the adapter will not look in — so the offered remedy cannot…"
+      },
+      {
+        "n": 403,
+        "shape": "entry",
+        "state": "open",
+        "title": "`primeAuthSession()` produced no log line on a boot where its token was present and its exchange would have answered 409 (🔴 UNDIAGNOSED 2026-09-03)",
+        "detail": {},
+        "excerpt": "**Status:** 🔴 open, unexplained. Recorded so the next session does not inherit the assumption that the prime ran. On the 21:30Z and 21:43Z boots of the packaged build, `%APPDATA%\\MYTHOS\\logs\\main.log` carried no `auth.session-prime:` line at all, and a grep of the whole file finds none ever. `resolveAuthTokenForPriming()` has no loopback guard and `decryptedKeysForChild()` has no key filter; `keystore-recrypt` reported all 9 keys decrypting; the server demanded a token, so the child received one. Every non-success path of `primeAuthSession()` logs, and a 409 from the combined-mode server was certain — yet nothing was written. Either the function is not reached on the path `whenReady()` actually takes when a PIN is configured, or `log()` is not bound to the file at that moment. Check that settles it: a temporary `log('auth.session-prime: entered')` as its first line, one boot. Not invest…"
+      },
+      {
+        "n": 404,
+        "shape": "entry",
+        "state": "open",
+        "title": "the adb fork-server outlives MYTHOS with its cwd inside the install tree, so the tree cannot be rebuilt, updated or uninstalled until someone finds and kills it (🔴 DIAGNOSED 2026-09-03, not yet fixed)",
+        "detail": {},
+        "excerpt": "**Status:** 🔴 diagnosed live 2026-09-03; no code change yet. Measured while rebuilding the packaged app: three consecutive `electron-builder --win --dir` runs failed with `EBUSY: resource busy or locked, rmdir …\\app.asar.unpacked\\mythos` after every `MYTHOS.exe` process had been stopped. The directory could be emptied but not removed — the signature of a live process whose *current working directory* is that folder. It was `adb.exe -L tcp:5037 fork-server server` (pid 4388, started 6 s after the app, from `%APPDATA%\\MYTHOS\\tools\\Android Platform Tools`). `android-child` spawns adb from the server child, which the Electron main process forks with `cwd: MYTHOS_DIR`; adb's daemon inherits that cwd and, by design, detaches and survives its parent. Killing it released the lock and the fourth build succeeded. The `pc-child` PowerShell (pid 17688) also survived the parent kill and held the tre…"
+      },
+      {
+        "n": 405,
+        "shape": "entry",
+        "state": "verified",
+        "title": "a dead pid cost ninety-two seconds and four turns because the failure named the recovery tool instead of running it",
+        "detail": {},
+        "excerpt": "**Status:** ✅ FIXED 2026-09-03. Six mutation probes recorded in `test/bug-405-dead-pid-returns-the-window-list.test.js`. Two halves: the trigger (`open_web`) and the recovery (`delegate`). **Measured from the operator's live voice session, audit vault 2026-09-03:** ``` 22:34:57 cua_bring_to_front{pid:6960} ok \u003c- 6960 was real 22:35:18 open_web{browser:true, ...} ok \u003c- relaunched Brave 22:35:38 open_web{browser:true, ...} ok 6960 is now dead 22:36:27 ui_elements{pid:6960} fail (24ms) 22:36:58 focus_window{pid:6960} fail (4ms) 22:37:45 list_windows{} ok \u003c- recovery, turn 1 22:37:56 list_windows{} ok \u003c- recovery, turn 2 22:38:30 cua_bring_to_front{pid:16652} ok \u003c- correct at last ``` Every Brave process on the machine carried a start time of 22:35:18 and pid 6960 no longer existed, so the two instant failures (24ms, 4ms) were **correct**. The defect is the ninety-two seconds and four turns…"
+      },
+      {
+        "n": 406,
+        "shape": "entry",
+        "state": "open",
+        "title": "the half-duplex gate held the operator's microphone for 40% of a conversation, and 92 seconds of that ended in a timeout rather than in actual echo (🔴 DIAGNOSED 2026-09-03, deliberately NOT fixed here)",
+        "detail": {},
+        "excerpt": "**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. **Measured from `voice.capture-suspend` releases, operator session 2026-09-03 (~11 minutes of conversation):** | release reason | n | total held | worst single hold | frames zeroed | |---|---|---|---|---| | `own-voice-ended` (normal) | 25 | 159.4s | 11.0s | 37,918 | | `own-voice-ceiling-near-field-energy` | 5 | 68.1s | **21.4s** | 6,810 | | `own-voice-ceiling-no-evidence-of-echo` | 2 | 24.2s | 13.1s | 2,235 | | `suspend-window-elapsed` | 2 | 16.0s | 8.0s | 0 | | **total** | **34** | **267.7s** | | **46,963** | `framesDropped` was 0 throughout — nothing was lost in transport. The audio was **zeroed**, deliberately, by the own-voice gate. **The signal is the ceiling releases, not the total.** Holding the mic while MYTHOS is genuinely speaking is correct half-duplex behaviour, and `own-voice-ended` is that…"
       }
     ],
     "counts": {
-      "verified": 66,
+      "verified": 69,
       "fixed": 173,
-      "open": 3,
+      "open": 7,
       "coded": 3,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 248,
+    "total": 255,
     "openDeclared": [
       274,
       275
