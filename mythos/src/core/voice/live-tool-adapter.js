@@ -39,6 +39,15 @@ const {
   detectUnbackedClaims, buildSpokenGoAheadNotice, detectUnscheduledCommitments,
   detectFalseRetractions,
 } = require('./claim-check');
+// BUG-275 H3/H4 — its own module; see that file's header for why it is not in
+// claim-check.js.
+const { detectUnsourcedRankedEntities, evidenceFor } = require('./ranked-claim-check');
+// The prose for onLiveTurnComplete's three turn-auditing detectors. Extracted
+// because the file-size ratchet refused this file and said, correctly, to move
+// the new code rather than raise the ceiling.
+const {
+  falseRetractionNotice, unscheduledCommitmentNotice, unsourcedRankingNotice,
+} = require('./turn-audit-notices');
 
 // BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
 // the file-size ratchet; full rationale in that module.
@@ -790,7 +799,11 @@ function createLiveToolAdapter(deps) {
           // instead of contradictory, and traceId is what lets a reader JOIN the
           // two records at all — until now nothing did, which is why the
           // disagreement could only be found by eye.
-          dispatchOk: ev.dispatchOk, traceId: call.id });
+          dispatchOk: ev.dispatchOk, traceId: call.id,
+          // BUG-275 H3/H4. THIS is a site that has to build it: `ev.result` is in
+          // scope here and nowhere downstream — the ledger dropped the result and
+          // the late re-narration at :525 says so ("long gone by now").
+          evidence: evidenceFor(call.name, ev.result) });
         responses.push({ id: call.id, name: call.name, response });
       } catch (err) {
         const reason = sanitize(err);
@@ -854,9 +867,17 @@ function createLiveToolAdapter(deps) {
     // too. This is where the ticket's own two examples (launch_app, open_web)
     // actually land, so omitting it here would have left the fix looking done
     // while the measured cases stayed unjoinable.
+    // BUG-275 H3/H4: the digest is built on BOTH commit paths, derived from the
+    // reason rather than from the one site the ticket's utterances happened to
+    // use. A web_search that breaches the 1500ms ack deadline lands here and
+    // nowhere else, and BUG-295 measured open_web breaching it 44 times in one
+    // session — more breaches than calls. A digest on the awaited path only
+    // would go quietly missing on exactly the slow lookups most likely to be
+    // narrated from memory.
     const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified,
       abortedInFlight: ev.abortedInFlight, summary: verdict,
-      dispatchOk: ev.dispatchOk, traceId: traceId || null };
+      dispatchOk: ev.dispatchOk, traceId: traceId || null,
+      evidence: evidenceFor(toolName, ev.result) };
     liveTurnActions.push(lateEntry);
     recentActionLedger.record(lateEntry);
     sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
@@ -1294,24 +1315,17 @@ function createLiveToolAdapter(deps) {
       // verified `open_folder` (window-title oracle, pid 15816) got retracted.
       for (const bad of detectFalseRetractions(
         assistantText, actionsThisTurn, recentActionLedger.forClaims())) {
+        const n = falseRetractionNotice(bad);
         if (bus && typeof bus.emit === 'function') {
           bus.emit('health.anomaly', {
             kind: 'retracted-a-proven-action',
             tool: 'false-retraction', target: 'false-retraction',
-            claim: bad.sentence, provenTools: bad.provenTools,
+            claim: bad.sentence, provenTools: bad.provenTools, reason: n.reason,
           });
         }
-        sendSystemNotice(
-          `CORRECTION of your own prior statement — you said "${bad.sentence}", but ${bad.provenTools.join(', ')} `
-          + 'DID succeed and was confirmed by an independent oracle. Nothing in this turn failed. '
-          + 'You just took back something that was true.',
-          'Do NOT retract it. Tell the operator it did happen, name the evidence, and then RECONCILE the '
-          + 'disagreement instead of folding: the window may be behind another one, on another display, or '
-          + 'already closed since. Offer the next concrete step (focus_window, list_windows) rather than '
-          + 'apologising for a success.',
+        sendSystemNotice(n.message, n.instruction,
           { site: 'bug398-row7-false-retraction', tool: 'false-retraction',
-            claim: 'retracted-a-proven-action' },
-        );
+            claim: 'retracted-a-proven-action' });
       }
 
       // BUG-398 D1 (2026-09-02): a promised RECURRING commitment with nothing
@@ -1324,23 +1338,38 @@ function createLiveToolAdapter(deps) {
       // evidence-based checks above saw a successful tool and stayed quiet.
       for (const promise of detectUnscheduledCommitments(
         assistantText, actionsThisTurn, recentActionLedger.forClaims())) {
+        const pn = unscheduledCommitmentNotice(promise);
         if (bus && typeof bus.emit === 'function') {
           bus.emit('health.anomaly', {
             kind: 'promised-schedule-not-created',
             tool: 'recurring-commitment', target: 'recurring-commitment',
-            claim: promise.sentence, sawTools: promise.sawTools,
+            claim: promise.sentence, sawTools: promise.sawTools, reason: pn.reason,
           });
         }
-        sendSystemNotice(
-          `CORRECTION of your own prior statement — you said "${promise.sentence}" but NOTHING was scheduled. `
-          + 'No reminder, timer or daily plan was created this turn, so nothing will fire. '
-          + 'Note that `remember` stores a fact and schedules NOTHING.',
-          'Tell the operator now, plainly, that the recurring item is NOT set up yet. Do NOT repeat the '
-          + 'promise. If they still want it, call reminder_add (or timer_add / daily_plan) and say so only '
-          + 'once that has succeeded.',
+        sendSystemNotice(pn.message, pn.instruction,
           { site: 'bug398-d1-unscheduled-commitment', tool: 'recurring-commitment',
-            claim: 'promised-schedule-not-created' },
-        );
+            claim: 'promised-schedule-not-created' });
+      }
+
+      // BUG-275 H3/H4 (2026-09-02): a ranked position handed to a name that is
+      // not in the evidence. The three above ask whether a TOOL did something;
+      // this is the first that compares the CONTENT of a reply to the content of
+      // a result. Why it cannot be a claim-check category is in that detector's
+      // own header; the wording rules are in turn-audit-notices.js.
+      for (const bad of detectUnsourcedRankedEntities(
+        assistantText, actionsThisTurn, recentActionLedger.forClaims())) {
+        const un = unsourcedRankingNotice(bad);
+        if (bus && typeof bus.emit === 'function') {
+          bus.emit('health.anomaly', {
+            kind: 'unsourced-ranked-entity',
+            tool: 'unsourced-ranking', target: 'unsourced-ranking',
+            claim: bad.sentence, absent: bad.absent, sawTools: bad.sawTools,
+            reason: un.reason,
+          });
+        }
+        sendSystemNotice(un.message, un.instruction,
+          { site: 'bug275-h3-unsourced-ranking', tool: 'unsourced-ranking',
+            claim: 'unsourced-ranked-entity' });
       }
     }
 

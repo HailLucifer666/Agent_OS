@@ -6239,7 +6239,166 @@ All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 i
 
 ## BUG-275 — the voice assistant fabricates leaderboard facts, invents sources, and justifies its own fabrications when challenged (OPEN — evidence re-measured 2026-08-28, NOT STARTED) — opened 2026-08-19
 
-**Status:** OPEN — the repair is NOT STARTED. All three of this entry's own "check first" items were answered 2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted) and the findings are in the sections below. **BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the words "NOT STARTED" appearing somewhere in its prose, so an editorial rewrite could have silently unrecorded it. H2 — defending an invention when challenged — is the highest-severity half.
+**Status:** 🔴 PARTIALLY FIXED — H3 and H4 are closed with a detector and a
+mutation-proven test suite (2026-09-02); **H5 and H7 are REFUTED and were never
+defects**; H1's stated mechanism was measured and is WRONG; H1 and H2 remain
+genuinely open. All three of this entry's own "check first" items were answered
+2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted).
+**BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the
+words "NOT STARTED" appearing somewhere in its prose, so an editorial rewrite
+could have silently unrecorded it. H2 — defending an invention when challenged —
+is the highest-severity half and is untouched.
+
+> ### ✅ H3 AND H4 CLOSED 2026-09-02 — and THREE of this ticket's findings were measured and are wrong
+>
+> Everything below was measured against
+> `%APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl` (667 records: 231
+> `conversation`, 213 `action`) before any code was written. The measurement
+> changed the scope of the fix three times, so it is recorded before the fix.
+>
+> | item | what the ticket says | what the vault says |
+> |---|---|---|
+> | **H1** | padded positions 4-5 with two names that "appear as a ranked entry in **no** snippet" | **WRONG ABOUT THE MECHANISM.** Both names are really in the 2,495-byte result: `Claude Opus 5` in a Terminal-Bench convergence article, `Gemini CLI` in the sentence *"a comparison of Claude Opus 5, GPT-5.6 Sol, Gemini CLI, GitHub Copilot"*. It did not invent them — it **promoted names out of unranked prose into rank positions**. Still open, and harder than filed |
+> | **H2** | invented a rationalisation for a name in "that benchmark" | **CONFIRMED as a defect**, but its stated basis is wrong too: there WAS a `Gemini CLI` in the evidence — in a *comparison article*, not a benchmark ranking. Still open |
+> | **H3** | five names attributed to LiveBench, whose result had no model rows | **CONFIRMED, and the cleanest case.** The LiveBench result 22.4s earlier (2,226 bytes) is column headers only: **0 of the 5 names occur in it**. ✅ **CLOSED** |
+> | **H4** | `Claude Opus 1` mutated from a correct `Claude Opus 5` | **CONFIRMED.** `Claude Opus 1` occurs in **0 of all 213 action results** in the session. ✅ **CLOSED** |
+> | **H5** | "GLM 5 3 is also live since August fourteenth" — a date with no source | **REFUTED. NOT A DEFECT.** The date was in evidence 350s earlier, twice: the z.ai blog snippet (*"2026-08-14 · Research … Today we are releasing GLM-5.3"*) and a SiliconANGLE article stamped `AUGUST 14 2026`. The ticket audited **one search** (turn 10) instead of the evidence window the model actually had |
+> | **H7** | *"that Nvidia news detail you asked for"* — "the operator never mentioned Nvidia at any point in the 26 turns" | **REFUTED on its first half. NOT A FABRICATION.** The operator asked, verbatim: *"tell me what what what what was that Nvidia's news you were telling?"* (`ts=1787128154911`). 22 action results also carry Nvidia. What survives is only the second half — the unverifiable "caught another glitch, restored, no data lost" self-report, which is **spoken twice, verbatim, 710s apart** (`1787128298167`, `1787129008833`): an unanswered offer re-offered rather than answered |
+>
+> **The same error produced two of the three wrong findings:** each compared a
+> spoken claim against ONE tool result instead of against the evidence the model
+> actually held. The recent-action window is 120s and spans turns.
+>
+> ### What was built, and why it is not an extension of the existing detector
+>
+> `detectUnsourcedRankedEntities` (`src/core/voice/ranked-claim-check.js`) fires
+> when a reply gives a named entity a ranked position and that name occurs in
+> **none** of the fact-finding results currently in evidence.
+>
+> It is a new predicate, not a new claim category, because
+> `detectUnbackedClaims` short-circuits on `backed` the moment any gateTool
+> succeeds — deliberately, per the F1b lesson — and in this session `web_search`
+> HAD succeeded. That gap is structural. The two gates are **disjoint by
+> construction** (this one needs a lookup that succeeded; the `external-fact`
+> category needs one that did not), so neither becomes unreachable and neither
+> can double-report a sentence.
+>
+> **The 120s window turned out to BE the scope, which removed a whole component.**
+> The first design parsed the cited source out of the spoken text
+> ("Checked LiveBench…") to pick which result to compare against. Unnecessary:
+> the BenchLM result H3 borrowed its five names from was **253.3s old**, so the
+> window had already dropped it, and H3 is visible with no attribution parsing
+> at all. An existing, tested mechanism instead of a new one.
+>
+> **Corpus replay, which is what makes it safe to ship:** all 171 real replies in
+> the session, each against the real evidence window at its own timestamp. **It
+> fired exactly twice — H3 and H4 — and nowhere else.** 82 of those replies had
+> evidence in window.
+>
+> **Two routes, one answer.** Route 1 = the detector's normalised digest. Route 2
+> = hand-written punctuation variants substring-matched over the raw JSON, not
+> reusing the production normaliser. Both returned the identical verdict on all
+> six names, `Claude Fable 5` and `Claude Opus 5` PRESENT included — which is why
+> the notice names three absent names rather than five.
+>
+> **The false positive that nearly shipped, and the one shared function that
+> stops it.** Spoken text is TTS-shaped and evidence is web prose, and they
+> disagree on punctuation for the same name: spoken `GPT-5 6 Sol` vs evidence
+> `GPT-5.6 Sol`; spoken `GLM 5 3` vs `GLM-5.3`; spoken `LiveBench ai` vs
+> `livebench.ai`. A punctuation-respecting substring test calls all three absent
+> and tells the model to retract a **correctly sourced** name. `evidence-digest.js`
+> holds ONE `normalizeForEvidence`, imported by both the build side (the adapter)
+> and the query side (the detector) — two copies would drift and every query
+> would silently become a false positive.
+>
+> **The gate fails closed on four clauses**, and the load-bearing one is
+> truncation: a digest cut short may be missing the very name being queried, so
+> absence from a partial digest is refused rather than trusted. That is the only
+> route by which this could accuse the model of inventing a name it really read.
+>
+> ### The notice states the measurement and no mechanism (BUG-398 row 5's rule)
+>
+> The detector knows exactly one fact — this name is not in the results in
+> evidence. It does **not** know whether the model invented it, read it in a
+> lookup that has since aged out (H3's real cause), or heard it from the
+> operator. So the message opens "CHECK of your own prior statement", says
+> plainly *"this is a measurement of the results, not an accusation"*, and is the
+> only one of the nine `sendSystemNotice` sites that is not a "CORRECTION".
+> Asserting a cause here is precisely what BUG-398 row 5 was.
+>
+> ### DISPOSITION — H1 is deliberately NOT caught, and that is pinned by a test
+>
+> Catching H1 needs "is this name in a **ranked context** in the snippet", i.e.
+> classifying snippet structure — a model of a system, which drifts, and drifts
+> open. The absence test can only fire on total absence, so its errors are
+> misses. Weakening it into a ranked-context heuristic would trade a guard that
+> cannot false-accuse for one that can, on the reply path, which is the single
+> error `claim-check.js`'s header forbids outright.
+> `test/bug-275-unsourced-ranked-entity.test.js` asserts H1's real utterance
+> against H1's real evidence returns `[]`, so H1 cannot be quietly "closed" that
+> way.
+>
+> ### Two defects found in passing, and fixed in the same pass
+>
+> 1. **All three turn-complete detector anomalies were missing `reason`** —
+>    including BUG-398 D1's and row 7's, shipped earlier the same day. None of
+>    the three kinds has a healer playbook, so each reaches the immune
+>    explainer's `no-match` path and is **spoken to the operator**, and
+>    `conversation/announcer.js`'s `honestCauseClause` reads `reason` and nothing
+>    else — saying *"I do not yet know the cause"* without it. An honesty alarm
+>    announced as an unexplained fault, in the voice channel this ticket is
+>    about, is noise. Found by reading the consumer, not the emit site. All three
+>    fixed, because the justification ("an emitter that knows its cause must
+>    state it") covers all three.
+> 2. **This ticket's own "Where to look" section still sends the reader to
+>    `vault\Conversation\session.json`**, which the 2026-08-28 box at the top of
+>    this entry already established is a single-session file that is overwritten.
+>    Left in place with the correction above it rather than deleted, since the
+>    box explains the relocation.
+>
+> ### Mutation proof — 8 probes, run 2026-09-02, all applied-verified
+>
+> Every probe re-counted the mutated string to confirm the edit landed (a
+> mutation that silently fails looks exactly like a guard that works), and every
+> restore was a full-path file copy verified `sha256sum -c`, not
+> `git checkout --`.
+>
+> | probe | result |
+> |---|---|
+> | (a) delete the truncation clause from the gate | RED: the 2 truncation tests. As predicted |
+> | (b) drop the punctuation strip from `normalizeForEvidence` | RED: the punctuation bound + the digest-shapes test. **PREDICTED AND DID NOT HAPPEN:** H3 staying green — it does, because H3's fixture spells its names with the same punctuation the reply uses, so **H3 does not exercise normalisation at all**. The punctuation bound is its only guard |
+> | (c) drop `ok === true && unverified !== true` | RED: the 2 lookup-state gates |
+> | (d) drop the colon requirement, making extraction lexical | RED: the vocative bound + H3. **And it caught a defect in the test file:** the bound asserted `!names.includes('Sir')`, and this mutation yields `"Sir: Claude Fable 5"` as one name — not the string `"Sir"`, so the bound PASSED against it. Rewritten to `/\bSir\b/` over every extracted name, and only then did it red |
+> | (e) invert absence to presence | RED: 7 tests including DISPOSITION — so the disposition is reachable and load-bearing, not vacuous |
+> | (f) delete the `evidence:` field from the awaited commit site | RED: **only** the wiring file, while all 18 tests in the detector's own file stayed GREEN. That contrast is why `test/bug-275-evidence-digest-reaches-the-ledger.test.js` exists — a detector with a perfect gate reads nothing if a push site forgets the field, and the suite would not notice |
+> | (g) delete `reason` from the unsourced-ranking anomaly | **FIRST RUN: reddened NOTHING.** A real operator-facing defect with no guard. The three `reason` tests were written in response and the probe RE-RUN: it now reds one test and only that one |
+> | (h) delete `reason` from the false-retraction anomaly | RED: only that kind's test, confirming the three assert independently |
+>
+> ### What the forward guards did, unprompted
+>
+> Three repo guards fired on this change and every one of them was right:
+> the **narration-site population guard** caught the new `sendSystemNotice` site
+> and made it be enumerated; the **file-size ratchet** refused
+> `live-tool-adapter.js` growing 1449→1492 and said "do not raise it to make
+> this pass" — so the notice prose for all three detectors moved to
+> `src/core/voice/turn-audit-notices.js` and the duplicated evidence-gate at the
+> two commit sites collapsed into one exported `evidenceFor()`, leaving the file
+> at **1441**, below where it started; and the **800-line ceiling** then refused
+> `claim-check.js` at 801, so the detector became its own module
+> (`ranked-claim-check.js`, sharing `splitSentences`/`FUTURE_RE` rather than
+> copying them). No baseline number was raised.
+>
+> **Suite 7074/7074/0 fail/0 skipped.** `sync-test-count --check`,
+> `build-index --check` and `build-capability-map --check` all green.
+>
+> ### What is left in this ticket
+>
+> **H1 and H2 only**, plus H7's second half (the canned "restored, no data lost"
+> self-report, re-offered verbatim). H1's real mechanism — names promoted from
+> unranked prose into ranked slots — is stated correctly above for the first
+> time; the fix direction the ticket previously recorded ("count-compliance
+> beating source-fidelity") is consistent with it but was reasoning from a
+> premise that the vault does not support, so **re-derive before building.**
 
 **Reported by the operator, 2026-08-19, from a live voice conversation: "it hallucinates".
 Filed for later, deliberately not fixed in the same session.**

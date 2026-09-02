@@ -59,6 +59,14 @@
 //   reminders/timers -> from-calendar.js (reminder_add, timer_add)
 //   searching/fetching
 //                    -> from-code-search.js (search_code), from-computer.js (search_files)
+// The ONLY require in this file, and it keeps the header's purity promise: a
+// sibling pure module. It is imported rather than reimplemented so that the
+// normalisation used to BUILD an evidence digest and the one used to QUERY it
+// are the same function — see evidence-digest.js's header for why two copies
+// would silently turn every query into a false positive.
+// (The BUG-275 ranked-entity detector and its evidence-digest dependency moved
+// to ranked-claim-check.js when this file reached the 800-line ceiling.)
+
 const CLAIM_CATEGORIES = [
   {
     name: 'logging',
@@ -602,4 +610,8 @@ module.exports = {
   detectUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice,
   detectUnscheduledCommitments, SCHEDULE_WRITE_TOOLS, SCHEDULE_READ_TOOLS,
   detectFalseRetractions,
+  // Exported for ranked-claim-check.js, which is a second detector over the
+  // same text and must split sentences and skip future tense IDENTICALLY.
+  // Two copies of either would drift, and the drift would be invisible.
+  splitSentences, FUTURE_RE,
 };

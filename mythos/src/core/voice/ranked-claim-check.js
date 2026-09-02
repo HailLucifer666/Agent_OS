@@ -1,0 +1,208 @@
+'use strict';
+// ranked-claim-check.js — BUG-275 H3/H4. A ranked position handed to a name
+// that is not in the evidence.
+//
+// SPLIT OUT OF claim-check.js, and the reason is worth recording rather than
+// hiding: adding this detector took that file to 801 lines against an 800-line
+// house ceiling, and the guard says "split them or add a justified exception".
+// The exception would have been the easy option and the wrong one — this is a
+// self-contained second detector over the same text, so it is a file.
+//
+// IT SHARES splitSentences AND FUTURE_RE WITH claim-check.js RATHER THAN
+// COPYING THEM. Both detectors run over the same assistant reply, and a
+// second copy of either would drift from the first invisibly — the same
+// reasoning that puts normalizeForEvidence in one module for both sides of
+// the digest. The dependency is one-directional: this file imports from
+// claim-check.js and claim-check.js knows nothing about this one.
+
+const { CLAIM_CATEGORIES, splitSentences, FUTURE_RE } = require('./claim-check');
+const { normalizeForEvidence, buildEvidenceDigest } = require('./evidence-digest');
+// ---------------------------------------------------------------------------
+// BUG-275 H3/H4 — a ranked position handed to a name that is not in the
+// evidence. This is the CONTENT check the BUG-275 entry says the detector above
+// cannot be, and it is deliberately not built by loosening that one.
+//
+// WHY detectUnbackedClaims CANNOT REACH THESE. Its `backed` short-circuit exits
+// as soon as any gateTool succeeded, and it must — the F1b lesson in the
+// searching category is that without it the detector tells the assistant to
+// retract statements it had just earned. In the real session `web_search` had
+// succeeded, so every shape check was skipped. That gap is structural, not a
+// tuning miss, so this is a separate predicate over the same evidence: not
+// "did a lookup succeed" but "is this name in what the lookup returned".
+// Existence standing in for agreement is the class; the two questions differ.
+//
+// MEASURED 2026-09-02 against %APPDATA%\MYTHOS\vault\Episodic\2026-08-19.jsonl
+// (667 records, 231 conversation, 213 action), and the measurement CORRECTED the
+// ticket on three points. Recorded here because the corrections are what set
+// this scope:
+//
+//   H3 (caught).  "Checked LiveBench ai leaderboard for coding, Sir. Top five
+//     currently stands thus: Claude Mythos 5, next Claude Fable 5, then
+//     GPT-5 6 Sol, Claude Opus 5, and Gemini CLI." The LiveBench result 22.4s
+//     earlier (2,226 bytes) is column headers and nothing else — 0 of those 5
+//     names occur in it. The earlier BenchLM result that DID carry three of them
+//     was 253.3s old, so the 120s recent-action window had already dropped it.
+//   H4 (caught).  "LMSpeed formally ranks Claude Opus 1 at global rank 1", where
+//     the result in front of it said Claude Opus 5. "Claude Opus 1" occurs in
+//     0 of all 213 action results in the session.
+//   H1 (NOT caught, deliberately — see the disposition below).
+//   H5 (NOT A DEFECT). The ticket calls "GLM 5 3 is also live since August
+//     fourteenth" an invented date. It is sourced: the z.ai blog snippet
+//     ("2026-08-14 · Research ... Today we are releasing GLM-5.3") and a
+//     SiliconANGLE article dated AUGUST 14 2026 were both in evidence 350s
+//     earlier. The ticket audited ONE search instead of the evidence window.
+//   H7 (NOT A DEFECT). The ticket says the operator never mentioned Nvidia.
+//     They did, verbatim: "tell me what what what what was that Nvidia's news
+//     you were telling?" 22 action results also carry Nvidia.
+//
+// THE WINDOW IS THE SCOPE, AND THAT IS THE DESIGN. The first draft of this
+// detector parsed the source out of the spoken text ("Checked LiveBench…") to
+// decide which result to compare against. That is a whole attribution parser to
+// maintain, and it is unnecessary: H3's misattribution is visible with no
+// attribution parsing at all, because the source it borrowed from had already
+// aged out of the evidence window. The existing, tested 120s ledger does the
+// scoping for free. No new surface.
+//
+// DISPOSITION — H1 IS NOT CAUGHT, ON PURPOSE, AND MUST NOT BE "FIXED" HERE.
+// H1 is the same five names spoken 56s earlier as a top five, when the evidence
+// held a ranking of three. Both padded names ARE in that result: "Claude Opus 5"
+// in a Terminal-Bench convergence article and "Gemini CLI" in the sentence "a
+// comparison of Claude Opus 5, GPT-5.6 Sol, Gemini CLI, GitHub Copilot". So the
+// model did not invent them — it promoted names out of unranked prose into rank
+// positions 4 and 5. The ticket's own text ("manufactured the remainder") is
+// wrong about the mechanism, and an absence test cannot see it by construction.
+//
+// Catching H1 needs "is this name in a RANKED context in the snippet", which
+// means classifying snippet structure — a model of a system that will drift, and
+// drift open. The absence test here is the opposite: it can only fire when a
+// name is wholly missing, so its errors are misses. Weakening it into a
+// ranked-context heuristic would trade a guard that cannot false-accuse for one
+// that can, on the reply path, which is the one error claim-check.js's header
+// forbids outright. Pinned by test: H1's real utterance against H1's real
+// evidence returns [].
+// WHAT THIS KILLS: nothing, and that is checked rather than assumed. The
+// obvious candidate is the external-fact category's `top N` shape, added for
+// this same ticket on 2026-08-28 — but the two gates are disjoint by
+// construction. That shape fires only when a gateTool was attempted and did
+// NOT succeed; this detector fires only when one DID succeed and returned a
+// digest. No reply can reach both, so neither becomes unreachable and neither
+// can double-report the same sentence. The "GATE: a FAILED lookup is silent"
+// test pins that boundary from this side.
+//
+// WHAT IT NEWLY REQUIRES: an `evidence` digest on the ledger row. That is a
+// fail-open in the wiring rather than the logic — a detector with a perfect
+// gate reads nothing if a push site forgets the field, and the suite would stay
+// green. Guarded behaviourally in
+// test/bug-275-evidence-digest-reaches-the-ledger.test.js, which was written
+// because a probe deleting the production wiring left every test in the
+// detector's own file passing.
+const RANK_WORDS = '\\d+|one|two|three|four|five|six|seven|eight|nine|ten';
+
+// An enumerated ranking: a "top N" head, then a colon, then the list. The list
+// is captured to end of sentence rather than up to the first "." because model
+// version numbers contain dots ("GPT-5.6") and a dot-bounded capture cuts the
+// name in half — found while testing, not by reading.
+const RANKED_LIST_RE = new RegExp(
+  '\\btop\\s+(?:' + RANK_WORDS + ')\\b[^:]{0,80}:\\s*(.+)$', 'i');
+
+// A single entity given a position: "LMSpeed formally ranks Claude Opus 1 at
+// global rank 1". Positional on the verb, so the name is taken from where a
+// ranked subject grammatically has to be, not from "every capitalised word" —
+// which would collect "Sir" out of every second sentence in this persona.
+const RANKED_SINGLE_RE =
+  /\branks?\s+([A-Z][A-Za-z0-9.'-]*(?:\s+[A-Z0-9][A-Za-z0-9.'-]*){0,3})\s+(?:at|as)\b/;
+
+// Ordinals and connectives that introduce a list member without being part of
+// the name. Grammar, not a catalogue of models — the thing trap D forbids is a
+// hand-kept list of the SET BEING CHECKED, and the set being checked here is
+// derived from the sentence at run time.
+const LIST_CONNECTIVE_RE =
+  /^(?:and|then|next|followed\s+by|finally|lastly|plus|with|also|first|second|third|fourth|fifth)\s+/i;
+
+// The tools whose results are the evidence for an external fact. DERIVED from
+// the external-fact category above rather than retyped: one list, and a tool
+// added there is covered here the same day.
+const EXTERNAL_FACT_CATEGORY = CLAIM_CATEGORIES.find((c) => c.name === 'external-fact');
+const EVIDENCE_TOOLS = EXTERNAL_FACT_CATEGORY ? EXTERNAL_FACT_CATEGORY.gateTools : [];
+
+// The gate for "does this tool's result count as external evidence?", exported
+// so the two commit sites in live-tool-adapter.js share ONE copy of it. Both
+// sites started with their own inline copy of the membership test, and two
+// copies of a membership test are how one of them quietly stops matching — the
+// same reason normalizeForEvidence is imported rather than reimplemented. It
+// lives here because this file is what defines the set.
+function evidenceFor(toolName, result) {
+  return EVIDENCE_TOOLS.indexOf(toolName) !== -1 ? buildEvidenceDigest(result) : null;
+}
+
+function rankedEntitiesIn(sentence) {
+  const out = [];
+  const list = RANKED_LIST_RE.exec(sentence);
+  if (list) {
+    for (const piece of String(list[1]).split(',')) {
+      for (const part of piece.split(/\s+and\s+/i)) {
+        const name = part.trim()
+          .replace(LIST_CONNECTIVE_RE, '')
+          .replace(/[.!?,;:]+$/, '')
+          .trim();
+        // Must read as a name: an initial capital, and long enough that the
+        // normalised form cannot match half the alphabet by accident.
+        if (/^[A-Z]/.test(name) && name.replace(/[^A-Za-z0-9]/g, '').length >= 3) out.push(name);
+      }
+    }
+  }
+  const single = RANKED_SINGLE_RE.exec(sentence);
+  if (single) {
+    const name = single[1].trim();
+    if (name.replace(/[^A-Za-z0-9]/g, '').length >= 3) out.push(name);
+  }
+  return [...new Set(out)];
+}
+
+// Pure, exported, separately testable — same contract as the two detectors
+// above. Returns [] or one entry:
+// { category:'unsourced-ranking', sentence, absent:[names], sawTools:[tools] }.
+function detectUnsourcedRankedEntities(assistantText, actionsThisTurn, recentActions) {
+  const text = String(assistantText || '');
+  if (!text) return [];
+
+  const current = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
+  const recent = Array.isArray(recentActions) ? recentActions : [];
+  const actions = current.concat(recent).filter((a) => a && a.tool);
+
+  // THE GATE, and every clause of it fails CLOSED.
+  //
+  // `ok === true` and not unverified: only a result that actually came back can
+  // prove a name is absent from it. A FAILED lookup proves nothing about the
+  // name and is already the external-fact category's case — firing here too
+  // would report one defect twice.
+  //
+  // `truncated` entries are excluded and cannot be substituted for: absence from
+  // a digest that was cut short is not absence from the result, and that is the
+  // only route by which this could accuse the model of inventing a name it read.
+  const usable = actions.filter((a) => EVIDENCE_TOOLS.indexOf(a.tool) !== -1
+    && a.ok === true && a.unverified !== true
+    && a.evidence && a.evidence.truncated !== true
+    && typeof a.evidence.text === 'string' && a.evidence.text.length > 0);
+  if (!usable.length) return [];
+
+  const digest = usable.map((a) => a.evidence.text).join('|');
+
+  for (const sentence of splitSentences(text)) {
+    if (FUTURE_RE.test(sentence)) continue;
+    const names = rankedEntitiesIn(sentence);
+    if (!names.length) continue;
+    const absent = names.filter((n) => digest.indexOf(normalizeForEvidence(n)) === -1);
+    if (!absent.length) continue;
+    return [{
+      category: 'unsourced-ranking',
+      sentence: sentence.trim().slice(0, 300),
+      absent,
+      sawTools: [...new Set(usable.map((a) => a.tool))],
+    }];
+  }
+  return [];
+}
+module.exports = {
+  detectUnsourcedRankedEntities, EVIDENCE_TOOLS, rankedEntitiesIn, evidenceFor,
+};

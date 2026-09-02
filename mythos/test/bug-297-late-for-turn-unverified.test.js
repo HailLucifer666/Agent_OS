@@ -218,6 +218,28 @@ describe('BUG-297 — the late-for-turn re-narration is the fourth path', () => 
       // precisely the job. Its prohibition is checked in
       // bug-299-fragment-cannot-license-a-fact.test.js.
       'ad4-correction-unheard',
+      // Added by BUG-275 H3/H4 (2026-09-02) — a ranked position handed to a name
+      // that occurs in none of the fact-finding results in evidence. This guard
+      // did its job a third time: the new site reddened this test on the commit
+      // that introduced it, and the enumeration below was written only after
+      // checking what the message instructs.
+      //
+      // ITS PROHIBITION: "Do NOT restate that ranking as established." Wording
+      // pinned in bug-275-unsourced-ranked-entity.test.js (logic) and
+      // bug-275-evidence-digest-reaches-the-ledger.test.js (the notice actually
+      // reaching the model), and the prose itself now lives in
+      // src/core/voice/turn-audit-notices.js.
+      //
+      // IT IS THE ONLY SITE IN THIS LIST THAT IS NOT A "CORRECTION". Its message
+      // opens "CHECK of your own prior statement", deliberately: the detector
+      // knows the name is absent from the results and does NOT know why, and
+      // H3's measured cause was an earlier lookup ageing out of the 120s window
+      // rather than invention. Asserting a cause here is what BUG-398 row 5 was.
+      //
+      // NOT in bug-273-unverified-payload.test.js's matrix, for the same reason
+      // as the D1 site below: that file enumerates paths narrating a TOOL
+      // OUTCOME, and this one narrates a property of a reply.
+      'bug275-h3-unsourced-ranking',
       // Added by BUG-398 D1 (2026-09-02) — a promised RECURRING commitment with
       // nothing scheduled. This guard did its job again: the new site made this
       // test fail on the commit that introduced it. Enumerated here after
