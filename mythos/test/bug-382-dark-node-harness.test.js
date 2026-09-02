@@ -33,6 +33,57 @@ const path = require('path');
 
 const harness = require('../scripts/verify-dark-nodes.js');
 
+// BUG-398 R2 (2026-09-02) — THE FOURTH TIME, and the same fail-open direction
+// the header above describes: the harness blamed the product for its own
+// mistake. verify-dark-nodes.js pinned its sandbox by setting ALLOWED_FOLDERS,
+// and from-computer.js reads VOICE_ALLOWED_DIRS. The pin did nothing, so the
+// allowlist stayed the default (%USERPROFILE% plus the project root) and file
+// ops passed only because os.tmpdir() happens to sit under the home directory
+// on a developer machine.
+//
+// MEASURED: on a GitHub windows-latest runner, and in any shell whose TEMP is
+// exported in Windows 8.3 short form (this repo's own agent shells do — root
+// CLAUDE.md records it), the sandbox resolves under the profile folder's
+// truncated alias while the default allowlist derives from the full account
+// name, resolveSandboxed fails the containment check, and all eight file-ops
+// tools report "is outside the folders I can access". CI read that as eight
+// product failures. It was the pin. (Both paths are described rather than
+// quoted because AD-7 forbids a machine-specific absolute path literal in a
+// tracked file, and it caught the first draft of this comment — a tracked
+// COMMENT is a tracked file too.)
+//
+// This test does NOT depend on the form of TEMP, deliberately — depending on it
+// is exactly what let the defect survive. It sets a restrictive
+// VOICE_ALLOWED_DIRS and asserts the harness's own pin overrides it. With the
+// wrong variable name the restriction wins and every tool fails.
+//
+// MUTATION PROOF, 2026-09-02: reverting scripts/verify-dark-nodes.js:222 to
+// `process.env.ALLOWED_FOLDERS` fails this test with the verbatim CI string
+// "is outside the folders I can access"; verified applied by grepping the file
+// for the variable name before re-running. The adjacent case that must keep
+// passing is the whole rest of this file, which exercises the same harness with
+// no VOICE_ALLOWED_DIRS set at all.
+describe('BUG-398 R2 — the harness pins the sandbox variable the effector actually reads', () => {
+  it('file ops still pass when the ambient allowlist would forbid the sandbox', async () => {
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'darknode-pin-'));
+    const before = process.env.VOICE_ALLOWED_DIRS;
+    // A real directory that exists and does NOT contain the sandbox, so the only
+    // way file ops can pass is the harness overriding it.
+    process.env.VOICE_ALLOWED_DIRS = os.homedir() + path.sep + 'no-such-allowlist-for-bug-398';
+    try {
+      const rows = await harness.GROUPS.fileops(sandbox);
+      const failed = rows.filter((r) => r.verdict === harness.FAIL);
+      assert.deepEqual(failed.map((r) => r.tool + ': ' + r.detail), [],
+        'the harness must pin VOICE_ALLOWED_DIRS — with the wrong variable name every '
+        + 'tool here reports "is outside the folders I can access" and CI reads it as a product bug');
+    } finally {
+      if (before === undefined) delete process.env.VOICE_ALLOWED_DIRS;
+      else process.env.VOICE_ALLOWED_DIRS = before;
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('BUG-382 — the harness oracles actually discriminate', () => {
   it('isPdf accepts a real PDF header and rejects everything else', () => {
     assert.equal(harness.isPdf(Buffer.from('%PDF-1.7\n...')), true);
