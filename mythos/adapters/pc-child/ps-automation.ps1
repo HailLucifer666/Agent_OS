@@ -2429,22 +2429,57 @@ function Walk-UIA($Element, $Depth, $MaxDepth, [ref]$Elements, $Path, [ref]$Trun
 function Find-UIAElementPathByName($TargetPid, $Name, $AutomationId, $Hwnd) {
     $found = Find-UIAWindow $TargetPid $Hwnd
     if ($found.error) { return @{ error = $found.error } }
+    $wantedName = if ($Name) { ([string]$Name).Trim() } else { '' }
+    $wantedId = if ($AutomationId) { ([string]$AutomationId).Trim() } else { '' }
+
+    # BUG-397 FOLLOW-UP (2026-09-02, live against Chrome). A SINGLE FIXED SEARCH
+    # DEPTH CANNOT SERVE BOTH A DIALOG AND A BROWSER, and picking one number for
+    # both made ui_click look incapable of something it can do.
+    #
+    # Measured on a YouTube tab, same window, same walk, depth varied:
+    #
+    #   depth  6 -> 28 elements, 8 named, ZERO page content
+    #   depth  8 -> 52 elements, 20 named, zero page content
+    #   depth 12 -> 109 elements, 29 named, zero page content
+    #   depth 16 -> 452 elements, 309 named, 72 page names ("Meet the desktop
+    #               setup community"), truncated 0
+    #
+    # So Chromium's accessibility tree is fully there; it just starts ~14 levels
+    # below the window root, and at 6 the only things visible are Minimize,
+    # Maximize, Close, New Tab. `ui_click` was therefore refusing every page
+    # element in every browser and blaming the ELEMENT ("no element with that
+    # name in this window") for a limit of its own search.
+    #
+    # Escalate instead of guessing: stop at the first depth that matches, so a
+    # Notepad menu still costs one shallow walk, and a browser pays for the deep
+    # one only when the shallow answers came back empty. The node budget in
+    # Walk-UIA is the real bound - the deepest rung here is a ceiling on levels,
+    # not on work.
+    $searchDepths = @($Script:UIA_NAME_SEARCH_DEPTH, 12, 18)
     $elements = @()
     $truncated = 0
     $visited = 0
-    Walk-UIA -Element $found.element -Depth 0 -MaxDepth $Script:UIA_NAME_SEARCH_DEPTH -Elements ([ref]$elements) -Path @() -Truncated ([ref]$truncated) -Visited ([ref]$visited)
-
-    $wantedName = if ($Name) { ([string]$Name).Trim() } else { '' }
-    $wantedId = if ($AutomationId) { ([string]$AutomationId).Trim() } else { '' }
+    $searchedDepth = 0
     $hits = @()
-    foreach ($e in $elements) {
-        $n = if ($e.name) { ([string]$e.name).Trim() } else { '' }
-        $aid = if ($e.automationId) { ([string]$e.automationId).Trim() } else { '' }
-        if ($wantedId -ne '') {
-            if ($aid -ne '' -and $aid -eq $wantedId) { $hits += $e }
-        } elseif ($wantedName -ne '') {
-            if ($n -ne '' -and $n -eq $wantedName) { $hits += $e }
+    foreach ($depth in $searchDepths) {
+        $elements = @()
+        $truncated = 0
+        $visited = 0
+        $searchedDepth = $depth
+        Walk-UIA -Element $found.element -Depth 0 -MaxDepth $depth -Elements ([ref]$elements) -Path @() -Truncated ([ref]$truncated) -Visited ([ref]$visited)
+        $hits = @()
+        foreach ($e in $elements) {
+            $n = if ($e.name) { ([string]$e.name).Trim() } else { '' }
+            $aid = if ($e.automationId) { ([string]$e.automationId).Trim() } else { '' }
+            if ($wantedId -ne '') {
+                if ($aid -ne '' -and $aid -eq $wantedId) { $hits += $e }
+            } elseif ($wantedName -ne '') {
+                if ($n -ne '' -and $n -eq $wantedName) { $hits += $e }
+            }
         }
+        if ($hits.Count -gt 0) { break }
+        # Nothing deeper to find: the walk saw every node there is.
+        if ($truncated -eq 0 -and $visited -lt $Script:UIA_WALK_NODE_BUDGET) { break }
     }
 
     $asked = if ($wantedId -ne '') { 'automationId "' + $wantedId + '"' } else { 'name "' + $wantedName + '"' }
@@ -2452,10 +2487,13 @@ function Find-UIAElementPathByName($TargetPid, $Name, $AutomationId, $Hwnd) {
     # itself cut short is a different fact from 'this window does not have it',
     # and reporting them as the same thing is how a partial answer reads as final.
     $limitNote = ''
+    # Report the depth actually SEARCHED, not the depth it started at. The search
+    # escalates, so naming the starting constant here would understate the effort
+    # and point the reader at the wrong limit.
     if ($visited -ge $Script:UIA_WALK_NODE_BUDGET) {
-        $limitNote = ' (the search stopped after ' + $Script:UIA_WALK_NODE_BUDGET + ' elements, so this window may hold more)'
+        $limitNote = ' (the search stopped at its ' + $Script:UIA_WALK_NODE_BUDGET + '-element budget, having reached depth ' + $searchedDepth + ', so this window may hold more)'
     } elseif ($truncated -gt 0) {
-        $limitNote = ' (the search reached depth ' + $Script:UIA_NAME_SEARCH_DEPTH + ' and ' + $truncated + ' elements have children below that)'
+        $limitNote = ' (the search went to depth ' + $searchedDepth + ' and ' + $truncated + ' elements still have children below that)'
     }
 
     # BUG-397 FOLLOW-UP, found on the first live desktop run (2026-08-31).

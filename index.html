@@ -339,50 +339,50 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-08-31",
+  "generated": "2026-09-02",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 6947,
+      "value": 6948,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-08-31"
+      "measuredAt": "2026-09-02"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-08-31"
+      "measuredAt": "2026-09-02"
     },
     "withheld": {
       "value": 64,
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-08-31"
+      "measuredAt": "2026-09-02"
     },
     "registered": {
       "value": 179,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-08-31"
+      "measuredAt": "2026-09-02"
     },
     "voiceReachable": {
       "value": 115,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-08-31"
+      "measuredAt": "2026-09-02"
     },
     "untriaged": {
       "value": 1,
       "label": "untriaged incidents",
       "tone": "fail",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-08-31",
+      "measuredAt": "2026-09-02",
       "stale": false
     }
   },
@@ -3952,7 +3952,7 @@
         "state": "verified",
         "title": "`ui_elements` returned a truncated tree without saying so, so the model invented the indices it was never shown and every `ui_click` failed \"out of range\"",
         "detail": {},
-        "excerpt": "**Status:** ✅ FIXED and ✅ LIVE-VERIFIED 2026-08-31. Guard file `test/bug-397-ui-click-path-fabrication.test.js` (24 tests), **15 mutations run, none survived**. Two pre-existing tests deliberately rewritten (see SCOPE). Live oracle committed as `scripts/verify-bug-397-ui-click.js` — **9 PASS · 0 UNVERIFIED · 0 FAIL** against a real Notepad, including the whole 2026-08-14 sequence (`ui_click name \"File\"`, then `name \"Save as\"`), each confirmed by an independent signal. **Reported as:** \"the UI underscore click does not work as designed\" (operator, 2026-08-31), symptom confirmed as the honest failure message rather than a silent wrong click. ### THE BUG `Handle-UiElements` walks the UIA tree to `depth` and stops. It returned nothing about what it had not visited, so **a node that was a genuine LEAF and a node CUT OFF at the depth limit came back byte-identical**. A caller needing an elemen…"
+        "excerpt": "**Status:** ✅ FIXED and ✅ LIVE-VERIFIED 2026-08-31, extended 2026-09-02 after a Chromium run. Guard file `test/bug-397-ui-click-path-fabrication.test.js` (25 tests), **19 mutations run, none survived**. Two pre-existing tests deliberately rewritten (see SCOPE). Live oracle committed as `scripts/verify-bug-397-ui-click.js` — **9 PASS · 0 UNVERIFIED · 0 FAIL** against a real Notepad, including the whole 2026-08-14 sequence (`ui_click name \"File\"`, then `name \"Save as\"`), each confirmed by an independent signal. **Reported as:** \"the UI underscore click does not work as designed\" (operator, 2026-08-31), symptom confirmed as the honest failure message rather than a silent wrong click. ### THE BUG `Handle-UiElements` walks the UIA tree to `depth` and stops. It returned nothing about what it had not visited, so **a node that was a genuine LEAF and a node CUT OFF at the depth limit came back by…"
       }
     ],
     "counts": {

@@ -43,7 +43,7 @@ it is committed.
 
 ## BUG-397 — `ui_elements` returned a truncated tree without saying so, so the model invented the indices it was never shown and every `ui_click` failed "out of range" (✅ FIXED 2026-08-31, mutation-proven)
 
-**Status:** ✅ FIXED and ✅ LIVE-VERIFIED 2026-08-31. Guard file `test/bug-397-ui-click-path-fabrication.test.js` (24 tests), **15 mutations run, none survived**. Two pre-existing tests deliberately rewritten (see SCOPE). Live oracle committed as `scripts/verify-bug-397-ui-click.js` — **9 PASS · 0 UNVERIFIED · 0 FAIL** against a real Notepad, including the whole 2026-08-14 sequence (`ui_click name "File"`, then `name "Save as"`), each confirmed by an independent signal.
+**Status:** ✅ FIXED and ✅ LIVE-VERIFIED 2026-08-31, extended 2026-09-02 after a Chromium run. Guard file `test/bug-397-ui-click-path-fabrication.test.js` (25 tests), **19 mutations run, none survived**. Two pre-existing tests deliberately rewritten (see SCOPE). Live oracle committed as `scripts/verify-bug-397-ui-click.js` — **9 PASS · 0 UNVERIFIED · 0 FAIL** against a real Notepad, including the whole 2026-08-14 sequence (`ui_click name "File"`, then `name "Save as"`), each confirmed by an independent signal.
 
 **Reported as:** "the UI underscore click does not work as designed" (operator, 2026-08-31), symptom confirmed as the honest failure message rather than a silent wrong click.
 
@@ -93,6 +93,30 @@ The fix above was 19 tests and 10 mutations green before it ever met a desktop. 
 Also measured and worth keeping: **`BUG-274 T5`'s WinUI3 `ExpandCollapseState` lie did not reproduce here.** Clicking `File` moved the state to `Expanded` *and* the flyout genuinely rendered (`Open`, `Save`, `Save as`, `Save all`, `Print`, `Exit` all appear in the tree afterwards). A working oracle was nearly "fixed" on the strength of that memory before the flyout was actually measured — check the claim where it runs before acting on it.
 
 And a limitation the run exposed rather than fixed: **`close_window` takes a pid, and Notepad puts every window on one pid.** Six probe windows could not be closed individually. Not in scope here; noted so it is not rediscovered.
+
+### WHAT THE CHROMIUM RUN FOUND (2026-09-02) — asked for as "open debug Chrome, play the third video"
+
+The Notepad result licensed nothing about browsers, and the browser run is where the remaining ceiling is. Debug Chrome via `browser_launch_debug`, YouTube home, third video read off the page by CDP so the target is a fact rather than a choice (`India's Most Beautiful Islands…`, `-YaRRFrXW9M`).
+
+**A single fixed name-search depth cannot serve both a dialog and a browser — FIXED.** Same window, same walk, depth varied:
+
+| depth | elements | named | page content? |
+|---|---|---|---|
+| 6 | 28 | 8 | **none** — Minimize, Maximize, Close, New Tab |
+| 8 | 52 | 20 | none |
+| 12 | 109 | 29 | none |
+| 16 | 452 | 309 | **72 page names**, truncated 0 |
+
+Chromium's accessibility tree starts roughly 14 levels below the window root. `UIA_NAME_SEARCH_DEPTH = 6` therefore made `ui_click` refuse **every page element in every browser** while blaming the element — "no element with that name in this window" — for a limit of its own search. The search now escalates 6 → 12 → 18, stopping at the first depth that matches or when the tree has been fully seen, so a Notepad menu still costs one shallow walk. After the change the same call resolves the title and fails for the *true* reason instead.
+
+**Two findings from that run are NOT fixed, and are named rather than left to be rediscovered:**
+
+1. **The ancestor-chain collapse picks the wrong end when the clickable node is DEEPER than its label.** Measured: the exact title is a `ControlType.Text` at `[1,0,0,1,2,0,0,1,0,0,2,5,0,1]`; the `ControlType.Hyperlink` that can actually be driven is its **child**, one level deeper, and its Name is **elided** by Chromium (`…Life in Andaman and…`) so exact matching never sees it. The collapse rule added on 2026-08-31 assumes the shallowest match is the control — true for a Win32 menu item, inverted here. So `ui_click` matches the Text node and fails honestly with "exposes none of the UIA patterns". Fixing it properly means preferring a match that exposes a clickable pattern over the shallowest one, and coping with elided names — neither is a one-liner and neither should be bolted on at the end of a session.
+2. **`click_at` reports success with no oracle at all, and did so here.** `click_at(1336, 1433)` returned `clicked:true` while the URL never changed and the video stayed paused at 0 — the element's rect (`y 1399, height 67`) sits below the fold, so the click landed on whatever pixel was there. This is the exact 1/0 false-success the pattern ladder was built to avoid, still live in the sibling tool that `ui_click`'s own failure text recommends. A remedy the caller is pointed at needs a visibility check and an oracle before it can be trusted.
+
+Also measured: **`see_and_click` read the wrong window.** With no `pid` it does a whole-screen OCR, and with Chrome not foreground it read the operator's terminal instead ("Pre-dep10D | Ran 3 | Verified | #108"). Its own failure text names the fix — pass a pid — so the advice chain is sound, but the default is a foot-gun.
+
+**Bottom line for the tool as it stands: `ui_click` cannot yet play a YouTube video.** It can now find page elements in a browser, which it could not before, and it fails honestly about the rest. Notepad-class apps work end-to-end.
 
 ### SCOPE — what was deliberately NOT done
 
