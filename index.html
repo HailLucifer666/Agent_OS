@@ -3961,18 +3961,26 @@
         "title": "the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation (🔴 NOT STARTED — diagnosis complete)",
         "detail": {},
         "excerpt": "**NOT STARTED — no code has been written for any finding below.** **Status:** 🔴 diagnosis complete and evidence-backed. Full dossier with verbatim errors, measurements and per-finding prevention notes: [`LIVE-SESSION-FINDINGS-2026-09-02.md`](LIVE-SESSION-FINDINGS-2026-09-02.md). **Read that file's section 0 (what already works — do not break it) and section 9 (five ways the measurements were wrong) before planning.** **Source:** one ~2-hour live voice session, 2026-09-02, operator-driven, trailed from `%APPDATA%\\MYTHOS\\vault\\Audit\\2026-09-02.jsonl`, the matching Episodic log and `mythos-server.log`. ### THE BUG The effector layer, the leash and the memory behaved correctly throughout. **Two clusters failed: anything that has to find something on a screen, and the spoken turn's claims about actions.** Every bad claim sat on a `fail` or an `unverified` — not one sat on a verified success,…"
+      },
+      {
+        "n": 399,
+        "shape": "entry",
+        "state": "open",
+        "title": "CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable (🔴 NOT STARTED — diagnosis only)",
+        "detail": {},
+        "excerpt": "**NOT STARTED — no code or workflow change has been made.** **Status:** 🔴 diagnosis only, from run evidence gathered 2026-09-02 while merging PR #69. ### THE BUG `.github/workflows/ci.yml`'s `test` job fails on essentially every run, **while the same suite is green on a developer machine**. The failing tests are not the same ones twice. Nothing in the failing set has any relationship to the change under test — PR #69's second commit changed only markdown and generated HTML and still went red. **Consequence: CI cannot currently tell anyone anything.** A red check no longer distinguishes \"this PR broke something\" from \"the runner ran out of headroom\", so the gate is either ignored or it blocks good work. The session that merged #69 spent a material part of its budget establishing that a red `test` job was not its fault, and the next session will repeat that unless this is fixed or documen…"
       }
     ],
     "counts": {
       "verified": 62,
       "fixed": 173,
-      "open": 7,
+      "open": 8,
       "coded": 2,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 247,
+    "total": 248,
     "openDeclared": [
       274,
       275,

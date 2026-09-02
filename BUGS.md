@@ -41,6 +41,61 @@ it is committed.
 
 ---
 
+## BUG-399 — CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable (🔴 NOT STARTED — diagnosis only)
+
+**NOT STARTED — no code or workflow change has been made.**
+
+**Status:** 🔴 diagnosis only, from run evidence gathered 2026-09-02 while merging PR #69.
+
+### THE BUG
+
+`.github/workflows/ci.yml`'s `test` job fails on essentially every run, **while the same suite is green on a developer machine**. The failing tests are not the same ones twice. Nothing in the failing set has any relationship to the change under test — PR #69's second commit changed only markdown and generated HTML and still went red.
+
+**Consequence: CI cannot currently tell anyone anything.** A red check no longer distinguishes "this PR broke something" from "the runner ran out of headroom", so the gate is either ignored or it blocks good work. The session that merged #69 spent a material part of its budget establishing that a red `test` job was not its fault, and the next session will repeat that unless this is fixed or documented.
+
+### WHY NOT HYPOTHETICAL — measured
+
+Local, repeatedly, on the merged tree: **`tests 6948 · pass 6948 · fail 0 · skipped 0`**. Each individually-named failing file below also passes on its own locally (`hub-enforces-caller-abort` 4/4 three times; `bug-382-dark-node-harness` 10/10).
+
+| Run | Commit | `e2e` | `test` | Top-level suites reported failing |
+|---|---|---|---|---|
+| `33604387458` | `dbe18d69` | success | **failure** | `hub-enforces-caller-abort` only (`not ok 4 — NEGATIVE CONTROL…`) |
+| `33613593590` attempt 1 | `b0a2a78` (**markdown + generated HTML only**) | **failure** | **failure** | `hub-enforces-caller-abort`, `bug-382-dark-node-harness` |
+| `33613593590` attempt 2 (re-run of failed jobs, no code change) | `b0a2a78` | **success** | **failure** | `hub-enforces-caller-abort`, `bug-382-dark-node-harness`, **speak-gating (`not ok 33`)**, **aether-sensor (`not ok 55`)** |
+| `main` @ `0aeae672` | — | — | **failure then success ×2 on the SAME SHA** | 2026-08-31T15:50 failed; 2026-09-01T06:24 passed twice |
+
+Three facts follow that no per-test bug can explain:
+
+1. **The failing set grew 1 → 2 → 4 files across successive runs of the same or simpler code.**
+2. **`e2e` flipped from failure to success on a re-run with no code change**, so at least one job is straightforwardly non-deterministic.
+3. **The same commit on `main` both fails and passes.**
+
+Supporting detail:
+
+- Errors are timing/resource-shaped, not assertion-shaped: `Promise resolution is still pending but the event loop has already resolved` (×4 on `dbe18d69`), and the failing files are the abort/timeout suite and a real-sandbox disk-read suite.
+- **Node version mismatch:** the workflow's actions are forced onto **Node 24** (`Node.js 20 is deprecated… being forced to run on Node.js 24` for `actions/checkout@v4` and `actions/setup-node@v4`). The machine where the suite is green runs **Node 26**. Untested as a cause.
+- **The CI summary disagrees with its own failure list.** Attempt 2's job log reports **`# fail 2`** while naming **four** failing top-level suites (33, 55, 695, 1279). A summary that undercounts its own failures is the same class this repo has already been bitten by — *a summary is where the real defects hide*.
+
+### ROOT CAUSE — hypothesis, explicitly not established
+
+This matches the signature the root `CLAUDE.md` already documents: *"a suite whose failures wander between files run to run is Windows fork/commit-limit exhaustion from orphaned `node.exe` processes — not a regression."* A hosted GitHub Windows runner is far smaller than the developer machine, and this suite is ~6,950 tests across ~150 files, many of which spawn child processes, real servers and PowerShell children. **Not verified** — nobody has yet measured process counts or memory on the runner.
+
+### THE FIX — directions, not a plan
+
+- **Bound the concurrency** — `node --test --concurrency=<N>` (or shard the suite across several jobs) so the runner is never asked to hold hundreds of child processes at once. Cheapest thing to try first, and it directly tests the hypothesis.
+- **Pin the Node version** in the workflow to match what the suite is developed against, so a CI-only failure cannot be a runtime difference nobody chose.
+- **Make the summary agree with the failure list** before trusting any count from CI.
+- **Consider a self-hosted runner** if sharding is not enough; several suites here legitimately need real ports, a real filesystem and a real desktop.
+- **Then re-establish the baseline in CI** and only afterwards treat a red `test` job as meaningful.
+
+### SCOPE — what must NOT be done
+
+**Do not "fix" the individually named tests.** They pass locally, they pass in isolation, and the set changes between runs — chasing them is chasing noise and would likely mean weakening real assertions to satisfy a resource problem. Fix the harness, then see what is left.
+
+Two genuinely load-sensitive tests were also observed locally and are recorded separately in [`LIVE-SESSION-FINDINGS-2026-09-02.md`](LIVE-SESSION-FINDINGS-2026-09-02.md) §10: `bug-234-acknowledge-is-not-a-heal` and `verify-lib-attach` (the latter with `Unable to deserialize cloned data due to invalid or unsupported version`), each failing only under full-suite load while passing 3/3 alone. They may share this ticket's root cause.
+
+---
+
 ## BUG-398 — the tool layer told the truth all session and the spoken turn did not: 10 overstated claims, 5 invented mechanisms, 1 invented citation (🔴 NOT STARTED — diagnosis complete)
 
 **NOT STARTED — no code has been written for any finding below.**
