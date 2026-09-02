@@ -9,6 +9,7 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 const { effectorFromTool } = require('./adapter');
+const { findAppPicker, appPickerNote } = require('./open-file-picker');
 // Spawning explorer.exe is not a window existing — see evidence.js's header.
 const evidence = require('./evidence');
 // Task 3 (step 5) — clipboard_read/clipboard_write delegate through pc-child,
@@ -853,22 +854,26 @@ async function open_file({ path: raw }) {
   // their own. Shortening the text WITHOUT the oracle would have meant claiming
   // an open nobody had checked, which is the one thing the contract forbids.
   //
-  // Bounded poll, four tries 400ms apart, mirroring open_folder: an app needs a
-  // moment to create and title its window, and a single fixed-delay check is a
-  // coin flip on a busy machine that reports real successes as unverified.
-  // from-pc is required lazily (circular dep) and its absence costs only the
-  // oracle, never the open.
+  // Bounded poll, four tries 400ms apart, mirroring open_folder: a single
+  // fixed-delay check is a coin flip on a busy machine. from-pc is required
+  // lazily (circular dep); its absence costs the oracle, never the open.
   const leaf = path.basename(resolved);
   const base = ok({ opened: resolved, name: leaf });
   let locate = null;
   try { locate = require('./from-pc').findWindowByTitle; } catch (_) { /* offline costs only the oracle */ }
+  // BUG-398 row 11: the picker check is inside the poll and ends it — see
+  // open-file-picker.js.
   let located = null;
+  let picker = null;
   if (typeof locate === 'function') {
-    for (let attempt = 0; attempt < 4 && !(located && located.window); attempt++) {
+    for (let attempt = 0; attempt < 4 && !(located && located.window) && !picker; attempt++) {
       await new Promise((r) => setTimeout(r, 400));
       try { located = await locate(leaf); } catch (_) { located = null; }
+      if (located && located.window) break;
+      picker = await findAppPicker(() => require('./from-pc').list_windows());
     }
   }
+  if (picker && !(located && located.window)) return evidence.unverified(base, appPickerNote(picker, leaf));
 
   if (located && located.window) {
     // "and focus it on front" was part of the same request. Advisory: Windows

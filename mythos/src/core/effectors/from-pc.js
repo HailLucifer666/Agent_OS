@@ -19,6 +19,8 @@ const { visionThink } = require('./vision-call');
 // `lastLaunchedPid` here that any launch overwrote and nothing expired (BUG-353).
 const implicitTarget = require('./implicit-target');
 const uiTarget = require('./ui-target');
+const { clickVerdict, scopedMissRemedy } = uiTarget;
+const { makeClickAt } = require('./click-at-evidence');
 // A fresh module instance owns no target — see forget() for why this line exists.
 implicitTarget.forget();
 
@@ -1225,13 +1227,6 @@ async function guardMessagingEnter() {
   return { messaging: true, pid: fgPid, app: app };
 }
 
-async function click_at({ x, y }) {
-  if (typeof x !== 'number' || typeof y !== 'number') return fail('x and y coordinates are required (numbers).');
-  // Phase 3 hardening: coordinate clicks are inherently racy (window may have
-  // moved between screen_look and click). Retry bounds the flakiness.
-  return delegateWithRetry({ cmd: 'click_at', x, y }, { attempts: 3 });
-}
-
 // ---- see_and_click: click a piece of text because you can SEE it ----
 //
 // 2026-08-02. ui_click needs an elementPath into a UIA tree. WhatsApp Desktop's tree
@@ -1261,6 +1256,12 @@ async function readScreenRegions(target) {
 
 const { matchRegions, centreOf } = require('./see-and-click-match.js');
 const { settleForChange } = require('./see-and-click-settle.js');
+
+
+// BUG-398 row 10: click_at gains an oracle (bodies in click-at-evidence.js).
+const { click_at, clickAtRaw } = makeClickAt({
+  delegateWithRetry, readScreenRegions, settleForChange, evidence, clickVerdict, fail,
+});
 
 function reasonOf(res) {
   const r = res && res.result;
@@ -1332,11 +1333,10 @@ async function see_and_click({ text, occurrence, expect, pid }) {
     // improvises. All five HUD-reading failures dead-ended here. The remedy is
     // only offered when it has NOT already been taken — telling a caller that
     // already passed a pid to go and get a pid trains it to ignore refusals.
-    const remedy = coercePid(pid)
-      ? focusNote
-      : ' This was a whole-screen read, which includes my own window — if the app you ' +
-        'mean is behind mine, call list_windows and pass its pid so I read (and focus) ' +
-        'that window instead.';
+    // BUG-398 row 9 (history in ui-target.js): with a pid the remedy was
+    // focusNote, empty whenever the focus succeeded, so it named no window.
+    const remedy = await scopedMissRemedy(coercePid(pid), focusNote,
+      () => delegate({ cmd: 'list_windows' }));
     return fail('I cannot see "' + want + '" on screen. ' + remedy + ' ' + (before.regions.length
       ? 'What I can read: ' + sample + (before.regions.length > 12 ? ' …' : '')
       : 'OCR returned no text regions at all — the screen may be blank, or this text may be an image or an icon rather than rendered text.'));
@@ -1371,7 +1371,7 @@ async function see_and_click({ text, occurrence, expect, pid }) {
       'Bring that window forward yourself (or close what covers it) and ask again - I will not click coordinates I cannot vouch for.');
   }
 
-  const clicked = await click_at(point);
+  const clicked = await clickAtRaw(point);
   if (!clicked.ok) return fail('Found "' + target.text + '" at ' + point.x + ',' + point.y +
     ' but the click failed: ' + reasonOf(clicked));
 
@@ -1500,7 +1500,7 @@ const TOOLS = [
   { name: 'ui_click', description: 'Click a UI element. PREFER `name` — pass the element\'s visible label (e.g. "Save as") and the path is resolved for you. Use `elementPath` only with indices ui_elements actually returned; NEVER extend a path past what you were shown, because deeper indices cannot be inferred and will fail. Drives the element through its UIA pattern (Invoke, Toggle, SelectionItem, ExpandCollapse or RangeValue) and reports whether it visibly reacted — it never falls back to clicking coordinates; use click_at or see_and_click for that. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { pid: 'number (optional) - window process ID; defaults to the last launched app', name: 'string (optional) - the element\'s visible label; fails and lists the matches if more than one element shares it', automationId: 'string (optional) - the element\'s automationId, when a name is ambiguous or absent', elementPath: 'array of number strings (optional) - element indices from root to target, exactly as returned by ui_elements', hwnd: 'number (optional) - the hwnd ui_elements reported, so the click resolves against the same window the tree came from' }, danger: true, fn: ui_click },
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right, delete, home, end, f1-f12, a single letter, or a combo like ctrl+n). Uses real VK codes for apps that ignore Unicode input, and escalates to posted key messages for packaged apps that silently swallow injected input. Enter inside a chat app is routed through the verified send path, which confirms the message actually left the compose box.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right|delete|home|end|f1-f12, a letter, or a combo like ctrl+n', pid: 'number (optional) - target window PID; when given, the key is refused if the keyboard caret belongs to a different app' }, danger: false, fn: send_key },
-  { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate' }, danger: true, fn: click_at },
+  { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it. Reports UNVERIFIED unless you pass expect: a raw coordinate click cannot know what was at those pixels, and a coordinate can sit below the visible part of a scrolling page or behind another window. Pass expect with text that should appear afterwards and it is checked and reported as proven; otherwise prefer see_and_click, which finds the label first.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate', expect: 'string (optional) - text you expect to see on screen after the click, used as proof it worked' }, danger: true, fn: click_at },
   { name: 'see_and_click', description: 'USE THIS FIRST to click anything in a chat app, Electron app or browser UI (WhatsApp, Spotify, YouTube, Discord), and ALWAYS after ui_click fails with an element-path or empty-tree error — those apps expose no usable UIA tree, so no elementPath exists to pass and guessing one cannot work. Needs no pid and no element path: it OCRs the screen, finds the label, and clicks the middle of it. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it lists the matches and refuses rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those. Pass pid (from list_windows or get_foreground_window) whenever you know which window the label is in — that scopes the OCR to that window, so a label MYTHOS\'s own HUD or another app happens to show cannot be matched by mistake.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - text you expect to appear on screen afterwards, used as proof the click worked', pid: 'number (optional) - look for the label only inside this window (from list_windows / get_foreground_window) instead of the whole desktop' }, danger: true, fn: see_and_click },
   { name: 'move_window', description: 'Move and resize a window by PID to an exact screen rectangle (x, y, width, height).', params: { pid: 'number - window process ID', x: 'number - new x', y: 'number - new y', width: 'number - new width', height: 'number - new height' }, danger: false, fn: move_window },
   { name: 'snap_window', description: 'Snap a window by PID to a screen position: left half, right half, maximize, minimize, or restore.', params: { pid: 'number - window process ID', position: 'string - left|right|maximize|minimize|restore' }, danger: false, fn: snap_window },

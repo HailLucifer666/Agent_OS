@@ -146,16 +146,36 @@ describe('see_and_click focuses the target window before reading it', () => {
       'it must say that passing the pid is what narrows the read: ' + msg);
   });
 
-  it('a scoped miss does NOT repeat the unscoped advice', async () => {
-    // Q1 — what else matches this? The remedy is only a remedy when it has not
-    // already been taken. Telling a caller that already passed a pid to go and
-    // get a pid is the kind of advice that trains the model to ignore refusals.
+  it('a scoped miss names the window it actually read, and does not repeat the unscoped advice', async () => {
+    // DELIBERATELY REWRITTEN by BUG-398 row 9 (2026-09-02). The original
+    // assertion was `!/call list_windows/i` with the reasoning "the remedy is
+    // only a remedy when it has not already been taken. Telling a caller that
+    // already passed a pid to go and get a pid ... trains the model to ignore
+    // refusals." The intent is right and is preserved below. The PREMISE was
+    // wrong, and the session disproved it eight times: passing a pid does not
+    // mean the read was scoped CORRECTLY.
+    //
+    // MEASURED: 8 fails, 0 successes, every call carrying pid 6272 — a Brave
+    // window showing a GitHub page, while the target was a YouTube video. The
+    // refusal printed what it had read and never compared it to what it was
+    // asked for, so the one fact that would have unstuck the model was on screen
+    // and unused. With the window named, "list_windows will show you the right
+    // one" stops being advice-already-taken and becomes the next real step.
+    //
+    // So the invariant is now: name the window that was read, and do NOT hand
+    // back the UNSCOPED advice ("pass its pid so I read that window instead"),
+    // which is the form that really would be redundant here.
     const rec = recordingPc({ ocrText: MYTHOS_HUD });
     const out = await withMockedPcChild(rec.mock, (mod) =>
       mod.see_and_click({ text: 'Video call', pid: 4321 }));
     const msg = String(out.result);
-    assert.ok(!/call list_windows/i.test(msg),
-      'a caller that already scoped the read must not be told to go and scope it: ' + msg);
+    assert.equal(out.ok, false);
+    assert.match(msg, /pid 4321/,
+      'the refusal must name the pid it actually read, so a wrong pid is visible: ' + msg);
+    assert.ok(!/pass its pid so I read/i.test(msg),
+      'the UNSCOPED remedy must not be repeated to a caller that already passed a pid: ' + msg);
+    assert.ok(!/includes my own window/i.test(msg),
+      'the whole-screen explanation belongs only to an unscoped read: ' + msg);
   });
 
   it('a successful match still clicks, and the focus did not break the happy path', async () => {
