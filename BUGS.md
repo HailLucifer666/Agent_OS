@@ -157,6 +157,131 @@ So against the floor actually in force (0.035) the picture is mixed — roughly 
 **What remains solid, and is the whole reason this ticket exists:** 267.7s held, 46,963 frames zeroed, `framesDropped: 0`, and 7 of 34 releases ending at a CEILING rather than because MYTHOS stopped speaking — including one 21.4s hold whose reason is `near-field-energy` and two totalling 24.2s whose reason literally states no echo was found. Those numbers are measurements, not inferences.
 **WHY THIS IS NOT FIXED IN THE SAME PASS, recorded so it is not read as an oversight.** Loosening this gate wrongly makes MYTHOS hear its own voice and answer itself, which is a worse failure than the one being fixed, and this repo has already mis-diagnosed this area twice (`bleedPeak measured the operator`; `own voice fed Gemini's VAD`). A correct fix needs a recorded audio corpus, the two ceiling constants traced to their real justification, and a replay harness — not a constant nudged at the end of a long session. **Revisit trigger:** any session that can capture mic + speaker audio together. **Durable form:** a replay test over captured frames that asserts the gate opens within N ms of the last real speaker frame, with the near-field case as its adjacent must-keep-passing.
 
+## BUG-407 — MYTHOS held two answers to "which browser", neither derived from the other, so a named request could not fail: it silently resolved to something else (✅ FIXED 2026-09-03, mutation-proven)
+
+**Status:** ✅ FIXED 2026-09-03. 9 mutation probes recorded in `test/bug-407-one-answer-to-which-browser.test.js`.
+
+**Reported by the operator, 2026-09-03:** *"If I ask you to open YouTube on a browser, it opens on Brave."*
+
+Two independent code paths answered that request, and neither read the other:
+
+| route | how it chose | could it be named? |
+|---|---|---|
+| `open_web({browser:true})` | `shell.openExternal` → the **OS default** | **no — there was no parameter** |
+| `browser_launch_debug()` | `BROWSER_SEARCH_ORDER`, **brave-first** (BUG-130) | yes |
+
+**Measured on the operator's machine:** `HKCU\SOFTWARE\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice` reads `ProgId = BraveHTML`, whose `HKCR\BraveHTML\shell\open\command` is `"…\Brave-Browser\Application\brave.exe" --single-argument %1`. So Brave really is the Windows default, both routes agreed, and **the disagreement was latent rather than live**. Set Chrome as the default and one spoken sentence routes to Chrome down one path and Brave down the other.
+
+**The part that was already biting.** A named request had nowhere to go. `open_web`'s own tool description had to admit it: *"that is always the OS DEFAULT browser and cannot be pointed at a named one (BUG-398 E3: the operator asked for Chrome three times and got Brave every time)."* A request that cannot be expressed does not fail — it silently resolves to something else. The only route that *could* honour a name was `browser_launch_debug`, which offers a signed-out debug profile (BUG-408), not the window the operator is logged into.
+
+**Fix.**
+1. `src/core/effectors/browser-target.js` (new) owns the question: name normalisation, executable discovery, the executable→name map **derived from `BROWSER_SUBPATHS`** rather than typed again, the OS-default read, and the http/https rule for a URL bound for a browser process.
+2. `open_web` gains **`browserName`**. When present, MYTHOS resolves that browser's executable and hands it the URL directly — Chromium reuses a running instance, so it opens a tab in the operator's **real, logged-in** window, with no debug port and no Electron hop (it therefore works on a plain `npm start`, where the default route cannot). Unnamed is unchanged: `shell.openExternal`.
+3. An **unnamed** debug launch now prefers the OS default when MYTHOS can drive it, falling back to `BROWSER_SEARCH_ORDER`. BUG-130's brave-first order is demoted from "the default" to "the fallback", which is what it always was.
+4. `browserSource` (`requested` / `os-default` / `search-order` / `browser-executable-env`) rides out on the launch result, so an unnamed launch never leaves the operator to discover which browser it picked or why it was not theirs.
+
+**Security at the new edge.** The named route hands a model-composed string to a browser **process**, where `file:///…` is a local-file read primitive. `externalUrl()` parses with WHATWG `URL` and admits only http/https, the same rule `electron/main.js` already applies before `shell.openExternal`, and the parsed `href` is passed as the single positional argv element with no shell — so it can never be read as a Chromium flag. A probe confirmed `file:`, `javascript:`, `data:`, `ms-msdt:` and `search-ms:` are all refused **without spawning anything**.
+
+**One thing the probes corrected.** The first version of the scheme test asserted that `https:/\evil.example` is refused, on the strength of this codebase's own comment naming it as the shape a `startsWith` check lets past. Measured: WHATWG treats a backslash as a slash for special schemes, so it parses to `https://evil.example/` and is **accepted** — correctly, because that is what a browser would resolve it to. The rule being enforced is the scheme, never the host. The test now pins the normalisation instead of a refusal that does not happen.
+
+**Deliberately NOT done.** `shell.openExternal` was not taught a browser name. It cannot be: it hands the URL to the OS handler for the scheme, which is by definition the default. Adding a name there would mean re-implementing browser discovery inside the Electron main process, a second copy of exactly the fact this ticket exists to de-duplicate.
+
+**Also collapsed here.** The URL-shape rule (`URL_SHAPED` / bare-domain) had two copies for one turn of this fix — `from-dashboard.js` now imports it from `open-external-route.js`, with a source-shape guard against a third appearing.
+
+**Scope.** `from-dashboard.js` sat exactly at its ratchet ceiling (1418), so the `browser:true` branch moved into `src/core/effectors/open-external-route.js` and the file ended at 1410. No baseline was raised.
+
+## BUG-408 — the debug browser is a different, signed-out identity and nothing MYTHOS said told the operator that (✅ FIXED 2026-09-03, mutation-proven)
+
+**Status:** ✅ FIXED 2026-09-03. 4 mutation probes recorded in `test/bug-408-debug-profile-identity.test.js`.
+
+**Reported by the operator, 2026-09-03:** *"It's sometimes open on Brave where I think it's a debug Brave window."*
+
+They were right, and nothing gave them a way to know it. `browser_launch_debug` runs with `--user-data-dir=%LOCALAPPDATA%\MYTHOS\<name>-debug-profile` — a separate Chromium profile with none of their logins, history, bookmarks or extensions. Both profiles were in use minutes apart in the reported session (`chrome-debug-profile` 04:02, `brave-debug-profile` 04:05). A window that looks like their browser and is signed out of everything reads as a **broken browser**, not as a second profile.
+
+The launch result said nothing about any of it. The only related sentence was BUG-345's ads caveat, and only for chrome/edge — a Brave launch said nothing at all.
+
+**Fix.** Every launch now reports two machine-readable facts (`separateProfile: true`, `signedIn: false`) and states in its spoken caveat that this is MYTHOS's own `<browser>` profile, naming the directory, for **every** browser. The ads caveat keeps its exact previous scope; `test/adblock-caveat.test.js` was rewritten deliberately so its false-positive guard asserts *"Brave is never warned about ads"* rather than *"Brave has no caveat"* — the intent it was always protecting.
+
+**DISPOSITION PINNED — the separate profile is not the bug and is not changing.** Chromium refuses `--remote-debugging-port` on a profile another instance already has open, so driving the real profile means closing the operator's browser first; and a debug port on a fully logged-in profile lets any local page drive it, which is worse than an inconvenience. The reason is written in `browser-launch-plan.js` and a test asserts the sentence is still there. Where the operator genuinely wants their real window, the route is **BUG-407's `browserName`**, which uses no debug profile at all.
+
+## BUG-409 — `browser_switch` closed nothing: `disconnect()` cannot stop a CDP-attached browser, so the next launch raced a survivor for the debug port (✅ FIXED 2026-09-03, live-reproduced and mutation-proven)
+
+**Status:** ✅ FIXED 2026-09-03. 8 mutation probes recorded in `test/bug-409-switch-actually-closes-the-browser.test.js`.
+
+`browser_switch` called `browserAgent.disconnect()`, which for a CDP-attached browser runs playwright's `browser.close()`. The installed `playwright-core`'s own types say what that does, verbatim: *"In case this browser is obtained using browserType.launch(), closes the browser and all of its pages. In case this browser is **connected to**, clears all created contexts belonging to this browser and **disconnects from the browser server**."*
+
+`launched` is set true only inside `launchLocal()`. `browser_launch_debug` spawns the process itself and then attaches, so **every debug browser MYTHOS starts takes the connected-to branch** and survives its own disconnect.
+
+**Reproduced live, spawned Brave on port 9223:**
+
+```
+after 3s                 : pid 13152 alive, port owner 13152
+after browser.close()    : pid 13152 ALIVE, port owner 13152   <- the bug
+after CDP Browser.close  : pid 13152 gone,  port owner (none)
+```
+
+**And the CDP close alone is NOT the fix.** Measured across 10 trials:
+
+| profile | browser | `Browser.close` | survivor |
+|---|---|---|---|
+| warm | chrome ×3 | resolved | none |
+| warm | brave ×3 | resolved | none |
+| **cold** | **chrome ×2** | **resolved** | **`chrome.exe` still running** |
+| cold | brave ×2 | resolved | none |
+
+A first-run Chrome sits on `chrome://intro/default-browser` — its own make-me-default flow — and that outlives `Browser.close` **while the command reports success**. A resolved close is not a closed browser.
+
+**Fix.** `adapters/browser-agent/browser-process.js` (new) closes and then **proves** it: ask over CDP → poll the profile-scoped process list → escalate to `taskkill /T /F` on the pids that list returned → report which step worked (`cdp` / `kill` / `none` / `unknown` / `not-ours` / `refused`). `browserAgent.closeLaunchedBrowser()` wires it up and is deliberately **separate from `disconnect()`**, which is also called on shutdown and by `connect()` itself — terminating from there would kill the session the caller is re-establishing. `browser_switch` now **refuses to launch** when the close fails, instead of launching onto a held port.
+
+**The authorisation is structural, not a check.** Nothing in that module accepts a pid from a caller. Every pid it can kill was produced by asking Windows which top-level process carries a `--user-data-dir` under `%LOCALAPPDATA%\MYTHOS\*-debug-profile`, and `isMythosDebugProfile()` refuses anything else — **including the empty string, whose `-like '**'` filter would otherwise match every process on the machine**. The operator's real browser keeps its profile elsewhere, so it cannot be named by the query, let alone killed by it.
+
+**A hole found in this fix before it shipped, recorded because it would have rebuilt the bug through the fix for the bug.** The first draft sent the close and then polled for survivors, so an **empty** survivor list meant "closed" — including when it was empty because nothing was ever there. That has a live caller: the operator can start their own Chrome with `--remote-debugging-port` on their real profile, MYTHOS attaches to it, and `browser_switch` would then have reported a clean close of a browser it never touched and launched a second one onto a port the first still held. It now looks **first**, so "nothing of ours is running here" is its own answer (`not-ours`).
+
+## BUG-410 — the attached browser was recorded from the REQUEST, not from what answered, so MYTHOS drove an invisible window under the visible one's name (✅ FIXED 2026-09-03, mutation-proven)
+
+**Status:** ✅ FIXED 2026-09-03. 4 mutation probes recorded in `test/bug-410-attached-browser-is-observed-not-requested.test.js`.
+
+**Reported by the operator, 2026-09-03:** *"Only once it was able to open YouTube on Brave, but it cannot navigate to the video by looking at it."*
+
+`browser_launch_debug` ended with:
+
+```js
+// This is the only trustworthy source — over CDP, Brave reports a plain
+// `Chrome/<version>` product string, so a version probe cannot tell them apart.
+attachedBrowser = want || 'chrome';
+```
+
+The first half of that comment is **true and still is** — measured 2026-09-03, a Brave holding the debug port answered `Browser.getVersion` with product `Chrome/152.0.7977.65`. The second half was not: `want` is not a trustworthy source, it is **the request**. It was merely the only answer anyone had looked for.
+
+**Why it mattered.** Because of BUG-409, a browser MYTHOS launched survived its own disconnect and kept the port, so a switch spawned a second **visible** window while the CDP session stayed attached to the first — and this line labelled the session with the name of the window the operator was looking at. Navigation and clicks went to the invisible window; `see_and_click` read the visible one, which never changed.
+
+**Fix.** The oracle is the **process listening on the port** — its executable path names it outright (measured: port 9224 → OwningProcess 21708 → `chrome.exe`). `attachedBrowser` is now set from that. A disagreement with the browser just launched is a **loud failure** naming both facts ("Launched chrome, but the debug port is held by brave…"), never a silent relabel. Where the port owner cannot be read (not Windows, PowerShell blocked) the result carries `browserIdentity: 'assumed'` rather than `'verified'` — the same distinction BUG-106 draws between knowing and vouching.
+
+**A probe that reddened nothing, and what it found instead.** "Put `attachedBrowser = want || 'chrome'` back but keep the mismatch guard" was expected to go red and did not: every test at the time passed a `want` equal to the browser chosen, so both expressions agreed. The mutation was not useless — it named an uncovered path. On an **unnamed** launch `want` is null, so `want || 'chrome'` reports chrome for a Brave the OS default or the search order picked: the same wrong-label defect from the other direction. A test for that case now exists, and the probe reds it.
+
+## BUG-411 — `browser_launch_debug` decided whether to spawn by reading its own connection state, so an OFFLINE adapter with a live browser spawned a rival onto a held port (✅ FIXED 2026-09-03, mutation-proven)
+
+**Status:** ✅ FIXED 2026-09-03. 4 mutation probes recorded in `test/bug-411-launch-adopts-instead-of-spawning.test.js`.
+
+**Reported by the operator, 2026-09-03:** *"Sometimes it is able to open, sometimes it is not able to open, sometimes open two, three chromes at the same time."*
+
+The tool branched on `browserAgent.getStatus().state` and nothing else — ONLINE, CONNECTING, otherwise **spawn**. But OFFLINE is a statement about *this process's connection*, not about the machine. A browser can be running and holding port 9222 with the adapter OFFLINE: the poller gave up (the operator's own log, `browser-agent.giving-up` at 22:21:45 after seven failures), the connection dropped (`disconnected unexpectedly`, twice that session), or a previous `browser_switch` left one alive because `disconnect()` never closed it (BUG-409).
+
+**And this is why the outcome felt random.** Two browsers were deliberately spawned onto one port, twice, with different endings:
+
+| port | result |
+|---|---|
+| 9223 | chrome bound it, then **brave took it** — both processes alive |
+| 9224 | chrome bound it, **brave exited** — one listener, chrome |
+
+So "sometimes it opens, sometimes it does not, sometimes there are three" is **one race with at least two observable endings**, not several separate faults.
+
+**Fix.** Look before spawning: try to adopt whatever is already on the port. It costs nothing when nothing is there — a refused connect fails in well under a poll interval, which is the measurement BUG-140 already relies on when it polls this same call. On adoption, the identity comes from BUG-410's port-owner oracle: a **named** request that does not match refuses (and says to close that window, which is the only true remedy for a window MYTHOS did not open); an unnamed request adopts and reports `portOwner`, `unknown` included.
+
+**`attachedBrowser` stays null for an adopted browser, deliberately.** Its contract since BUG-106 is "a browser MYTHOS launched and can therefore vouch for **and close**" — and that value is what authorises `browser_switch`'s close. Setting it on adoption would let MYTHOS try to close a window it never opened. A mutation probe pins it.
+
+**Not fixed here, and not this bug.** `buildBrowserLaunchArgs` still carries no URL, so navigation remains a separate CDP step after the launch. That is by design (the launch tool takes no URL) and it is the reason a launch and a navigate can end up in different browsers when the port is contested — which is what BUG-410's oracle now catches rather than what this change removes.
+
 ## BUG-399 — CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable (✅ FIXED 2026-09-02 — three causes, none of them the one this ticket first named)
 
 **Status:** ✅ FIXED 2026-09-02. Three ordinary test defects, each masked on a

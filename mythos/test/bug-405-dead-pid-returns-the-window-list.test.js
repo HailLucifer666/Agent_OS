@@ -327,14 +327,36 @@ describe('BUG-405 — the trigger: open_web(browser:true) says it may have kille
     // a URL and the whole dashboard effector context, and the thing asserted IS
     // the sentence. Anchored on the flag and the operative words so a reword
     // does not fail it but a deletion does.
-    const src = fs.readFileSync(
+    //
+    // MOVED 2026-09-03 (BUG-407): the sentence itself now lives in
+    // open-external-route.js, which owns both hand-off routes, while the flag
+    // stays on the result built in from-dashboard.js. This is the brittleness
+    // of a source-shape guard doing its job — it went red on a pure code move,
+    // which is exactly what it should do rather than pass over a file that no
+    // longer contains the thing. Both files are read, and the NAMED route's
+    // copy of the warning is now pinned too: it launches a browser just as
+    // readily as the default route does.
+    const dash = fs.readFileSync(
       path.resolve(__dirname, '../src/core/effectors/from-dashboard.js'), 'utf8',
     );
-    assert.match(src, /windowPidsMayBeStale: true/,
+    const route = fs.readFileSync(
+      path.resolve(__dirname, '../src/core/effectors/open-external-route.js'), 'utf8',
+    );
+    assert.match(dash, /windowPidsMayBeStale: true/,
       'the machine-readable half — a consumer should not have to parse prose');
-    assert.match(src, /LAUNCHED it, so any window pid you were holding/,
+    assert.match(route, /LAUNCHED it, so any window pid you were holding/,
       'the model-facing half: this is what nobody told it at 22:35:18');
-    assert.match(src, /call list_windows before focusing or clicking one/);
+    // Anchored WITHOUT the leading "call ": the sentence is built from two
+    // concatenated string literals and the line break falls between the two
+    // words, so a longer pattern matches nothing however present the sentence
+    // is. Short contiguous fragments only — the standing lesson about
+    // source-shape guards in this repo.
+    assert.match(route, /list_windows before focusing or clicking one/);
+    // Both routes launch a browser, so both must carry the warning. Counting
+    // rather than matching once: a single match would pass with the named
+    // route's copy missing, and that route is the NEW one.
+    assert.equal((route.match(/list_windows before focusing or clicking one/g) || []).length, 2,
+      'the default route and the named route each need this sentence');
   });
 });
 

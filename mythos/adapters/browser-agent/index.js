@@ -18,6 +18,7 @@ const { chromium } = require('playwright-core');
 const fs = require('fs');
 const path = require('path');
 const { createLogger } = require('../../src/core/logger');
+const browserProcess = require('./browser-process');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
 const CONNECT_TIMEOUT_MS = 10000;
@@ -446,6 +447,57 @@ async function disconnect() {
   state = 'OFFLINE';
 }
 
+// BUG-409: disconnect() above is correct for what it is named — it drops OUR
+// end. It does NOT stop the browser, and for the CDP path it structurally
+// cannot: playwright's own contract for a connected-to browser is "clears all
+// created contexts and disconnects from the browser server". `launched` is only
+// ever true inside launchLocal(), and browser_launch_debug spawns the process
+// itself and then attaches, so every debug browser MYTHOS starts takes the
+// connected-to branch and survives its own disconnect, still holding the debug
+// port. browser_switch then launched the next browser onto that held port.
+//
+// This is the closing counterpart, kept SEPARATE rather than folded into
+// disconnect(), because disconnect() is also called on shutdown and by
+// connect() itself ("already connected, disconnecting first") — terminating the
+// browser from there would kill the very session the caller is re-establishing.
+// One caller means it: browser_switch.
+//
+// Only ever called with a MYTHOS debug profile directory; browser-process.js
+// refuses anything else, which is what keeps this from being able to name the
+// operator's real browser. See that file's header for the measurements.
+async function closeLaunchedBrowser(profileDir, deps) {
+  // Launched (playwright-owned persistent context) mode already closes the real
+  // browser — that is the ONE case the vendor contract does terminate. Reuse
+  // the existing path rather than add a second way to close the same thing.
+  if (launched && context) {
+    await disconnect();
+    return { closed: true, method: 'context-close', survivors: [], reason: null };
+  }
+
+  const handle = browser;
+  // Before the close, so the 'disconnected' listener does not report a
+  // deliberate shutdown as "Chrome disconnected unexpectedly".
+  intentionalDisconnect = true;
+
+  const verdict = await browserProcess.closeDebugBrowser({
+    profileDir,
+    sendClose: handle
+      ? async function () {
+        const session = await handle.newBrowserCDPSession();
+        await session.send('Browser.close');
+      }
+      : null,
+    deps,
+  });
+
+  try { if (handle) handle.close(); } catch (_) { /* best-effort */ }
+  browser = null;
+  mode = null;
+  state = 'OFFLINE';
+  clearBrowserPidFile();
+  return verdict;
+}
+
 // Execute a callback with a page reference. Finds or creates a suitable page.
 async function withPage(callback) {
   if (state !== 'ONLINE' || (!browser && !context)) {
@@ -566,6 +618,13 @@ async function withNewPage(callback) {
 module.exports = {
   connect,
   disconnect,
+  // BUG-409: disconnect() drops our end; this one stops the browser and proves
+  // it stopped. Not interchangeable — see the comment above the function.
+  closeLaunchedBrowser,
+  // BUG-410: the only trustworthy answer to "which browser is behind the debug
+  // port", since Brave reports a plain Chrome/<version> product string over CDP.
+  processOnPort: browserProcess.processOnPort,
+  isMythosDebugProfile: browserProcess.isMythosDebugProfile,
   getStatus,
   withPage,
   withNewPage,

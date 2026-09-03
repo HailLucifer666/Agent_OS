@@ -343,18 +343,18 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7160,
+      "value": 7223,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-02"
+      "measuredAt": "2026-09-03"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-02"
+      "measuredAt": "2026-09-03"
     },
     "withheld": {
       "value": 61,
@@ -4022,10 +4022,55 @@
         "title": "the half-duplex gate held the operator's microphone for 40% of a conversation, and 92 seconds of that ended in a timeout rather than in actual echo (🔴 DIAGNOSED 2026-09-03, deliberately NOT fixed here)",
         "detail": {},
         "excerpt": "**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. **Measured from `voice.capture-suspend` releases, operator session 2026-09-03 (~11 minutes of conversation):** | release reason | n | total held | worst single hold | frames zeroed | |---|---|---|---|---| | `own-voice-ended` (normal) | 25 | 159.4s | 11.0s | 37,918 | | `own-voice-ceiling-near-field-energy` | 5 | 68.1s | **21.4s** | 6,810 | | `own-voice-ceiling-no-evidence-of-echo` | 2 | 24.2s | 13.1s | 2,235 | | `suspend-window-elapsed` | 2 | 16.0s | 8.0s | 0 | | **total** | **34** | **267.7s** | | **46,963** | `framesDropped` was 0 throughout — nothing was lost in transport. The audio was **zeroed**, deliberately, by the own-voice gate. **The signal is the ceiling releases, not the total.** Holding the mic while MYTHOS is genuinely speaking is correct half-duplex behaviour, and `own-voice-ended` is that…"
+      },
+      {
+        "n": 407,
+        "shape": "entry",
+        "state": "verified",
+        "title": "MYTHOS held two answers to \"which browser\", neither derived from the other, so a named request could not fail: it silently resolved to something else",
+        "detail": {
+          "fix": "1. `src/core/effectors/browser-target.js` (new) owns the question: name normalisation, executable discovery, the executable→name map"
+        }
+      },
+      {
+        "n": 408,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the debug browser is a different, signed-out identity and nothing MYTHOS said told the operator that",
+        "detail": {
+          "fix": "Every launch now reports two machine-readable facts (`separateProfile: true`, `signedIn: false`) and states in its spoken caveat that this is MYTHOS's own `\u003cbrowser>` profile, naming the directory, for"
+        }
+      },
+      {
+        "n": 409,
+        "shape": "entry",
+        "state": "verified",
+        "title": "`browser_switch` closed nothing: `disconnect()` cannot stop a CDP-attached browser, so the next launch raced a survivor for the debug port",
+        "detail": {
+          "fix": "`adapters/browser-agent/browser-process.js` (new) closes and then"
+        }
+      },
+      {
+        "n": 410,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the attached browser was recorded from the REQUEST, not from what answered, so MYTHOS drove an invisible window under the visible one's name",
+        "detail": {
+          "fix": "The oracle is the"
+        }
+      },
+      {
+        "n": 411,
+        "shape": "entry",
+        "state": "verified",
+        "title": "`browser_launch_debug` decided whether to spawn by reading its own connection state, so an OFFLINE adapter with a live browser spawned a rival onto a held port",
+        "detail": {
+          "fix": "Look before spawning: try to adopt whatever is already on the port. It costs nothing when nothing is there — a refused connect fails in well under a poll interval, which is the measurement BUG-140 already relies on when it polls this same call. On adoption, the identity comes from BUG-410's port-owner oracle: a"
+        }
       }
     ],
     "counts": {
-      "verified": 69,
+      "verified": 74,
       "fixed": 173,
       "open": 7,
       "coded": 3,
@@ -4033,7 +4078,7 @@
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 255,
+    "total": 260,
     "openDeclared": [
       274,
       275

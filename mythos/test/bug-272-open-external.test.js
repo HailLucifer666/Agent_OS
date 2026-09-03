@@ -51,12 +51,24 @@ describe('BUG-272 T2 — open_web(browser:true) hands off, or fails honestly', (
     assert.match(String(res.reason), /browser/);
   });
 
+  // UPDATED 2026-09-03 (BUG-407): the expected value gained its trailing slash.
+  // This route now parses the URL with WHATWG `new URL()` and hands over
+  // `parsed.href`, because the named-browser path passes the string to a
+  // browser PROCESS and the scheme must be proven http/https at that edge, not
+  // pattern-matched. `href` canonicalises an empty path to "/".
+  //
+  // This is not a loosened assertion. electron/main.js ALREADY called
+  // shell.openExternal(parsed.href), so 'https://www.example.com/' is what the
+  // browser received all along — the old expectation pinned the value one hop
+  // before the normalisation and therefore did not describe what was opened.
+  // Moving the parse earlier makes the reported url and the opened url the same
+  // string, which is the fact worth pinning.
   it('a bare domain is normalised to https before hand-off', async () => {
     const seen = [];
     const built = tools();
     built.setExternalOpener(async (url) => { seen.push(url); return { opened: true }; });
     await openWebOf(built)({ type: 'web', browser: true, url: 'www.example.com' });
-    assert.deepEqual(seen, ['https://www.example.com']);
+    assert.deepEqual(seen, ['https://www.example.com/']);
   });
 
   // The heart of the fix. Every one of these was previously ok:true.

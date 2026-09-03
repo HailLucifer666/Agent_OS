@@ -123,11 +123,18 @@ describe('open_web browser:true — the explicit real-browser route', () => {
     assert.match(String(res.result || res.error), /browser_navigate/);
   });
 
+  // UPDATED 2026-09-03 (BUG-407) — the trailing slash. The route now hands over
+  // WHATWG `new URL(...).href` so the http/https scheme is PROVEN before the
+  // string can reach a browser process (the named-browser path spawns the
+  // executable with it). electron/main.js already passed `parsed.href` to
+  // shell.openExternal, so this is the value the browser always got; the parse
+  // just moved one hop earlier, which is what makes res.result.url and the
+  // opened url the same string.
   it('browser:true with a BARE DOMAIN in query normalizes to https and routes the same way', async () => {
     const res = await openWebTool().fn({ type: 'web', query: 'openai.com', browser: true });
     assert.equal(res.ok, true);
-    assert.deepEqual(handedOff, ['https://openai.com'], 'normalised BEFORE the hand-off');
-    assert.equal(res.result.url, 'https://openai.com');
+    assert.deepEqual(handedOff, ['https://openai.com/'], 'normalised BEFORE the hand-off');
+    assert.equal(res.result.url, 'https://openai.com/');
   });
 
   it('browser:true with a non-URL query fails with guidance, not a silent search', async () => {

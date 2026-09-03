@@ -78,7 +78,11 @@ const DELIBERATE = {
 const BASELINE = {
   'mythos/server/index.js': 4680,
   'electron/main.js': 2606,
-  'mythos/src/core/effectors/from-browser.js': 1627,
+  // 1627 -> 1610 (BUG-407..411, 2026-09-03): the browser resolver moved to
+  // browser-target.js and the launch plan to browser-launch-plan.js, so the fix
+  // fitted under the ceiling instead of raising it. Recorded DOWN, per this
+  // file's own rule — the ceiling only ever tightens.
+  'mythos/src/core/effectors/from-browser.js': 1610,
   'mythos/src/core/effectors/from-pc.js': 1552,
   'mythos/src/core/voice/live-tool-adapter.js': 1449,
   'mythos/src/core/effectors/from-dashboard.js': 1418,
