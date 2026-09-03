@@ -291,6 +291,69 @@ function fsExists(p) {
 }
 
 // ---------------------------------------------------------------------------
+// "You asked for X — is X what is actually there?" asked ONCE (BUG-410/411)
+// ---------------------------------------------------------------------------
+//
+// SELF-REVIEW FINDING, 2026-09-03, gate B against the BUG-407..411 commit.
+// The first pass answered this question in the OFFLINE/adopt path and left the
+// other two branches of the same function answering it differently — or not at
+// all:
+//
+//   already ONLINE : `if (want && attachedBrowser && attachedBrowser !== want)`
+//                    — the guard is SKIPPED when attachedBrowser is null, so a
+//                    request naming brave got ok({browser:'unknown'}). A false
+//                    success, for the exact case the adopt path refuses.
+//   CONNECTING     : joined the in-flight connect and returned ok with NO `want`
+//                    comparison and no identity read at all.
+//
+// Three branches, one question, three answers. Deriving the set from the reason
+// rather than from the diff is what found it: "an identity taken from the
+// request instead of from what answered" is not a property of one branch.
+//
+// `attached` is the BUG-106 value — non-null means MYTHOS launched it and can
+// therefore vouch for it AND close it, which is why it selects the remedy:
+// browser_switch can close our own browser, and nothing can safely close
+// someone else's. `probe` is called ONLY when it is needed (a named request
+// whose identity we cannot vouch for), because it costs a PowerShell round
+// trip. Returns a reason string, or null when the request is satisfiable.
+function namedRequestRefusal(opts) {
+  const o = opts || {};
+  const want = normalizeBrowserName(o.want) || o.want;
+  if (!want) return null;
+
+  const ours = Boolean(o.attached);
+  let identity = o.attached || null;
+  if (!identity && typeof o.probe === 'function') {
+    try { identity = o.probe() || null; } catch (_) { identity = null; }
+  }
+
+  if (identity && identity === want) return null;
+
+  if (!identity) {
+    return 'Something is already on the debug port and I cannot tell which browser it is, '
+      + `so I will not claim to be driving ${want}. `
+      + 'MYTHOS did not launch it — close that browser window and ask again.';
+  }
+  if (ours) {
+    // BUG-107: name the remedy. "Close it first" was the dead end that ticket
+    // removed — browser_switch is something MYTHOS can actually do.
+    return `${identity} already owns the debug port — one port, one browser. `
+      + `Call browser_switch with browser:"${want}" to close ${identity} and launch ${want} instead.`;
+  }
+  return `Something is already on the debug port and it is ${identity}, not ${want} — one port, one browser. `
+    + `MYTHOS did not launch it, so I will not close it: close that ${identity} window yourself and ask again.`;
+}
+
+// Playwright's launchPersistentContext takes a CHANNEL ('chrome', 'msedge'),
+// not a path, and the adapter tries chrome then falls back to msedge. The
+// channel names are already keys in BROWSER_ALIASES, so the browser name is a
+// lookup rather than a second mapping to keep in step (gate D: derive, do not
+// type a list). null for a channel this codebase has no name for.
+function browserNameForChannel(channel) {
+  return normalizeBrowserName(channel);
+}
+
+// ---------------------------------------------------------------------------
 // The URL that is about to reach a browser process (BUG-407)
 // ---------------------------------------------------------------------------
 //
@@ -379,6 +442,10 @@ module.exports = {
   parseCommandExecutable,
   osDefaultBrowser,
   resolveLaunchTarget,
+  // BUG-410/411 self-review: one predicate for "is what answered what was asked",
+  // so three branches of browser_launch_debug cannot answer it three ways.
+  namedRequestRefusal,
+  browserNameForChannel,
   externalUrl,
   openUrlInBrowser,
   USER_CHOICE_KEY,

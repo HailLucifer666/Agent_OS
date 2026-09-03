@@ -343,7 +343,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7223,
+      "value": 7239,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -4067,10 +4067,19 @@
         "detail": {
           "fix": "Look before spawning: try to adopt whatever is already on the port. It costs nothing when nothing is there — a refused connect fails in well under a poll interval, which is the measurement BUG-140 already relies on when it polls this same call. On adoption, the identity comes from BUG-410's port-owner oracle: a"
         }
+      },
+      {
+        "n": 412,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the BUG-410 fix left the same defect at three sites in the files it had just edited, and made a neighbouring comment false on the way past",
+        "detail": {
+          "fix": "`launchLocal` now records the channel it actually got and reports it through `getStatus()`. The label is read from the launch instead of re-derived by its caller. An unnameable channel stays `null` — unknown stays unknown. ### 2. The already-ONLINE branch skipped its own guard ```js if (want && attachedBrowser && attachedBrowser !== want) { ...refuse... } return ok({ alreadyOnline: true, browser: attachedBrowser || 'unknown' }); ``` The guard is"
+        }
       }
     ],
     "counts": {
-      "verified": 74,
+      "verified": 75,
       "fixed": 173,
       "open": 7,
       "coded": 3,
@@ -4078,7 +4087,7 @@
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 260,
+    "total": 261,
     "openDeclared": [
       274,
       275

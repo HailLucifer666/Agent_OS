@@ -52,14 +52,16 @@ async function requireOnline() {
     // ensureOnline() either CONNECTED to an endpoint already running
     // (mode:'cdp' — we did not start it, so its identity is unconfirmed and
     // stays null/unknown, same as the "cannot confirm" refusal below already
-    // handles) or LAUNCHED one itself (mode:'launched', via launchLocal's
-    // chrome-first/edge-fallback — the same default path browser_launch_debug
-    // uses for an unnamed request, so it earns the same 'chrome' label). Only
-    // touch attachedBrowser when THIS call actually changed connectivity (we
-    // are inside the `state !== 'ONLINE'` branch) — an adapter that was
-    // already ONLINE has its identity left exactly as it was.
+    // handles) or LAUNCHED one itself (mode:'launched').
+    //
+    // BUG-410, found by self-review of the BUG-410 commit itself: this read
+    // `mode === 'launched' ? 'chrome' : null`, so a machine without Chrome
+    // launched EDGE and was labelled chrome. launchLocal reports its channel
+    // now, so the label is read from the launch. Account in bug-106's test file.
     if (status.state === 'ONLINE') {
-      attachedBrowser = status.mode === 'launched' ? 'chrome' : null;
+      attachedBrowser = status.mode === 'launched'
+        ? browserTarget.browserNameForChannel(status.launchedChannel)
+        : null;
     }
   }
   if (status.state !== 'ONLINE') {
@@ -808,7 +810,7 @@ const browserTarget = require('./browser-target');
 const {
   BROWSER_SUBPATHS, BROWSER_SEARCH_ORDER, BROWSER_ALIASES,
   normalizeBrowserName, browserCandidatePaths, findBrowserExecutable,
-  identifyBrowserByExecutable, debugProfileDir, resolveLaunchTarget,
+  identifyBrowserByExecutable, debugProfileDir, resolveLaunchTarget, supportedBrowserList,
 } = browserTarget;
 
 // TEST SEAM for browser_launch_debug's spawn path (BUG-410/411). Chrome, Brave
@@ -834,7 +836,6 @@ let attachedBrowser = null;
 // Test seam only — production code sets this exclusively via a real launch.
 function __setAttachedBrowserForTest(name) { attachedBrowser = name; }
 
-function supportedBrowserList() { return BROWSER_SEARCH_ORDER.join(', '); }
 
 // Returns null when the request is satisfiable, or a fail() when driving the
 // attached browser would NOT be what the caller asked for. This is the whole
@@ -916,19 +917,24 @@ async function browser_launch_debug(args) {
     if (!want) return fail(`"${requested}" is not a browser I can drive. Supported: ${supportedBrowserList()}.`);
   }
 
+  const cdpUrlEarly = process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) || 'http://127.0.0.1:9222';
+  // SELF-REVIEW 2026-09-03 (gate B on the BUG-407..411 commit): the branches
+  // below all answer "is what answered what was asked?", and answered it
+  // differently — the ONLINE branch skipped its own guard whenever
+  // attachedBrowser was null, returning ok({browser:'unknown'}) for a named
+  // request. One predicate now. The probe is lazy: it costs a PowerShell round
+  // trip only for a named request whose identity we cannot already vouch for.
+  const probeOwner = () => launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrlEarly);
+  const refuseNamed = () => browserTarget.namedRequestRefusal({ want, attached: attachedBrowser, probe: probeOwner });
+
   const status0 = browserAgent.getStatus();
   if (status0.state === 'ONLINE') {
     // One CDP port, one browser. If a different one already owns it, say so
-    // instead of "launched" — the debug port cannot be shared.
-    if (want && attachedBrowser && attachedBrowser !== want) {
-      // BUG-107: name the remedy here too. checkBrowserTarget()'s refusal points
-      // at browser_switch, but this branch is the one a model asked for a
-      // different browser actually hits first — it calls browser_launch_debug,
-      // not browser_navigate. "Close it first" is an instruction to the operator,
-      // not something MYTHOS can act on, which is the dead end BUG-107 removed.
-      return fail(`${attachedBrowser} already owns the debug port — one port, one browser. `
-        + `Call browser_switch with browser:"${want}" to close ${attachedBrowser} and launch ${want} instead.`);
-    }
+    // instead of "launched" — the debug port cannot be shared. BUG-107's
+    // browser_switch remedy now lives in namedRequestRefusal, which also
+    // closed the null-attachedBrowser hole this branch had.
+    const onlineRefusal = refuseNamed();
+    if (onlineRefusal) return fail(onlineRefusal);
     return ok({ alreadyOnline: true, browser: attachedBrowser || 'unknown' });
   }
   if (status0.state === 'CONNECTING') {
@@ -938,6 +944,11 @@ async function browser_launch_debug(args) {
     const cdpUrl0 = process.env.BROWSER_CDP_URL || (config && config.BROWSER_CDP_URL) || 'http://127.0.0.1:9222';
     const joined = await browserAgent.ensureOnline({ cdpUrl: cdpUrl0 }).catch(() => false);
     if (joined) {
+      // DISPOSITION (self-review, second round): a `want` check was added here
+      // and REVERTED. A connect in flight is not decidable yet, so refusing
+      // turned a poller race into a hard browser_switch failure — bug-107 went
+      // red, correctly. The ACTION is already guarded one step later by
+      // checkBrowserTarget(); what is left is a narration cost. Filed as BUG-412.
       const s = browserAgent.getStatus();
       return ok({ launched: false, mode: s.mode, pageCount: s.pageCount });
     }
@@ -979,14 +990,8 @@ async function browser_launch_debug(args) {
     // this is not that — see browser_switch's own null branch. `portOwner` is
     // reported as information so MYTHOS can tell the operator what is actually
     // there instead of guessing.
-    if (want && found && found !== want) {
-      return fail(`Something is already on the debug port and it is ${found}, not ${want} — one port, one browser. `
-        + `MYTHOS did not launch it, so I will not close it: close that ${found} window yourself and ask again.`);
-    }
-    if (want && !found) {
-      return fail(`Something is already on the debug port and I cannot tell which browser it is, so I will not claim to be driving ${want}. `
-        + 'MYTHOS did not launch it — close that browser window and ask again.');
-    }
+    const adoptRefusal = browserTarget.namedRequestRefusal({ want, attached: null, probe: () => found });
+    if (adoptRefusal) return fail(adoptRefusal);
     const sAdopted = browserAgent.getStatus();
     return ok({ launched: false, adopted: true, mode: sAdopted.mode, pageCount: sAdopted.pageCount, portOwner: found || 'unknown' });
   }
@@ -1066,20 +1071,14 @@ async function browser_launch_debug(args) {
   return ok(result);
 }
 
-// BUG-410's oracle. Returns a browser NAME or null; null means "could not
-// tell", never "no mismatch". Kept tiny and non-throwing because it runs on the
-// launch path, and a failure to identify must degrade to `assumed`, not to a
-// failed launch.
+// BUG-410's oracle lives in adapters/browser-agent/browser-process.js now,
+// beside processOnPort — the two halves of one answer. Delegated rather than
+// re-implemented so there is one place to edit it, and guarded because the
+// adapter is monkey-patched by several test files.
 function identifyBrowserOnPort(cdpUrl) {
-  try {
-    const port = Number(new URL(String(cdpUrl)).port);
-    if (!Number.isInteger(port) || port <= 0) return null;
-    if (typeof browserAgent.processOnPort !== 'function') return null;
-    const owner = browserAgent.processOnPort(port);
-    return owner && owner.exe ? identifyBrowserByExecutable(owner.exe) : null;
-  } catch (_) {
-    return null;
-  }
+  return typeof browserAgent.identifyBrowserOnPort === 'function'
+    ? browserAgent.identifyBrowserOnPort(cdpUrl)
+    : null;
 }
 
 // BUG-107: the wrong-browser refusal above ("attached to Brave, not Chrome")

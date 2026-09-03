@@ -269,8 +269,31 @@ async function closeDebugBrowser(opts) {
   };
 }
 
+
+// BUG-410: the two halves of one answer, kept together. processOnPort says
+// WHICH PROCESS owns the debug port; this says which BROWSER that is. Returns a
+// name or null, and null means "could not tell" — never "no mismatch". Moved
+// here from from-browser.js during the BUG-410 self-review: it was one file
+// away from its own data source, and from-browser.js is at its size ceiling.
+//
+// Non-throwing by contract: it runs on the launch path, so a failure to
+// identify must degrade to "assumed", never fail the launch.
+function identifyBrowserOnPort(cdpUrl, deps) {
+  try {
+    const port = Number(new URL(String(cdpUrl)).port);
+    if (!Number.isInteger(port) || port <= 0) return null;
+    const owner = (deps && deps.processOnPort ? deps.processOnPort : processOnPort)(port, deps);
+    if (!owner || !owner.exe) return null;
+    // browser-target.js owns exe -> name, derived from BROWSER_SUBPATHS. Required
+    // lazily so this module stays cheap to require from the adapter index.
+    return require('../../src/core/effectors/browser-target').identifyBrowserByExecutable(owner.exe);
+  } catch (_) {
+    return null;
+  }
+}
 module.exports = {
   isMythosDebugProfile,
+  identifyBrowserOnPort,
   parseProcessRows,
   processesForProfile,
   processOnPort,

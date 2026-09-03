@@ -190,28 +190,35 @@ describe('BUG-410 — the attached browser is the one that ANSWERED', () => {
     assert.equal(res.result.browser, 'chrome');
   });
 
+  // Driven through the REAL implementation in browser-process.js with an
+  // injected processOnPort, not through a stub of the whole oracle. The function
+  // moved out of from-browser.js during this ticket's own self-review (it was
+  // one file away from its data source), and the first version of this test
+  // monkey-patched `browserAgent.processOnPort` — which the moved code does not
+  // read, so the test would have gone on passing while exercising nothing. That
+  // is the false-green shape (/kee class 14), caught by the move.
   test('the identity oracle answers null for "cannot tell", never a guess', () => {
-    const original = browserAgent.processOnPort;
-    try {
-      browserAgent.processOnPort = () => ({ pid: 21708, exe: EXE.chrome });
-      assert.equal(browserMod.identifyBrowserOnPort('http://127.0.0.1:9222'), 'chrome');
-      browserAgent.processOnPort = () => ({ pid: 24080, exe: EXE.brave });
-      assert.equal(browserMod.identifyBrowserOnPort('http://127.0.0.1:9222'), 'brave',
-        'brave.exe must be identifiable — the CDP product string says Chrome for both');
-      browserAgent.processOnPort = () => null;
-      assert.equal(browserMod.identifyBrowserOnPort('http://127.0.0.1:9222'), null);
-      browserAgent.processOnPort = () => ({ pid: 1, exe: 'C:\\x\\firefox.exe' });
-      assert.equal(browserMod.identifyBrowserOnPort('http://127.0.0.1:9222'), null,
-        'a browser MYTHOS cannot drive is unknown, not a mismatch and not a match');
-      browserAgent.processOnPort = () => { throw new Error('powershell missing'); };
-      assert.equal(browserMod.identifyBrowserOnPort('http://127.0.0.1:9222'), null,
-        'the oracle runs on the launch path — it must degrade, never fail the launch');
-      browserAgent.processOnPort = () => ({ pid: 1, exe: EXE.chrome });
-      assert.equal(browserMod.identifyBrowserOnPort('not a url'), null);
-      assert.equal(browserMod.identifyBrowserOnPort('http://127.0.0.1/'), null, 'no port, no answer');
-    } finally {
-      browserAgent.processOnPort = original;
-    }
+    const at = (owner) => bp.identifyBrowserOnPort('http://127.0.0.1:9222', { processOnPort: owner });
+    assert.equal(at(() => ({ pid: 21708, exe: EXE.chrome })), 'chrome');
+    assert.equal(at(() => ({ pid: 24080, exe: EXE.brave })), 'brave',
+      'brave.exe must be identifiable — the CDP product string says Chrome for both');
+    assert.equal(at(() => null), null);
+    assert.equal(at(() => ({ pid: 1, exe: 'C:\\x\\firefox.exe' })), null,
+      'a browser MYTHOS cannot drive is unknown, not a mismatch and not a match');
+    assert.equal(at(() => ({ pid: 1, exe: null })), null, 'a process with no path is not an identity');
+    assert.equal(at(() => { throw new Error('powershell missing'); }), null,
+      'the oracle runs on the launch path — it must degrade, never fail the launch');
+    const good = () => ({ pid: 1, exe: EXE.chrome });
+    assert.equal(bp.identifyBrowserOnPort('not a url', { processOnPort: good }), null);
+    assert.equal(bp.identifyBrowserOnPort('http://127.0.0.1/', { processOnPort: good }), null,
+      'no port, no answer');
+  });
+
+  test('the effector delegates to the adapter rather than keeping a second copy', () => {
+    assert.equal(browserAgent.identifyBrowserOnPort, bp.identifyBrowserOnPort,
+      'one implementation, exported through the adapter the effector already talks to');
+    assert.equal(typeof browserMod.identifyBrowserOnPort, 'function',
+      'and from-browser keeps a named seam, so the launch path stays readable');
   });
 
   test('processOnPort rejects a port number it cannot use', () => {

@@ -100,18 +100,48 @@ describe('BUG-106 — attachedBrowser must not outlive the real connection', () 
     assert.equal(result.result.browser, 'unknown', 'a bare CDP connect must never be reported as a specific browser');
   });
 
-  test('requireOnline lazy fallback: an actual local launch (mode:launched) is reported as chrome', async () => {
-    __setAttachedBrowserForTest(null);
-    let fakeState = { state: 'OFFLINE', mode: null, hint: null };
-    browserAgent.getStatus = () => ({ ...fakeState });
-    browserAgent.ensureOnline = async () => { fakeState = { state: 'ONLINE', mode: 'launched' }; return true; };
-    browserAgent.withPage = async (cb) => cb({
-      goto: async () => {}, waitForLoadState: async () => {}, title: async () => 'Example', url: () => 'https://example.com',
-    });
+  // REWRITTEN 2026-09-03 (BUG-410, found reviewing BUG-410's own commit).
+  //
+  // This test asserted that mode:'launched' is "reported as chrome", which is
+  // what the code did — and the code was wrong. launchLocal tries playwright
+  // channel 'chrome' and FALLS BACK to 'msedge', so on a machine without Chrome
+  // it launches Edge and the label said chrome: an identity taken from an
+  // assumption, the exact defect BUG-410 fixed in browser_launch_debug and
+  // missed here.
+  //
+  // The fixture is why it read as safe. It returned mode:'launched' and nothing
+  // else, which the real adapter never does — launchLocal now sets
+  // launchedChannel in the same breath as mode. A fixture more generous than
+  // the wire cannot see the production failure (/kee class 3), and this one
+  // could not express the Edge case at all.
+  //
+  // Intent preserved and widened: a browser MYTHOS launched still earns a
+  // label; the label now comes from the launch, and an unnameable channel stays
+  // unknown rather than becoming the plausible default.
+  test('requireOnline lazy fallback: the label is the channel that ACTUALLY launched', async () => {
+    const cases = [
+      { launchedChannel: 'chrome', expect: 'chrome' },
+      { launchedChannel: 'msedge', expect: 'edge' },
+      // The pre-fix code answered 'chrome' for all three of these rows.
+      { launchedChannel: null, expect: 'unknown' },
+    ];
+    for (const c of cases) {
+      __setAttachedBrowserForTest(null);
+      let fakeState = { state: 'OFFLINE', mode: null, hint: null };
+      browserAgent.getStatus = () => ({ ...fakeState });
+      browserAgent.ensureOnline = async () => {
+        fakeState = { state: 'ONLINE', mode: 'launched', launchedChannel: c.launchedChannel };
+        return true;
+      };
+      browserAgent.withPage = async (cb) => cb({
+        goto: async () => {}, waitForLoadState: async () => {}, title: async () => 'Example', url: () => 'https://example.com',
+      });
 
-    const result = await browser_navigate({ url: 'https://example.com' });
-    assert.equal(result.ok, true);
-    assert.equal(result.result.browser, 'chrome', 'a browser MYTHOS itself launched via the default fallback earns the chrome label');
+      const result = await browser_navigate({ url: 'https://example.com' });
+      assert.equal(result.ok, true);
+      assert.equal(result.result.browser, c.expect,
+        `channel ${JSON.stringify(c.launchedChannel)} must be reported as ${c.expect}, never as a plausible default`);
+    }
   });
 
   test('an already-ONLINE adapter is left untouched by requireOnline (no reconnect attempt, identity unchanged)', async () => {

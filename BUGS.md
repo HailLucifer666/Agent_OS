@@ -282,6 +282,59 @@ So "sometimes it opens, sometimes it does not, sometimes there are three" is **o
 
 **Not fixed here, and not this bug.** `buildBrowserLaunchArgs` still carries no URL, so navigation remains a separate CDP step after the launch. That is by design (the launch tool takes no URL) and it is the reason a launch and a navigate can end up in different browsers when the port is contested — which is what BUG-410's oracle now catches rather than what this change removes.
 
+## BUG-412 — the BUG-410 fix left the same defect at three sites in the files it had just edited, and made a neighbouring comment false on the way past (✅ FIXED 2026-09-03, mutation-proven; one part deliberately not fixed)
+
+**Status:** ✅ FIXED 2026-09-03. 7 mutation probes recorded in `test/bug-412-one-predicate-for-which-browser-answered.test.js`. **Found by running the scope gates against BUG-407..411's own commit, after it was pushed** — gate B: derive the set from the reason, not from the diff.
+
+The reason BUG-410 gave was *"an identity taken from the request instead of from what answered"*. That is not a property of one branch. The fix touched one.
+
+### 1. `requireOnline()` carried BUG-410 verbatim, twenty lines above BUG-410's fix
+
+```js
+attachedBrowser = status.mode === 'launched' ? 'chrome' : null;
+```
+
+`launchLocal` tries playwright channel `'chrome'` and **falls back to `'msedge'`**. On a machine without Chrome it launches **Edge**, and this labelled it chrome.
+
+**And the comment justifying the literal was made false by BUG-407, in the same commit.** It read: *"via launchLocal's chrome-first/edge-fallback — the same default path browser_launch_debug uses for an unnamed request, so it earns the same 'chrome' label."* That parity was real until BUG-407 taught the unnamed path to read the OS default and verify it against the port owner. So the fix broke the argument for the neighbouring line and left the line standing — defect class 11, with class 10 riding on it.
+
+**Fix:** `launchLocal` now records the channel it actually got and reports it through `getStatus()`. The label is read from the launch instead of re-derived by its caller. An unnameable channel stays `null` — unknown stays unknown.
+
+### 2. The already-ONLINE branch skipped its own guard
+
+```js
+if (want && attachedBrowser && attachedBrowser !== want) { ...refuse... }
+return ok({ alreadyOnline: true, browser: attachedBrowser || 'unknown' });
+```
+
+The guard is **skipped whenever `attachedBrowser` is null**, so a request naming brave got `ok({ browser: 'unknown' })`. The adopt path added in BUG-411 refuses exactly that case. Same predicate, opposite answers, in one function.
+
+**Fix:** one predicate, `namedRequestRefusal`, with each caller passing what it knows. `attached` (BUG-106's value — non-null means MYTHOS launched it) selects the remedy, because `browser_switch` can close our own browser and nothing can safely close someone else's. `browser-process.js` refuses that close, so offering `browser_switch` for a foreign window would be a dead end.
+
+### 3. The CONNECTING branch — DELIBERATELY NOT FIXED
+
+It never compares `want` at all. A `want` check was added here and **reverted**: the identity of a connect still in flight is not unknown, it is *not yet decidable*, and refusing turned a poller race into a hard failure of `browser_switch` — two tests in `bug-107` went red, correctly. The **action** stays guarded one step later, because `checkBrowserTarget()` refuses a named `browser_navigate` while `attachedBrowser` is null, with an accurate message. What remains is a narration cost: "ready", then a refusal on the next call.
+
+**Revisit trigger:** an Audit row showing a `browser_launch_debug` success on the CONNECTING branch followed by a `checkBrowserTarget` refusal in the same turn. **Durable form:** the join returning the uncertainty in its result rather than a bare `ok`. Pinned by a test so it cannot drift silently.
+
+### Two probes that reddened nothing, and what they found
+
+- **(e)** Deleting `launchedChannel = 'msedge'` from the fallback reddened **nothing**. `bug-106`'s test stubs `ensureOnline`/`getStatus`, so it asserted the *consumer* while nothing asserted the *producer* — the fix's own new field could be deleted from the branch that needed it most with the suite green. Closed with a derived source-shape test that extracts the channels `launchLocal` asks playwright for and the channels it records, and compares the two sequences: it catches a deleted assignment *and* the worse shape, recording `'chrome'` on the msedge branch.
+- **(g)** Replacing the delegation body with `return null` also reddened **nothing** — the test "asserting" the delegation compared two exports and a `typeof`, neither of which the mutation touches. Closed by stubbing the adapter and checking the value actually comes back through.
+
+Two vacuous guards out of seven probes, in a change written specifically about vacuous guards.
+
+### Also in this pass
+
+- `identifyBrowserOnPort` moved from `from-browser.js` into `adapters/browser-agent/browser-process.js`, beside `processOnPort` — the two halves of one answer were a file apart. The effector delegates.
+- A duplicate `supportedBrowserList()` was defined in `from-browser.js` *and* exported from `browser-target.js`. Removed; the effector imports it.
+- `from-browser.js` ended at **1609**, inside the 1610 ceiling this PR had already tightened it to. No baseline was raised.
+
+### Deliberately not fixed, filed with the check that settles each
+
+- **`main.js:1301` calls the non-closing `disconnect()` on shutdown**, and it is now the last caller that means *close*. Its sibling comment names BUG-029 exactly — *"leaves an orphan holding a browser… after MYTHOS is gone"*. Not swapped for `closeLaunchedBrowser()` because `stopRunningLoops()` is **synchronous by design** and the close is genuinely async (a PowerShell query plus a verification poll); a fire-and-forget async call there would not complete, which is the un-awaited-write class. `Start Agent OS.bat`'s orphan cleanup is the existing backstop. **Revisit trigger:** a debug browser found alive after a clean MYTHOS exit. **Durable form:** an awaited async shutdown step, or a synchronous kill by the recorded pid.
+- **`launchLocal` cannot launch Brave and never consults the OS default.** Playwright's `channel:` accepts its own channel names, and Brave is not one — reaching it needs `executablePath`, whose precedence against `channel` is a vendor-resolution question (class 13) that has not been read. So the lazy bring-up in `requireOnline()` can still start Chrome or Edge on a machine whose default is Brave. In BUG-407's set by its own reason; a capability gap rather than a wrong answer, and the label is now honest either way. **Revisit trigger:** an operator report of the lazy path opening the wrong browser. **Durable form:** `launchLocal` taking a resolved executable from `browser-target.js`, so all three launch routes share one resolver.
+
 ## BUG-399 — CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable (✅ FIXED 2026-09-02 — three causes, none of them the one this ticket first named)
 
 **Status:** ✅ FIXED 2026-09-02. Three ordinary test defects, each masked on a
