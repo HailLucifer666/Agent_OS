@@ -172,24 +172,9 @@ export function createChunkCompletion({ advance, fallback }) {
   return { done, fail };
 }
 
-// The entity speaks through three different engines and the operator hears all
-// of them in one session: server edge-tts (VOICE_TTS_VOICE), Gemini Live S2S
-// (GEMINI_LIVE_VOICE), and — when edge-tts is down — this browser fallback.
-// The fallback used to set NO voice at all, so it inherited the OS default,
-// which on Windows is Microsoft David: male. Combined with a male edge-tts
-// default, the entity greeted the operator as a British man and then answered
-// as a woman. All three are female now; this picks the closest available match
-// instead of taking whatever the OS hands over.
-//
-// 2026-08-06: retuned from en-GB-first to en-US-first. The entity now speaks
-// through Gemini Live (Aoede) on every surface it can — boot greeting and typed
-// turns included (VOICE_UNIFIED_LIVE_VOICE) — so this list's job is no longer
-// "pair with a British edge-tts voice" but "sound like Aoede when neither Live
-// nor edge-tts is available". Aoede is US-leaning, so is en-US-AvaNeural, so is
-// this list. This surface can never literally BE Aoede: speechSynthesis has no
-// access to Gemini. Nearest match is the ceiling here.
-//
-// Pure and exported so it can be unit-tested against fixture voice lists —
+// Browser fallback approximates Aoede with a US-leaning voice when provider
+// audio is unavailable. It cannot reproduce Gemini's voice exactly.
+// Pure and exported for fixture voice lists —
 // getVoices() is unavailable and unstubbable in the test runner.
 const PREFERRED_VOICES = [
   // en-US female first: pairs with edge-tts en-US-AvaNeural, which in turn is
@@ -245,7 +230,9 @@ export function createBrainRecoveryNotice() {
   };
 }
 
-export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity, brainOnline, vad }) {
+export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onVisionQuery, onActivity, brainOnline, vad, operatorEnabled = () => false, onOperatorTurn, onOperatorStop, onOperatorRequestId }) {
+  let operatorAwaiting = false, operatorRouted = false, operatorDrained = false;
+  let desktopSpeechId = null, playbackHeard = false, playbackFailed = false;
   // BUG-020: optional per-instance VAD tuning overrides — partial overrides
   // only (unspecified fields keep the module-level defaults declared above).
   if (vad && (vad.engine === 'rms' || vad.engine === 'silero')) VAD_ENGINE = vad.engine;
@@ -386,7 +373,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     stopRecording();
 
     // Close panel command — checked before nav
-    if (isCloseCommand(command) && closePanel) {
+    if (!operatorEnabled() && isCloseCommand(command) && closePanel) {
       closePanel();
       caption(' Panels closed.', 'info');
       finishTurn();
@@ -394,7 +381,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }
 
     const panelId = navTarget(command);
-    if (panelId) {
+    if (!operatorEnabled() && panelId) {
       openPanel(panelId);
       finishTurn();
       return;
@@ -406,7 +393,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     const session = beginTurn();
 
     // D5: Pre-flight brain availability check — skip transcription if brain is known offline.
-    if (!_brainOnline()) {
+    if (!operatorEnabled() && !_brainOnline()) {
       caption('Brain is offline — voice processing unavailable.', 'error');
       brainRecovery.refused();
       finishTurn();
@@ -422,6 +409,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     const grace = setTimeout(() => {
       if (!done) {
         done = true;
+        if (operatorAwaiting) stopSpeaking();
         caption('No reply from the brain (timed out). Check that providers are configured.', 'error');
         finishTurn();
       }
@@ -441,16 +429,14 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
         deliverReply(msg, session);
       },
     });
-    activeReqId = req.reqId; // Item B: barge-in (stopSpeaking) needs this to send 'stop'
+    setActiveReqId(req.reqId);
   }
 
-  // Reserves a fresh session token for a turn whose reply may stream
-  // speech-chunk messages before 'done' arrives. Shared by handleCommand
-  // (voice) and the external vision-query path (Part B / app.js). reqId is
-  // known upfront for server-initiated turns (proactive speech); local
-  // dispatch (handleCommand, or app.js callers of utterance()/visionQuery())
-  // learns it only once the WS call returns, and sets activeReqId directly.
+  // Reserve ownership before chunks arrive; local requests attach reqId after dispatch.
   function beginTurn(reqId) {
+    if (operatorEnabled()) stopSpeaking(false);
+    desktopSpeechId = null; playbackHeard = false; playbackFailed = false;
+    if (operatorEnabled()) { operatorAwaiting = true; operatorRouted = false; operatorDrained = false; processing = true; if (onOperatorTurn) onOperatorTurn(reqId); }
     const session = ++speakSession;
     doneReceived = false;
     lastChunkPlayed = false;
@@ -460,14 +446,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     return session;
   }
 
-  // Show the brain's reply and speak it aloud. BARGE-IN: the mic keeps
-  // recording during playback (processing drops before 'speaking'), so the
-  // user can talk over MYTHOS — a non-echo transcript stops playback and
-  // becomes the next command. isEcho() drops transcripts that are mostly
-  // MYTHOS's own words leaking from the speakers (hardware echo cancellation
-  // catches most of it; this is the software backstop). Preferred voice:
-  // server edge-tts mp3 in msg.audioB64; browser speechSynthesis (msg.speak,
-  // sanitized) is the fallback.
+  // Transcript echo protection complements the mechanical playback ownership gate.
   function isEcho(text) {
     // Active playback: check against speakingText
     if (speakingText) {
@@ -498,13 +477,15 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   // Does NOT wipe the echo-guard reference: moves it to lastSpokenText with a
   // timestamp so transcripts arriving AFTER playback ends (late speaker bleed)
   // are still caught by isEcho() within ECHO_GUARD_MS.
-  function stopSpeaking() {
+  function stopSpeaking(notify = true) {
+    desktopSpeechId = null; // Cancellation must never acknowledge successful playback.
+    if (operatorAwaiting) { operatorAwaiting = false; operatorRouted = false; if (onOperatorStop) onOperatorStop(); processing = false; }
     speakSession++;
     // Item B: tell the server to stop synthesizing any not-yet-sent chunks for
     // the turn we just cut off client-side — otherwise edge-tts keeps running
     // in the background for audio nobody will hear. Harmless no-op server-side
     // if the turn already finished (reqId not found).
-    if (activeReqId) { stopRequest(activeReqId); activeReqId = null; }
+    if (activeReqId) { if (notify) stopRequest(activeReqId); activeReqId = null; }
     if (currentAudio) { try { currentAudio.pause(); } catch { /* ok */ } currentAudio = null; }
     if (window.speechSynthesis) { try { window.speechSynthesis.cancel(); } catch { /* ok */ } }
     if (speakingText) { lastSpokenText = speakingText; lastSpokenAt = Date.now(); }
@@ -514,7 +495,6 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     assistantSpeaking = false; // BUG-027: TTS queue fully drained (or force-stopped) — release the VAD gate
   }
 
-  // ---- chunked playback (speech-chunk messages arrive before 'done') ----
   function enqueueChunk(msg, session) {
     if (speakSession !== session) return; // barge-in already happened
     chunkQueue.push(msg);
@@ -548,7 +528,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
       // hardcoded behavior unchanged.
       const audio = new Audio('data:' + (chunk.mime || 'audio/mpeg') + ';base64,' + chunk.audioB64);
       currentAudio = audio;
-      audio.onended = step.done;
+      audio.onended = () => { if (speakSession === session) { playbackHeard = true; step.done(); } };
       audio.onerror = step.fail;
       audio.play().catch(step.fail);
     } else {
@@ -568,20 +548,25 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
   }
 
   function speakChunkFallback(text, session, onDone) {
+    if (speakSession !== session) return; // Late audio errors cannot restart cancelled speech.
     if (window.speechSynthesis && !disposed) {
       const u = new SpeechSynthesisUtterance(sanitizeForTts(text));
       const v = preferredVoice();
       if (v) u.voice = v;
-      u.onend = () => { if (speakSession === session) onDone(); };
-      u.onerror = () => { if (speakSession === session) onDone(); };
+      u.onend = () => { if (speakSession === session) { playbackHeard = true; onDone(); } };
+      u.onerror = () => { if (speakSession === session) { playbackFailed = true; onDone(); } };
       try { window.speechSynthesis.speak(u); return; } catch { /* fall through to silent finish */ }
     }
-    if (speakSession === session) onDone();
+    if (speakSession === session) { playbackFailed = true; onDone(); }
   }
-
+  function acknowledgeDesktopDrain() {
+    if (desktopSpeechId && playbackHeard && !playbackFailed) sendMessage({ type: 'desktop-speech-drained', speechId: desktopSpeechId });
+    desktopSpeechId = null;
+  }
   function maybeFinishTurn(session) {
     if (speakSession !== session) return;
     if (doneReceived && (lastChunkPlayed || chunkQueue.length === 0) && !playing) {
+      acknowledgeDesktopDrain();
       stopSpeaking();
       // Task 6: the reply just finished playing — clear the caption back to
       // the idle hint instead of leaving the spoken phrase on screen forever.
@@ -590,14 +575,17 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }
   }
 
-  // Show the brain's reply and speak it aloud. `session` was reserved by
-  // beginTurn() at dispatch time (before any speech-chunk could arrive).
-  // Chunked replies (msg.chunked) already streamed their audio via
-  // speech-chunk messages — 'done' here just supplies the caption text and
-  // triggers the barge-in-aware finish once the queue drains. Non-chunked
-  // replies (TTS down / offline / error) keep the direct fallback path,
-  // byte-identical to pre-Part-C behavior.
+  // Batch done supplies captions; playback drains separately. Operator Live
+  // routing acknowledgements retain ownership until native PCM also drains.
   function deliverReply(msg, session) {
+    if (session !== speakSession) return; // A cancelled request cannot finish a newer turn.
+    desktopSpeechId = typeof msg?.desktopSpeechId === 'string' ? msg.desktopSpeechId : null;
+    if (operatorAwaiting && msg && msg.routedToLive) {
+      operatorRouted = true;
+      if (operatorDrained) finishOperatorPlayback();
+      return; // Empty routed done is routing acknowledgement, never playback completion.
+    }
+    if (operatorAwaiting) { operatorAwaiting = false; if (onOperatorStop) onOperatorStop(); }
     const say = msg && msg.say ? String(msg.say) : '';
     if (!say) { finishTurn(); return; }
     const kind = msg.error || msg.offline ? 'error' : 'reply';
@@ -616,11 +604,11 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }
     speakFallback(spoken, session);
   }
-
   function speakFallback(spoken, session) {
     assistantSpeaking = true; // BUG-027: non-chunked reply starting to speak — arm the VAD gate
-    const finish = () => {
+    const finish = (heard = false) => {
       if (speakSession !== session) return;
+      if (heard) { playbackHeard = true; acknowledgeDesktopDrain(); }
       stopSpeaking();
       // Task 6: same clear-on-finish as maybeFinishTurn() above, for the
       // non-chunked (speechSynthesis fallback) reply path.
@@ -631,8 +619,8 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
       const u = new SpeechSynthesisUtterance(sanitizeForTts(spoken));
       const v = preferredVoice();
       if (v) u.voice = v;
-      u.onend = finish;
-      u.onerror = finish;
+      u.onend = () => finish(true);
+      u.onerror = () => finish(false);
       try {
         window.speechSynthesis.cancel();
         window.speechSynthesis.speak(u);
@@ -658,7 +646,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     // Drop single-word transcripts — they are almost always noise hallucinations
     // ("and", "I", "yeah") or incomplete fragments, never real commands.
     const words = command.toLowerCase().split(/\s+/).filter(Boolean);
-    if (words.length < 2) return;
+    if (words.length < 2 && !operatorEnabled()) return;
     // Echo check covers BOTH active playback (speakingText) and the post-playback
     // window (lastSpokenText within ECHO_GUARD_MS). Stops MYTHOS hearing its own
     // voice — during playback AND the beat after it ends.
@@ -669,7 +657,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     }
     if (speakingText) stopSpeaking();    // barge-in: user talked over playback
     caption('» ' + command, 'heard');
-    if (isVisionQuery(command) && onVisionQuery) {
+    if (!operatorEnabled() && isVisionQuery(command) && onVisionQuery) {
       onVisionQuery(command);
       return;
     }
@@ -1042,18 +1030,26 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     caption('', 'info');
   }
 
+  function setActiveReqId(reqId) { activeReqId = reqId || null; if (operatorAwaiting && onOperatorRequestId) onOperatorRequestId(activeReqId); }
+  function finishOperatorPlayback(error) {
+    operatorDrained = true;
+    if (!operatorAwaiting || (!operatorRouted && !error)) return;
+    operatorAwaiting = false; assistantSpeaking = false;
+    if (speakingText) { lastSpokenText = speakingText; lastSpokenAt = Date.now(); speakingText = ''; }
+    if (error) caption(error, 'error');
+    finishTurn();
+  }
+
   return {
+    setOperatorPlayback(owned) { if (owned && operatorAwaiting) { assistantSpeaking = true; processing = true; setState('speaking'); } },
+    setOperatorTranscript(text) { if (operatorAwaiting) speakingText = String(text || ''); },
+    finishOperatorPlayback,
     start,
     stop,
     toggle() { return active ? (stop(), false) : start(); },
     isActive: () => active,
     cleanup() { disposed = true; stop(); },
-    // External reply path (Part B, vision Q&A): the camera flow dispatches
-    // its own WS request (visionQuery, not utterance) but the reply must
-    // flow through this same chunk-queue/barge-in machinery so a "what do
-    // you see" answer is spoken exactly like a voice reply. beginTurn()
-    // reserves the session before any speech-chunk can arrive; the caller
-    // routes onChunk/onDone to onExternalChunk/deliverExternalReply with it.
+    // External text/vision requests share the same reservation and playback path.
     beginTurn,
     onExternalChunk: enqueueChunk,
     deliverExternalReply: deliverReply,
@@ -1061,7 +1057,7 @@ export function createVoiceLoop({ onState, openPanel, closePanel, onCaption, onV
     // after beginTurn() already reserved the session) report the reqId back so
     // barge-in (stopSpeaking) can cancel synthesis for THEIR turns too, not
     // just handleCommand's own.
-    setActiveReqId(reqId) { activeReqId = reqId || null; },
+    setActiveReqId,
     // Mic device selection (mic-settings panel): persist the chosen deviceId
     // and drop any live stream so the next ensureMic() re-acquires on the new
     // device. Selection is read fresh from localStorage inside ensureMic(), so

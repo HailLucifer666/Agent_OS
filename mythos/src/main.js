@@ -265,6 +265,7 @@ async function main() {
   let reflection = null;
   let immuneExplainer = null;
   let goals = null;
+  let desktopRuntime = null;
   let effectors = null;
   let leash = null;
   let cortex = null;
@@ -541,7 +542,7 @@ async function main() {
       // REMEDIATION P1-7: fs (vault fs-store) added so browser_navigate can
       // existence-check a /vault/... path via the same resolver open_artifact
       // uses (vault-url.js), instead of forwarding it into a file:// URL.
-      registerFromBrowser(hub, { config: config, fs: memory.fs });
+      registerFromBrowser(hub, { config, fs: memory.fs, getBridge: () => desktopRuntime?.getBridge(), isDesktopTask: id => goals?.get(id)?.execution?.owner === 'desktop' });
       dashboardWiring = registerFromDashboard(hub, {
         goalsEffector: goalsBridge, pipeline: pipelineEffector, kanban: kanbanEffector,
         agentActions: agentActionsEffector, buildRunner: buildRunner,
@@ -678,6 +679,7 @@ async function main() {
       logger.info('effectors.ready', { count: effectors.count() });
 
       leash = createLeash({ bus, config, identity, auditWriter: memory.audit, goals, effectors, scanner: require('./core/effectors/credential-scanner').createCredentialScanner() });
+      desktopRuntime = require('./core/desktop/runtime').createDesktopRuntime({ goals, effectors, leash, memory, config, bus, logger });
       logger.info('leash.ready', {});
     }},
 
@@ -871,7 +873,7 @@ async function main() {
         checkpoints: checkpoints, forge: forge,
         reflection: reflection,
         engagementStore: engagementStore, engagementManager: engagementManager,
-        conversationGateway: conversationGateway,
+        conversationGateway: conversationGateway, desktopRuntime,
         getCapabilityDigest: getCapabilityDigest,
         identity: identity, // S2S (Phase 5) — buildLiveSystemInstruction()'s persona compose
         // Phase 2 (Aether): nearest-device audio sink — the aether sensor's
@@ -937,6 +939,7 @@ async function main() {
     }},
 
     { name: 'browser-automation', fail: 'degraded', fn: function() {
+      desktopRuntime.start().catch(error => logger.warn('desktop.bridge-unavailable', { error: error.message }));
       // [Phase 9 — NEW] Browser automation via playwright-core. Tries CDP to an
       // already-running Chrome first, then launches Chrome/Edge locally as fallback.
       // Also starts the PC child (PowerShell automation daemon).
@@ -1292,6 +1295,7 @@ async function main() {
   // Stop running loops — step 1 of the D-07 coordinated shutdown sequence
   // (registered below via lifecycle.registerShutdownStep, run after server-close).
   function stopRunningLoops() {
+    desktopRuntime?.stop().catch(error => logger.warn('desktop.stop-failed', { error: error.message }));
     if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
     if (actionReflectTimer) clearInterval(actionReflectTimer);
     pcChild.shutdownPcChild();

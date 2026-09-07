@@ -1563,16 +1563,15 @@ const { gotoWithRedirectRetry: _gotoWithRedirectRetry } = require('./browser-got
 function registerFromBrowser(hub, ctx) {
   config = (ctx && ctx.config) || null;
   vaultFs = (ctx && ctx.fs) || null;
-  for (var i = 0; i < TOOLS.length; i++) {
-    hub.register(effectorFromTool(TOOLS[i]));
-  }
-  return TOOLS.length;
+  const tools = require('./browser-driver-tools').withBrowserDriver(TOOLS, ctx);
+  for (const tool of tools) hub.register(effectorFromTool(tool));
+  return tools.length;
 }
 
 module.exports = {
   registerFromBrowser,
   _buildLaunchResult: buildLaunchResult, // tests (BUG-345 caveat)
-  TOOLS,
+  TOOLS: require('./browser-driver-tools').withBrowserDriver(TOOLS),
   browser_navigate, browser_click, browser_type, browser_screenshot, browser_get_title,
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
   browser_launch_debug, browser_switch,

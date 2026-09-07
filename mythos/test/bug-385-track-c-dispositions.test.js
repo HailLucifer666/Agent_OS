@@ -182,7 +182,8 @@ describe('BUG-385 C-3 — video call has no tool, and no substitute', () => {
 
   test('no registered tool offers a video call', () => {
     assert.ok(registered.length > 150, `only ${registered.length} tools resolved — the enumeration broke`);
-    const suspects = registered.filter((id) => /video|facetime|meet\b|zoom/i.test(id));
+    // Listing observed video cards is a read oracle, not a video-call tool.
+    const suspects = registered.filter((id) => id !== 'browser_video_list' && /video|facetime|meet\b|zoom/i.test(id));
     assert.deepStrictEqual(suspects, [],
       'a video-call tool appeared. The `video call` map node records that none exists and that '
       + 'MYTHOS said so plainly rather than faking it — update the node before adding one.');

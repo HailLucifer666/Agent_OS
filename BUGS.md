@@ -16,6 +16,184 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 ---
 
 
+## Windows Operator evidence — 2026-09-07, Stage 1 qualification remains open
+
+This implementation starts at `55fcf752bef1a31468f6ba22e6db5d316dbc63a0` on
+`codex/windows-operator`. It adds a bounded YouTube desktop owner, not a claim
+that every Windows application is supported. Historical ticket statuses and the
+261-ticket campaign dispositions below remain unchanged. Runtime inventory is
+Windows 11 Pro build 26200, Node 26.1.0 and Electron 43.4.1. Brave, Chrome,
+packaged Notepad and OneNote registrations and working audio-device status were
+observed. Installed binary versions are Brave `152.1.94.121` and Chrome
+`152.0.7977.76`. Device enumeration does not verify microphone capture or echo control.
+Raw evidence stays in project-local `.cache/windows-operator/`.
+
+The verifier accepted `EXPECTED-FAIL` as a successful requested workflow. The
+existing gate regression failed before the repair and passed afterward; only
+observed `PASS` verdicts now meet the gate. Missing, refused and untested outcomes
+remain separate. The first recursive integration probe recorded 7,379 tests with
+18 failures. Catalog declarations and compatibility fixtures explained those
+failures. The next run recorded 7,401 tests with three failures: the old hub count,
+a video-call name heuristic that incorrectly matched `browser_video_list`, and
+the new pure protocol fixture missing its explicit hygiene allowlist. All three
+were repaired; their 43 focused regressions and file-size checks passed. These
+intermediate runs are not clean-suite evidence.
+
+The subsequent clean recursive run passed **7,401/7,401 tests**, with zero
+failures, skips, cancellations or todo, in 200.4 seconds. Free ports and
+project-local long-form TEMP/TMP were used. Evidence is
+`.cache/windows-operator/integration-clean.tap`; the mandatory integration hook
+must independently pass before committing this checkpoint.
+The first commit-hook attempt refused integration because Node reported
+`Unable to deserialize cloned data due to invalid or unsupported version` at
+the `verify-lib-attach.test.js` file boundary. All 22 tests in that unchanged
+file passed on immediate focused rerun. Node's upstream issue
+[64061](https://github.com/nodejs/node/issues/64061) records the same test-runner
+symptom; that resemblance alone does not establish this run's root cause.
+The failed hook is retained in `commit-integration.log`; no test was skipped,
+assertion weakened or hook bypassed to retry integration.
+The next hook reached the map coverage guard: labeling the operator honestly as
+`unknown` required all six tools to appear in the unknown-node verifier. Its new
+desktop group records each as `UNAVAILABLE` with the missing signed-in bridge,
+task ownership and attended microphone prerequisites. It executes no desktop
+actions. Eleven focused coverage/size checks passed; the final hook still must
+pass the complete suite. This is an accounting repair, not live qualification.
+Another hook run exposed the existing timeout-budget queue fixture's startup
+race. Delaying its fake `setImmediate` handshake by 80 ms reproduced a 50 ms
+startup-ping timeout and the later `waitFor timeout`, before the queue invariant
+was reached. The fake child now replies only to its actual ping write through a
+microtask with that command's ID. No timeout was increased, no production code
+changed and the four deliberate command timeouts remain. The same scheduling
+perturbation now passes; removing production queue draining in an isolated copy
+still fails `queued command 1 never settled`. Source hashes were unchanged.
+Evidence is `.cache/campaign/bug355-proof/`; the test count is unchanged.
+
+The final delivery run passed **7,404/7,404 tests**, with zero failures, skips,
+cancellations or todo, in 205.2 seconds (`delivery-suite.tap`). Comparing test
+names explains the increase from 7,401: two explicit reconnect regressions and
+the existing ASCII guard discovering the newly staged pipe-server PowerShell
+file. The preceding all-green hook had correctly refused stale 7,401-count
+documentation after discovering that third test. Counts are regenerated from
+the complete delivery output; no historical number is reused as current proof.
+
+The next mandatory hook passed all 7,404 behavior tests but refused capability
+map freshness after the live vault gained three events during verification.
+The generator reported no mapping problems. Its final whole-island comparison
+contradicted its documented exclusion of live counters from repository freshness.
+The check now compares repository-owned data, excluding only node success/failure
+counters and the live untriaged-incidents vital. Writes still refresh those
+measurements. Repository metadata, dates, tool mappings and contradictory zero
+claims remain enforced. The new regression failed before the repair; all 23
+focused map tests pass afterward. Independent review found no blocking issue.
+Reversing only the final freshness decision in an isolated copy fails the
+intended live-counter assertion; production hashes remain unchanged. Evidence
+is `.cache/windows-operator/map-freshness-proof/`.
+
+The final reviewed-source recursive run passed **7,407/7,407 tests**, with zero
+failures, skips, cancellations or todo, in 237.7 seconds. Its three added tests
+exercise the freshness boundary above. Evidence is `delivery-final-suite.tap`;
+count documentation and the map were regenerated from this complete output.
+The mandatory integration hook subsequently passed the full suite, registry,
+freshness and file-size gates. Implementation checkpoint is
+`31fe526dca193b452cdbfd6d021fdb6e2da506ac`; the hook transcript is
+`.cache/windows-operator/commit-reviewed.log`. This is a verified engineering
+checkpoint, not attended spoken-workflow qualification.
+
+The controller persists versioned execution in existing goals, excludes its
+goals from cortex arbitration, and routes every leaf through the existing leash
+and dispatcher. Independent observations must prove selected video identity,
+non-ad playback and advancing time. The same observed tab remains the target of
+contextual follow-ups. Delayed page readiness uses bounded fresh observations;
+unknown writes are not clicked again. Disconnect pauses execution before
+releasing ownership. Explicit continuation acquires fresh authority, while a
+trusted persisted request key rejects replay after reconnect and a real goal
+reload. Forty-four focused controller/server/playback checks passed, including
+real WebSocket routing with fake providers, denied and cross-connection actions,
+speech-drain receipts and two-turn native conversation context. Provider fakes
+do not prove acoustic performance or real-site playback.
+
+An end-to-end boundary review then found that reconnect resume existed only
+inside the controller: the WebSocket whitelist and HUD offered pause/cancel,
+and spoken resume could not find a disconnected task. Read-only discovery now
+shows the newest unowned pending task as paused, with its request and ID. It
+grants no ownership. The visible Resume control and spoken continuation pass
+the existing leash and shared dispatch before acquiring authority. Another
+live owner's task remains inaccessible. The real WebSocket regression uses the
+actual runtime, controller, goal store and dispatch with a simulated browser:
+disconnect during an uncertain click, reconnect, discover without executing,
+explicitly resume, observe advancing playback and finish with exactly one
+click. Seven server tests passed; actual isolated Chrome keyboard Resume also
+retained paused state until confirmation. This establishes reachable recovery,
+not real-site playback. Evidence is `reconnect-server.log` and `ui/proof.json`
+under `.cache/windows-operator/`.
+
+Production playback-proof, cancellation and durable-duplicate statements were
+mutated individually in isolated copies. Each corresponding regression failed
+with `ERR_ASSERTION`, not syntax/import errors. The original and final controller
+SHA256 both equal `c273beda9b28510976f95a1ffb67196135f12348d76580472222d0933aed762d`.
+Bridge target checks, trusted-input context and native origin allowlisting also
+failed their isolated mutation assertions. Production source hashes were
+unchanged. The actual Chrome DOM/CDP fixture exposed and repaired ordinal
+selection of sponsored/Shorts/generic links; it now observes the third normal
+video and refuses competing relevant lists.
+
+The extension uses exact origin allowlisting and a current-user-restricted
+Windows pipe. A real protected DACL, anonymous-token denial, Unicode exchange,
+framing, truncation/oversize rejection and EOF shutdown were exercised. Direct
+Windows Electron native hosting was disproved: the GUI executable emitted a
+leading CRLF before JavaScript and its stdin wrapper reached EOF. A small
+compiled C# console host now ships beside the packaged GUI and passes actual
+native-process tests. This measured platform constraint justifies the departure
+from the proposed same-GUI-executable entry. Packaging proof is separate from
+extension installation in a signed-in browser.
+
+The final disposable `final-reviewed-artifact` GUI was launched by its exact path,
+loaded the real HUD and exited cleanly with its child server. Its packaged
+console host passed native handshake, command exchange and EOF shutdown. All
+operator production files match current source. All 925 compared authored files
+match, including the final transport documentation and freshness repair. The earlier
+GUI probe had a stale executable path and is superseded by this exact-path run.
+Artifact identities are executable SHA256
+`e417020ea61f07cf6f8e740fe3849539d1a2b2875c18c53fd287ef3926fd84f3`,
+app.asar `59ccb58c0bfae8fbab60b82d40408657c26e28bb72734832fbdbb693f1a651f7`
+and helper `ffaa4af475d54248a4b127b0badc70c4acf16a1a5acb583f69244a70f237c586`.
+The complete comparison and process evidence are in
+`.cache/windows-operator/package/final-reviewed-identity.json` and
+`packaged-final-reviewed-enabled/gui-proof.json`.
+The same exact artifact also booted with `DESKTOP_OPERATOR_ENABLED=true` and no
+extension setup: the HUD loaded, `/api/config/s2s` returned `operatorEnabled:true`,
+`desktop.setup-required` was logged and the GUI/child server exited cleanly.
+This proves the unavailable-bridge startup path remains usable.
+
+Task turns are classified only after completed batch STT, before any task model
+audio is played. Existing VAD thresholds were preserved. Deterministic task
+speech uses existing TTS; ordinary conversation retains native Live output and
+completed session context. Request identity fences stale PCM and transcripts.
+The classifier deliberately refuses unsupported or ambiguous action wording;
+it is not general desktop intent coverage. Trusted input takeover is observed
+only inside the attached top-level browser document. A global Windows input
+lease, child-frame support and later document/application workflows remain
+unimplemented and unverified.
+
+Actual isolated Chrome rendering passed capability qualification labels,
+register search/empty states, keyboard detail open/close and a 390-pixel layout.
+The production desktop panel passed keyboard pause/cancel and pending-result
+checks in a labeled disposable fixture, with zero page errors. This is component
+proof, not a running speech-driven task. Screenshots and source hashes are in
+`.cache/windows-operator/ui/proof.json`.
+The UI proof exposed zero observations displayed as `0% SUCCESS` on the new
+operator node. Qualified nodes with no observations now hide those metrics;
+the real browser rerun confirmed hidden metrics/scope and all four labels.
+Its public map label is `not yet measured`, because bounded component proofs do
+not establish the actual signed-in speech-driven workflow.
+
+**Open acceptance gates:** exact extension ID and explicit existing-profile
+setup; real signed-in Brave third-video playback, pause/resume/next; synchronized
+microphone/playback evidence; ten consecutive attended successes across two cold
+boots; the 50-command corpus and all latency percentiles. No such run has been
+counted as successful. Stages 2–7 remain gated behind that first demonstration.
+Licensing, distribution, purchases and account changes remain separate.
+
 ## Campaign evidence — 2026-09-07 inventory, verification still open
 
 All 261 declared tickets now have complete-body and current-mechanism source assessments, including repeated headings and named consumers. Historical public statuses remain unchanged. This completes source coverage, not every live verification gate: each campaign row records its disposition and missing evidence. No ticket is called currently verified merely from a source match or a passing aggregate suite.

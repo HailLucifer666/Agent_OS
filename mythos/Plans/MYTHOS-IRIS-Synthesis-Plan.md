@@ -21,6 +21,62 @@ the first external user exists).
 
 *Historical. Rewritten every session until 2026-09-07; superseded by `RESUME.md`.*
 
+### 2026-09-07 — Windows Operator is the active implementation priority.
+
+The operator approved the Windows Operator plan after the ticket campaign. Start
+from `55fcf752bef1a31468f6ba22e6db5d316dbc63a0` on `codex/windows-operator`.
+The upstream audit branch was reconciled before edits. Preserve the unrelated
+root package-lock.json modification. Desktop tasks have one persisted owner and
+use the existing leash and shared dispatch for every leaf action. DSH remains the
+build engine. No milestone closes on command acceptance or unit tests alone.
+
+- [ ] Stage 0: record the current configuration and separate completed outcomes,
+  expected refusals, missing prerequisites, failures and unverified results.
+- [ ] Stage 1: demonstrate spoken YouTube third-video selection, pause, resume
+  and next in the existing signed-in Brave session through the extension.
+- [ ] Stage 2: qualify Windows discovery, target identity, physical-input takeover,
+  modal handling, exact typing and disposable save/reopen/readback.
+- [ ] Stage 3: qualify browser navigation and Gmail drafts through API and browser;
+  Amazon tests stop at the exact order review, before any purchase.
+- [ ] Stage 4: qualify transactional DOCX/XLSX/PDF edits and installed OneNote,
+  preserving unrelated parts and rejecting concurrent modifications.
+- [ ] Stage 5: qualify advanced PDF text replacement and OCR with BYO Acrobat.
+- [ ] Stage 6: qualify spoken DSH builds against running functional acceptance.
+- [ ] Stage 7: repeat the supported workflows using matching packaged bytes,
+  including cold boot, reconnect, cancellation, restart and ownership cleanup.
+
+Each primary workflow needs ten consecutive attended spoken successes across
+two cold boots. The mixed qualification requires 48/50 first-attempt completions
+and 50/50 within bounded recovery, with zero wrong-target writes, unauthorized
+sends or purchases, lost originals or false completion statements. Missing
+prerequisites and correct refusals are separate counts. Initial p95 targets are
+2 seconds for acknowledgement, 250 ms for local stop and 1.5 seconds for spoken
+cancellation. Measure these; do not weaken them after observing failures.
+
+**IMPLEMENTATION CHECKPOINT:** the extension/pipe, persisted task controller,
+shared dispatch, deterministic task speech and visible HUD controls are wired.
+Real Windows pipe and packaged GUI/helper processes have bounded proofs; the
+signed-in extension and spoken workflow do not. Windows Electron corrupted
+native framing before JavaScript, so packaging uses a compiled console helper.
+Completed batch STT classifies task turns before playback; conversation retains
+native Live output. The original audio thresholds remain unchanged. See the
+Windows Operator evidence section in BUGS.md for failures, repairs and limits.
+
+The final fresh recursive suite passed 7,407 tests with zero failures or skips.
+Three critical controller guard mutations failed the intended assertions, and
+real browser UI checks passed. The exact disposable package booted with operator
+mode both disabled and enabled; missing extension setup remained explicit.
+All 925 compared authored files match the final reviewed package, including
+the transport documentation and capability-map freshness repair. Reconnect discovery and the visible Resume action
+are now exercised through the real WebSocket/runtime/dispatch path; discovery
+does not execute a task or acquire authority.
+
+**NEXT ACTION:** perform explicit extension setup and the attended existing-browser
+proof after integration gates. Raw test artifacts
+stay in ignored `.cache/windows-operator`; defect evidence stays in BUGS.md.
+Later stages remain gated on the first workflow's real demonstration. Licensing
+and distribution decisions remain separate; no release is authorized here.
+
 ### 2026-09-07 — All 261 tickets assessed; confirmed repairs integrated, live gates remain open.
 
 The approved campaign started at `635eaad5ab36bb7cadab63786ed2af08c41aaf74` on `codex/full-ticket-audit`. Upstream was reconciled before repairs. The operator's pre-existing root package-lock.json modification remains excluded. BUGS.md records complete-body source assessments and named consumers for all 261 IDs, including 11 pointer-only entries. Its separate campaign dispositions are 247 blocked, 5 currently verified, 8 superseded and 1 duplicate. Historical public states remain unchanged.
@@ -1779,6 +1835,7 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 
 | Date | Work | Commit | Live-verified |
 |---|---|---|---|
+| 2026-09-07 | Added the Windows Operator Stage 1 foundation, restored reconnect continuation, corrected verifier accounting and capability-map freshness, and passed 7,407 tests plus the mandatory integration gates. | `31fe526dca193b452cdbfd6d021fdb6e2da506ac` | Bounded packaged GUI/native bridge, browser UI and WebSocket proofs passed. The attended signed-in Brave speech gate remains open; no stage acceptance is ticked. |
 | 2026-07-30 | Preserved both untracked plan files + Gemini Live probe into git | `ce013a5` | n/a (docs) |
 | 2026-07-30 | Promoted canonical plan to `mythos/Plans/`, added this tracking header | `496e884` | n/a (docs) |
 | 2026-07-30 | **Merged-order step 0:** restored the V2 spine from `~/.claude/plans/` into `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md` (md5 verified identical); retracted the false blocking-gap; folded in V2 §18's seven corrections and merged execution order | `3cabeec` | n/a (docs) |

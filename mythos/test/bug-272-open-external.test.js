@@ -146,7 +146,7 @@ describe('BUG-272 T2 — the Electron side', () => {
 
   it('requires shell lazily, not at module scope', () => {
     const src = main();
-    assert.doesNotMatch(src.slice(0, src.indexOf('function ')), /\{[^}]*\bshell\b[^}]*\} = require\('electron'\)/,
+    assert.doesNotMatch(src.slice(0, src.indexOf('function ')), /(?:const|let|var)\s*\{[^}]*\bshell\b[^}]*\} = require\('electron'\)/,
       'several Electron exports are lazy getters that throw before app.ready, and a '
       + 'module-scope destructure of one is what once stopped this app booting at all');
     const fn = src.slice(src.indexOf('function openExternalUrl'));

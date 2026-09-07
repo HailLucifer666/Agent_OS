@@ -99,6 +99,7 @@ function mountConfigRoutes(app, deps) {
   app.get('/api/config/s2s', (req, res) => {
     res.json({
       enabled: Boolean(config.VOICE_S2S_ENABLED),
+      operatorEnabled: Boolean(config.DESKTOP_OPERATOR_ENABLED),
       screenShare: {
         enabled: Boolean(config.LIVE_SCREEN_SHARE_ENABLED),
         fps: config.LIVE_SCREEN_FPS,

@@ -33,6 +33,8 @@
 // A rule matches by exact name or by prefix, and answers with a requirement.
 // `requires` is evaluated against a snapshot (see buildCapabilitySnapshot).
 const RULES = [
+  { id: 'desktop-operator', match: name => name.startsWith('desktop_task_'), requires: snap => snap.desktopOperator,
+    reason: 'Desktop operator mode is not enabled; complete browser extension setup and enable DESKTOP_OPERATOR_ENABLED' },
   {
     id: 'gmail',
     match: (name) => name.startsWith('gmail_'),
@@ -124,6 +126,7 @@ function buildCapabilitySnapshot({ config, adapters } = {}) {
   } catch (_) { androidDevice = true; androidOnline = true; }
 
   return {
+    desktopOperator: cfg.DESKTOP_OPERATOR_ENABLED === true,
     googleOAuth: set(cfg.GOOGLE_CLIENT_ID) && set(cfg.GOOGLE_CLIENT_SECRET) && set(cfg.GOOGLE_REFRESH_TOKEN),
     browserOnline: onlineOrUnknown(a.browser),
     cuaOnline: onlineOrUnknown(a.cua),

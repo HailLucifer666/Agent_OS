@@ -57,6 +57,8 @@ const { registerFromDocs } = require('../src/core/effectors/from-docs');
 const { registerFromImageGen } = require('../src/core/effectors/from-image-gen');
 const { registerFromDocuments } = require('../src/core/effectors/from-documents');
 const { registerFromCodeSearch } = require('../src/core/effectors/from-code-search');
+const { registerFromDesktop } = require('../src/core/effectors/from-desktop');
+const refuseDesktop = () => ({ ok: false, result: 'No desktop runtime in catalog fixture', notExecuted: true });
 const { registerFromForge } = require('../src/core/effectors/from-forge');
 
 const { createPipelineEffector } = require('../src/core/effectors/pipeline');
@@ -161,6 +163,7 @@ describe('anti-drift: TIER_TABLE <-> effector hub conformance', () => {
     registerFromDocuments(hub, { documents: {}, documentsIndex: {} });
     registerFromCodeSearch(hub, { documents: {}, documentsIndex: {} });
     registerFromForge(hub, { forge: {} });
+    registerFromDesktop(hub, { controller: { start: refuseDesktop, status: refuseDesktop, control: refuseDesktop } });
   });
 
   after(() => cleanupVaultDir(dir));

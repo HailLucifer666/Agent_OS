@@ -466,11 +466,11 @@ if (require.main === module) {
 // misfiring. Both readings were available from the same output; the reason this
 // matters is that the flaky run is exactly the one the old code called green.
 //
-// EXPECTED-FAIL is deliberately NOT blocking: a documented, reproduced refusal
-// (focus_window's foreground lock) is knowledge, not an unknown.
+// A known refusal explains failure; it does not prove the requested outcome.
+// Only observed PASS verdicts count toward workflow completion.
 function gateVerdict(steps) {
   const all = Array.isArray(steps) ? steps : [];
-  const blocking = all.filter((s) => s.verdict === VERDICT.FAIL || s.verdict === VERDICT.UNVERIFIED);
+  const blocking = all.filter((s) => s.verdict !== VERDICT.PASS && s.verdict !== VERDICT.UNTESTED);
   const unproven = all.filter((s) => s.verdict === VERDICT.UNTESTED);
   // A run that collected NO steps is not a clean sweep — it is a run that did not
   // happen (adapter never loaded, both targets absent). Zero failures out of zero

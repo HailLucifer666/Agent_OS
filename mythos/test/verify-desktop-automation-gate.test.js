@@ -112,12 +112,12 @@ test('the exact shape of the 2026-08-21 run does not report success', () => {
   assert.equal(gateVerdict(steps).met, false);
 });
 
-test('a documented EXPECTED-FAIL still satisfies the gate', () => {
-  // focus_window's foreground lock is reproduced, understood and recorded in
-  // adapters/CLAUDE.md. A known refusal is knowledge, not an unknown — treating it
-  // as blocking would make the gate permanently red for a closed question.
+test('a documented EXPECTED-FAIL does not complete the requested workflow', () => {
+  // Understanding the foreground lock does not establish that focus succeeded.
+  // Keep the known refusal visible, but never count it as a completed action.
   const v = gateVerdict([step('focus', VERDICT.EXPECTED), step('type', VERDICT.PASS)]);
-  assert.equal(v.met, true);
+  assert.equal(v.met, false);
+  assert.deepEqual(v.blocking.map((s) => s.name), ['focus']);
 });
 
 test('FAIL and UNVERIFIED both block, and are reported separately from UNTESTED', () => {
