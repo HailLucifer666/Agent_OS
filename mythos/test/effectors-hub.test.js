@@ -221,7 +221,9 @@ describe('gate: 100 registered count', () => {
     // open_artifact, which only serves builds out of the vault, and launch_app
     // takes an app name and refuses paths. The operator asked twice in the
     // 2026-08-20 transcript and got "I can't access the...") = 106.
-    assert.equal(hub.count(), 106);
+    // Extension driver adds video_list, media_state and media_control to the
+    // existing browser catalog. Desktop wrappers are outside this subset.
+    assert.equal(hub.count(), 109);
   });
 });
 

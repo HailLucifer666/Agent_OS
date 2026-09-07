@@ -22,15 +22,19 @@ function makeFakeChild() {
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   const writes = [];
-  child.stdin = { write: (s) => writes.push(s) };
+  child.stdin = { write: (s) => {
+    writes.push(s);
+    const command = JSON.parse(s);
+    // Bind the handshake to the actual ping write. A check-phase callback can
+    // lose to the 50ms timeout under load, before this queue test even starts.
+    if (command.cmd === 'ping') queueMicrotask(() => {
+      child.stdout.emit('data', Buffer.from('\n' + JSON.stringify({ id: command.id, ok: true }) + '\n'));
+    });
+  } };
   child.stdin.writes = writes;
   let killed = false;
   child.kill = () => { killed = true; };
   child.__killed = () => killed;
-  child.respondToLastCommand = function respond() {
-    const parsed = JSON.parse(writes[writes.length - 1]);
-    child.stdout.emit('data', Buffer.from('\n' + JSON.stringify({ id: parsed.id, ok: true }) + '\n', 'utf8'));
-  };
   return child;
 }
 
@@ -63,7 +67,6 @@ test('BUG-355: exhausting the timeout budget drains the queue - no caller hangs'
     spawnImpl: (...a) => {
       const c = makeFakeChild.apply(null, a);
       children.push(c);
-      setImmediate(() => { try { c.respondToLastCommand(); } catch (_) {} });
       return c;
     },
     commandTimeoutMs: 50,

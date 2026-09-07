@@ -17,6 +17,8 @@ const { checkToolCapability } = require('./tool-capability');
 // number here; a pinned count is stale the moment an effector lands).
 // This is the curated high-traffic default; override with LIVE_TOOL_ALLOWLIST.
 const DEFAULT_ALLOWLIST = [
+  'desktop_task_start','desktop_task_status','desktop_task_control',
+  'browser_video_list','browser_media_state','browser_media_control',
   'navigate','close_panel','read_status','read_system_specs','open_web',
   // Task B3 — on-demand "how's the system" mid-conversation: host metrics,
   // provider health, spend stats, adapter status in one read-only call.

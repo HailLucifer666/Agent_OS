@@ -440,26 +440,34 @@ function generate(deps = {}) {
   const body = eol + json.split('\n').join(eol) + eol;
   const nextHtml = html.slice(0, bodyStart) + body + html.slice(close);
 
-  return { data, next, facts, vitals, problems, mapping, stale, labels, html, nextHtml, changed: nextHtml !== html };
+  // Live counters move independently of repository edits. Keep their write
+  // refresh, but compare only repository-owned data for the freshness gate.
+  // Mapping and zero-claim contradictions above remain unconditional gates.
+  const repositoryProjection = (value) => {
+    const { untriaged, ...repoVitals } = value.vitals || {};
+    return { ...value, vitals: repoVitals, nodes: (value.nodes || []).map(({ ok, f, ...node }) => node) };
+  };
+  const checkChanged = JSON.stringify(repositoryProjection(data)) !== JSON.stringify(repositoryProjection(next));
+  return { data, next, facts, vitals, problems, mapping, stale, labels, html, nextHtml, changed: nextHtml !== html, checkChanged };
 }
 
-function main(argv) {
+function main(argv, deps = {}) {
   const wantJson = argv.includes('--json');
   const write = argv.includes('--write');
 
   let result;
   try {
-    result = generate();
+    result = generate(deps);
   } catch (e) {
     console.error(`build-capability-map: ${e.message}`);
     return 1;
   }
 
-  const { problems, mapping, facts, vitals, changed, nextHtml, labels } = result;
+  const { problems, mapping, facts, vitals, changed, checkChanged, nextHtml, labels } = result;
 
   if (wantJson) {
     console.log(JSON.stringify({
-      problems, vitals, changed,
+      problems, vitals, changed, checkChanged,
       registered: facts.repo.registered.length,
       vaultReachable: facts.vault.reachable,
       countsReachable: facts.counts.reachable,
@@ -519,7 +527,7 @@ function main(argv) {
       + 'Run --write after fixing the mapping.');
     return 1;
   }
-  if (changed) {
+  if (checkChanged) {
     console.error('build-capability-map --check: the island is stale — run --write.');
     return 1;
   }

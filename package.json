@@ -26,6 +26,7 @@
     },
     "icon": "build/icon.ico",
     "asar": true,
+    "beforePack": "electron/build-browser-native-host.js",
     "asarUnpack": [
       "mythos/**/*"
     ],
@@ -61,6 +62,9 @@
       "!**/@huggingface/transformers/src{,/**/*}"
     ],
     "win": {
+      "extraResources": [
+        { "from": ".cache/native-browser-host/mythos-browser-host.exe", "to": "mythos-browser-host.exe" }
+      ],
       "target": "nsis",
       "forceCodeSigning": false
     },

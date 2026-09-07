@@ -70,7 +70,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       spent: { tokens: 0, actions: 0 },
       parentId: opts.parentId || null,
       childIds: [],
-      plan: [],
+      plan: [], execution: opts.execution || null,
       grants: {},
       reason: opts.reason || '',
       createdAt: now,
@@ -299,9 +299,8 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
   }
 
   // --- Arbiter ---
-
   function arbitrate(perceptions, working) {
-    var candidates = getActiveGoals();
+    var candidates = getActiveGoals().filter(function(g) { return !(g.execution && g.execution.owner === 'desktop'); });
     if (candidates.length === 0) return null;
 
     var maxActive = (config && config.MAX_ACTIVE_GOALS) || 5;
@@ -372,8 +371,8 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
   //              skillRef?, _spentTokens? }
   // markPlanStepDone() advances the queue and is called from dispatchAction
   // after each step's outcome is recorded.
-
   async function plan(goal, ctx) {
+    if (goal && goal.execution && goal.execution.owner === 'desktop') return null;
     // 1. Check current plan for pending step
     if (goal.plan && goal.plan.length > 0) {
       for (var i = 0; i < goal.plan.length; i++) {

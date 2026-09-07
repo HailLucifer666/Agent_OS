@@ -3,15 +3,15 @@
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0f0c29,50:302b63,100:24243e&height=220&section=header&text=MYTHOS&fontSize=80&fontColor=43e5a0&fontAlignY=35&desc=Autonomous%20Entity%20OS&descSize=24&descAlignY=58&descColor=4fd8ff&animation=fadeIn" width="100%" alt="MYTHOS header"/>
 
 <a href="https://github.com/HailLucifer666/Agent_OS">
-  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;7350+tests+green.+Zero+build+step." alt="Typing SVG" />
+  <img src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&size=22&duration=3000&pause=900&color=43E5A0&center=true&vCenter=true&multiline=false&width=700&height=50&lines=Not+a+chatbot.+Not+an+agent+framework.;A+living+system+with+an+OODA+loop.;Perceives+%C2%B7+Reasons+%C2%B7+Acts+%C2%B7+Self-heals.;7423+tests+green.+Zero+build+step." alt="Typing SVG" />
 </a>
 
 <br/>
 
 [![Node](https://img.shields.io/badge/node-%3E%3D22-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
-[![Tests](https://img.shields.io/badge/tests-7350%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
+[![Tests](https://img.shields.io/badge/tests-7423%20pass-2dd4bf?style=for-the-badge&logo=checkmarx&logoColor=white)](https://github.com/HailLucifer666/Agent_OS/actions)
 [![Phases](https://img.shields.io/badge/phases-P0%E2%80%93P20%20shipped-6e40c9?style=for-the-badge)](ROADMAP.md)
-[![Effectors](https://img.shields.io/badge/effectors-180%20tools-eab308?style=for-the-badge)](#-180-tool-effectors)
+[![Effectors](https://img.shields.io/badge/effectors-186%20tools-eab308?style=for-the-badge)](#-186-tool-effectors)
 [![Deploy](https://img.shields.io/badge/deploy-render-4fc08d?style=for-the-badge&logo=render&logoColor=white)](https://agent-os-7gg5.onrender.com)
 [![License](https://img.shields.io/badge/license-personal%2Fhobby-lightgrey?style=for-the-badge)](#%EF%B8%8F-license)
 
@@ -31,13 +31,13 @@
 > [!IMPORTANT]
 > **Honest-inert by design.** Missing keys, dead providers, failed calls show up as `OFFLINE` / `DEGRADED` — never faked. Quota numbers are estimates. Errors surface verbatim. If something doesn't work, you *see* that it doesn't work.
 
-A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 7350 tests.
+A living system with an OODA loop, layered memory, tiered autonomy, immune system, and 7423 tests.
 
 <div align="center">
 
 ### 🧭 Navigate
 
-[**Architecture**](#-architecture-overview) · [**OODA Loop**](#-the-ooda-cognitive-loop) · [**Brain**](#-brain--multi-provider-chain) · [**Memory**](#%EF%B8%8F-memory-system) · [**Immune System**](#%EF%B8%8F-immune-system) · [**Safety**](#-tiered-autonomy--safety) · [**Voice**](#%EF%B8%8F-voice-system) · [**180 Tools**](#-180-tool-effectors) · [**Engagements**](#-engagement-layer--structured-task-lifecycle) · [**Deploy**](#-deploy) · [**Screenshots**](#-screenshots) · [**History**](#-build-history) · [**Stack**](#%EF%B8%8F-tech-stack) · [**Docs**](#-documentation)
+[**Architecture**](#-architecture-overview) · [**OODA Loop**](#-the-ooda-cognitive-loop) · [**Brain**](#-brain--multi-provider-chain) · [**Memory**](#%EF%B8%8F-memory-system) · [**Immune System**](#%EF%B8%8F-immune-system) · [**Safety**](#-tiered-autonomy--safety) · [**Voice**](#%EF%B8%8F-voice-system) · [**186 Tools**](#-186-tool-effectors) · [**Engagements**](#-engagement-layer--structured-task-lifecycle) · [**Deploy**](#-deploy) · [**Screenshots**](#-screenshots) · [**History**](#-build-history) · [**Stack**](#%EF%B8%8F-tech-stack) · [**Docs**](#-documentation)
 
 </div>
 
@@ -75,7 +75,7 @@ flowchart TB
         end
         subgraph IOLayer["I/O"]
             SENS["10 Sensors"]
-            EFF["180 Effectors"]
+            EFF["186 Effectors"]
         end
         CORT --> BRN --> Cloud
         SENS --> BUS --> EFF
@@ -159,7 +159,7 @@ flowchart LR
 │              IDENTITY                                │  self.md · boundaries.md
 │         Human-editable persona                       │  Entity has no write path
 ├─────────────────────────────────────────────────────┤
-│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  11 sensors · 180 effectors
+│     SENSORS   ←→   BUS   ←→   EFFECTORS             │  11 sensors · 186 effectors
 │  timer·file·ws·job·metric·gmail·screen·window·       │  Publish/subscribe, never direct
 │  reminder·calendar                                   │
 ├─────────────────────────────────────────────────────┤
@@ -408,11 +408,11 @@ screen-share only. So MYTHOS can look when asked; it is not watching the room.
 
 ---
 
-## 180-Tool Effectors
+## 186-Tool Effectors
 
-🧰 Every action MYTHOS can take goes through one of these 180 registered effectors. Counts are generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays — not hand-typed:
+🧰 Every action MYTHOS can take goes through one of these 186 registered effectors. Counts are generated (`mythos/scripts/sync-test-count.js`, AD-10) from the real `from-*.js` tool arrays — not hand-typed:
 
-- [180-Tool Effectors](#180-tool-effectors) — the full catalog, generated from the real `from-*.js` arrays.
+- [186-Tool Effectors](#186-tool-effectors) — the full catalog, generated from the real `from-*.js` arrays.
 
 <!-- SYNC:EFFECTOR-CATALOG:START -->
 <!-- Generated by mythos/scripts/sync-test-count.js from the real from-*.js tool
@@ -424,7 +424,7 @@ screen-share only. So MYTHOS can look when asked; it is not watching the room.
 pie showData title Tool Distribution
     "PC Control" : 29
     "Dashboard" : 28
-    "Browser Automation" : 21
+    "Browser Automation" : 24
     "Computer & Files" : 15
     "Phone (Android)" : 14
     "Memory & Notes" : 11
@@ -435,7 +435,7 @@ pie showData title Tool Distribution
     "Gmail" : 4
     "System" : 4
     "WhatsApp" : 4
-    "Other (16 modules, under 4 tools each)" : 28
+    "Other (17 modules, under 4 tools each)" : 31
 ```
 
 <details>
@@ -447,7 +447,7 @@ pie showData title Tool Distribution
 |---------|--------|:-----:|------------|
 | **PC Control** | `from-pc.js` | 29 | `launch_app`, `list_windows`, `focus_window`, `close_window`, `media_key`, `get_volume`, `set_volume`, `set_app_volume`, `get_app_volume`, `set_app_mute`, `screen_look`, `capture_screenshot`, `ui_elements`, `ui_click`, `ui_type`, `send_key`, `click_at`, `see_and_click`, `move_window`, `snap_window`, `scroll_at`, `right_click_at`, `drag`, `write_note`, `ambient_awareness`, `show_desktop`, `media_status`, `screen_read_text`, `set_wallpaper` |
 | **Dashboard** | `from-dashboard.js` | 28 | `navigate`, `close_panel`, `open_web`, `open_artifact`, `delete_artifact`, `read_status`, `read_system_specs`, `web_fetch`, `web_search`, `job_status`, `create_goal`, `propose_goal`, `list_goals`, `toggle_goal`, `delete_goal`, `capture_idea`, `pipeline_status`, `pipeline_advance`, `pipeline_execute`, `kanban_status`, `kanban_add_card`, `kanban_move_card`, `kanban_assemble`, `kanban_build_card`, `ask_agent`, `camera_look`, `camera_on`, `daily_plan` |
-| **Browser Automation** | `from-browser.js` | 21 | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_get_title`, `browser_get_text`, `browser_scroll`, `browser_tabs`, `browser_go_back`, `browser_wait_for`, `browser_fill_form`, `browser_dismiss_overlays`, `browser_check_captcha`, `browser_upload_file`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_evaluate`, `browser_launch_debug`, `browser_switch` |
+| **Browser Automation** | `from-browser.js` | 24 | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_screenshot`, `browser_get_title`, `browser_get_text`, `browser_scroll`, `browser_tabs`, `browser_go_back`, `browser_wait_for`, `browser_fill_form`, `browser_dismiss_overlays`, `browser_check_captcha`, `browser_upload_file`, `browser_select_option`, `browser_press_key`, `browser_hover`, `browser_evaluate`, `browser_launch_debug`, `browser_switch`, `browser_video_list`, `browser_media_state`, `browser_media_control` |
 | **Computer & Files** | `from-computer.js` | 15 | `open_file`, `open_folder`, `list_folder`, `read_file`, `write_file`, `create_folder`, `delete_file`, `move_file`, `copy_file`, `rename_file`, `search_files`, `compose_email`, `clipboard_read`, `clipboard_write`, `think_deeply` |
 | **Phone (Android)** | `from-android.js` | 14 | `phone_list_devices`, `phone_screenshot`, `phone_notifications`, `phone_contacts_search`, `phone_sms_send`, `phone_call`, `phone_whatsapp_send`, `phone_wifi_toggle`, `phone_bluetooth_toggle`, `phone_hotspot_toggle`, `phone_app_launch`, `phone_app_close`, `phone_file_pull`, `phone_file_push` |
 | **Memory & Notes** | `from-memory.js` | 11 | `suggest_procedures`, `note_take`, `note_read`, `note_search`, `self_capabilities`, `remember`, `forget_fact`, `log_incident`, `recall_memory`, `list_incidents`, `incident_status` |
@@ -458,6 +458,7 @@ pie showData title Tool Distribution
 | **Gmail** | `from-gmail.js` | 4 | `gmail_unread`, `gmail_read`, `gmail_send`, `gmail_draft` |
 | **System** | `from-system.js` | 4 | `get_time`, `get_weather`, `get_directions`, `system_status` |
 | **WhatsApp** | `from-whatsapp.js` | 4 | `whatsapp_send`, `whatsapp_contacts`, `whatsapp_contact_save`, `whatsapp_contact_delete` |
+| **Desktop Task Operator** | `from-desktop.js` | 3 | `desktop_task_start`, `desktop_task_status`, `desktop_task_control` |
 | **Document Generation** | `from-docs.js` | 3 | `generate_spreadsheet`, `generate_deck`, `generate_pdf` |
 | **Forge (multi-file build)** | `from-forge.js` | 3 | `build_project`, `revise_project`, `project_status` |
 | **MCP Bridge** | `from-mcp.js` | 3 | `mcp_list_servers`, `mcp_list_tools`, `mcp_call_tool` |
@@ -604,7 +605,7 @@ Copy `.env.example` to `.env` and fill in keys. Boots **degraded without any key
 
 ## 📈 Build History
 
-**20 phases shipped.** Linear history on `main`. 7350 tests green.
+**20 phases shipped.** Linear history on `main`. 7423 tests green.
 
 ```mermaid
 gantt
@@ -678,7 +679,7 @@ Full history: [ROADMAP.md](ROADMAP.md) · [MYTHOS-ARCHITECTURE.md](MYTHOS-ARCHIT
 | **Realtime** | WebSocket v2 | Streaming, broadcasts, subscriptions |
 | **Voice** | Edge TTS + Web Speech API | 322 Microsoft Neural voices, free |
 | **Vision** | MediaPipe gestures | 5 gestures: confirm, deny, mute, unmute, vision |
-| **Tests** | Built-in `node:test` | 7350 tests, zero test framework deps |
+| **Tests** | Built-in `node:test` | 7423 tests, zero test framework deps |
 | **Deps** | 9 total | `@huggingface/transformers` · `@mediapipe/tasks-vision` · `exceljs` · `express` · `kokoro-js` · `onnxruntime-web` · `playwright-core` · `pptxgenjs` · `ws` |
 | **Deploy** | Docker (Render) | One `Dockerfile`, auto-deploy on push |
 
@@ -692,7 +693,7 @@ Agent_OS/
 ├── mythos/                      # MYTHOS entity runtime
 │   ├── Dockerfile               # Docker image for cloud deploy
 │   ├── .env.example             # All config knobs (documented)
-│   ├── package.json             # 9 deps, 7350 tests
+│   ├── package.json             # 9 deps, 7423 tests
 │   ├── src/
 │   │   ├── main.js              # Boot sequence (13 lifecycle steps)
 │   │   └── core/
@@ -700,7 +701,7 @@ Agent_OS/
 │   │       ├── bus/             # Event bus (pub/sub, middleware, storm guard)
 │   │       ├── config/          # Schema validation + env loading
 │   │       ├── cortex/          # OODA loop + orient/decide
-│   │       ├── effectors/       # 180 tools, build-runner, orchestrator
+│   │       ├── effectors/       # 186 tools, build-runner, orchestrator
 │   │       ├── goals/           # Arbitrage + budget system
 │   │       ├── identity/        # self.md + boundaries.md
 │   │       ├── immune/          # watchdog, healer, breakers, announcer
@@ -722,7 +723,7 @@ Agent_OS/
 │   ├── ui/public/               # JARVIS HUD (canvas + widgets)
 │   │   ├── js/                  # app.js, ws.js, voice, neural-map
 │   │   └── css/                 # 10 stylesheets, design tokens
-│   ├── test/                    # 7350 tests (node --test)
+│   ├── test/                    # 7423 tests (node --test)
 │   └── vault/                   # Persistent data (gitignored)
 ├── render.yaml                  # Render Blueprint (cloud deploy)
 ├── Start Agent OS.bat           # Windows launcher

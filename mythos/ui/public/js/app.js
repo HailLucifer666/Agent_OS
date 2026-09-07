@@ -16,6 +16,8 @@ import { createOverlayManager } from './overlay/overlay-manager.js';
 import { mountWidgets } from './widgets/widget-host.js';
 import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
+import { createOperatorPlayback } from './voice/operator-playback.js';
+import { mountDesktopTask } from './desktop-task.js';
 import { decideVoiceTransport } from './voice/voice-transport.js';
 import { createToggleGuard } from './voice/toggle-guard.js';
 import { createCameraLoop } from './vision/camera.js';
@@ -149,14 +151,17 @@ const _wakewordCfgReady = fetch('/api/config/wakeword')
 // the client had no way to learn the flag at all, so voice/s2s-bridge.js —
 // complete and protocol-correct — had no consumer.
 let _s2sEnabled = false;
+let _operatorEnabled = false, operatorPlayback = null;
 // Slice 3: screen share rides the same fetch. Null unless the server explicitly
 // reports it enabled — the fail-closed default matters more here than for the
 // other flags, since the failure mode is streaming the desktop unasked.
 let _screenShareCfg = null;
-fetch('/api/config/s2s')
+const voiceConfigReady = fetch('/api/config/s2s')
   .then((r) => (r.ok ? r.json() : null))
   .then((cfg) => {
     if (cfg && cfg.enabled) _s2sEnabled = true;
+    _operatorEnabled = Boolean(cfg && cfg.operatorEnabled);
+    if (_operatorEnabled) mountDesktopTask();
     if (cfg && cfg.screenShare && cfg.screenShare.enabled) _screenShareCfg = cfg.screenShare;
   })
   .catch(() => {});
@@ -339,18 +344,26 @@ function ensureVoice() {
       onVisionQuery: (text) => describeScene(text),
       onActivity: (level) => { compose.setActivity(level); orb.setActivity(level); hud.setActivity(level); },
       brainOnline: () => _brainOnline,
+      operatorEnabled: () => _operatorEnabled,
+      onOperatorTurn: (reqId) => { if (operatorPlayback) operatorPlayback.begin(reqId); },
+      onOperatorRequestId: (reqId) => operatorPlayback?.setRequestId(reqId),
+      onOperatorStop: () => { if (operatorPlayback) operatorPlayback.stop(); },
       vad: _vadOverrides || undefined,
+    });
+  }
+  if (_operatorEnabled && !operatorPlayback) {
+    const loop = voice;
+    operatorPlayback = createOperatorPlayback({
+      onOwnership: (owned) => { loop.setOperatorPlayback(owned); if (owned) noteAssistantAudio(); },
+      onDrain: () => loop.finishOperatorPlayback(),
+      onError: (message) => loop.finishOperatorPlayback(message),
+      onCaption: (text, kind) => { loop.setOperatorTranscript(text); compose.setCaption(text, kind); },
     });
   }
   return voice;
 }
 
-// ---- S2S (Gemini Live duplex) transport, additive and flag-gated ----------
-// voice/s2s-bridge.js self-wires its own live-audio-out/live-interrupted/
-// live-state/live-transcript listeners through ws.js's onBroadcast, so all it
-// needs from here is onState/onCaption and a start/stop call. Lazily imported
-// (same pattern as wakeword.js below) so a HUD with the flag off never fetches
-// the bridge or pcm-player at all.
+// Duplex is lazy; operator mode uses only the separately owned playback sink.
 let s2s = null;
 let _s2sImport = null;
 
@@ -381,19 +394,13 @@ function ensureS2S() {
   return _s2sImport;
 }
 
-// One entry point for every voice affordance (compose-bar button, orb click,
-// wake word). decideVoiceTransport() owns the choice AND the mic-exclusivity
-// invariant — the two transports each open their own getUserMedia stream, so
-// both capturing at once would have the Live model hearing itself and the
-// batch loop transcribing MYTHOS's own replies. See voice/voice-transport.js
-// and test/voice-transport-decision.test.js.
+// All voice affordances share the tested, exclusive transport decision.
 async function toggleVoiceImpl() {
-  // No voice affordance (compose-bar button, orb click, wake word) may open
-  // the mic while the PIN lock screen is locked OR its status check hasn't
-  // answered yet — see isGateClosed()'s doc comment in pin/pin-gate.js.
+  await voiceConfigReady;
+  // PIN status must positively permit capture before any microphone starts.
   if (isGateClosed(pinLockScreen.lockState())) return;
   const plan = decideVoiceTransport({
-    s2sEnabled: _s2sEnabled,
+    s2sEnabled: _s2sEnabled && !_operatorEnabled,
     s2sActive: Boolean(s2s && s2s.isActive()),
     batchActive: Boolean(voice && voice.isActive()),
   });
@@ -404,9 +411,7 @@ async function toggleVoiceImpl() {
   if (plan.stopOther === 's2s' && s2s) await s2s.stop();
 
   if (plan.transport === 'batch') {
-    // BUG-269 defect 2: this start() was un-awaited, so two presses could
-    // interleave their async re-entry into voice-loop's start(). Awaited now;
-    // the in-flight guard below drops presses that land while it resolves.
+    // Await capture acquisition so the toggle guard covers the whole start.
     if (plan.action === 'start') await ensureVoice().start();
     else if (voice) voice.stop();
     return;
@@ -418,12 +423,7 @@ async function toggleVoiceImpl() {
   else await bridge.stop();
 }
 
-// BUG-269 defect 2: every caller fires toggleVoice() without await, and the
-// toggle itself awaits mic acquisition — two presses landing mid-toggle
-// interleaved their start/stop writes ("erratic on repeat presses"). The
-// guard drops presses arriving while a toggle is in flight (drop, not queue:
-// queueing would ripple start/stop/start the operator never asked for).
-// See voice/toggle-guard.js and test/voice-toggle-guard.test.js.
+// Drop concurrent toggles through the tested guard; never queue surprise toggles.
 const toggleVoice = createToggleGuard(toggleVoiceImpl);
 
 // Orb click still toggles voice (legacy affordance)
@@ -543,7 +543,8 @@ function describeScene(text) {
 // Compose-bar text submit reuses the voice loop's own chunk-queue/barge-in
 // playback machinery (same pattern as describeScene() above) so a typed
 // message gets a spoken reply exactly like a voice utterance.
-function sendTextMessage(text) {
+async function sendTextMessage(text) {
+  await voiceConfigReady;
   const v = ensureVoice();
   const session = v.beginTurn();
   const req = utterance({

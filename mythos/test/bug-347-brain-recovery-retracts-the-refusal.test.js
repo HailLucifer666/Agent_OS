@@ -122,12 +122,27 @@ describe('BUG-347 — the refusal is retracted, once, and only when it was made'
 });
 
 describe('BUG-347 — the loop is wired to the notice', () => {
-  it('the refusal branch records that it refused', () => {
-    const at = LOOP.indexOf('if (!_brainOnline()) {');
-    assert.notStrictEqual(at, -1, 'the pre-flight refusal must still exist');
-    const body = LOOP.slice(at, at + 300);
-    assert.match(body, /brainRecovery\.refused\(\)/,
-      'without this the retraction can never fire, because nothing knows a refusal happened');
+  it('legacy offline refusal arms recovery while operator requests bypass it', () => {
+    const vm = require('node:vm');
+    const code = LOOP.replace(/^import .*;$/gm, '').replace(/export /g, '')
+      .replace('    setOperatorPlayback(owned)', '    processTranscript, recovery: brainRecovery,\n    setOperatorPlayback(owned)');
+    for (const operator of [false, true]) {
+      const sent = [], captions = [];
+      const create = vm.runInNewContext(code + '\ncreateVoiceLoop', {
+        window: {}, navigator: {}, console, Float32Array, Date, URLSearchParams,
+        utterance: (args) => { sent.push(args); return { reqId: 'test' }; },
+        stopRequest() {}, sendMessage() {}, isVisionQuery: () => false,
+        setTimeout: () => 1, clearTimeout() {}, clearInterval() {},
+      });
+      const loop = create({ operatorEnabled: () => operator, brainOnline: () => false,
+        onCaption: (text) => captions.push(text) });
+      loop.processTranscript('tell me about the weather');
+      assert.equal(sent.length, operator ? 1 : 0);
+      assert.equal(captions.some((text) => /Brain is offline/.test(text)), !operator);
+      assert.equal(Boolean(loop.recovery.check(true)), !operator, 'only an actual refusal arms recovery');
+      assert.equal(loop.recovery.check(true), null, 'recovery remains single-shot');
+      loop.cleanup();
+    }
   });
 
   it('the VAD tick asks whether to retract', () => {

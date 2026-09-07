@@ -702,7 +702,18 @@ async function groupRefused() {
 
 // ---------------------------------------------------------------------------
 
+async function groupDesktop() {
+  const mark = results.length;
+  // This offline harness has no authenticated task owner or signed-in bridge.
+  // Component regressions cannot substitute for the attended workflow oracle.
+  for (const tool of ['desktop_task_start', 'desktop_task_status', 'desktop_task_control',
+    'browser_video_list', 'browser_media_state', 'browser_media_control']) {
+    record('desktop operator', tool, UNAVAILABLE, 'Requires explicit extension setup, an authenticated desktop task and attended signed-in YouTube/microphone proof; no workflow was executed by this offline harness.');
+  }
+  return rowsSince(mark);
+}
 const GROUPS = {
+  desktop: groupDesktop,
   system: groupSystem,
   okf: groupOkf,
   persona: groupPersona,
