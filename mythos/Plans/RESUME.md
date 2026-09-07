@@ -10,9 +10,8 @@ Stage 1 by operator decision on 2026-09-07. Stages 2-7 are PAUSED, not cancelled
 and stay paused until the golden path below reads 10 consecutive PASS lines
 across at least two cold boots, sustained for a week.
 
-Branch of record for this change: `refactor/subtract-phase-a` (worktree, from
-`55fcf75`). The Windows Operator implementation itself continues on
-`codex/windows-operator` and is not in this branch.
+Phase A landed via PR #74 (`451ba73`). The Windows Operator implementation
+itself continues on `codex/windows-operator` and is not on `main` yet.
 
 ## The golden path
 
@@ -28,8 +27,7 @@ tool evidence plus the media oracle, and appends ONE line to
 <iso-time> PASS|FAIL|UNVERIFIED|PREREQ-MISSING steps=<n>/4 ackP95ms=<n> <notes>
 ```
 
-It prints the current consecutive-PASS streak. **That streak is the one number
-that says whether MYTHOS is getting better.** Today it is 0.
+**The consecutive-PASS streak it prints is the one number that matters.** Today: 0.
 
 Run it once a day, with MYTHOS running:
 
@@ -37,8 +35,8 @@ Run it once a day, with MYTHOS running:
 cd mythos && node scripts/golden-path.js
 ```
 
-PREREQ-MISSING (no provider, no browser adapter, server down) is a separate
-outcome from FAIL and does not count toward or against the streak.
+PREREQ-MISSING (no provider, no browser, server down) is separate from FAIL and
+does not count toward or against the streak.
 
 ## Stages
 
@@ -87,11 +85,11 @@ the runner instead of UNVERIFIED:
    and answers the legacy channel with an empty `done`. The runner cannot
    observe a spoken reply from that channel.
 
-Do these, in order: (a) decide whether the golden path is judged through the
-extension path (merge `codex/windows-operator` Stage 1 first) or through CDP
-against Brave relaunched with the debug flag; (b) give the runner a way to
-observe the Live path, or run it with `VOICE_S2S_ENABLED=false` and say so on
-the log line; (c) then read the first real line. Streak is still 0.
+In order: (a) decide whether the golden path is judged through the extension
+path (merge `codex/windows-operator` Stage 1 first) or through CDP against Brave
+relaunched with the debug flag; (b) give the runner a way to observe the Live
+path, or run with `VOICE_S2S_ENABLED=false` and say so; (c) read the first real
+line. Streak is still 0.
 
 ## Where the detail lives
 
