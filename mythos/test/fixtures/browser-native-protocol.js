@@ -19,4 +19,3 @@ function createNativeDecoder(onMessage) {
 }
 
 module.exports = { encodeNativeMessage, createNativeDecoder };
-

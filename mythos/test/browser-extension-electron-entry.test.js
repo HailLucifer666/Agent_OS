@@ -62,7 +62,3 @@ test('compiled host rejects unauthorized origin and malformed native frames with
     const [code] = await once(child, 'close'); assert.equal(code, 1); assert.equal(output, ''); assert.match(errors, reason);
   }
 });
-
-
-
-

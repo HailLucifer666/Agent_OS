@@ -93,6 +93,11 @@ The final reviewed-source recursive run passed **7,407/7,407 tests**, with zero
 failures, skips, cancellations or todo, in 237.7 seconds. Its three added tests
 exercise the freshness boundary above. Evidence is `delivery-final-suite.tap`;
 count documentation and the map were regenerated from this complete output.
+The mandatory integration hook subsequently passed the full suite, registry,
+freshness and file-size gates. Implementation checkpoint is
+`31fe526dca193b452cdbfd6d021fdb6e2da506ac`; the hook transcript is
+`.cache/windows-operator/commit-reviewed.log`. This is a verified engineering
+checkpoint, not attended spoken-workflow qualification.
 
 The controller persists versioned execution in existing goals, excludes its
 goals from cortex arbitration, and routes every leaf through the existing leash

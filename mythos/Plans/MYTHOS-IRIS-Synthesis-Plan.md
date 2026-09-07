@@ -1831,6 +1831,7 @@ Steps get ticked and logged rather than deleted: a task that turns out to need r
 
 | Date | Work | Commit | Live-verified |
 |---|---|---|---|
+| 2026-09-07 | Added the Windows Operator Stage 1 foundation, restored reconnect continuation, corrected verifier accounting and capability-map freshness, and passed 7,407 tests plus the mandatory integration gates. | `31fe526dca193b452cdbfd6d021fdb6e2da506ac` | Bounded packaged GUI/native bridge, browser UI and WebSocket proofs passed. The attended signed-in Brave speech gate remains open; no stage acceptance is ticked. |
 | 2026-07-30 | Preserved both untracked plan files + Gemini Live probe into git | `ce013a5` | n/a (docs) |
 | 2026-07-30 | Promoted canonical plan to `mythos/Plans/`, added this tracking header | `496e884` | n/a (docs) |
 | 2026-07-30 | **Merged-order step 0:** restored the V2 spine from `~/.claude/plans/` into `mythos/Plans/MYTHOS-IRIS-Synthesis-Plan-V2-spine.md` (md5 verified identical); retracted the false blocking-gap; folded in V2 §18's seven corrections and merged execution order | `3cabeec` | n/a (docs) |
