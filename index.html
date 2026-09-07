@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7336,
+      "value": 7407,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -368,14 +368,14 @@
       "measuredAt": "2026-09-07"
     },
     "registered": {
-      "value": 180,
+      "value": 186,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
       "measuredAt": "2026-09-07"
     },
     "voiceReachable": {
-      "value": 119,
+      "value": 125,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
@@ -1036,7 +1036,7 @@
         "gmail_read"
       ],
       "ok": 112,
-      "f": 103,
+      "f": 104,
       "note": "gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
       "ev": "LIVE-VERIFIED 2026-08-28 (Track A, BUG-387) — the first time this node has been checked against the provider rather than against its own history. `node mythos/scripts/verify-google-grant.js` reports INVALID: the refresh token minted no access token and Gmail refused. The real effector agrees, which is the two-routes-one-answer cross-check: calling gmail_unread through the registered tool returns \"invalid_grant: Token has been expired or revoked.\" So this row is correct and stays red. THE CODE AROUND IT IS NOT AT FAULT, measured rather than assumed: from-gmail classifies invalid_grant as TERMINAL and its remedy text names the literal command plus the 7-day Testing-publishing-status trap; hub.js latches the terminal result per tool so the provider is not hammered — the 88 recorded failures fall into 60 bursts, nearly all of size ONE, i.e. one attempt per process rather than a retry storm; gmail-sensor raises health.anomaly with needsOperator:true; and explainer.js speaks the whole remedy aloud, verbatim, including `node scripts/google-auth.js`. Nine test files already cover that chain, two of them asserting the SPOKEN text contains the command. WHAT WAS ACTUALLY BROKEN was the one thing an operator would check: `doctor` reported \"OK Gmail / Calendar sensors — configured\" for three weeks while all of the above was failing, because it tests that three strings are PRESENT in .env and presence is not validity. Fixed under BUG-387: doctor now says validity is unchecked and names the verifier. A CORRECTION worth recording: from the episodic `summary` field it looked as though MYTHOS had announced this nine times over eight days and never said what to do — that was WRONG, `summary` truncates at ~100 characters and `detail.text` carries the full remedy. Only the 2026-08-18 utterance is genuinely deficient and it predates the BUG-273 C2 / BUG-278 fixes that repaired exactly it. NEEDS THE OPERATOR: run `node mythos/scripts/google-auth.js`, put the new GOOGLE_REFRESH_TOKEN in mythos/.env, then confirm with `node mythos/scripts/verify-google-grant.js` — which is the point of the new script, since before it there was no way to tell whether the three minutes had worked."
     },
@@ -1298,7 +1298,7 @@
         "reminder_approve_action",
         "calendar_upcoming"
       ],
-      "ok": 72,
+      "ok": 73,
       "f": 3,
       "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
@@ -1599,7 +1599,7 @@
       ],
       "note": "Historical get_time/get_weather/get_directions checks passed. Latest weather failure was a timeout; location ambiguity remains a separate content gate.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. This node reached the acceptance contract, so it is the strongest of the four promotions. get_time is not merely \"ok:true\": the answer must carry THIS process's current year, and passing timezone:\"Asia/Tokyo\" must actually change it — a tool returning a plausible date is precisely what a self-report cannot rule out, and the mutation that returned a fixed 1999 date was caught. get_weather and get_directions answered over their free lanes (346 and 143 bytes); their CONTENT is not verified against a second source and the harness says so rather than implying it did. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back. Campaign 2026-09-07: latest recorded weather failure was an upstream timeout, preceded by successful calls. A fresh Bangalore query returned Bangalore Town, Sindh, Pakistan; this is not proof of the intended city. No capability downgrade was inferred from a single failure, and content accuracy remains unverified.",
-      "ok": 158,
+      "ok": 159,
       "f": 5
     },
     {
@@ -1650,6 +1650,29 @@
       ],
       "note": "Procedure guidance is implemented and regression-tested. Live voice verification remains pending.",
       "ev": "Read-only retrieval uses existing recall eligibility. Malformed and stale runtime targets are excluded. Every selected action still passes leash and dispatch; only matching recorded arguments receive outcome attribution.",
+      "ok": 0,
+      "f": 0
+    },
+    {
+      "c": "web",
+      "n": "Windows desktop task operator",
+      "s": "unknown",
+      "tools": [
+        "desktop_task_start",
+        "desktop_task_status",
+        "desktop_task_control",
+        "browser_video_list",
+        "browser_media_state",
+        "browser_media_control"
+      ],
+      "qualification": {
+        "available": "Implementation available behind explicit setup",
+        "verified": "Not verified on the signed-in Brave and microphone configuration",
+        "blocked": "Attended extension setup and spoken YouTube qualification",
+        "unsupported": "Child-frame control and later Windows/document workflows in this stage"
+      },
+      "note": "Stage 1 implementation is available for qualification. Command acceptance cannot establish completion. Existing signed-in browser and spoken acceptance gates remain blocked.",
+      "ev": "Windows Operator 2026-09-07: current-user named-pipe ACL and anonymous denial exercised on Windows; actual disposable Chrome DOM/CDP fixtures verify ordinal selection and trusted-input takeover. Controller tests require video identity and advancing playback time. These are bounded implementation proofs, not ten attended spoken successes or the 50-command qualification. See BUGS.md Windows Operator evidence.",
       "ok": 0,
       "f": 0
     }
@@ -5492,7 +5515,7 @@ function build(){
       var leaf = {
         id:cid+"-"+j, label:n.n, s:n.s, r:(n.s==="dark"||n.s==="unknown")?5.5:7, tier:2,
         a:a, dist:d,
-        data:{cluster:hub.label, name:n.n, status:n.s, ok:n.ok, f:n.f, note:n.note, ev:n.ev}
+        data:{cluster:hub.label, name:n.n, status:n.s, ok:n.ok, f:n.f, note:n.note, ev:n.ev, qualification:n.qualification}
       };
       nodes.push(leaf);
       edges.push({a:hub, b:leaf, s:n.s, w:1});
@@ -5704,7 +5727,7 @@ function open(n){
 
   var m = document.getElementById("p-metric");
   var bar = document.getElementById("p-bar");
-  if(typeof d.ok === "number" && typeof d.f === "number"){
+  if(typeof d.ok === "number" && typeof d.f === "number" && (!d.qualification || d.ok+d.f>0)){
     var tot = d.ok + d.f;
     var pct = tot ? Math.round(100*d.ok/tot) : 0;
     m.innerHTML =
@@ -5723,6 +5746,11 @@ function open(n){
   }
 
   document.getElementById("p-note").textContent = d.note || "";
+  if(d.qualification){
+    var qLabels={available:"Available",verified:"Verified on this configuration",blocked:"Blocked",unsupported:"Unsupported"};
+    document.getElementById("p-note").style.whiteSpace="pre-line";
+    document.getElementById("p-note").textContent += "\n\n" + Object.keys(qLabels).map(function(k){return qLabels[k]+": "+d.qualification[k];}).join("\n");
+  }
   var ev = document.getElementById("p-ev");
   ev.textContent = d.ev || "No narrative evidence is recorded for this capability.";
 

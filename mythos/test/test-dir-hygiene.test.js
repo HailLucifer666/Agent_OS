@@ -29,6 +29,7 @@ const ALLOWLIST = new Set([
   'helpers/mock-spawn-enoent.js',
   'helpers/leash-fixture.js',
   'fixtures/stub-mcp-server.js',
+  'fixtures/browser-native-protocol.js', // Pure framing oracle; importing never opens pipes or processes.
   'eval/routing.eval.js',
   'eval/memory-impact.eval.js',
 ]);

@@ -335,6 +335,7 @@ const EFFECTOR_LABELS = {
   'from-android.js': 'Phone (Android)',
   'from-app-reply.js': 'App Reply',
   'from-browser.js': 'Browser Automation',
+  'from-desktop.js': 'Desktop Task Operator',
   'from-calendar.js': 'Calendar & Timers',
   'from-code-search.js': 'Code Search',
   'from-computer.js': 'Computer & Files',

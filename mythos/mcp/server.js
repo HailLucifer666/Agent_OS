@@ -312,7 +312,7 @@ if (require.main === module) {
     // five OTHER effectors still drifting from main.js on this surface.
     registerFromComputer(hub, { brain: brain, config: config, logger: logger });
     registerFromPc(hub, { brain: brain, fs: memory.fs });
-    registerFromBrowser(hub, { config: config });
+    registerFromBrowser(hub, { config: config, getBridge: () => null, isDesktopTask: () => false });
     registerFromSkills(hub);
     registerFromMemory(hub, { semantic: memory.semantic, fs: memory.fs, identity: identity, memory: memory });
     registerFromCalendar(hub, { fs: memory.fs, bus: bus });

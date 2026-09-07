@@ -96,7 +96,7 @@ describe('F2 — one speaker per connection', () => {
 
   test('sendSpokenReply reaches no speech-chunk emission with Live open', () => {
     const body = bodyOf('sendSpokenReplyNow');
-    const guardAt = body.search(/if \(!ws\._mythosNodeId && liveSession && liveSession\.isOpen\(\)\)/);
+    const guardAt = body.search(/if \(!ws\._mythosNodeId && liveSession && liveSession\.isOpen\(\) && !meta\?\.verifiedDesktop\)/);
     const chunkAt = body.indexOf('sendSpeechChunk(');
     assert.notStrictEqual(guardAt, -1, 'the Live guard must exist');
     assert.notStrictEqual(chunkAt, -1, 'sendSpokenReply must still be the function that emits chunks');
@@ -111,7 +111,7 @@ describe('F2 — one speaker per connection', () => {
     // the Gemini Live wire protocol. An unprefixed reply would make MYTHOS
     // believe the operator said its own answer back to it.
     const body = bodyOf('sendSpokenReplyNow');
-    const branch = body.slice(body.search(/if \(!ws\._mythosNodeId && liveSession && liveSession\.isOpen\(\)\)/));
+    const branch = body.slice(body.search(/if \(!ws\._mythosNodeId && liveSession && liveSession\.isOpen\(\) && !meta\?\.verifiedDesktop\)/));
     assert.match(branch.slice(0, 600), /SYSTEM_NOTICE_PREFIX/,
       'the routed text must carry SYSTEM_NOTICE_PREFIX');
   });

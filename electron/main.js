@@ -1,13 +1,6 @@
 'use strict';
-
-// electron/main.js — Electron shell around the existing MYTHOS server.
-// See V2 spine §13. The server (mythos/src/main.js) is fork()ed as a child on
-// loopback and a BrowserWindow loads its http://127.0.0.1:<port>. Zero UI
-// rewrite — the JARVIS HUD, worklets and WS client are unchanged.
-//
-// All paths/ports come from __dirname / app.getPath / process.env — nothing
-// machine-specific is hardcoded (open-source portability, CLAUDE.md + AD-7).
-//
+// electron/main.js — Electron GUI around the existing MYTHOS server.
+// V2 §13: fork the loopback server and load the HUD. Paths derive from the environment.
 // AD-8 holds here too: this file owns the safeStorage-backed key store and
 // injects decrypted values ONLY into the child process env (server-side). The
 // preload surface (preload.js) exposes no value-returning channel to the

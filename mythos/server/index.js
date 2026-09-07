@@ -1834,14 +1834,8 @@ function createServer(deps) {
   // text-only copy would look harmless and isn't: playNextChunk() speaks any
   // chunk whose audioB64 is null via speechSynthesis, so the PC would narrate
   // the reply alongside the phone — the same two-voices defect as BUG-060.
-  // F2b (2026-08-15) — one speaker per connection.
-  //
-  // F2a stops sendSpokenReply from speaking OVER an open Live session, but a
-  // guard on one function is an instance, not the class: proactiveSpeak() fires
-  // from reminders, goal/build announcements and health notices on its own
-  // schedule, and can still land in the middle of a reply that is already
-  // streaming chunks. The two share no lock and no turn serialisation, and each
-  // side's mic gate polices only its own engine's capture.
+  // F2b: replies and proactive announcements share one connection speech lock.
+  // Each engine's microphone gate alone cannot prevent overlapping playback.
   //
   // Queue, never discard — the risk of this change is a lost announcement, so a
   // second utterance waits rather than being dropped. But the wait is BOUNDED:
@@ -2067,6 +2061,7 @@ function createServer(deps) {
   }
 
   async function proactiveSpeakNow(text, targetWs, opts) {
+    if (opts?.isCurrent && !opts.isCurrent()) return;
     targetWs = targetWs || lastActiveWs;
     // Stage 2 (BUG-060, "two voices speaking simultaneously" —
     // vault/Incidents/2026-07-31.jsonl): if this connection has an open Gemini
@@ -2177,6 +2172,7 @@ function createServer(deps) {
     // Item B: register an abort controller so a 'stop' for this reqId (barge-in
     // mid-proactive-speech) can cancel remaining chunk synthesis below.
     const ctrl = new AbortController();
+    ctrl._targetWs = targetWs;
     inflightSpeech.set(reqId, ctrl);
     try {
       // Always split — same fix and same reason as sendSpokenReply() below (see
@@ -2263,6 +2259,8 @@ function createServer(deps) {
       memory: memory,
       config: config,
       goalId: ctx.goalId || null,
+      connectionId: ctx.connectionId || null,
+      requestId: ctx.requestId || null,
       tier: ctx.tier || 0,
       // REMEDIATION P2-12: this hardcoded 'voice' unconditionally, even for
       // handleConfirmReply's confirm-accept path below (a T3+ action a human
@@ -2836,15 +2834,22 @@ function createServer(deps) {
     }
 
     // ---- S2S Live voice (V2 §10, merged-order step 4, Phase 5) ----
-    // One session per WS connection, created LAZILY on liveOpen() (wake-word/
-    // cost gate) — never at boot, never at connection time. liveAdapter is
-    // lazy for the same reason: constructing it unconditionally for every
-    // connection would require every test fixture's fake `leash` to implement
-    // `.check()` even when the S2S path is never exercised, breaking back-
-    // compat with existing fixtures (and wasting a real allocation on a path
-    // most connections never touch).
+    // Live session and adapter are lazy per connection, preserving the wake/cost
+    // gate and compatibility with server fixtures that never exercise voice.
     let liveSession = null;
     let liveAdapter = null;
+    let liveOutputGeneration = 0, operatorReqId = null, operatorLivePending = false;
+    const desktop = config.DESKTOP_OPERATOR_ENABLED && deps.desktopRuntime ? require('./desktop-connection').createDesktopConnection({
+      runtime: deps.desktopRuntime, connectionId, leash, dispatch: dispatchAction, send, historyAppend, logger,
+      reply: sendSpokenReply, speak: async (text, opts) => {
+        await proactiveSpeak(text, ws, { ...opts, skipLive: true });
+      },
+      cancelSpeech: opts => {
+        for (const ctrl of inflightSpeech.values()) if (ctrl._targetWs === ws) ctrl.abort();
+        if (!(opts?.preserveCompletedLive && liveSession?.isOpen() && !operatorLivePending)) { liveOutputGeneration++; if (liveSession) { liveSession.close('desktop-control'); send({ type: 'live-interrupted', operatorReqId }); } liveSession = null; }
+        operatorReqId = null; operatorLivePending = false;
+      },
+    }) : null;
     // Stage 2 (BUG-060): expose this connection's Live session to proactiveSpeak(),
     // which lives outside this closure — a plain getter on the ws itself, re-read
     // on every call so it always reflects the current (possibly reassigned, possibly
@@ -2880,7 +2885,7 @@ function createServer(deps) {
         // AD-1/AD-2/AD-4: identical gate -> dispatch path as this connection's
         // own executeAction()/handleConfirmReply() — leash.check() -> dispatchAction().
         liveAdapter = createLiveToolAdapter({
-          leash, dispatchAction, bus, logger, connectionId,
+          leash, dispatchAction: (decision, ctx) => dispatchAction(decision, { ...ctx, connectionId }), bus, logger, connectionId,
           memory, historyAppend, reflection,
           summarizeActionsForResult,
           getLiveSession: () => liveSession,
@@ -2915,7 +2920,7 @@ function createServer(deps) {
             // for exactly that reason. getStatus() is a pure read; requiring
             // these starts nothing.
             adapters: {
-              browser: browserAgentAdapter,
+              browser: config.DESKTOP_OPERATOR_ENABLED ? deps.desktopRuntime?.getBridge() || { getStatus: () => ({ state: 'OFFLINE' }) } : browserAgentAdapter,
               cua: cuaDriverAdapter,
               pcChild,
               android: androidChildAdapter,
@@ -2928,7 +2933,7 @@ function createServer(deps) {
         // reported here. Re-logging them on every rotation would turn a
         // once-per-session diagnostic into a recurring one, so the rebuild
         // closure below deliberately keeps just `declarations`.
-        const declarationsForSession = () => rebuildDeclarations().declarations;
+        const declarationsForSession = () => rebuildDeclarations().declarations.filter(d => !desktop || require('./desktop-connection').conversationToolAllowed(d.name));
         if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
         // Logged as its own event, not folded into the line above: "withheld by
         // curation" and "withheld because this machine cannot do it" are
@@ -2940,6 +2945,7 @@ function createServer(deps) {
             reasons: [...new Set(unavailable.map((u) => u.reason))],
           });
         }
+        const outputGeneration = liveOutputGeneration;
         liveSession = createLiveSession({
           // liveConfigNow() carries a voice picked in the HUD since boot.
           // live-session.js reads GEMINI_LIVE_VOICE ONCE, at construction
@@ -2957,20 +2963,24 @@ function createServer(deps) {
           // BUG-079's reasoning applied to the catalog, not just the prompt: a
           // function, so a rotation re-reads which adapters are actually up.
           functionDeclarations: declarationsForSession,
-          onToolCall: liveAdapter.handleLiveToolCalls,
+          onToolCall: (calls, handlers) => desktop ? require('./desktop-connection').conversationTools(calls, handlers, liveAdapter) : liveAdapter.handleLiveToolCalls(calls, handlers),
           onAudioOut: (b64) => {
-            send({ type: 'live-audio-out', data: b64 });
+            if (outputGeneration !== liveOutputGeneration) return;
+            send({ type: 'live-audio-out', data: b64, ...(desktop ? { operatorReqId } : {}) });
             if (liveTurnUserSpeechAt !== null && !liveTurnAudioRecorded) {
               voiceLatencyTracker.record(Date.now() - liveTurnUserSpeechAt);
               liveTurnAudioRecorded = true;
             }
           },
           onTranscript: (t) => {
-            send({ type: 'live-transcript', role: t.role, text: t.text });
+            if (outputGeneration !== liveOutputGeneration) return;
+            send({ type: 'live-transcript', role: t.role, text: t.text, ...(desktop ? { operatorReqId } : {}) });
             if (t.role === 'user' && liveTurnUserSpeechAt === null) liveTurnUserSpeechAt = Date.now();
           },
-          onState: (s) => send({ type: 'live-state', state: s.state, reason: s.reason }),
+          onState: (s) => { if (outputGeneration === liveOutputGeneration) send({ type: 'live-state', state: s.state, reason: s.reason }); },
           onTurnComplete: (turn) => {
+            if (outputGeneration !== liveOutputGeneration) return;
+            operatorLivePending = false;
             liveAdapter.onLiveTurnComplete(turn);
             liveTurnUserSpeechAt = null;
             liveTurnAudioRecorded = false;
@@ -2980,18 +2990,20 @@ function createServer(deps) {
             // explicit end-of-turn it has no moment at which to reopen the mic
             // or stop its reply-timeout clock. Ignored by clients that don't
             // know the frame.
-            send({ type: 'live-turn-complete' });
+            send({ type: 'live-turn-complete', ...(desktop ? { operatorReqId } : {}) });
           },
           // Direct per-connection barge-in callback — NOT the shared bus (see
           // live-session.js's onInterrupted comment: a bare bus.subscribe here
           // would fire for every OTHER connection's interruption too).
-          onInterrupted: () => send({ type: 'live-interrupted' }),
+          onInterrupted: () => { if (outputGeneration === liveOutputGeneration) send({ type: 'live-interrupted', ...(desktop ? { operatorReqId } : {}) }); },
           // BUG-170: Live produced a reply the operator could read and no
           // audio at all — which is indistinguishable, from the room, from
           // being ignored. Speak it through the TTS chain instead. skipLive
           // is not optional here: routing it back into the session that just
           // failed to speak would be the same silence again.
           onSilentTurn: ({ turnId, text }) => {
+            if (desktop) return; // The operator sink reports missing native audio; no competing TTS turn.
+            if (outputGeneration !== liveOutputGeneration) return;
             logger.warn('live.turn-silent.speaking-via-tts', { turnId, chars: text.length });
             proactiveSpeak(text, ws, { skipLive: true })
               .catch((err) => logger.warn('live.turn-silent.tts-failed', { turnId, error: err.message }));
@@ -3122,6 +3134,7 @@ function createServer(deps) {
     }
 
     async function sendSpokenReplyNow(reqId, say, meta, micStoppedAt) {
+      if (meta?.isCurrent && !meta.isCurrent()) return;
       const speak = sanitizeSpoken(say);
       // Phase 2 (AETHER-WIRING): route the reply to the nearest device instead
       // of the local TTS chain. The client still gets its caption-only 'done'
@@ -3154,19 +3167,10 @@ function createServer(deps) {
       // playback was the entity's voice for the same connection. Two engines,
       // one connection, guaranteed to differ in timbre.
       //
-      // Route the text through the same [SYSTEM] channel proactiveSpeak uses so
-      // Gemini itself says it, and finish the turn caption-only (chunked:true,
-      // zero chunks) exactly as the Aether branch above does.
-      //
-      // The `!ws._mythosNodeId` term is load-bearing and was missing in the first
-      // cut of this guard, which broke aether-node-routing.test.js. A phone node
-      // may have its own Live session open on its own connection, but a
-      // node-origin utterance is deliberately answered by the BATCH pipeline (see
-      // the routing decision at the 'utterance' handler, which sends node turns
-      // to handleUtterance and only HUD turns to Live). Routing the reply into
-      // Live here would answer on the desktop a question that was asked at the
-      // phone. Same guard the utterance router uses, and for the same reason.
-      if (!ws._mythosNodeId && liveSession && liveSession.isOpen()) {
+      // Conversation uses the Live system-notice route. Node replies retain their
+      // originating device. Verified desktop wording bypasses model paraphrasing;
+      // its task owner closes prior Live output and waits for actual TTS drain.
+      if (!ws._mythosNodeId && liveSession && liveSession.isOpen() && !meta?.verifiedDesktop) {
         liveSession.sendText(`${SYSTEM_NOTICE_PREFIX} ${speak}`, { site: 'reply-routed-to-live' });
         logger.info('reply.routed-to-live', { reqId, chars: speak.length });
         try { send({ type: 'done', reqId, say, speak, chunked: true, ...meta }); } catch (_) { /* client gone */ }
@@ -3211,6 +3215,7 @@ function createServer(deps) {
       // edge-tts keeps synthesizing chunks nobody will hear after the client
       // has already stopped playback locally.
       const ctrl = new AbortController();
+      ctrl._targetWs = ws;
       inflightSpeech.set(reqId, ctrl);
       // Task 12: record the real mic-stop -> first-audio-frame delta exactly
       // once, on the first chunk that actually ships real audio (AD-5 — a
@@ -3734,6 +3739,7 @@ function createServer(deps) {
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
+      if (desktop?.handle(msg)) return;
       // Targeted proactive speech (Phase 3c): the most-recently-active
       // connection is whichever tab last sent ANY message, not just an
       // utterance — keeps a silently-idle-but-focused tab as the target
@@ -3748,20 +3754,13 @@ function createServer(deps) {
       // Quiet-gate reference for proactive follow-ups: an unprompted remark must
       // never land while the operator is mid-conversation.
       if (msg.type === 'utterance' || msg.type === 'vision-query') lastTurnAt = Date.now();
-      // BUG-129: while a Live (S2S) session is open, typed HUD text belongs to
-      // the SAME conversation as the spoken one. The batch path would answer it
-      // through edge-tts — a different voice, and a separate history from the
-      // one Gemini is holding. Feed it in as user content instead so the reply
-      // comes back on the Live audio path in the Live voice, with context.
-      // The empty `done` releases the HUD's reqId handler (deliverReply treats
-      // a no-say done as finishTurn); the typed message's own caption is drawn
-      // client-side by compose-bar, so nothing is lost by not answering here.
-      // 2026-08-06: typing without ever having spoken left `liveSession` null,
-      // so this fell to the batch/edge-tts path and answered in a different
-      // voice than the spoken conversation. Open one on demand first
-      // (VOICE_UNIFIED_LIVE_VOICE); the batch fallback below is unchanged and
-      // still runs whenever a Live session genuinely isn't available.
+      // Completed task utterances were intercepted above. Conversation stays in
+      // the native Live session; operator playback retains ownership until drain.
       if (msg.type === 'utterance') {
+        if (desktop) {
+          require('./desktop-connection').routeConversation(msg, { router: desktop, getLive: liveForSpeech, send, sanitize: sanitizeErrorForClient, onStart: id => { operatorReqId = id; operatorLivePending = true; } });
+          return;
+        }
         // Proof that the mic-hot window that ducked the speakers was a person.
         // See duckAudio/unduckAudio: two windows in a row WITHOUT this and
         // ducking backs off, because the trigger was playback, not speech.
@@ -3950,6 +3949,7 @@ function createServer(deps) {
       // reqId (sendSpokenReply's or proactiveSpeak's chunk loop). A stop for
       // an already-finished or unknown reqId is a harmless no-op.
       else if (msg.type === 'stop') {
+        desktop?.stop().catch(error => logger.warn('desktop.stop-failed', { error: error.message }));
         const ctrl = inflightSpeech.get(msg.reqId);
         if (ctrl) ctrl.abort();
       }
@@ -4065,7 +4065,7 @@ function createServer(deps) {
         }
       }
       else if (msg.type === 'live-open') { queueTurn(function () { return liveOpen(); }); }
-      else if (msg.type === 'live-audio') { if (liveSession) liveSession.sendAudio(msg.data); }
+      else if (msg.type === 'live-audio') { if (config.DESKTOP_OPERATOR_ENABLED) send({ type: 'live-state', state: 'closed', reason: 'operator-mode-requires-completed-transcription' }); else if (liveSession) liveSession.sendAudio(msg.data); }
       // Slice 3 screen share. Same guard shape as live-audio: a frame arriving
       // before live-open (or after a close) is a silent no-op, never a throw —
       // the HUD's capture loop and the session lifecycle are independent timers
@@ -4089,6 +4089,7 @@ function createServer(deps) {
     // dangling Gemini socket would otherwise keep billing for open-mic time
     // with no client left to hear the reply.
     ws.on('close', () => {
+      desktop?.close().catch(error => logger.warn('desktop.disconnect-failed', { error: error.message }));
       if (liveSession) liveSession.close('ws-closed');
       liveAdaptersByConnection.delete(connectionId);
       // Drop this node's registration — but ONLY if the map still points at THIS

@@ -447,8 +447,8 @@ const SCHEMA = {
   // Browser automation (Phase 9 — playwright-core, drives installed Chrome/Edge)
   BROWSER_CDP_URL:            { type: 'string',  default: 'http://127.0.0.1:9222' },
   BROWSER_AUTOMATION:         { type: 'bool', default: true },
-  // Per-page default action timeout (click/type/textContent). Higher lets a
-  // lazy-hydrating SPA (YouTube's ytd-* custom elements) come up before the
+  DESKTOP_OPERATOR_ENABLED:   { type: 'bool', default: false },
+  // Per-page timeout lets lazy-hydrating SPA elements come up before the
   // click; lower fails faster on a genuinely-absent element. Read by the
   // browser-agent adapter (setDefaultTimeout) and from-browser's waitReady().
   BROWSER_PAGE_TIMEOUT_MS:    { type: 'number', default: 15000, min: 1000, max: 60000 },

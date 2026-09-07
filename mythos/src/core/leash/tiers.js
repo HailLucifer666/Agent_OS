@@ -5,6 +5,9 @@
 // (0-4). Every key here is copied verbatim from the spec — do not rename,
 // re-tier, or drop any entry without updating the spec first.
 const TIER_TABLE = {
+  // Desktop wrappers persist task state; all leaves retain independent checks.
+  desktop_task_start: 1, desktop_task_status: 0, desktop_task_control: 1,
+  browser_video_list: 0, browser_media_state: 0, browser_media_control: 2,
   // T0 — READ ONLY (auto-allow, never audit)
   'navigate':              0,
   'close_panel':           0,

@@ -106,7 +106,8 @@ describe('GET /api/config/s2s (the flag surface the S2S bridge needs)', () => {
   test('leaks nothing but flags — no API key, model id or endpoint', async () => {
     await withServer({ VOICE_S2S_ENABLED: true, GEMINI_API_KEY: 'sk-should-never-appear', LIVE_MODEL: 'secret-model' }, async (port) => {
       const res = await httpGet(port, '/api/config/s2s');
-      assert.deepEqual(Object.keys(res.body), ['enabled', 'screenShare']);
+      assert.deepEqual(Object.keys(res.body), ['enabled', 'operatorEnabled', 'screenShare']);
+      assert.equal(res.body.operatorEnabled, false);
       assert.equal(JSON.stringify(res.body).includes('sk-should-never-appear'), false);
       assert.equal(JSON.stringify(res.body).includes('secret-model'), false);
     });

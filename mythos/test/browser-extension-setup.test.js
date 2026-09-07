@@ -1,0 +1,24 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { prepareBrowserExtensionSetup } = require('../scripts/setup-browser-extension');
+const { tempVaultDir, cleanupVaultDir } = require('./helpers');
+test('setup produces review-only HKCU registration with exact origins and shared runtime discovery', t => {
+  const dir = tempVaultDir(); t.after(() => cleanupVaultDir(dir));
+  fs.mkdirSync(path.join(dir, 'resources')); fs.writeFileSync(path.join(dir, 'resources/app.asar'), 'fixture');
+  const executablePath = path.join(dir, 'resources/mythos-browser-host.exe'); fs.writeFileSync(executablePath, 'fixture-not-executed');
+  const runtimeDir = path.join(dir, 'runtime'), extensionIds = ['a'.repeat(32)];
+  const setup = prepareBrowserExtensionSetup({ outputDir: path.join(dir, 'setup'), runtimeDir, executablePath, extensionIds });
+  const manifest = JSON.parse(fs.readFileSync(setup.manifestPath));
+  assert.deepEqual(manifest.allowed_origins, ['chrome-extension://' + extensionIds[0] + '/']);
+  assert.equal(manifest.path, executablePath); assert.equal(manifest.type, 'stdio');
+  const registry = fs.readFileSync(setup.registryPath, 'utf16le');
+  assert.match(registry, /HKEY_CURRENT_USER/); assert.doesNotMatch(registry, /HKEY_LOCAL_MACHINE/);
+  assert.match(registry, /BraveSoftware/); assert.match(registry, /Google/); assert.match(registry, /RuntimeDir/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runtimeDir, 'browser-extension-setup.json'))), { allowedExtensionIds: extensionIds });
+  const gui = path.join(dir, 'MYTHOS.exe'); fs.writeFileSync(gui, 'fixture');
+  assert.throws(() => prepareBrowserExtensionSetup({ outputDir: dir, runtimeDir, executablePath: gui, extensionIds }), /GUI executable/);
+  assert.throws(() => prepareBrowserExtensionSetup({ outputDir: dir, runtimeDir, executablePath, extensionIds: ['*'] }), /Explicit/);
+});
