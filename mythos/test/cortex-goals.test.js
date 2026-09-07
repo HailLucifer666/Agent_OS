@@ -111,61 +111,6 @@ function sleep(ms) {
 }
 
 // ---------------------------------------------------------------------------
-// cortex/sensors/timer
-// ---------------------------------------------------------------------------
-
-describe('cortex/sensors/timer', function() {
-  it('emits sensor.timer events at tick cadence', async function() {
-    var bus = fakeBus();
-    var { createTimerSensor } = require('../src/core/sensors/timer');
-    var timer = createTimerSensor({ bus: bus, config: { MYTHOS_TICK_MS: 50 } });
-    timer.start();
-    await sleep(180);
-    timer.stop();
-    var events = bus._emitted().filter(function(e) { return e.type === 'perception.tick'; });
-    assert.ok(events.length >= 2, 'expected at least 2 timer events, got ' + events.length);
-    for (var i = 0; i < events.length; i++) {
-      assert.ok(events[i].payload.ts, 'event ' + i + ' missing ts');
-      assert.ok(typeof events[i].payload.generation === 'number', 'event ' + i + ' missing generation');
-      assert.equal(events[i].payload.kind, 'timer', 'event ' + i + ' missing kind');
-      assert.equal(events[i].payload.salienceHint, 0.1, 'event ' + i + ' missing salienceHint');
-    }
-  });
-
-  it('stops and does not emit after stop()', async function() {
-    var bus = fakeBus();
-    var { createTimerSensor } = require('../src/core/sensors/timer');
-    var timer = createTimerSensor({ bus: bus, config: { MYTHOS_TICK_MS: 50 } });
-    timer.start();
-    await sleep(130);
-    timer.stop();
-    var countAtStop = bus._emitted().filter(function(e) { return e.type === 'perception.tick'; }).length;
-    await sleep(130);
-    var countAfter = bus._emitted().filter(function(e) { return e.type === 'perception.tick'; }).length;
-    assert.equal(countAfter, countAtStop, 'new events appeared after stop()');
-  });
-
-  it('start/stop generation tracking prevents stale timers', async function() {
-    var bus = fakeBus();
-    var { createTimerSensor } = require('../src/core/sensors/timer');
-    var timer = createTimerSensor({ bus: bus, config: { MYTHOS_TICK_MS: 50 } });
-    timer.start();
-    await sleep(30);
-    timer.stop();
-    timer.start();
-    await sleep(130);
-    timer.stop();
-    var events = bus._emitted().filter(function(e) { return e.type === 'perception.tick'; });
-    // All events should have the second generation
-    var lastGen = events[events.length - 1].payload.generation;
-    for (var i = 0; i < events.length; i++) {
-      assert.equal(events[i].payload.generation, lastGen,
-        'event ' + i + ' has stale generation ' + events[i].payload.generation + ' vs ' + lastGen);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
 // cortex/ooda
 // ---------------------------------------------------------------------------
 

@@ -32,13 +32,15 @@ The initial recursive baseline was 7,239 tests, 7,223 passes and 16 failures: se
 
 The recovered DSH install took 44 minutes and passed its executed version check; actual recovered adapter generation took 68.3 seconds. The real packaged adapter produced the requested HTML in 23.1 seconds. A separate Forge mechanical verifier passed five stages, but manual inspection rejected an 82-byte placeholder JPEG and incomplete page coverage. Engine availability is demonstrated; unrestricted build quality is not. Raw evidence and isolated artifacts remain in ignored project-local .cache/campaign; tracked conclusions and limits live in BUGS.md.
 
-**NEXT ACTION:** satisfy the named live/operator/product gates rather than carrying historical verified labels forward. Source assessment and reproduced repairs are complete; full campaign verification remains open. Integration commit references are recorded in the campaign progress log below once committed.
+**NEXT ACTION:** satisfy the named live/operator/product gates rather than carrying historical verified labels forward. Source assessment and reproduced repairs are complete; full campaign verification remains open. Integration commit `f8c3f6be009714315cf696bf487e573e80b29539` was pushed to `origin/codex/full-ticket-audit`. Its mandatory pre-commit gate independently passed all 7,336 tests and the count, registry and freshness checks. No release or deployment occurred.
 
 ### Campaign progress log
 
 | Checkpoint | Evidence | Commit |
 |---|---|---|
-| Source assessment and repair integration | All 261 IDs assessed; 130 undeclared IDs classified; 7,336 tests passed; live limits retained in BUGS.md. | Integration commit recorded after creation. |
+| Source assessment and repair integration | All 261 IDs assessed; 130 undeclared IDs classified; 7,336 tests passed in the delivery run and mandatory hook; live limits retained in BUGS.md. | `f8c3f6be009714315cf696bf487e573e80b29539`, pushed to `origin/codex/full-ticket-audit`. |
+
+The receipt hook subsequently reproduced one timer-test scheduling failure. Controlled event-loop starvation reproduced the original assertion; the follow-up changes only three tests to deterministic interval-clock assertions. Production is unchanged. BUGS.md records the failed gate, focused proof, mutation result and remaining oracle limit; the follow-up is not considered integrated until its mandatory hook passes.
 
 ### 2026-08-22 — **W6 is closed, and the thing it measured turned out to matter more than the swap itself: build quality was a PROMPT gap, not an engine gap.**
 
