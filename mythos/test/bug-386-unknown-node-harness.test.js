@@ -137,11 +137,11 @@ describe('BUG-386 — the harness covers every tool in its scope, both direction
 });
 
 describe('BUG-386 — the fast groups really run, against real subsystems', () => {
-  test('system, okf, persona and widgets pass their oracles', async () => {
+  test('system, okf, persona, widgets and procedures pass their oracles', async () => {
     const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'bug386-run-'));
     const rows = [];
     try {
-      for (const g of ['system', 'okf', 'persona', 'widgets']) {
+      for (const g of ['system', 'okf', 'persona', 'widgets', 'procedures']) {
         rows.push(...(await harness.GROUPS[g](sandbox)));
       }
     } finally {

@@ -82,6 +82,7 @@ const LAUNCH_CODE_UNVERIFIED = {
 function harness(outcome) {
   const episodic = [];
   const audit = [];
+  const history = [];
   const adapter = createLiveToolAdapter({
     leash: {
       check: () => ({ allow: true, requireConfirm: false, tier: 2, reason: 'within-autonomous-max' }),
@@ -103,13 +104,13 @@ function harness(outcome) {
     logger: { warn() {}, info() {}, error() {} },
     connectionId: 'conn-398-r2',
     memory: { working: { tick: 9 }, episodic: { write: async (r) => { episodic.push(r); } } },
-    historyAppend: () => {},
+    historyAppend: (role, text) => history.push({ role, text }),
     reflection: { noteTurn() {} },
-    summarizeActionsForResult: () => null,
+    summarizeActionsForResult: require('../src/core/voice/action-outcome-summary').summarizeActionsForResult,
     getLiveSession: () => null,
     sanitizeErrorForClient: (e) => String((e && e.message) || e),
   });
-  return { adapter, episodic, audit };
+  return { adapter, episodic, audit, history };
 }
 
 async function runOne(outcome, toolName) {
@@ -119,10 +120,20 @@ async function runOne(outcome, toolName) {
     { sendToolResponse: () => {} });
   h.adapter.onLiveTurnComplete({ userText: 'open vs code', assistantText: 'Opening it now.' });
   const turn = h.episodic.find((r) => r.kind === 'conversation');
-  return { turn, action: turn && turn.detail.actions[0], audit: h.audit[0] };
+  return { turn, action: turn && turn.detail.actions[0], audit: h.audit[0], history: h.history };
 }
 
 describe('BUG-398 row 2 — the two ledgers record two scopes, and can now be joined', () => {
+  it('the same unverified outcome reaches history without becoming a failed action', async () => {
+    const { action, history } = await runOne(LAUNCH_CODE_UNVERIFIED);
+    assert.equal(action.ok, false);
+    assert.equal(action.dispatchOk, true);
+    assert.equal(action.status, 'unverified');
+    const note = history.find(row => row.role === 'system' && row.text.startsWith('Action outcomes:'));
+    assert.ok(note);
+    assert.match(note.text, /ui_type NOT CONFIRMED/);
+    assert.doesNotMatch(note.text, /ui_type FAILED|ui_type succeeded/);
+  });
   it('(b) the turn record carries the Audit row\'s traceId', async () => {
     const { action, audit } = await runOne(LAUNCH_CODE_UNVERIFIED);
     assert.equal(audit.traceId, 'fc_16510075431666483365', 'premise: the audit side has it');

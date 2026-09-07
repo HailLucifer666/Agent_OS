@@ -523,9 +523,36 @@ function openSetFrom(text) {
 
 // ---------------------------------------------------------------------------
 
+function campaignAssessments(text) {
+  const headings = [...text.matchAll(/^### Individual declared-ticket dispositions\s*$/gm)];
+  if (headings.length !== 1) return new Map();
+  const tail = text.slice(headings[0].index + headings[0][0].length);
+  const section = tail.split(/^#{1,6} /m)[0];
+  const lines = section.split(/\r?\n/);
+  const cells = (line) => line.trim().split(/(?<!\\)\|/).slice(1, -1).map((s) => s.trim().replace(/\\\|/g, '|'));
+  const header = lines.findIndex((line) => cells(line).join('|') ===
+    'Ticket|Recorded state|Campaign disposition|Current evidence / missing proof|Candidate test or source');
+  if (header < 0 || !/^\|(?:\s*:?-+:?\s*\|){5}$/.test((lines[header + 1] || '').trim())) return new Map();
+  const allowed = new Set(['currently reproduced', 'currently verified', 'disproved', 'duplicate', 'superseded', 'blocked']);
+  const result = new Map(), seen = new Set();
+  for (const line of lines.slice(header + 2)) {
+    if (!line.trim().startsWith('|')) break;
+    const row = cells(line), id = /^BUG-(\d+)$/.exec(row[0] || '');
+    if (!id) continue;
+    const n = Number(id[1]);
+    // Conflicting/duplicate rows are not a trustworthy campaign assessment.
+    if (seen.has(n)) { result.delete(n); continue; }
+    seen.add(n);
+    if (row.length !== 5 || !allowed.has(row[2]) || !row[3] || !row[4]) continue;
+    result.set(n, { disposition: row[2], evidence: row[3], source: row[4] });
+  }
+  return result;
+}
+
 function buildRegister(deps = {}) {
   const text = deps.bugsText ?? fs.readFileSync(BUGS_FILE, 'utf8');
   const { set: openSet, section } = openSetFrom(text);
+  const campaign = campaignAssessments(text);
 
   // Guard the guard. An empty open set would make every "is it covered" check
   // pass vacuously, which is the shape that has bitten this repo twice.
@@ -545,6 +572,7 @@ function buildRegister(deps = {}) {
     };
     // An entry with no recognised section still opens to something readable.
     if (!Object.keys(sec).length) row.excerpt = excerpt(b.body);
+    if (campaign.has(b.n)) row.campaign = campaign.get(b.n);
     return row;
   });
 
@@ -619,6 +647,6 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { parseBugs, classify, openSetFrom, buildRegister, readIsland, generate, main, STATES };
+module.exports = { parseBugs, classify, openSetFrom, buildRegister, campaignAssessments, readIsland, generate, main, STATES };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

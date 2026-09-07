@@ -172,13 +172,21 @@ function resolveSandboxed(raw) {
       // as a bare ENOENT the way F6 did.
       const vaultRootReal = realpathOrNull(vaultRoot) || vaultRoot;
       const ancestorReal = realpathOrNull(nearestExistingAncestor(vaultResolved));
-      const insideVault = containedIn(vaultResolved, vaultRoot) ||
-        (ancestorReal && (containedIn(ancestorReal, vaultRoot) || containedIn(ancestorReal, vaultRootReal)));
+      // BUG-247 campaign: both boundaries must hold. OR let an in-vault
+      // junction expose an outside file through read_file/list_folder; the
+      // reverse also passed (lexical traversal through an outside alias back
+      // into the vault). A configured vault junction remains valid because
+      // physical containment is against its canonical root. The nearest
+      // existing ancestor also covers targets whose leaf does not exist yet.
+      const insideVault = containedIn(vaultResolved, vaultRoot) &&
+        ancestorReal && containedIn(ancestorReal, vaultRootReal);
       if (!insideVault) {
         return {
           ok: false,
           reason: `"${raw}" escapes the vault. Resolved against MYTHOS_VAULT_ROOT ("${vaultRoot}") it points to ` +
-            `"${vaultResolved}", which is outside it. (This process's cwd is "${process.cwd()}" — the two roots ` +
+            `"${vaultResolved}"; its existing ancestor resolves to "${ancestorReal || 'unavailable'}". ` +
+            `Both the lexical path and real ancestor must stay inside the vault (canonical root "${vaultRootReal}"). ` +
+            `(This process's cwd is "${process.cwd()}" — the two roots ` +
             `diverging is exactly what caused F6, so both are named here rather than one being silently assumed.)`,
           rule: 'outside-vault-root',
         };

@@ -71,6 +71,7 @@ const TIER_TABLE = {
   'use_skill':             0,  // read-only — loads a skill's guidance text from disk
   'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
   'recall_memory':         0,  // read-only — searches existing memory (recallHybrid), writes nothing
+  'suggest_procedures':    0,  // BUG-358: guidance only; individual actions retain their own tiers.
   // Notes (memory/notes.js, 2026-08-14). Reads are T0 like recall_memory /
   // read_file above; note_take is T1 — a local write into MYTHOS's own notes
   // directory, same class as write_note, not the T3 class of write_file (which

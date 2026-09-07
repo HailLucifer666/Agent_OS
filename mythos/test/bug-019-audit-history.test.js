@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
+const WebSocket = require('ws');
+const { once } = require('node:events');
 const { createBus } = require('../src/core/bus');
 const { createServer } = require('../server');
 const { createFsStore } = require('../src/core/memory/fs-store');
@@ -73,6 +75,25 @@ test('BUG-019: GET /api/audit/recent returns recent audit entries newest-first',
   const server = createServer(baseDeps(bus, { memory: fakeMemory }));
   await server.ready;
   const addr = server.httpServer.address();
+
+  // The persisted id/ts are additive: all previous payload fields survive,
+  // and the UI can identify a row arriving through both HTTP and WS.
+  const socket = new WebSocket('ws://127.0.0.1:' + addr.port + '/ws');
+  await once(socket, 'open');
+  try {
+    const delivered = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('audit WS event missing')), 3000);
+      socket.on('message', raw => {
+        const message = JSON.parse(String(raw));
+        if (message.type === 'audit') { clearTimeout(timeout); resolve(message.payload); }
+      });
+    });
+    bus.emit('audit.decision', { id: 'aud-wire', ts: now, tool: 'wire_probe', tier: 2, decision: 'allow' });
+    assert.deepEqual(await delivered, { id: 'aud-wire', ts: now, tool: 'wire_probe', tier: 2, decision: 'allow' });
+  } finally {
+    socket.close();
+    await once(socket, 'close');
+  }
 
   // Test 1: fetch all with default limit
   const res1 = await httpGet(addr.port, '/api/audit/recent');

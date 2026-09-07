@@ -3,6 +3,7 @@
 // CA patterns from NOVA tools-dashboard goals CRUD + BRAIN-MAP lane selection.
 
 var crypto = require('crypto');
+var procedureWarnings = require('../memory/skills').procedureWarnings;
 
 var DRIVE_WEIGHTS = {
   'user-service': 1.0,
@@ -61,9 +62,9 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       title: opts.title || 'Untitled goal',
       status: opts.status || 'proposed',
       priority: typeof opts.priority === 'number' ? opts.priority : 0.5,
-      budget: {
-        tokens: opts.budget && opts.budget.tokens || (config && config.GOAL_TOKEN_BUDGET) || GOAL_TOKEN_BUDGET_FALLBACK,
-        actions: opts.budget && opts.budget.actions || (config && config.GOAL_ACTION_BUDGET) || 25,
+      budget: { // Zero is an exhausted cap; only absent/null values use defaults (BUG-235).
+        tokens: (opts.budget && opts.budget.tokens) ?? (config && config.GOAL_TOKEN_BUDGET) ?? GOAL_TOKEN_BUDGET_FALLBACK,
+        actions: (opts.budget && opts.budget.actions) ?? (config && config.GOAL_ACTION_BUDGET) ?? 25,
         deadline: opts.budget && opts.budget.deadline || null
       },
       spent: { tokens: 0, actions: 0 },
@@ -392,23 +393,22 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
     // SKILL_MIN_SUCCESS_RATE lives in schema; default 0.5.
     if (ctx && ctx.memory && ctx.memory.skills) {
       try {
-        // B-1 fix: recall() signature is (query, opts) — it called
-        // .toLowerCase() on the first arg, so passing {query,limit} as the
-        // first arg threw TypeError inside the try/catch, silently killing
-        // the procedural-skill branch since the goal system shipped.
+        // B-1: recall(query, opts), never recall({query,limit}); the latter
+        // throws at toLowerCase and silently bypassed every saved procedure.
         var minSuccess = (config && config.SKILL_MIN_SUCCESS_RATE) || 0.5;
         var skills = await ctx.memory.skills.recall(goal.title, { limit: 3 });
         for (var si = 0; si < skills.length; si++) {
           if (skills[si].score <= 0.6) continue;
           var skillRec = skills[si].record;
-          if (!skillRec.steps || skillRec.steps.length === 0) continue;
-          // B-2 fix: respect the tracked successRate. Brand-new skills
-          // (uses===0) pass through — they get a chance to prove themselves.
+          var warnings = procedureWarnings(skillRec);
+          if (warnings.length) {
+            if (bus) bus.emit('health.anomaly', { kind: 'procedure-replay-rejected', skillRef: skillRec.id || skills[si].ref, warnings: warnings });
+            continue;
+          }
+          // B-2: respect measured reliability; never-used skills remain eligible.
           if (skillRec.uses > 0 && (skillRec.successRate || 0) < minSuccess) continue;
           var sref = skillRec.id || skills[si].ref;
-          // B-3 + V3 fix: persist the WHOLE skill procedure into goal.plan so
-          // subsequent ticks step through it in order, not just step[0] forever.
-          // Each step is marked 'pending' and advanced by markPlanStepDone().
+          // B-3/V3: persist every pending step; markPlanStepDone advances the sequence.
           goal.plan = skillRec.steps.map(function (s) {
             return {
               tool: s.tool, args: s.args,
@@ -777,7 +777,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
           if (data && data.id) {
             // B1: Normalize loaded goals to prevent crashes on corrupt/legacy files.
             data.spent = data.spent || { tokens: 0, actions: 0 };
-            data.budget = data.budget || { tokens: (config && config.GOAL_TOKEN_BUDGET) || GOAL_TOKEN_BUDGET_FALLBACK, actions: (config && config.GOAL_ACTION_BUDGET) || 25, deadline: null };
+            data.budget = data.budget || { tokens: (config && config.GOAL_TOKEN_BUDGET) ?? GOAL_TOKEN_BUDGET_FALLBACK, actions: (config && config.GOAL_ACTION_BUDGET) ?? 25, deadline: null };
             data.plan = data.plan || [];
             data.childIds = data.childIds || [];
             data.grants = data.grants || {};

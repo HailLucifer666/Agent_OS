@@ -587,9 +587,9 @@ describe('from-memory: recall_memory', () => {
 // tool structure invariants
 // ---------------------------------------------------------------------------
 describe('from-memory: tool structure', () => {
-  it('exports exactly 10 tools (P5 self_capabilities, BUG-160 forget_fact, BUG-171 the incident read side, 2026-08-14 notes)', () => {
+  it('exports memory tools including read-only procedural guidance (BUG-358)', () => {
     const tools = buildTools({ semantic: { write: () => ({}) }, fs: { ensureDir: () => {}, appendLine: () => {} }, memory: { recallHybrid: async () => [] } });
-    assert.equal(tools.length, 10);
+    assert.equal(tools.length, 11);
     // The note_* trio registers even with no notes store in ctx — the tools
     // then fail honestly ("notes store unavailable") rather than vanishing,
     // because a tool that disappears based on wiring is invisible to the
@@ -597,7 +597,7 @@ describe('from-memory: tool structure', () => {
     assert.deepEqual(tools.map(t => t.name).sort(), [
       'forget_fact', 'incident_status', 'list_incidents', 'log_incident',
       'note_read', 'note_search', 'note_take',
-      'recall_memory', 'remember', 'self_capabilities',
+      'recall_memory', 'remember', 'self_capabilities', 'suggest_procedures',
     ]);
   });
 

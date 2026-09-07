@@ -17,7 +17,30 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
-### 2026-08-22 (latest) — **W6 is closed, and the thing it measured turned out to matter more than the swap itself: build quality was a PROMPT gap, not an engine gap.**
+### 2026-09-07 — All 261 tickets assessed; confirmed repairs integrated, live gates remain open.
+
+The approved campaign started at `635eaad5ab36bb7cadab63786ed2af08c41aaf74` on `codex/full-ticket-audit`. Upstream was reconciled before repairs. The operator's pre-existing root package-lock.json modification remains excluded. BUGS.md records complete-body source assessments and named consumers for all 261 IDs, including 11 pointer-only entries. Its separate campaign dispositions are 247 blocked, 5 currently verified, 8 superseded and 1 duplicate. Historical public states remain unchanged.
+
+- [x] Complete the source assessment of all 261 tickets and individually classify all 130 undeclared IDs (1,093 citation locations). Known collisions and continuations remain explicitly adjudicated.
+- [x] Repair reproduced defects in shared DSH resolution/setup, safe auth diagnostics, child ownership/cwd, procedure guidance/provenance, vault containment, memory persistence, fatal exits, browser launch/close evidence, OCR diagnostics, widgets and outcome history. Targeted regressions and isolated mutation checks accompany repairs; no voice threshold was guessed.
+- [x] Pass a fresh recursive suite: 7,336 tests, 7,336 passes, zero failures, skips, cancellations or todo, in 235.3 seconds. Use free ports and project-local long-form TEMP/TMP. Generator/registry checks pass with their explained 130-ID baseline.
+- [x] Exercise real development and disposable packaged Electron boots, the four-mode authentication matrix, real packaged DSH generation, successful isolated incomplete-install recovery and recovered-engine generation, and root-map/HUD browser paths. These bounded proofs do not certify every historical ticket's runtime claim.
+- [ ] Complete synchronized microphone/playback checks for 027/406, native Ctrl+Alt+X for 268, remaining handset/native-app/model oracles, and grounded speech before emission for 275. Per-ticket missing evidence is in BUGS.md. Hardware evidence and product/licensing decisions are separate gates.
+- [ ] Complete the existing release/licensing decisions, including 274 T3. BYO constraints and deferred WhatsApp scope remain unchanged; no release was performed.
+
+The initial recursive baseline was 7,239 tests, 7,223 passes and 16 failures: seven missing Git sh/PATH cases, seven invalid outside-vault fixtures, one invalid DSH TEMP fixture, and the watcher ignore/cleanup defect. Intermediate checkpoints were 7,295 green, 7,324 with two failures (unchanged file-size ceiling and a CPU-sensitive test clock), and 7,326 green. These remain historical measurements; the final 7,336 run includes the later popup, artwork and zero-budget repairs.
+
+The recovered DSH install took 44 minutes and passed its executed version check; actual recovered adapter generation took 68.3 seconds. The real packaged adapter produced the requested HTML in 23.1 seconds. A separate Forge mechanical verifier passed five stages, but manual inspection rejected an 82-byte placeholder JPEG and incomplete page coverage. Engine availability is demonstrated; unrestricted build quality is not. Raw evidence and isolated artifacts remain in ignored project-local .cache/campaign; tracked conclusions and limits live in BUGS.md.
+
+**NEXT ACTION:** satisfy the named live/operator/product gates rather than carrying historical verified labels forward. Source assessment and reproduced repairs are complete; full campaign verification remains open. Integration commit references are recorded in the campaign progress log below once committed.
+
+### Campaign progress log
+
+| Checkpoint | Evidence | Commit |
+|---|---|---|
+| Source assessment and repair integration | All 261 IDs assessed; 130 undeclared IDs classified; 7,336 tests passed; live limits retained in BUGS.md. | Integration commit recorded after creation. |
+
+### 2026-08-22 — **W6 is closed, and the thing it measured turned out to matter more than the swap itself: build quality was a PROMPT gap, not an engine gap.**
 
 **W6 COMPLETE, all 8 steps, pushed on `docs/w6-deepseek-harness-build-engine` (PR #18).**
 `512debd` the swap, `7e4f498` the deletion, `24b75c8` the close-out, `38300be` the two

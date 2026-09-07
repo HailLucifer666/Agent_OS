@@ -1,4 +1,5 @@
 'use strict';
+const { childRuntimeDir, childCommand } = require('../util/child-runtime');
 
 // piper-child.js — autostarts the local Piper TTS service (services/piper-server.py).
 // Sibling of edge-tts-child.js and deliberately the same shape.
@@ -121,14 +122,15 @@ function createPiperChild({ logger, config }) {
     }
 
     try {
-      child = spawn(pyBin, [PIPER_SCRIPT], {
+      child = spawn(childCommand(pyBin), [PIPER_SCRIPT], {
+        cwd: childRuntimeDir(),
         shell: false,
         stdio: 'ignore',
         windowsHide: true,
         env: {
           ...process.env,
           PIPER_PORT: port,
-          PIPER_MODEL_DIR: modelDir,
+          PIPER_MODEL_DIR: path.resolve(modelDir),
           PIPER_VOICE: (config && config.PIPER_VOICE) || process.env.PIPER_VOICE || 'en_US-hfc_female-medium',
         },
       });

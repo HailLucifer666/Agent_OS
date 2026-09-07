@@ -83,6 +83,28 @@ function lister(sequence) {
 }
 
 describe('BUG-409 — the close verifies, then escalates', () => {
+  test('unknown ownership cannot authorize CDP close', async () => {
+    let closes = 0;
+    const result = await bp.closeDebugBrowser({ profileDir: OURS,
+      sendClose: async () => { closes += 1; },
+      deps: { ...NOWAIT, processesForProfile: () => null },
+    });
+    assert.equal(closes, 0);
+    assert.equal(result.closed, false);
+    assert.equal(result.method, 'unknown');
+  });
+
+  test('an unreadable process table after kill is not proof of exit', async () => {
+    const result = await bp.closeDebugBrowser({ profileDir: OURS,
+      sendClose: async () => {},
+      deps: { ...NOWAIT, processesForProfile: lister([
+        [{ pid: 15048, name: 'chrome.exe' }], [{ pid: 15048, name: 'chrome.exe' }], null,
+      ]), killProcess: () => true },
+    });
+    assert.equal(result.closed, false);
+    assert.equal(result.method, 'unknown');
+  });
+
   // (d)
   test('the profile directory IS the authorisation, and it is strict', () => {
     assert.equal(bp.isMythosDebugProfile(OURS), true);
@@ -189,7 +211,7 @@ describe('BUG-409 — the close verifies, then escalates', () => {
     const r = await bp.closeDebugBrowser({
       profileDir: OURS,
       sendClose: async () => {},
-      deps: Object.assign({}, NOWAIT, { processesForProfile: () => null }),
+      deps: Object.assign({}, NOWAIT, { processesForProfile: lister([[{ pid: 7, name: 'brave.exe' }], null]) }),
     });
     assert.equal(r.closed, false, 'the CDP ack alone is the evidence measured to be wrong');
     assert.equal(r.method, 'unknown');
@@ -206,7 +228,7 @@ describe('BUG-409 — the close verifies, then escalates', () => {
     const r2 = await bp.closeDebugBrowser({
       profileDir: OURS,
       sendClose: null, // no live handle at all
-      deps: Object.assign({}, NOWAIT, { processesForProfile: () => null }),
+      deps: Object.assign({}, NOWAIT, { processesForProfile: lister([[{ pid: 7, name: 'brave.exe' }], null]) }),
     });
     assert.match(r2.reason, /no CDP session was available to ask/);
   });

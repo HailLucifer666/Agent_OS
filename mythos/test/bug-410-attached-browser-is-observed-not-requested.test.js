@@ -106,7 +106,7 @@ describe('BUG-410 — the attached browser is the one that ANSWERED', () => {
       return true;
     };
     __setLaunchDepsForTest({
-      spawn: (exe, args) => { spawned.push({ exe, args }); return { pid: 999, unref() {} }; },
+      spawn: (exe, args) => { spawned.push({ exe, args }); const child = new (require('node:events').EventEmitter)(); child.pid = 999; child.unref = () => {}; process.nextTick(() => child.emit('spawn')); return child; },
       resolveLaunchTarget: () => ({ name: chosen, exe: EXE[chosen], source: 'requested' }),
       identifyBrowserOnPort: () => portOwner,
     });
@@ -167,7 +167,7 @@ describe('BUG-410 — the attached browser is the one that ANSWERED', () => {
       return true;
     };
     __setLaunchDepsForTest({
-      spawn: (exe, args) => { spawned.push({ exe, args }); return { pid: 999, unref() {} }; },
+      spawn: (exe, args) => { spawned.push({ exe, args }); const child = new (require('node:events').EventEmitter)(); child.pid = 999; child.unref = () => {}; process.nextTick(() => child.emit('spawn')); return child; },
       // No name was requested; the OS default chose brave.
       resolveLaunchTarget: () => ({ name: 'brave', exe: EXE.brave, source: 'os-default' }),
       identifyBrowserOnPort: () => 'brave',

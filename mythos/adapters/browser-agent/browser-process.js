@@ -202,6 +202,10 @@ async function closeDebugBrowser(opts) {
   // BUG-409 through the fix for BUG-409. Look FIRST, so "nothing of ours is
   // running here" is its own answer.
   const before = list(profileDir, deps);
+  if (before === null) {
+    return { closed: false, method: 'unknown', survivors: [],
+      reason: 'could not establish ownership because the process list could not be read; no close was sent' };
+  }
   if (before !== null && !before.length) {
     return {
       closed: false,
@@ -250,7 +254,12 @@ async function closeDebugBrowser(opts) {
     if (kill(proc.pid, deps)) killed.push(proc);
   }
   await wait(interval);
-  const remaining = list(profileDir, deps) || [];
+  // A failed oracle is still unknown after escalation; it never proves exit.
+  const remaining = list(profileDir, deps);
+  if (remaining === null) {
+    return { closed: false, method: 'unknown', survivors,
+      reason: 'termination was attempted but the process list could not be read to verify exit' };
+  }
   if (!remaining.length) {
     return {
       closed: true,

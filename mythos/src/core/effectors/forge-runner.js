@@ -60,7 +60,15 @@ function createForgeRunner({ config, vault, engine }) {
     vault.ensureDir(vault.vaultPath(scratchRel));
     const scratchAbs = vault.vaultPath(scratchRel);
 
+    // The approved file plan must see the builder's output constraints. Without
+    // this, a website planner can require logo.png while the builder is told
+    // logos must be inline SVG/CSS, making the approved plan contradictory.
+    const packKind = kind === 'website' ? 'ui' : buildPack.classifyDeliverable(spec || '');
+    let skillBlock = '';
+    try { skillBlock = buildPack.packBlockFor(packKind); } catch (_) { /* same best-effort contract as runBuild */ }
+
     const prompt = [
+      skillBlock,
       'You are planning a build. Do NOT create, write, or modify any files — planning only.',
       kind === 'website'
         ? 'This is a WEBSITE. index.html MUST be the entry point and listed FIRST.'

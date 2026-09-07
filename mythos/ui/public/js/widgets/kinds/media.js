@@ -114,7 +114,8 @@ export function mountMedia(el) {
       // 5s poll doesn't flicker the image.
       if (m.art) {
         const key = `${m.title || ''}|${m.artist || ''}`;
-        if (artEl.dataset.trackKey !== key) {
+        // Error/offline polls clear the image; the same track must restore it on recovery.
+        if (artEl.dataset.trackKey !== key || !artEl.querySelector('img')) {
           artEl.dataset.trackKey = key;
           // xss-safe: static template, no interpolation
           artEl.innerHTML = `<img src="/api/media/art?ts=${Date.now()}" alt="" class="widget-art-img">`;

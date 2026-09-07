@@ -106,19 +106,25 @@ function createHabitPromoter(deps) {
       counts.set(key, next);
       if (next < promoteAfter) return null;
 
-      promoted.add(key);
       const fact = WATCHED[tool].fact(subject);
       // One topic per (tool, subject), NOT an append to a shared topic. The
       // eight fragmented "also likes:" bullets in the 2026-08-14 vault are what
       // appending produces; a stable topic id lets a re-observation update the
       // same entry instead of stacking another line.
       const topic = 'habit-' + tool + '-' + subject.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      semantic.write(topic, [fact], {
+      const saved = semantic.write(topic, [fact], {
         // Observed behaviour, not a stated preference. Below the 0.8 a direct
         // "remember that I like X" earns, above an inference from prose.
         confidence: 0.7,
         sources: ['habit-promoter:' + tool + ':' + next + 'x'],
       });
+      // BUG-249: mark promotion only after durable persistence. semantic.write
+      // reports a filesystem failure as {ref:null, degraded:true}; it does not
+      // normally throw. Marking first silenced every retry for this session,
+      // and ignoring its result announced a fact that was never stored.
+      // Keep the count so the next successful action can retry the same topic.
+      if (!saved || saved.degraded === true || typeof saved.ref !== 'string' || !saved.ref.trim()) return null;
+      promoted.add(key);
       logger.info('memory.habit-promoted', { tool: tool, subject: subject, count: next });
       return { topic: topic, fact: fact, count: next };
     } catch (_) {

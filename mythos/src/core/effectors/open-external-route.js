@@ -103,7 +103,7 @@ async function performExternalOpen(target, ctx) {
   const c = ctx || {};
   if (target.browser) {
     const openIn = c.openUrlInBrowser || browserTarget.openUrlInBrowser;
-    const res = openIn(target.browser, target.href, c.deps);
+    const res = await openIn(target.browser, target.href, c.deps);
     return {
       opened: Boolean(res && res.opened),
       reason: (res && res.reason) || null,

@@ -1146,12 +1146,11 @@ subscribe(['open-web'], (msg) => {
       ackRender(msg, { mounted: false, reason: 'that link was not an http(s) URL, so I did not open it' });
       return;
     }
-    // window.open returns null when the popup is blocked, which is a real and
-    // common failure that used to be reported to the operator as a success.
+    // BUG-003/028: noopener can return null even after creating a tab; no handle proves neither outcome.
     const win = window.open(targetUrl, '_blank', 'noopener');
     ackRender(msg, win
       ? { mounted: true, surface: 'new browser tab' }
-      : { mounted: false, reason: 'the browser blocked the new tab' });
+      : { mounted: false, unverified: true, reason: 'I cannot confirm whether the new tab opened because the browser did not expose a window handle' });
     return;
   }
   if (p.widgetType === 'youtube' || p.widgetType === 'web') {

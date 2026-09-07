@@ -1,4 +1,5 @@
 'use strict';
+const { childRuntimeDir, childCommand } = require('../../src/core/util/child-runtime');
 
 // adapters/cua-driver/index.js — BUG-026 (4th attempt, part B): lifecycle wrapper for the external
 // `cua-driver` binary (trycua/cua project — native Rust CLI, MIT licensed, NOT the
@@ -318,7 +319,7 @@ function spawnChild() {
   try {
     proc = spawnImpl
       ? spawnImpl(resolveBinary(), ['mcp'])
-      : spawn(resolveBinary(), ['mcp'], { shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      : spawn(childCommand(resolveBinary()), ['mcp'], { cwd: childRuntimeDir(), shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   } catch (err) {
     state = 'OFFLINE';
     hint = `Failed to spawn ${BINARY_NAME}: ${err.message}`;

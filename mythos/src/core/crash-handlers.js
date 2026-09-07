@@ -71,6 +71,9 @@ function installCrashHandlers(deps) {
   };
 
   function die(event, reason) {
+    // A drained event loop can exit before the unref'd flush timer runs.
+    // Preserve failure on that natural exit without truncating the log write.
+    proc.exitCode = 1;
     // The logging is wrapped because the failure mode of a crash handler is that
     // it crashes: if the log destination is gone too, the process must still end
     // deliberately rather than throw from inside the handler.

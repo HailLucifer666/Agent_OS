@@ -68,7 +68,7 @@ const DEFAULT_ALLOWLIST = [
   // log_incident. Allowlisting the write without them is exactly the
   // read-tool-missing-next-to-its-act-tool shape this list has been bitten by
   // before — and it is what made Incidents/ a place reports went to die.
-  'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory',
+  'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory','suggest_procedures',
   // Notes (2026-08-14). All three ship together, act tool WITH both its read
   // tools, per this list's own rule: a withheld read tool next to an act tool
   // does not make the model decline, it makes it substitute the nearest
@@ -468,7 +468,7 @@ function parseParam(name, spec) {
   return { schema, optional };
 }
 
-function toDeclaration(entry) {
+function toDeclaration(entry, procedureGuidance = false) {
   const properties = {};
   const required = [];
   const params = entry.params || {};
@@ -480,6 +480,9 @@ function toDeclaration(entry) {
   const decl = {
     name: entry.name,
     description: String(entry.description || entry.name).slice(0, 1024),
+  };
+  if (procedureGuidance && entry.name !== 'suggest_procedures') properties.skillRef = {
+    type: 'string', description: 'Optional: skillRef returned by suggest_procedures, only when this action follows one of its steps. Never authorization; resolve current targets.'
   };
   if (Object.keys(properties).length) {
     decl.parameters = { type: 'object', properties };
@@ -528,7 +531,7 @@ function buildFunctionDeclarations(hub, opts) {
       const cap = checkToolCapability(entry.name, snapshot);
       if (!cap.ok) { unavailable.push({ name: entry.name, rule: cap.rule, reason: cap.reason }); continue; }
     }
-    declared.push(toDeclaration(entry));
+    declared.push(toDeclaration(entry, allow.has('suggest_procedures') && catalog.some(e => e.name === 'suggest_procedures')));
   }
   // AD-5 in spirit: a silent cap reads as full coverage. Say what was withheld.
   //

@@ -13,23 +13,29 @@ const path = require('path');
 const os = require('os');
 const { fakeBus } = require('./helpers');
 const { createEffectorHub } = require('../src/core/effectors/hub');
-const { registerFromComputer } = require('../src/core/effectors/from-computer');
+const fixtureComputerModule = require('../test-fixtures/fixture-computer-module');
 const { tierOf, TIER_TABLE } = require('../src/core/leash/tiers');
 
 describe('folder read-write tools: write_file / create_folder / delete_file', () => {
-  let hub, scratchDir;
+  let hub, scratchDir, outsideDir, savedAllowedDirs;
 
   before(() => {
     const bus = fakeBus();
     hub = createEffectorHub({ bus, config: {} });
-    registerFromComputer(hub, {});
     // Inside the project root, which allowedRoots() always includes — a
     // dedicated scratch subfolder so nothing here touches real project files.
-    scratchDir = path.resolve(__dirname, '..', '.tmp-folder-write-test');
+    scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-folder-write-'));
+    outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-folder-outside-'));
+    savedAllowedDirs = process.env.VOICE_ALLOWED_DIRS;
+    process.env.VOICE_ALLOWED_DIRS = scratchDir;
+    fixtureComputerModule(scratchDir).registerFromComputer(hub, {});
   });
 
   after(() => {
     fs.rmSync(scratchDir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+    if (savedAllowedDirs === undefined) delete process.env.VOICE_ALLOWED_DIRS;
+    else process.env.VOICE_ALLOWED_DIRS = savedAllowedDirs;
   });
 
   it('write_file/create_folder/delete_file are registered with danger:true and tier 3', () => {
@@ -88,13 +94,15 @@ describe('folder read-write tools: write_file / create_folder / delete_file', ()
   });
 
   it('write_file/create_folder/delete_file all fail outside the allowed roots', async () => {
-    const outside = 'C:\\Windows\\System32\\mythos-write-test.txt';
+    const outside = path.join(outsideDir, 'protected.txt');
+    fs.writeFileSync(outside, 'sentinel');
     const w = await hub.get('write_file').invoke({ path: outside, content: 'x' });
     assert.equal(w.ok, false);
-    const c = await hub.get('create_folder').invoke({ path: 'C:\\Windows\\System32\\mythos-folder-test' });
+    const c = await hub.get('create_folder').invoke({ path: path.join(outsideDir, 'new-folder') });
     assert.equal(c.ok, false);
-    const d = await hub.get('delete_file').invoke({ path: 'C:\\Windows\\System32\\drivers\\etc\\hosts' });
+    const d = await hub.get('delete_file').invoke({ path: outside });
     assert.equal(d.ok, false);
+    assert.equal(fs.readFileSync(outside, 'utf8'), 'sentinel');
   });
 });
 
@@ -112,7 +120,6 @@ describe('REMEDIATION: sandbox escape via symlinked directory', () => {
   before(() => {
     const bus = fakeBus();
     hub = createEffectorHub({ bus, config: {} });
-    registerFromComputer(hub, {});
 
     savedAllowedDirs = process.env.VOICE_ALLOWED_DIRS;
     sandboxRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-sandbox-root-'));
@@ -120,6 +127,7 @@ describe('REMEDIATION: sandbox escape via symlinked directory', () => {
     // Override to a deterministic, controlled root — independent of whatever
     // %USERPROFILE% happens to contain on this machine.
     process.env.VOICE_ALLOWED_DIRS = sandboxRoot;
+    fixtureComputerModule(sandboxRoot).registerFromComputer(hub, {});
 
     // A junction (directory symlink, no elevation required on Windows) placed
     // INSIDE the allowed root, pointing OUTSIDE it.
@@ -127,7 +135,8 @@ describe('REMEDIATION: sandbox escape via symlinked directory', () => {
   });
 
   after(() => {
-    process.env.VOICE_ALLOWED_DIRS = savedAllowedDirs;
+    if (savedAllowedDirs === undefined) delete process.env.VOICE_ALLOWED_DIRS;
+    else process.env.VOICE_ALLOWED_DIRS = savedAllowedDirs;
     fs.rmSync(sandboxRoot, { recursive: true, force: true });
     fs.rmSync(outsideDir, { recursive: true, force: true });
   });

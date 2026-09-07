@@ -79,6 +79,21 @@ describe('BUG-411 — look at the port before spawning onto it', () => {
   });
 
   // The state that produced the bug: adapter OFFLINE, browser very much alive.
+  test('a missing executable returns its spawn error before CDP polling', async () => {
+    let connects = 0;
+    browserAgent.getStatus = () => ({ state: 'OFFLINE' });
+    browserAgent.ensureOnline = async () => { connects += 1; return false; };
+    const missing = path.join(process.env.LOCALAPPDATA, 'missing-browser.exe');
+    __setLaunchDepsForTest({
+      resolveLaunchTarget: () => ({ name: 'chrome', exe: missing, source: 'requested' }),
+      spawn: require('node:child_process').spawn,
+    });
+    const result = await browser_launch_debug({ browser: 'chrome' });
+    assert.equal(result.ok, false);
+    assert.match(result.result, /Failed to launch browser:.*ENOENT/);
+    assert.equal(connects, 1, 'only the pre-launch adoption probe runs');
+  });
+
   function arrangeOfflineButBrowserAlive(portOwner) {
     let online = false;
     browserAgent.getStatus = () => (online
@@ -86,7 +101,7 @@ describe('BUG-411 — look at the port before spawning onto it', () => {
       : { state: 'OFFLINE', mode: null, pageCount: 0 });
     browserAgent.ensureOnline = async () => { online = true; return true; };
     __setLaunchDepsForTest({
-      spawn: (exe, args) => { spawned.push({ exe, args }); return { pid: 1, unref() {} }; },
+      spawn: (exe, args) => { spawned.push({ exe, args }); const child = new (require('node:events').EventEmitter)(); child.pid = 1; child.unref = () => {}; process.nextTick(() => child.emit('spawn')); return child; },
       resolveLaunchTarget: () => ({ name: 'chrome', exe: EXE.chrome, source: 'search-order' }),
       identifyBrowserOnPort: () => portOwner,
     });
@@ -160,7 +175,7 @@ describe('BUG-411 — look at the port before spawning onto it', () => {
       return true;
     };
     __setLaunchDepsForTest({
-      spawn: (exe, args) => { spawned.push({ exe, args }); return { pid: 1, unref() {} }; },
+      spawn: (exe, args) => { spawned.push({ exe, args }); const child = new (require('node:events').EventEmitter)(); child.pid = 1; child.unref = () => {}; process.nextTick(() => child.emit('spawn')); return child; },
       resolveLaunchTarget: () => ({ name: 'chrome', exe: EXE.chrome, source: 'os-default' }),
       identifyBrowserOnPort: () => 'chrome',
     });

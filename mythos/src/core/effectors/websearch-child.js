@@ -1,4 +1,5 @@
 'use strict';
+const { childRuntimeDir } = require('../util/child-runtime');
 
 // websearch-child.js — autostarts the adopted local search daemon (open-webSearch,
 // Apache-2.0). Sibling of piper-child.js/edge-tts-child.js and deliberately the
@@ -71,7 +72,7 @@ function entryCandidates() {
 function resolveEntry() {
   const override = String(process.env.WEB_SEARCH_LOCAL_ENTRY || '').trim();
   if (override) {
-    try { if (fs.statSync(override).isFile()) return override; } catch (_) { /* reported by the caller */ }
+    try { if (fs.statSync(override).isFile()) return path.resolve(override); } catch (_) { /* reported by the caller */ }
     return { missingOverride: override };
   }
   for (const candidate of entryCandidates()) {
@@ -132,6 +133,7 @@ function createWebSearchChild({ logger, config }) {
 
     try {
       child = spawn(process.execPath, args, {
+        cwd: childRuntimeDir(),
         shell: false,
         stdio: 'ignore',
         windowsHide: true,

@@ -1,14 +1,13 @@
 'use strict';
 
-// effectors/from-browser.js — CA of app/lib/voice/tools-browser.js (10 tools). Function
-// bodies verbatim; only re-pointing is `./browser-agent` -> `adapters/browser-agent`
-// (untouched, re-pathed).
+// Browser effectors use the shared browser-agent adapter.
 
 const browserAgent = require('../../../adapters/browser-agent');
 const { effectorFromTool } = require('./adapter');
 const evidenceModule = require('./evidence');
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
 const { spawn } = require('child_process');
+const { childRuntimeDir, childCommand, waitForSpawn } = require('../util/child-runtime');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -1008,7 +1007,8 @@ async function browser_launch_debug(args) {
   try { fs.mkdirSync(profileDir, { recursive: true }); } catch (err) { return fail(`Could not create debug profile directory: ${err.message}`); }
 
   try {
-    const child = launchDep('spawn', spawn)(exe, buildBrowserLaunchArgs(profileDir, extensionDirs), { detached: true, stdio: 'ignore' });
+    const child = launchDep('spawn', spawn)(childCommand(exe), buildBrowserLaunchArgs(profileDir, extensionDirs), { detached: true, stdio: 'ignore', cwd: childRuntimeDir() });
+    await waitForSpawn(child); // Acceptance precedes PID tracking and CDP polling.
     child.unref();
     // BUG-029 (Phase 3 hardening): this detached spawn is the orphan risk.
     // Record the PID the same way launchLocal() does, so Start Agent OS.bat's

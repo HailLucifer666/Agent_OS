@@ -30,13 +30,14 @@
 //
 // Run: cd mythos && node --test test/bug-359-whatsapp-window-settle.test.js
 
-const { describe, it } = require('node:test');
+const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 
 const FROM_PC_PATH = require.resolve('../src/core/effectors/from-pc');
 const WHATSAPP_PATH = require.resolve('../src/core/effectors/from-whatsapp');
 
 const NO_PID = { ok: true, unverified: true, reason: 'launched, but no windowed process matching the name could be confirmed', result: { launched: true } };
+let clock;
 
 function load(listWindowsResponses, ctxExtra) {
   const calls = [];
@@ -45,6 +46,7 @@ function load(listWindowsResponses, ctxExtra) {
   const fakePc = {
     launch_app: async () => { calls.push({ fn: 'launch_app' }); return NO_PID; },
     list_windows: async () => {
+      clock.tick(5);
       calls.push({ fn: 'list_windows' });
       const i = probe++;
       if (!queue) return { ok: true, result: { windows: [], total: 0 } };
@@ -84,6 +86,12 @@ const WA_WINDOW = (pid) => ({
 });
 
 describe('BUG-359 — the window gets a bounded settle after a cold deep-link launch', () => {
+  beforeEach((t) => {
+    // Advance the deadline with probe time, not unrelated full-suite load.
+    // Real sleep still runs; a 40ms CPU scheduling pause cannot erase probe 3.
+    clock = t.mock.timers;
+    clock.enable({ apis: ['Date'], now: 1000 });
+  });
   it('a window that appears on a later probe completes the send instead of refusing', async () => {
     // Cold-start shape measured live: two probes too early, then the window.
     const h = load([

@@ -103,6 +103,59 @@ describe('F9 — what must NOT become a fact', () => {
       assert.doesNotThrow(() => promoter.observe('spotify_play', { query: 'Radiohead' }, true));
     }
   });
+
+  it('retries failed persistence and announces only a durable promotion', () => {
+    // BUG-249: semantic.write normally reports failure as degraded:true, not
+    // an exception. Cover that production contract and thrown failures too.
+    const failureResults = [() => { throw new Error('temporary vault failure'); },
+      () => ({ ref: null, degraded: true }), () => null, () => undefined,
+      () => ({ ref: null, degraded: false }), () => ({ ref: 'stale', degraded: true })];
+    for (const fail of failureResults) {
+      let writes = 0;
+      const events = [];
+      const { promoter } = harness({
+        semantic: { write() { writes++; return writes === 1 ? fail() : { ref: 'saved', degraded: false }; } },
+        logger: { info: (...args) => events.push(args) },
+      });
+      for (let i = 0; i < 2; i++) promoter.observe('spotify_play', { query: 'Radiohead' }, true);
+      assert.equal(promoter.observe('spotify_play', { query: 'Radiohead' }, true), null);
+      assert.equal(writes, 1);
+      assert.equal(events.length, 0, 'failed persistence must not announce a durable fact');
+      assert.ok(promoter.observe('spotify_play', { query: 'Radiohead' }, true));
+      assert.equal(writes, 2, 'failure must not poison the promoted set');
+      assert.equal(events.length, 1);
+      assert.equal(events[0][0], 'memory.habit-promoted');
+      assert.equal(promoter.observe('spotify_play', { query: 'Radiohead' }, true), null);
+      assert.equal(writes, 2, 'a durable success must still deduplicate later observations');
+    }
+  });
+
+  it('honors the real semantic store degraded-return contract before retrying', () => {
+    const { createSemanticStore } = require('../src/core/memory/semantic');
+    const stored = new Map();
+    const anomalies = [];
+    const promotions = [];
+    let unavailable = true;
+    const semantic = createSemanticStore({
+      fs: { writeText(file, text) {
+        if (unavailable) throw new Error('fixture filesystem temporarily unavailable');
+        stored.set(file, text);
+      } },
+      config: {}, bus: { emit: (...args) => anomalies.push(args) }, logger: {},
+    });
+    const promoter = createHabitPromoter({ semantic, promoteAfter: 1,
+      logger: { info: (...args) => promotions.push(args) } });
+    assert.equal(promoter.observe('spotify_play', { query: 'Radiohead' }, true), null);
+    assert.equal(stored.size, 0);
+    assert.equal(promotions.length, 0);
+    assert.equal(anomalies[0][1].kind, 'memory-write-failed');
+    unavailable = false;
+    assert.ok(promoter.observe('spotify_play', { query: 'Radiohead' }, true));
+    assert.match([...stored.values()][0], /radiohead/i);
+    assert.equal(promotions.length, 1);
+    promoter.observe('spotify_play', { query: 'Radiohead' }, true);
+    assert.equal(promotions.length, 1);
+  });
 });
 
 describe('F9 — the watch list is derived, not imagined', () => {

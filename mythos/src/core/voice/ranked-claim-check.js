@@ -177,14 +177,19 @@ function detectUnsourcedRankedEntities(assistantText, actionsThisTurn, recentAct
   // name and is already the external-fact category's case — firing here too
   // would report one defect twice.
   //
-  // `truncated` entries are excluded and cannot be substituted for: absence from
-  // a digest that was cut short is not absence from the result, and that is the
-  // only route by which this could accuse the model of inventing a name it read.
+  // BUG-275 campaign: absence requires the WHOLE successful evidence window.
+  // A mixed complete/truncated window reproduced a false accusation: the name
+  // existed beyond the digest cap, but filtering that row proved absence from
+  // unrelated complete headers. Refuse the whole absence check if a successful
+  // lookup has incomplete evidence; a neighbouring complete row cannot repair
+  // its missing tail. Failed/unverified and non-evidence tools remain outside
+  // this proof domain. This only suppresses uncertain post-turn notices; it
+  // neither proves ranking context (H1) nor prevents already-streamed speech.
   const usable = actions.filter((a) => EVIDENCE_TOOLS.indexOf(a.tool) !== -1
-    && a.ok === true && a.unverified !== true
-    && a.evidence && a.evidence.truncated !== true
-    && typeof a.evidence.text === 'string' && a.evidence.text.length > 0);
-  if (!usable.length) return [];
+    && a.ok === true && a.unverified !== true);
+  if (!usable.length || usable.some((a) => !a.evidence
+    || a.evidence.truncated === true
+    || typeof a.evidence.text !== 'string' || a.evidence.text.length === 0)) return [];
 
   const digest = usable.map((a) => a.evidence.text).join('|');
 

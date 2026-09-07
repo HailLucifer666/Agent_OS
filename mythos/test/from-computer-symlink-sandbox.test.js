@@ -19,7 +19,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { resolveSandboxed, isInsideAllowedRoots } = require('../src/core/effectors/from-computer');
+const fixtureComputerModule = require('../test-fixtures/fixture-computer-module');
+let resolveSandboxed, isInsideAllowedRoots;
 
 describe('resolveSandboxed: symlink/junction escape from an allowed root', () => {
   let sandboxRoot, outsideDir, savedAllowedDirs;
@@ -32,13 +33,15 @@ describe('resolveSandboxed: symlink/junction escape from an allowed root', () =>
     sandboxRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-sbx-root-')));
     outsideDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-sbx-outside-')));
     process.env.VOICE_ALLOWED_DIRS = sandboxRoot;
+    ({ resolveSandboxed, isInsideAllowedRoots } = fixtureComputerModule(sandboxRoot));
     fs.symlinkSync(outsideDir, path.join(sandboxRoot, 'escape-link'), 'junction');
     fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'exfiltrate me', 'utf8');
     fs.writeFileSync(path.join(sandboxRoot, 'legit.txt'), 'fine', 'utf8');
   });
 
   after(() => {
-    process.env.VOICE_ALLOWED_DIRS = savedAllowedDirs;
+    if (savedAllowedDirs === undefined) delete process.env.VOICE_ALLOWED_DIRS;
+    else process.env.VOICE_ALLOWED_DIRS = savedAllowedDirs;
     fs.rmSync(sandboxRoot, { recursive: true, force: true });
     fs.rmSync(outsideDir, { recursive: true, force: true });
   });
@@ -91,11 +94,13 @@ describe('resolveSandboxed: allowed root given in non-canonical form', () => {
     linkRoot = path.join(path.dirname(realRoot), `${path.basename(realRoot)}-link`);
     fs.symlinkSync(realRoot, linkRoot, 'junction');
     process.env.VOICE_ALLOWED_DIRS = linkRoot;
+    ({ resolveSandboxed, isInsideAllowedRoots } = fixtureComputerModule(realRoot));
     fs.writeFileSync(path.join(realRoot, 'inside.txt'), 'ok', 'utf8');
   });
 
   after(() => {
-    process.env.VOICE_ALLOWED_DIRS = savedAllowedDirs;
+    if (savedAllowedDirs === undefined) delete process.env.VOICE_ALLOWED_DIRS;
+    else process.env.VOICE_ALLOWED_DIRS = savedAllowedDirs;
     try { fs.rmSync(linkRoot, { recursive: true, force: true }); } catch { /* junction already gone */ }
     fs.rmSync(realRoot, { recursive: true, force: true });
   });

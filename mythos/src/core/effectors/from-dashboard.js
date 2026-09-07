@@ -316,13 +316,13 @@ function buildTools(ctx) {
     if (result) result.renderDispatched = true;
     var ack = null;
     try { ack = await widgetRenderer(result); } catch (_) { ack = null; }
-    // A timeout resolves null, and that is NOT the same as an explicit "did not
-    // mount": silence means the HUD never answered (no client attached, or it is
-    // wedged), which is unproven rather than proven-failed. Reporting failure there
-    // would be the mirror-image lie of the one this fixes.
+    // Silence is unknown, not failed. Explicit noopener uncertainty follows the same rule.
     if (!ack) {
       return evidence.unverified(ok(result, uiActions),
         'the dashboard did not answer, so I cannot confirm it rendered');
+    }
+    if (ack.mounted === false && ack.unverified === true && typeof ack.reason === 'string' && ack.reason.trim()) {
+      return evidence.unverified(ok(result, uiActions), ack.reason);
     }
     if (!ack.mounted) {
       return fail('the dashboard did not render this: ' + String(ack.reason || 'no reason given')
@@ -423,7 +423,7 @@ function buildTools(ctx) {
         for (var i = 0; i < ytRes.result.results.length; i++) {
           var r = ytRes.result.results[i];
           var vid = youtubeVideoId(r.url);   // BUG-381: five URL shapes were unreadable
-          if (vid) candidates.push({ id: vid, title: r.title || (title || q) }, OPEN_WEB_CODES.UNPLAYABLE);
+          if (vid) candidates.push({ id: vid, title: r.title || (title || q) });
         }
         if (!candidates.length) return fail('Found results but could not extract a YouTube video ID — the hits were not watch pages. Try a more specific title, or use spotify_play if the operator wanted to listen rather than watch.', OPEN_WEB_CODES.UNPLAYABLE);
 

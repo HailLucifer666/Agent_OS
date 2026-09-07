@@ -78,6 +78,29 @@ export function applyS2sResult(rows, cfg) {
   else row.value = cfg.enabled ? 'enabled' : 'disabled';
   return rows;
 }
+
+// BUG-401: app.js mounts widgets before createComposeBar creates its pill.
+// Observing only an already-existing pill misses normal boot permanently.
+// Observe the stable compose container so late creation, replacement and removal
+// use the same source of truth. No pill means unknown, never invented idle.
+// Verified with the real compose module mounted after this widget in Chromium.
+export function observeVoiceState(root, onState) {
+  function read() {
+    const pill = root && root.querySelector('[data-voice-state]');
+    onState(pill ? pill.dataset.voiceState : null);
+  }
+  read();
+  if (!root) return () => {};
+  const observer = new MutationObserver(read);
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['data-voice-state'],
+  });
+  return () => observer.disconnect();
+}
+
 export function mountVoice(el, ctx) {
   const bag = cleanupBag();
 
@@ -117,18 +140,12 @@ export function mountVoice(el, ctx) {
     stateEl.className = `widget-value-text mono ${STATE_CLASS[s]}`;
   }
 
-  // The pill carries the live state; compose-bar mounts in the same boot pass
-  // as the widgets, so it may not exist yet on first paint.
-  const pill = document.querySelector('[data-voice-state]');
-  if (pill) {
-    paintState(pill.dataset.voiceState);
-    const observer = new MutationObserver(() => paintState(pill.dataset.voiceState));
-    observer.observe(pill, { attributes: true, attributeFilter: ['data-voice-state'] });
-    bag.add(() => observer.disconnect());
-  } else {
-    // No pill means the compose bar has not mounted. Do not invent a state.
-    stateEl.textContent = UNAVAILABLE;
-  }
+  bag.add(observeVoiceState(document.getElementById('compose-bar'), (state) => {
+    if (state === null) {
+      stateEl.textContent = UNAVAILABLE;
+      stateEl.className = 'widget-value-text mono text-faint';
+    } else paintState(state);
+  }));
 
   // BUG-175: watch the wake word's own dataset attributes on <html>, the same
   // observe-don't-rebroadcast pattern this widget already uses for the voice

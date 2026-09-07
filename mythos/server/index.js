@@ -26,6 +26,7 @@ const { buildBriefingFacts } = require('../src/core/conversation/briefing');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
+const { reasonText } = require('../src/core/util/reason-text');
 // A2: reuse credential-scanner's curated pattern list (single source of truth)
 // to scrub secret-shaped values out of the client-bound log copy.
 const { _PATTERNS: LOG_SECRET_PATTERNS } = require('../src/core/effectors/credential-scanner');
@@ -3924,15 +3925,14 @@ function createServer(deps) {
         logger.info('voice.capture-suspend', fields);
       }
       else if (msg.type === 'open-web-ack') {
-        // BUG-273 B3. `mounted` is the HUD reporting on its own DOM. Anything else
-        // — an older client, a malformed frame — is treated as NOT mounted rather
-        // than as a pass: a missing field must never read as a confirmation.
+        // Missing/malformed mounted never confirms; explicit unknown preserves noopener's absent handle.
         const w = pendingWidgetRender.get(msg.reqId);
         if (w) {
           clearTimeout(w.timer);
           pendingWidgetRender.delete(msg.reqId);
           w.resolve({
             mounted: msg.mounted === true,
+            unverified: msg.mounted === false && msg.unverified === true && typeof msg.reason === 'string' && !!msg.reason.trim(),
             surface: typeof msg.surface === 'string' ? msg.surface.slice(0, 60) : null,
             reason: typeof msg.reason === 'string' ? msg.reason.slice(0, 200) : null,
           });
@@ -4315,24 +4315,22 @@ function createServer(deps) {
       // must surface as an honest ocr-result, never crash the server.
       if (msg && msg.channel === 'mythos:ocr-grab') {
         (async () => {
-          // BUG-268 instrumentation, boundary 2 of 3 (see electron/main.js's
-          // OCR-grab callback for the full read-in-order guide). Entry and
-          // outcome are logged separately on purpose: an entry with no outcome
-          // means screen_read_text hung rather than failed, which the previous
-          // single-log shape could not distinguish. ok:true with text.length 0
-          // localises it to GDI capture or the WinRT OCR call.
+          // BUG-268 boundary 2 (Electron callback owns boundary 1): entry without
+          // outcome means dispatch hung; ok:true with empty text implicates capture/OCR.
           const startedAt = Date.now();
-          try { log.info('ocr.hotkey.received', {}); } catch { /* never break the handler to log */ }
+          try { logger.info('ocr.hotkey.received', {}); } catch { /* never break the handler to log */ }
           try {
             const r = await dispatchAction({ tool: 'screen_read_text', args: {} }, { tier: 0, channel: 'hotkey' });
             const ok = Boolean(r && r.ok);
+            // fail(reason) carries a string; preserve it identically in telemetry and HUD.
+            const error = ok ? undefined : (reasonText(r && r.result) || reasonText(r && r.error) || 'OCR failed');
             try {
-              log.info('ocr.hotkey.dispatched', {
+              logger.info('ocr.hotkey.dispatched', {
                 ok: ok,
                 textLength: ok ? String((r.result && r.result.text) || '').length : 0,
                 unverified: Boolean(r && r.unverified),
                 ms: Date.now() - startedAt,
-                error: ok ? undefined : String((r && r.result && r.result.error) || (r && r.error) || 'OCR failed'),
+                error: error,
               });
             } catch { /* never break the handler to log */ }
             broadcastAll({
@@ -4340,7 +4338,7 @@ function createServer(deps) {
               payload: {
                 ok: ok,
                 text: ok ? String((r.result && r.result.text) || '') : '',
-                error: ok ? undefined : String((r && r.result && r.result.error) || (r && r.error) || 'OCR failed'),
+                error: error,
               },
             });
           } catch (err) {
@@ -4540,9 +4538,9 @@ function createServer(deps) {
     });
   }
 
-  // audit.decision — exact string P5 emits alongside auditWriter.write() (Ambiguity #3).
+  // P5 audit.decision: preserve persisted identity for snapshot/live overlap (BUG-019).
   bus.subscribe('audit.decision', (e) => {
-    broadcastAll({ type: 'audit', payload: { tool: e.payload.tool, tier: e.payload.tier, decision: e.payload.decision } });
+    broadcastAll({ type: 'audit', payload: { tool: e.payload.tool, tier: e.payload.tier, decision: e.payload.decision, id: e.payload.id, ts: e.payload.ts } });
   });
 
   // Engagement layer WS relay (Phase 5a wiring): ui/public/js/views/engagements.js

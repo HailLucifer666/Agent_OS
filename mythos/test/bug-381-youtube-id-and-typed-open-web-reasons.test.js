@@ -69,6 +69,21 @@ describe('BUG-381 — the id extractor reads every shape YouTube serves', () => 
 });
 
 describe('BUG-381 — and it refuses to invent an id', () => {
+  it('uses the parsed host and complete video identifier, never URL substrings', () => {
+    for (const url of [
+      `https://youtube.com.evil.example/watch?v=${REAL_ID}`,
+      `https://example.com/?next=https://youtube.com/watch?v=${REAL_ID}`,
+      `https://youtube.com@evil.example/watch?v=${REAL_ID}`,
+      `https://youtu.be/${REAL_ID}extra`,
+      `https://youtube.com/watch?v=${REAL_ID}extra`,
+      `https://youtube.com/results?v=${REAL_ID}`,
+      `https://youtube.com/embed/${REAL_ID}/extra`,
+      `https://youtube.com/watch?v=${REAL_ID}&v=aaaaaaaaaaa`,
+      `javascript://youtube.com/watch?v=${REAL_ID}`,
+    ]) assert.equal(youtubeVideoId(url), null, url);
+    assert.equal(youtubeVideoId(`https://WWW.YOUTUBE.COM/watch?app=desktop&v=${REAL_ID}`), REAL_ID);
+  });
+
   it('a non-YouTube URL is null, even when it contains an 11-char path segment', () => {
     // The hostile case for a widened parser: /live/ and /v/ are ordinary paths on
     // other sites. Matching them would hand the media window a video id that

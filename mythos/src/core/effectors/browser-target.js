@@ -40,6 +40,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { childRuntimeDir, childCommand, waitForSpawn } = require('../util/child-runtime');
 
 // BUG (on-demand launcher, Phase 6a): mirrors scripts/setup-chrome-debug.ps1's
 // exact search order and launch flags so this tool and the manual script agree
@@ -389,7 +390,7 @@ function externalUrl(raw) {
 // passed as a single positional argv element with no shell, and is http/https
 // by construction, so neither the shell nor Chromium's own flag parser can
 // reinterpret it.
-function openUrlInBrowser(name, url, deps) {
+async function openUrlInBrowser(name, url, deps) {
   const spawnFn = (deps && deps.spawn) || require('child_process').spawn;
   const resolve = (deps && deps.findBrowserExecutable) || findBrowserExecutable;
 
@@ -405,7 +406,10 @@ function openUrlInBrowser(name, url, deps) {
     return { opened: false, reason: `no ${want} installation found — install it, or drop the browser name to use your default browser` };
   }
   try {
-    const child = spawnFn(exe, [checked.href], { detached: true, stdio: 'ignore' });
+    const child = spawnFn(childCommand(exe), [checked.href], { detached: true, stdio: 'ignore', cwd: childRuntimeDir() });
+    // spawn() returns before Windows accepts the executable. ENOENT/EACCES
+    // arrive on `error`, outside this try/catch unless we await the handshake.
+    await waitForSpawn(child);
     if (child && typeof child.unref === 'function') child.unref();
     // DELIBERATELY NOT recordLaunchedPid(). browser_launch_debug records its
     // pid so `Start Agent OS.bat`'s cleanup step can kill an orphaned DEBUG

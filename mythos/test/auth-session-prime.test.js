@@ -130,7 +130,7 @@ function fakeLog() {
 // Layer 1 — real behavior against fakes
 // ---------------------------------------------------------------------------
 describe('primeAuthSession — real behavior (extracted from electron/main.js)', () => {
-  it('no token: does nothing at all — fetch is never called, win is never touched', async () => {
+  it('no token: records a skipped prime without fetching or touching the window', async () => {
     const fetch = fakeFetch();
     const log = fakeLog();
     const win = fakeWin();
@@ -138,7 +138,7 @@ describe('primeAuthSession — real behavior (extracted from electron/main.js)',
     await ctx.primeAuthSession(win, '', 4478);
     assert.equal(fetch.requests.length, 0, 'a default loopback install must never POST');
     assert.equal(win.calls.length, 0, 'a default loopback install must never touch the window session');
-    assert.equal(log.lines.length, 0, 'a no-token boot must be completely silent — untouched');
+    assert.deepEqual(log.lines.map((line) => line[1].outcome), ['entered', 'skipped']);
   });
 
   it('undefined token: same as empty — still a strict no-op', async () => {
@@ -236,6 +236,40 @@ describe('primeAuthSession — real behavior (extracted from electron/main.js)',
     const ctx = loadIntoContext({ fetch, log: fakeLog() });
     await ctx.primeAuthSession(win, TOKEN, 4478);
     assert.ok(!fetch.requests[0].url.includes(TOKEN), 'the URL handed to fetch must never carry the token');
+  });
+});
+
+describe('BUG-403 safe priming outcomes', () => {
+  it('records each successful stage without exposing credentials', async () => {
+    const log = fakeLog();
+    const ctx = loadIntoContext({ fetch: fakeFetch({ setCookie: 'mythos_token=private-cookie;' }), log });
+    await ctx.primeAuthSession(fakeWin(), 'private-secret', 4478);
+    assert.deepEqual(log.lines.map((line) => line[1].outcome), ['entered', 'exchanged', 'cookie-installed']);
+    assert.doesNotMatch(JSON.stringify(log.lines), /private-secret|private-cookie/);
+  });
+  it('cookie installation failure is nonfatal and does not echo its error payload', async () => {
+    const log = fakeLog();
+    const win = fakeWin();
+    win.webContents.session.cookies.set = async () => { throw new Error('private-cookie private-secret'); };
+    const ctx = loadIntoContext({ fetch: fakeFetch({ setCookie: 'mythos_token=private-cookie;' }), log });
+    await assert.doesNotReject(ctx.primeAuthSession(win, 'private-secret', 4478));
+    assert.equal(log.lines.at(-1)[1].stage, 'cookie-install');
+    assert.equal(log.lines.at(-1)[1].outcome, 'failed');
+    assert.doesNotMatch(JSON.stringify(log.lines), /private-secret|private-cookie/);
+  });
+  it('request failures cannot leak reflected secrets through exception messages', async () => {
+    const log = fakeLog();
+    const ctx = loadIntoContext({ fetch: fakeFetch({ throws: new Error('private-secret') }), log });
+    await ctx.primeAuthSession(fakeWin(), 'private-secret', 4478);
+    assert.equal(log.lines.at(-1)[1].stage, 'request');
+    assert.doesNotMatch(JSON.stringify(log.lines), /private-secret/);
+  });
+  it('combined PIN rejection remains a failed exchange, never a cookie installation', async () => {
+    const log = fakeLog();
+    const ctx = loadIntoContext({ fetch: fakeFetch({ status: 409 }), log });
+    await ctx.primeAuthSession(fakeWin(), 'private-secret', 4478);
+    assert.equal(log.lines.at(-1)[1].status, 409);
+    assert.equal(log.lines.at(-1)[1].outcome, 'failed');
   });
 });
 

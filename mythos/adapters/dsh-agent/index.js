@@ -66,16 +66,9 @@ var { timeoutDiagnosis, exitDiagnosis, withEvidence } = require('./diagnosis');
 // The version is ASSERTED, not assumed. A developer preview that promises
 // breaking changes cannot be trusted to keep the CLI contract above, and a
 // silent version drift would turn a contract change into a mystery build
-// failure. Paths are derived from __dirname (W6-AD-7 — no machine paths).
+// failure. BUG-402: paths share the installer's environment-aware resolver.
 var DSH_PINNED_VERSION = '0.1.1-rc.2';
-var ADAPTERS_DIR = path.resolve(__dirname, '..');            // mythos/adapters
-var MYTHOS_DIR = path.resolve(ADAPTERS_DIR, '..');           // mythos
-var REPO_ROOT = path.resolve(MYTHOS_DIR, '..');              // repo root
-
-var DSH_INSTALL_ROOTS = [
-  path.join(REPO_ROOT, 'DeepSeek Harness', 'node_modules', '@deepseek-ai', 'dsh'),
-  path.join(MYTHOS_DIR, 'node_modules', '@deepseek-ai', 'dsh'),
-];
+var { dshSearchHomes, packageDirFor, findInstalled } = require('../../src/core/dsh-location');
 
 var INSTALL_HINT = 'node mythos/scripts/setup-dsh.js --install';
 
@@ -127,42 +120,32 @@ function requireCwd(cwd) {
   return abs;
 }
 
-function resolveDshPackageDir() {
-  return DSH_INSTALL_ROOTS.find(function (d) { return fs.existsSync(path.join(d, 'package.json')); }) || null;
+function resolveDshPackageDir(env, homes) {
+  var found = findInstalled(env, homes);
+  return found ? found.pkgDir : null;
 }
 
 // Returns the absolute path to dsh's CLI entry, or throws with the install hint.
 // Deliberately does NOT fall back to `npx --yes`: that caches outside the opened
 // project (root CLAUDE.md forbids it) and floats the version under a pin.
-function resolveDshEntry() {
-  var pkgDir = resolveDshPackageDir();
-  if (!pkgDir) {
+function resolveDshEntry(env, homes) {
+  var found = findInstalled(env, homes);
+  if (!found) {
     throw new Error('dsh is not installed project-local. Run:\n  ' + INSTALL_HINT + '\nLooked in:\n'
-      + DSH_INSTALL_ROOTS.map(function (d) { return '  ' + d; }).join('\n'));
+      + (homes || dshSearchHomes(env)).map(packageDirFor).map(function (d) { return '  ' + d; }).join('\n'));
   }
-  var pkg = JSON.parse(fs.readFileSync(path.join(pkgDir, 'package.json'), 'utf8'));
-  installedVersion = pkg.version || null;
-  if (pkg.version !== DSH_PINNED_VERSION) {
-    throw new Error('dsh version mismatch: installed ' + pkg.version + ', this adapter is pinned '
+  if (found.reason) {
+    throw new Error('dsh install at ' + found.pkgDir + ': ' + found.reason + '. Reinstall: ' + INSTALL_HINT);
+  }
+  installedVersion = found.version || null;
+  if (found.version !== DSH_PINNED_VERSION) {
+    throw new Error('dsh version mismatch: installed ' + found.version + ', this adapter is pinned '
       + 'to ' + DSH_PINNED_VERSION + '. dsh is a developer preview whose README says there WILL '
       + 'be compatibility-breaking changes, so the CLI contract this adapter asserts cannot be '
       + 'assumed to hold. Reinstall the pin (' + INSTALL_HINT + '), or move DSH_PINNED_VERSION '
       + 'deliberately after re-reading the installed reference.');
   }
-  // `bin` is a string or a map; read whichever shape ships rather than guessing
-  // a file name.
-  var bin = pkg.bin;
-  var rel = typeof bin === 'string' ? bin : (bin && (bin.dsh || bin[Object.keys(bin)[0]]));
-  if (!rel) {
-    throw new Error('dsh package.json declares no `bin` entry — the CLI contract moved. Read the '
-      + 'installed package before assuming a file name.');
-  }
-  var entry = path.join(pkgDir, rel);
-  if (!fs.existsSync(entry)) {
-    throw new Error('dsh `bin` points at ' + rel + ', which is not inside the installed package. '
-      + 'Reinstall rather than guessing another path.');
-  }
-  return entry;
+  return found.entry;
 }
 
 // ---------------------------------------------------------------------------

@@ -29,19 +29,17 @@ cd "$(git rev-parse --show-toplevel)/mythos" || exit 1
 # `deploy-config-conformance.test.js`'s real-boot test failed at its 30s timeout
 # because of it, and that failure was repeatedly written off as flakiness.
 #
-# So the question to ask is not "does this shell's TEMP look wrong" but "what
-# will node actually use" — ask node, expand that, and hand it back. Unconditional
-# and idempotent: on a machine with no short names it resolves to itself.
-# realpathSync.native is the expander because node is already a hard dependency
-# of this hook and cygpath is not guaranteed to exist.
-canon=$(node -e 'const fs=require("fs"),os=require("os");try{process.stdout.write(fs.realpathSync.native(os.tmpdir()))}catch(e){process.stdout.write("")}')
-if [ -n "$canon" ]; then
-  TEMP="$canon"
-  TMP="$canon"
-  export TEMP TMP
-  echo "pre-commit: temp dir pinned to $TEMP"
-fi
-
+# Use checkout-local storage, not Git's inherited /tmp. Canonicalize after
+# creating it, and reject redirected cache paths before creating descendants.
+# Failure blocks the gate: silently falling back would write outside the project.
+canon=$(node -e 'const fs=require("fs"),path=require("path");const root=fs.realpathSync.native(path.resolve(".."));let dir=root;for(const part of [".cache","pre-commit-temp"]){dir=path.join(dir,part);fs.mkdirSync(dir,{recursive:true});if(fs.realpathSync.native(dir)!==dir)throw new Error("pre-commit temp path is redirected")}process.stdout.write(fs.realpathSync.native(dir))') || {
+  echo "pre-commit: BLOCKED — cannot create project-local test temp directory." >&2
+  exit 1
+}
+TEMP="$canon"
+TMP="$canon"
+export TEMP TMP
+echo "pre-commit: temp dir pinned to $TEMP"
 # FAULT 2 — a port the suite needs is already held, and it reads as broken code.
 # test/boot.test.js spawns src/main.js on 4478 and the legacy proactive-speak
 # path needs the edge-tts server on 5050 — the same two ports the desktop

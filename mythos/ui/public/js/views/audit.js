@@ -1,5 +1,6 @@
 // audit.js — scrollable leash trail: every decision with tier/outcome.
-// Spec Full Code, adapted to the P9 panel mount contract. WS-only (anti-drift #6).
+// P9 panel contract: HTTP history plus live WS audit decisions. Optional WS
+// id/ts fields identify persisted rows; older payloads still render unchanged.
 import { subscribe } from '/js/ws.js';
 
 // Audit rows carry model-driven values: `tool` is whatever the brain asked to
@@ -8,10 +9,12 @@ function escapeHtml(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-export async function render(mount) {
+export function render(mount) {
   // xss-safe: static template, no interpolation
   mount.innerHTML = `<div class="audit-list" id="audit-list"></div>`;
   const rows = [];
+  const controller = new AbortController();
+  let disposed = false;
 
   // Wave 0 (2026-08-13): healer.js's audit rows are deliberately tool:null —
   // a heal is a playbook decision, not a dispatch, and there is no tool to
@@ -31,33 +34,46 @@ export async function render(mount) {
       .join('') || '<div class="text-faint">No decisions yet.</div>';
   }
 
-  // Fetch historical audit entries on mount (BUG-019)
-  try {
-    const res = await fetch('/api/audit/recent?limit=50');
-    if (res.ok) {
-      const data = await res.json();
-      if (data.error) {
-        console.warn('audit-api-error', data.error);
-      } else if (data.entries && Array.isArray(data.entries)) {
-        // API returns newest-first; reverse to oldest-first so live events append correctly
-        rows.push(...data.entries.reverse());
-      }
-    } else {
-      console.warn('audit-fetch-status', res.status, await res.text().catch(() => ''));
-    }
-  } catch (err) {
-    console.warn('audit-fetch-failed', err.message);
-  }
-
-  // Render historical entries
-  renderList();
-
-  // Subscribe to live updates (appended in newest order, existing logic handles display)
+  // BUG-019: subscribe before requesting the snapshot. Otherwise decisions
+  // made while the response is in flight disappear from both sources.
   const unsub = subscribe(['audit'], (msg) => {
+    if (disposed) return;
+    if (msg.payload.id && rows.some((r) => r.id === msg.payload.id)) return;
     rows.push(msg.payload);
     if (rows.length > 500) rows.shift();
     renderList();
   });
+  renderList();
 
-  return unsub;
+  // Return teardown immediately: a closed panel must not wait for the fetch.
+  (async () => {
+   try {
+    const res = await fetch('/api/audit/recent?limit=50', { signal: controller.signal });
+    if (res.ok) {
+      const data = await res.json();
+      if (disposed) return;
+      if (data.error) {
+        console.warn('audit-api-error', data.error);
+      } else if (data.entries && Array.isArray(data.entries)) {
+        // API returns newest-first; reverse to oldest-first so live events append correctly
+        // Snapshot and live stream can overlap. Only real ids establish
+        // identity; legacy id-less events remain distinct rather than guessed.
+        const merged = new Map();
+        for (const row of [...data.entries].reverse().concat(rows)) merged.set(row.id || row, row);
+        rows.splice(0, rows.length, ...[...merged.values()].slice(-500));
+      }
+    } else {
+      console.warn('audit-fetch-status', res.status, await res.text().catch(() => ''));
+    }
+   } catch (err) {
+    if (!disposed) console.warn('audit-fetch-failed', err.message);
+   }
+   if (!disposed) renderList();
+  })();
+
+  return () => {
+    disposed = true;
+    controller.abort();
+    unsub();
+  };
 }

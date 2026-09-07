@@ -262,13 +262,13 @@ describe('BUG-407 — one answer to "which browser"', () => {
       'href canonicalises an empty path — this is the string the browser actually receives');
   });
 
-  test('openUrlInBrowser demands a real URL — bare-domain guessing stays in ONE place', () => {
+  test('openUrlInBrowser demands a real URL — bare-domain guessing stays in ONE place', async () => {
     // resolveExternalTarget is the only thing allowed to turn "openai.com" into
     // a URL. A second guesser inside the spawn helper would be a second
     // derivation of the same fact, which is the ticket's own defect class — so
     // this refuses, honestly and by name, rather than being clever.
     let spawned = 0;
-    const r = bt.openUrlInBrowser('chrome', 'www.example.com/x', {
+    const r = await bt.openUrlInBrowser('chrome', 'www.example.com/x', {
       spawn: () => { spawned += 1; return { pid: 1, unref() {} }; },
       findBrowserExecutable: fakeExeResolver(P),
     });
@@ -278,10 +278,10 @@ describe('BUG-407 — one answer to "which browser"', () => {
   });
 
   // (g)
-  test('openUrlInBrowser spawns the exe with the parsed href as its ONLY argument', () => {
+  test('openUrlInBrowser spawns the exe with the parsed href as its ONLY argument', async () => {
     const calls = [];
-    const res = bt.openUrlInBrowser('chrome', 'https://www.example.com/x', {
-      spawn: (exe, args, opts) => { calls.push({ exe, args, opts }); return { pid: 4242, unref() { this.unrefd = true; } }; },
+    const res = await bt.openUrlInBrowser('chrome', 'https://www.example.com/x', {
+      spawn: (exe, args, opts) => { calls.push({ exe, args, opts }); const child = new (require('node:events').EventEmitter)(); child.unref = () => {}; process.nextTick(() => child.emit('spawn')); return child; },
       findBrowserExecutable: fakeExeResolver(P),
     });
     assert.equal(res.opened, true);
@@ -290,28 +290,40 @@ describe('BUG-407 — one answer to "which browser"', () => {
     assert.equal(calls[0].exe, P.chrome);
     assert.deepEqual(calls[0].args, ['https://www.example.com/x'],
       'exactly one positional argument, always beginning http(s) so Chromium cannot read it as a flag');
-    assert.deepEqual(calls[0].opts, { detached: true, stdio: 'ignore' });
+    assert.deepEqual(calls[0].opts, { detached: true, stdio: 'ignore',
+      cwd: require('../src/core/util/child-runtime').childRuntimeDir() });
   });
 
-  test('openUrlInBrowser refuses a bad scheme and an unknown browser without spawning', () => {
+  test('openUrlInBrowser refuses a bad scheme and an unknown browser without spawning', async () => {
     let spawned = 0;
     const spawn = () => { spawned += 1; return { pid: 1, unref() {} }; };
     const deps = { spawn, findBrowserExecutable: fakeExeResolver(P) };
-    assert.equal(bt.openUrlInBrowser('chrome', 'file:///C:/x', deps).opened, false);
-    assert.equal(bt.openUrlInBrowser('safari', 'https://example.com', deps).opened, false);
-    assert.equal(bt.openUrlInBrowser('edge', 'https://example.com',
-      { spawn, findBrowserExecutable: fakeExeResolver({ chrome: P.chrome }) }).opened, false,
+    assert.equal((await bt.openUrlInBrowser('chrome', 'file:///C:/x', deps)).opened, false);
+    assert.equal((await bt.openUrlInBrowser('safari', 'https://example.com', deps)).opened, false);
+    assert.equal((await bt.openUrlInBrowser('edge', 'https://example.com',
+      { spawn, findBrowserExecutable: fakeExeResolver({ chrome: P.chrome }) })).opened, false,
     'a named browser that is not installed must fail, not fall back');
     assert.equal(spawned, 0, 'nothing may be spawned on any refusal path');
   });
 
-  test('openUrlInBrowser reports a spawn failure rather than throwing', () => {
-    const res = bt.openUrlInBrowser('chrome', 'https://example.com', {
+  test('openUrlInBrowser reports a spawn failure rather than throwing', async () => {
+    const res = await bt.openUrlInBrowser('chrome', 'https://example.com', {
       spawn: () => { throw new Error('EACCES'); },
       findBrowserExecutable: fakeExeResolver(P),
     });
     assert.equal(res.opened, false);
     assert.match(String(res.reason), /EACCES/);
+  });
+
+  test('openUrlInBrowser returns the real asynchronous ENOENT without crashing', async () => {
+    const missing = path.resolve(__dirname, '../../.cache/campaign/nonexistent-browser.exe');
+    assert.equal(require('node:fs').existsSync(missing), false);
+    const res = await externalRoute.performExternalOpen(
+      { browser: 'chrome', href: 'https://example.com/' },
+      { deps: { findBrowserExecutable: () => missing } },
+    );
+    assert.equal(res.opened, false);
+    assert.match(res.reason, /ENOENT/);
   });
 
   test('the named route never claims MYTHOS owns the browser it opened', () => {

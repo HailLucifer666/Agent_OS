@@ -196,7 +196,7 @@ describe('BUG-273 B3 — the HUD reports on its own DOM', () => {
       'containment is the one check a try/catch around the mount cannot make');
   });
 
-  it('every client branch answers, including the popup-blocked one', () => {
+  it('every client branch answers, including the unknown noopener outcome', () => {
     const s = fs.readFileSync(
       path.join(__dirname, '..', 'ui', 'public', 'js', 'app.js'), 'utf8',
     ).replace(/\r\n/g, '\n');
@@ -206,7 +206,7 @@ describe('BUG-273 B3 — the HUD reports on its own DOM', () => {
     // Five branches: no widgetType, newtab/news, youtube/web, dynamic, default.
     const acks = handler.match(/ackRender\(/g) || [];
     assert.ok(acks.length >= 5, `every branch must answer — found ${acks.length} ackRender calls`);
-    assert.match(handler, /the browser blocked the new tab/,
-      'window.open returns null on a blocked popup, and that used to be reported as success');
+    assert.match(handler, /cannot confirm whether the new tab opened/,
+      'noopener null must not be called either blocked or mounted');
   });
 });

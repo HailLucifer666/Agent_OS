@@ -22,6 +22,10 @@
 // command on phone A must never block phone B.
 
 const { spawn, spawnSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { childCommand } = require('../../src/core/util/child-runtime');
 const { createLogger } = require('../../src/core/logger');
 let log = createLogger(process.env.LOG_LEVEL || 'info'); // let: startAndroidChild({log}) may inject a capture logger
 
@@ -51,6 +55,9 @@ let deviceQueues = new Map();
 let refreshInFlight = false;
 let refreshFailStreak = 0;
 let devicesRunner = null;
+let runtimeCwd;
+const activeCommands = new Set();
+let generation = 0;
 
 function getStatus() {
   let queueDepth = 0;
@@ -80,7 +87,7 @@ function runAdb(args, timeoutMs) {
     let settled = false;
     let child;
     try {
-      child = spawn(adbBin, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(childCommand(adbBin), args, { cwd: runtimeCwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
       resolve({ ok: false, error: err.message });
       return;
@@ -89,9 +96,22 @@ function runAdb(args, timeoutMs) {
     let stdoutChunks = [];
     let stderr = '';
 
+    // Own only these client processes. adb's shared daemon is deliberately
+    // not ours to kill; moving its inherited cwd removes the install lock.
+    const cancel = function() {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      activeCommands.delete(cancel);
+      try { child.kill(); } catch (_) { /* already exited */ }
+      resolve({ ok: false, error: 'Android bridge shutting down.' });
+    };
+    activeCommands.add(cancel);
+
     const timer = setTimeout(function() {
       if (settled) return;
       settled = true;
+      activeCommands.delete(cancel);
       try { child.kill(); } catch (_) { /* best-effort */ }
       resolve({ ok: false, error: 'adb command timed out after ' + timeoutMs + 'ms' });
     }, timeoutMs);
@@ -103,6 +123,7 @@ function runAdb(args, timeoutMs) {
     child.on('error', function(err) {
       if (settled) return;
       settled = true;
+      activeCommands.delete(cancel);
       clearTimeout(timer);
       resolve({ ok: false, error: err.message });
     });
@@ -110,6 +131,7 @@ function runAdb(args, timeoutMs) {
     child.on('exit', function(code) {
       if (settled) return;
       settled = true;
+      activeCommands.delete(cancel);
       clearTimeout(timer);
       const stdout = Buffer.concat(stdoutChunks);
       if (code === 0) {
@@ -128,9 +150,11 @@ async function refreshDevices() {
   // active goals paused. runAdb() is the async form and kills on timeout;
   // its own comment (above) already said why spawn-not-spawnSync mattered.
   if (!devicesRunner || refreshInFlight) return;
+  const startedGeneration = generation;
   refreshInFlight = true;
   try {
     const r = await devicesRunner();
+    if (generation !== startedGeneration) return;
     if (!r || !r.ok) {
       refreshFailStreak += 1;
       if (refreshFailStreak === 1 || refreshFailStreak % 15 === 0) {
@@ -165,11 +189,12 @@ async function refreshDevices() {
     if (!seen.has(serial)) devices.delete(serial);
   });
   } catch (err) {
+    if (generation !== startedGeneration) return;
     // A throwing runner must not become an unhandledRejection (the host
     // process dies on those) and must not strand refreshInFlight.
     log.warn('android-child.refresh-crashed', { error: err && err.message });
   } finally {
-    refreshInFlight = false;
+    if (generation === startedGeneration) refreshInFlight = false;
   }
 }
 
@@ -285,6 +310,7 @@ function resolveAdbBin(requested) {
 // hint; boot continues either way (AD-9) — this function never throws.
 function startAndroidChild(opts) {
   const o = opts || {};
+  shutdownAndroidChild();
   adbBin = resolveAdbBin(o.adbBin);
   pollMs = o.pollMs || DEFAULT_POLL_MS;
   cmdTimeoutMs = o.cmdTimeoutMs || DEFAULT_CMD_TIMEOUT_MS;
@@ -302,6 +328,12 @@ function startAndroidChild(opts) {
 
   let probe;
   try {
+    // Even one-shot commands can implicitly launch adb's persistent daemon.
+    // Every invocation must use the same writable cwd, including headless.
+    runtimeCwd = process.env.MYTHOS_TOOLS_DIR
+      ? path.resolve(process.env.MYTHOS_TOOLS_DIR, 'runtime')
+      : path.join(os.tmpdir(), 'mythos-adb-runtime');
+    fs.mkdirSync(runtimeCwd, { recursive: true });
     // BUG-334 seam: tests inject a successful probe so they can reach the
     // ONLINE polling path without a real adb binary on the machine.
     // BUG-360: the seam is handed the RESOLVED adbBin. It used to take no
@@ -311,7 +343,7 @@ function startAndroidChild(opts) {
     // about. Existing injectors that ignore the argument are unaffected.
     probe = o.versionProbe
       ? o.versionProbe(adbBin)
-      : spawnSync(adbBin, ['version'], { encoding: 'utf8', timeout: ADB_PROBE_TIMEOUT_MS, windowsHide: true });
+      : spawnSync(childCommand(adbBin), ['version'], { cwd: runtimeCwd, encoding: 'utf8', timeout: ADB_PROBE_TIMEOUT_MS, windowsHide: true });
   } catch (err) {
     probe = { error: err };
   }
@@ -339,7 +371,7 @@ function startAndroidChild(opts) {
   // no-op. Best-effort: a failure here doesn't block going ONLINE, since
   // `adb devices` will implicitly start the server anyway.
   try {
-    spawnSync(adbBin, ['start-server'], { encoding: 'utf8', timeout: ADB_START_SERVER_TIMEOUT_MS, windowsHide: true });
+    spawnSync(childCommand(adbBin), ['start-server'], { cwd: runtimeCwd, encoding: 'utf8', timeout: ADB_START_SERVER_TIMEOUT_MS, windowsHide: true });
   } catch (_) { /* best-effort */ }
 
   state = 'ONLINE';
@@ -351,9 +383,11 @@ function startAndroidChild(opts) {
 
 // Never calls `adb kill-server` — that would drop other tools' adb sessions
 // on the same machine (a developer's own `adb logcat` in another terminal,
-// e.g.). Only stops this process's own polling and drains its own queues.
+// e.g.). Stops owned clients and polling, and drains this process's queues.
 function shutdownAndroidChild() {
+  generation += 1;
   clearPollTimer();
+  for (const cancel of activeCommands) cancel();
   deviceQueues.forEach(function(q) {
     q.queue.forEach(function(job) {
       job.resolve({ ok: false, error: 'Android bridge shutting down.' });

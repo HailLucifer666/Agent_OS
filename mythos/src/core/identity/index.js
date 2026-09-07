@@ -201,7 +201,10 @@ function createIdentity({ bus, config, fs, identityStore }) {
     var m;
     while ((m = denyRe.exec(raw)) !== null) deny.push(m[1].trim());
 
-    var tierMatch = raw.match(/^max_autonomous_tier:\s*(\d+)/m);
+    // BUG-015/181: consume the whole value and enforce the schema's 0..4
+    // tier range. Prefix parsing accepted 99, 2.5 and 2garbage as permission
+    // ceilings instead of entering the existing malformed-file fail-safe.
+    var tierMatch = raw.match(/^max_autonomous_tier:[ \t]*([0-4])[ \t]*\r?$/m);
     var max_autonomous_tier = tierMatch ? parseInt(tierMatch[1], 10) : undefined;
 
     var allowed_dirs = [];

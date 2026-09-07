@@ -57,7 +57,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 
 const HOOK_PATH = path.join(__dirname, '..', '..', '.githooks', 'pre-commit');
@@ -106,50 +105,49 @@ test('cause 0 — the gate survives checkout: line endings are pinned to LF', ()
     'the hook contains a carriage return — it will not execute; re-checkout after fixing .gitattributes');
 });
 
-test('cause 1 — the gate asks node what temp dir it will use, not the shell', () => {
+test('cause 1 — the gate pins both temp variables to project-local canonical storage', () => {
   const src = hookCode();
-  // The mechanism, and specifically WHERE it reads from. Measured 2026-08-22:
-  // git does not pass the invoking shell's TEMP to a hook, it sets TEMP=/tmp.
-  // A check written against $TEMP therefore sees a string with no '~' in it and
-  // concludes all is well — while Git Bash's /tmp maps to
-  // the profile's local AppData temp folder under its 8.3 short name, so the
-  // suite got the short form on
-  // every gated commit this repo has ever run. The first version of this fix
-  // made exactly that mistake and was inert.
-  assert.match(src, /os\.tmpdir\(\)/,
-    "the hook must resolve node's own os.tmpdir(), not $TEMP — under git the shell's TEMP is /tmp "
-    + 'and carries no evidence of the short path underneath it');
-  assert.match(src, /realpathSync\.native/,
-    'realpathSync.native is the expander; without it the short form survives');
-  assert.match(src, /export TEMP TMP|export TMP TEMP/,
-    'both must be exported — os.tmpdir() reads TEMP then TMP, so setting one leaves the bug reachable');
-  assert.doesNotMatch(src, /case\s+"\$TEMP\$TMP"/,
-    'do not gate on the shell\'s own TEMP: that is the check that was inert');
+  assert.doesNotMatch(src, /os\.tmpdir\(\)/, 'Git-supplied /tmp must not select storage outside the project');
+  assert.match(src, /realpathSync\.native/, 'native canonicalization removes Windows short-name segments');
+  assert.match(src, /export TEMP TMP|export TMP TEMP/);
 });
 
-test('cause 1, behaviourally — the expansion the hook relies on removes a short segment', () => {
-  // Not a shape assertion. Runs the exact expression the hook runs, in a child
-  // whose TEMP is the value git actually supplies, and asserts the result is
-  // usable. On Windows this expands the 8.3 short profile name to the full one; on
-  // other platforms /tmp is already canonical and this asserts the no-op.
-  // It must go through `sh`, not straight to node. Git Bash rewrites POSIX
-  // paths in the environment into Windows form on the way to a native program,
-  // so `TEMP=/tmp sh -c node` is what git actually produces, while spawning node
-  // directly hands it the literal string '/tmp' — a different value with a
-  // different failure. The first version of this test made that mistake and
-  // failed against a working fix.
-  const { execFileSync } = require('node:child_process');
-  const expr = 'const fs=require("fs"),os=require("os");'
-    + 'try{process.stdout.write(fs.realpathSync.native(os.tmpdir()))}catch(e){process.stdout.write("")}';
-  const out = execFileSync('sh', ['-c', 'TEMP=/tmp TMP=/tmp exec "$0" -e "$1"', process.execPath, expr], {
-    encoding: 'utf8',
-  }).trim();
+function tempExpression() {
+  const match = hookCode().match(/canon=\$\(node -e '([^']+)'\)/);
+  assert.ok(match, 'execute the hook expression itself, not a copied implementation');
+  return match[1];
+}
 
-  assert.ok(out, 'the expansion produced nothing — the hook would silently leave TEMP alone');
-  assert.ok(!/~\d/.test(out),
-    'the expanded temp path still carries an 8.3 short segment (' + out + '). '
-    + "deploy-config-conformance's real-boot test dies at its 30s timeout on such a path, "
-    + 'and reports only ECONNREFUSED.');
+test('cause 1 behaviour — Git TEMP=/tmp cannot redirect hook artifacts outside checkout', (t) => {
+  const { execFileSync } = require('node:child_process');
+  const repo = path.resolve(__dirname, '../..');
+  fs.mkdirSync(path.join(repo, '.cache'), { recursive: true });
+  const fixture = fs.mkdtempSync(path.join(repo, '.cache', 'hook-temp-'));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(fixture, 'mythos'));
+  const run = () => execFileSync('sh', ['-c', 'TEMP=/tmp TMP=/tmp exec "$0" -e "$1"', process.execPath, tempExpression()], {
+    encoding: 'utf8', cwd: path.join(fixture, 'mythos'),
+  }).trim();
+  const out = run();
+  assert.equal(out, path.join(fs.realpathSync.native(fixture), '.cache', 'pre-commit-temp'));
+  assert.ok(fs.statSync(out).isDirectory());
+  assert.equal(run(), out, 'repeated commits reuse the canonical project-local directory');
+  assert.ok(!/~\d/.test(out), 'no Windows short-name segment survives');
+});
+test('redirected cache directory blocks before creating test artifacts at its target', (t) => {
+  const { spawnSync } = require('node:child_process');
+  const repo = path.resolve(__dirname, '../..');
+  const fixture = fs.mkdtempSync(path.join(repo, '.cache', 'hook-redirect-'));
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+  const checkout = path.join(fixture, 'checkout');
+  const outside = path.join(fixture, 'outside');
+  fs.mkdirSync(path.join(checkout, 'mythos'), { recursive: true });
+  fs.mkdirSync(outside);
+  fs.symlinkSync(outside, path.join(checkout, '.cache'), 'junction');
+  const result = spawnSync(process.execPath, ['-e', tempExpression()], { cwd: path.join(checkout, 'mythos'), encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /temp path is redirected/);
+  assert.deepEqual(fs.readdirSync(outside), []);
 });
 
 test('cause 2 — the gate picks ports a running MYTHOS cannot be holding', () => {
@@ -179,14 +177,14 @@ test('cause 3 — a blocked commit names the tests that failed', () => {
   assert.match(src, /BLOCKED/, 'the refusal itself must stay loud');
 });
 
-test('the normalisation the hook relies on is idempotent, so a good TEMP is left alone', () => {
+test('canonical project paths remain idempotent', () => {
   // Runs on every platform: resolving an already-canonical path must return the
   // same path. If this ever stopped holding, the hook would rewrite a correct
   // TEMP into something else on every commit. The short-to-long expansion
   // itself is Windows-only and cannot be constructed portably, which is stated
   // here rather than hidden behind a skip — this repo has been bitten by guards
   // that only ever skip.
-  const canonical = fs.realpathSync.native(os.tmpdir());
+  const canonical = fs.realpathSync.native(path.resolve(__dirname, '../..'));
   assert.equal(fs.realpathSync.native(canonical), canonical,
     'realpathSync.native must be a no-op on an already-resolved path');
   assert.ok(!/~\d/.test(canonical),

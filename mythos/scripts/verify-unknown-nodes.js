@@ -659,6 +659,31 @@ async function groupComputer(sandbox) {
   return rowsSince(mark);
 }
 
+async function groupProcedures(sandbox) {
+  const mark = results.length;
+  const { store, bus } = realStack(sandbox);
+  const { createSkillsStore } = require(path.join(MYTHOS_ROOT, 'src/core/memory/skills'));
+  const skills = createSkillsStore({ fs: store, bus, config: {} });
+  const mod = require(path.join(MYTHOS_ROOT, 'src/core/effectors/from-memory'));
+  const tools = toolMap(mod.buildTools({ memory: { skills } }));
+  const steps = [{ tool: 'get_time', args: {} }];
+  skills.write('harness-clock', { id: 'harness-clock', when: ['clock'], steps });
+  const before = store.listFiles('Skills', '.md').map(f => [f.path, store.readText(f.path)]);
+  // Disk is the read-only oracle. This proves retrieval, not a model's choice
+  // to use guidance or the outcome of a later authorized action.
+  await exercise('procedures', tools, 'suggest_procedures', { query: 'clock' }, {}, r => {
+    const suggestions = r && r.result && r.result.suggestions;
+    const after = store.listFiles('Skills', '.md').map(f => [f.path, store.readText(f.path)]);
+    const match = suggestions && suggestions.find(s => s.skillRef === 'harness-clock');
+    const passed = okOf(r) && match && JSON.stringify(match.steps) === JSON.stringify(steps)
+      && JSON.stringify(before) === JSON.stringify(after);
+    return { ok: !!passed, detail: passed
+      ? 'disk round trip returned the saved steps and left every procedure byte unchanged; live voice selection remains unverified'
+      : 'ORACLE: saved guidance was missing, altered, or retrieval changed the procedure files' };
+  });
+  return rowsSince(mark);
+}
+
 async function groupRefused() {
   const mark = results.length;
   const G = 'deliberately not run';
@@ -686,6 +711,7 @@ const GROUPS = {
   mission: groupMission,
   pc: groupPc,
   computer: groupComputer,
+  procedures: groupProcedures,
   refused: groupRefused,
 };
 
