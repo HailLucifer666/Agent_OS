@@ -72,10 +72,26 @@ outcome from FAIL and does not count toward or against the streak.
 
 ## NEXT ACTION
 
-Merge `refactor/subtract-phase-a`. Then, with MYTHOS running in the operator's
-browser session, run `node scripts/golden-path.js` and read the first real line.
-If it is PREREQ-MISSING, fix the prerequisite it names. If it is FAIL or
-UNVERIFIED, that failure is the only bug that matters.
+Phase A merged (PR #74, `451ba73`). The first real golden-path run happened on
+2026-09-07 and named two prerequisites, both now reported as PREREQ-MISSING by
+the runner instead of UNVERIFIED:
+
+1. **No debuggable browser.** Brave was running without
+   `--remote-debugging-port=9222`, so the server withheld all 20 `browser_*`
+   tools before the brain saw them. `scripts/setup-chrome-debug.ps1` launches
+   Chrome or Edge with a SEPARATE profile, which is not the signed-in Brave
+   session Stage 1 names. On `main` there is no path to the operator's own
+   Brave session; that path is the extension work on `codex/windows-operator`.
+2. **Typed turns vanish into Live.** With `VOICE_S2S_ENABLED=true` the server
+   injects a typed utterance into the Gemini Live session (`live.text-injected`)
+   and answers the legacy channel with an empty `done`. The runner cannot
+   observe a spoken reply from that channel.
+
+Do these, in order: (a) decide whether the golden path is judged through the
+extension path (merge `codex/windows-operator` Stage 1 first) or through CDP
+against Brave relaunched with the debug flag; (b) give the runner a way to
+observe the Live path, or run it with `VOICE_S2S_ENABLED=false` and say so on
+the log line; (c) then read the first real line. Streak is still 0.
 
 ## Where the detail lives
 

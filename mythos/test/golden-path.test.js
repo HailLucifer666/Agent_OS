@@ -14,6 +14,8 @@
 //       pass" fails.
 //   (c) streakOf: `continue` -> `break` on PREREQ -> "PREREQ days are skipped,
 //       not reset" fails.
+//   (d) 2026-09-07, second pass: verdictForStep, drop the onlyEmptyDone branch ->
+//       "an empty done with nothing else observable is PREREQ-MISSING" fails.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -70,6 +72,29 @@ test('offline provider and refused tool are PREREQ-MISSING, not FAIL', () => {
   const r = gp.verdictForStep(step, turnWith([doneFrame()], [refused]), null);
   assert.equal(r.verdict, VERDICT.PREREQ);
   assert.match(r.reason, /browser adapter offline/);
+});
+
+test('an empty done with nothing else observable is PREREQ-MISSING (routed into Live), not UNVERIFIED', () => {
+  // Live shape, 2026-09-07: exactly one frame, type done, say '', no actions.
+  const r = gp.verdictForStep(step, turnWith([{ type: 'done', say: '' }], []), null);
+  assert.equal(r.verdict, VERDICT.PREREQ);
+  assert.match(r.reason, /live-session/);
+  // Adjacent cases that must keep their verdicts: a done that SAID something and
+  // proved nothing is still UNVERIFIED; an empty done accompanied by another
+  // frame is not the Live shape either.
+  assert.equal(gp.verdictForStep(step, turnWith([doneFrame()], []), null).verdict, VERDICT.UNVERIFIED);
+  assert.equal(gp.verdictForStep(step, turnWith([{ type: 'say', say: 'x' }, { type: 'done', say: '' }], []), null).verdict, VERDICT.UNVERIFIED);
+});
+
+test('probeCdp reports a refused port as a missing prerequisite, not a throw', async () => {
+  const net = require('node:net');
+  // Bind then close to obtain a port that is definitely not listening.
+  const port = await new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
+  const r = await gp.probeCdp('http://127.0.0.1:' + port);
+  assert.equal(r.ok, false);
+  assert.match(r.error, /no debuggable browser/);
+  const bad = await gp.probeCdp('not a url');
+  assert.equal(bad.ok, false);
 });
 
 test('timeout, missing done and turn error are FAIL', () => {

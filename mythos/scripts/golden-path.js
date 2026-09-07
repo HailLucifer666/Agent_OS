@@ -84,6 +84,14 @@ function verdictForStep(step, turn, oracle) {
   if (!done) return { id: step.id, verdict: VERDICT.FAIL, reason: 'missing-done' };
   if (done.offline) return { id: step.id, verdict: VERDICT.PREREQ, reason: 'provider-offline' };
   if (done.error || done.ok === false) return { id: step.id, verdict: VERDICT.FAIL, reason: 'turn-error: ' + (done.error || done.say || '') };
+  // Seen live 2026-09-07: with VOICE_S2S_ENABLED the server feeds a typed
+  // utterance into the Gemini Live session (server log `live.text-injected`) and
+  // releases this channel with an EMPTY done — no say, no other frame, no action
+  // event. The reply, if any, left as live-audio on a socket this runner does not
+  // hold. That is not "the brain proved nothing"; it is "this channel cannot see
+  // the brain", which is a prerequisite and must not read as UNVERIFIED.
+  const onlyEmptyDone = (turn.events || []).length === 1 && !(typeof done.say === 'string' && done.say.trim()) && !(turn.actions || []).length;
+  if (onlyEmptyDone) return { id: step.id, verdict: VERDICT.PREREQ, reason: 'turn-routed-to-live-session: empty done, nothing observable on the legacy channel (VOICE_S2S_ENABLED?)' };
   const proof = (turn.actions || []).find((a) => actionProves(a, step.anyOf));
   if (!proof) {
     const refused = (turn.actions || []).find((a) => a.payload && step.anyOf.includes(a.payload.tool) && a.payload.refused);
@@ -194,6 +202,24 @@ function readMediaOracle(port, token) {
   });
 }
 
+// The browser adapter's own reachability check, mirrored: GET <cdpUrl>/json/version.
+// Seen live 2026-09-07: with nothing on 9222 the server withheld all 20 browser_*
+// tools as UNAVAILABLE before the brain saw them, and four turns went out that
+// could not have passed. Ask first; a prerequisite that is missing is reported
+// as one, not discovered four turns later as UNVERIFIED.
+function probeCdp(cdpUrl) {
+  return new Promise((resolve) => {
+    let u;
+    try { u = new URL('/json/version', cdpUrl); } catch (err) { return resolve({ ok: false, error: 'bad BROWSER_CDP_URL: ' + err.message }); }
+    const req = http.get({ host: u.hostname, port: u.port || 80, path: u.pathname, timeout: 3000 }, (res) => {
+      res.resume();
+      res.on('end', () => resolve(res.statusCode === 200 ? { ok: true } : { ok: false, error: 'CDP ' + u.href + ' -> ' + res.statusCode }));
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'CDP ' + u.href + ' timed out' }); });
+    req.on('error', (err) => resolve({ ok: false, error: 'no debuggable browser at ' + u.origin + ' (' + err.code + ')' }));
+  });
+}
+
 function appendLog(line) {
   fs.mkdirSync(LOG_DIR, { recursive: true });
   fs.appendFileSync(LOG_FILE, line + '\n');
@@ -219,6 +245,17 @@ async function main() {
     return 2;
   }
 
+  const cdp = await probeCdp(process.env.BROWSER_CDP_URL || 'http://127.0.0.1:9222');
+  if (!cdp.ok) {
+    if (handle.child) await killTree(handle.child);
+    const results = [{ id: 'browser', verdict: VERDICT.PREREQ, reason: cdp.error + ' — the signed-in browser must be running with --remote-debugging-port' }];
+    const line = formatLogLine(new Date().toISOString(), VERDICT.PREREQ, results, null);
+    const { streak } = appendLog(line);
+    log('⛔', line);
+    log('📈', 'consecutive PASS streak: ' + streak);
+    return 2;
+  }
+
   const results = [], acks = [];
   try {
     for (const step of STEPS) {
@@ -227,6 +264,10 @@ async function main() {
       const oracle = step.oracle === 'media' ? await readMediaOracle(handle.port, handle.token || '') : null;
       const r = verdictForStep(step, turn, oracle);
       r.ackMs = turn.ackMs;
+      // Keep the payload that produced the verdict. A probe that reports a
+      // verdict and drops the frames is the most expensive habit in this repo's
+      // history (verify-desktop-automation.js, Q2). Printed only under --json.
+      r.raw = { say: (turn.events.find((e) => e.type === 'done') || {}).say, events: turn.events, actions: turn.actions, oracle };
       results.push(r);
       log(r.verdict === VERDICT.PASS ? '✅' : r.verdict === VERDICT.PREREQ ? '⛔' : '❌', step.id + ' ' + r.verdict + ' — ' + r.reason + (turn.ackMs !== null ? ' (ack ' + turn.ackMs + 'ms)' : ''));
       // A timeout leaves turn ownership uncertain, and a missing prerequisite
@@ -248,7 +289,7 @@ async function main() {
   return overall === VERDICT.PASS ? 0 : overall === VERDICT.PREREQ ? 2 : 1;
 }
 
-module.exports = { STEPS, VERDICT, actionProves, verdictForStep, overallVerdict, p95, formatLogLine, streakOf, LOG_FILE };
+module.exports = { STEPS, VERDICT, actionProves, verdictForStep, overallVerdict, p95, formatLogLine, streakOf, probeCdp, LOG_FILE };
 
 // Requiring this file must not drive the operator's browser.
 if (require.main === module) {
