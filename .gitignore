@@ -206,3 +206,6 @@ nodes/.kotlin/
 # Pulled on demand, never committed.
 /open-websearch/
 mythos/.tmp-file-walk-test/
+
+# Project-local test, browser, package and audit scratch state; never publish.
+.cache/

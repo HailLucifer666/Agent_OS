@@ -1,4 +1,5 @@
 'use strict';
+const { childRuntimeDir, childCommand } = require('../util/child-runtime');
 
 // edge-tts-child.js — autostarts the local edge-tts Python service (CA of NOVA
 // app/server.js's autostartEdgeTts block, lines 941-992). Detects python + the
@@ -100,7 +101,8 @@ function createEdgeTtsChild({ logger }) {
     }
 
     try {
-      child = spawn(pyBin, [TTS_SCRIPT], {
+      child = spawn(childCommand(pyBin), [TTS_SCRIPT], {
+        cwd: childRuntimeDir(),
         shell: false,
         stdio: 'ignore',
         windowsHide: true,

@@ -18,6 +18,7 @@ const { chromium } = require('playwright-core');
 const fs = require('fs');
 const path = require('path');
 const { createLogger } = require('../../src/core/logger');
+const browserProcess = require('./browser-process');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
 const CONNECT_TIMEOUT_MS = 10000;
@@ -113,6 +114,10 @@ let browser = null;      // CDP-connected Browser instance
 let context = null;      // launchPersistentContext BrowserContext instance
 let launched = false;    // true when we own the context (launched mode)
 let mode = null;         // 'cdp' | 'launched' | null
+// BUG-410: the playwright CHANNEL launchLocal actually got ('chrome'|'msedge'),
+// or null when we did not launch one. Reported through getStatus() so no caller
+// has to guess which browser started — guessing is what that ticket is about.
+let launchedChannel = null;
 let state = 'OFFLINE';   // OFFLINE | CONNECTING | ONLINE
 let hint = null;
 let intentionalDisconnect = false;
@@ -140,7 +145,7 @@ function getStatus() {
       }
     }
   } catch { /* ignore */ }
-  return { state, mode, hint, cdpUrl, pageCount };
+  return { state, mode, hint, cdpUrl, pageCount, launchedChannel };
 }
 
 // connect(url, {quiet})
@@ -181,6 +186,7 @@ async function connect(url, opts) {
 
       browser = newBrowser;
       launched = false;
+      launchedChannel = null;
       mode = 'cdp';
       state = 'ONLINE';
       log.info('browser-agent connected via CDP', { url, contexts: browser.contexts().length });
@@ -222,18 +228,30 @@ async function launchLocal(userDataDir) {
   hint = null;
   intentionalDisconnect = false;
   launched = false;
+  launchedChannel = null;
   mode = null;
 
   try {
     // Playwright expects channel as a string, not array. Try Chrome first, fall back to Edge.
+    //
+    // BUG-410 (self-review 2026-09-03): RECORD WHICH ONE ACTUALLY STARTED. This
+    // function has always known — it is the one that catches the Chrome failure
+    // and asks for Edge — and it has never told anyone, so from-browser.js's
+    // requireOnline() labelled the result 'chrome' whenever mode was 'launched'.
+    // On a machine without Chrome that is Edge, reported as Chrome: the same
+    // identity-from-assumption defect BUG-410 fixed in browser_launch_debug, at
+    // a site the first pass of that fix did not touch. The launcher answering
+    // for itself beats any caller re-deriving it.
     try {
       context = await chromium.launchPersistentContext(userDataDir, {
         channel: 'chrome', headless: false, viewport: null,
       });
+      launchedChannel = 'chrome';
     } catch (e1) {
       context = await chromium.launchPersistentContext(userDataDir, {
         channel: 'msedge', headless: false, viewport: null,
       });
+      launchedChannel = 'msedge';
     }
     launched = true;
     mode = 'launched';
@@ -250,6 +268,7 @@ async function launchLocal(userDataDir) {
       clearBrowserPidFile(); // BUG-029: browser gone — pidfile no longer needed
       context = null;
       launched = false;
+      launchedChannel = null;
     });
 
     return true;
@@ -258,6 +277,7 @@ async function launchLocal(userDataDir) {
     hint = 'launchLocal failed: ' + err.message;
     context = null;
     launched = false;
+    launchedChannel = null;
     mode = null;
     log.warn('browser-agent launchLocal failed', { error: err.message });
     return false;
@@ -434,6 +454,7 @@ async function disconnect() {
     clearBrowserPidFile(); // BUG-029
     context = null;
     launched = false;
+    launchedChannel = null;
     mode = null;
   } else if (browser) {
     try {
@@ -444,6 +465,57 @@ async function disconnect() {
   }
 
   state = 'OFFLINE';
+}
+
+// BUG-409: disconnect() above is correct for what it is named — it drops OUR
+// end. It does NOT stop the browser, and for the CDP path it structurally
+// cannot: playwright's own contract for a connected-to browser is "clears all
+// created contexts and disconnects from the browser server". `launched` is only
+// ever true inside launchLocal(), and browser_launch_debug spawns the process
+// itself and then attaches, so every debug browser MYTHOS starts takes the
+// connected-to branch and survives its own disconnect, still holding the debug
+// port. browser_switch then launched the next browser onto that held port.
+//
+// This is the closing counterpart, kept SEPARATE rather than folded into
+// disconnect(), because disconnect() is also called on shutdown and by
+// connect() itself ("already connected, disconnecting first") — terminating the
+// browser from there would kill the very session the caller is re-establishing.
+// One caller means it: browser_switch.
+//
+// Only ever called with a MYTHOS debug profile directory; browser-process.js
+// refuses anything else, which is what keeps this from being able to name the
+// operator's real browser. See that file's header for the measurements.
+async function closeLaunchedBrowser(profileDir, deps) {
+  // Launched (playwright-owned persistent context) mode already closes the real
+  // browser — that is the ONE case the vendor contract does terminate. Reuse
+  // the existing path rather than add a second way to close the same thing.
+  if (launched && context) {
+    await disconnect();
+    return { closed: true, method: 'context-close', survivors: [], reason: null };
+  }
+
+  const handle = browser;
+  // Before the close, so the 'disconnected' listener does not report a
+  // deliberate shutdown as "Chrome disconnected unexpectedly".
+  intentionalDisconnect = true;
+
+  const verdict = await browserProcess.closeDebugBrowser({
+    profileDir,
+    sendClose: handle
+      ? async function () {
+        const session = await handle.newBrowserCDPSession();
+        await session.send('Browser.close');
+      }
+      : null,
+    deps,
+  });
+
+  try { if (handle) handle.close(); } catch (_) { /* best-effort */ }
+  browser = null;
+  mode = null;
+  state = 'OFFLINE';
+  clearBrowserPidFile();
+  return verdict;
 }
 
 // Execute a callback with a page reference. Finds or creates a suitable page.
@@ -566,6 +638,14 @@ async function withNewPage(callback) {
 module.exports = {
   connect,
   disconnect,
+  // BUG-409: disconnect() drops our end; this one stops the browser and proves
+  // it stopped. Not interchangeable — see the comment above the function.
+  closeLaunchedBrowser,
+  // BUG-410: the only trustworthy answer to "which browser is behind the debug
+  // port", since Brave reports a plain Chrome/<version> product string over CDP.
+  processOnPort: browserProcess.processOnPort,
+  identifyBrowserOnPort: browserProcess.identifyBrowserOnPort,
+  isMythosDebugProfile: browserProcess.isMythosDebugProfile,
   getStatus,
   withPage,
   withNewPage,

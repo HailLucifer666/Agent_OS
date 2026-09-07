@@ -49,7 +49,7 @@ function fakeSkillsStore() {
   return {
     _records: records,
     seed: function (name, md, sidecar) {
-      records.push({ name: name, md: md, sidecar: sidecar || {} });
+      records.push({ name: name, md: md, when: ['deploy the app'], sidecar: sidecar || {} });
     },
     recall: function (query, opts) {
       opts = opts || {};

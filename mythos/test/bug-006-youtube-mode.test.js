@@ -138,4 +138,20 @@ describe('BUG-006: YouTube embed mode configuration', () => {
     assert.match(result.result, /search query is required/);
   });
 
+  it('probes only real candidates when all videos refuse embedding', async () => {
+    const probes = [];
+    const fallback = makeFetchStub();
+    global.fetch = async (url) => {
+      if (String(url).includes('youtube.com/oembed')) {
+        probes.push(new URL(String(url)).searchParams.get('url'));
+        return { ok: false, status: 403 };
+      }
+      return fallback(url);
+    };
+    const result = await toolFn(buildTools(ctx), 'open_web')({ type: 'youtube', query: 'blocked embed' });
+    assert.deepEqual(probes, [`https://www.youtube.com/watch?v=${STUB_VIDEO_ID}`]);
+    assert.equal(result.result.widgetType, 'newtab');
+    assert.equal(result.result.url, probes[0]);
+  });
+
 });

@@ -178,11 +178,12 @@ test('the exit is scheduled, not immediate, so the log can reach the pipe', () =
 // End to end, in a real process, with the real logger
 // ---------------------------------------------------------------------------
 
-test('a real process logs to stderr and exits 1 on an escaped rejection', () => {
+test('a real process with no keepalive logs to stderr and exits 1 on an escaped rejection', (t) => {
   // Not a stub anywhere: a real child, the real logger, a real rejection, and
   // the real process.exit. This is the only assertion here that proves the wiring
   // survives contact with Node's actual event.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bug308-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const script = path.join(dir, 'child.js');
   const core = path.join(__dirname, '..', 'src', 'core').replace(/\\/g, '/');
   fs.writeFileSync(script, [
@@ -190,9 +191,7 @@ test('a real process logs to stderr and exits 1 on an escaped rejection', () => 
     "const { installCrashHandlers } = require('" + core + "/crash-handlers');",
     "installCrashHandlers({ logger: createLogger('info') });",
     "Promise.reject(new Error('escaped-rejection-marker'));",
-    // Keep the loop alive long enough for the handler to run and exit; if the
-    // handler never fires this exits 0 and the test fails on the code.
-    'setTimeout(() => { process.exit(0); }, 4000);',
+    // No keepalive: the handler's unref'd flush timer must not permit exit 0.
   ].join('\n'), 'utf8');
 
   let code = 0;

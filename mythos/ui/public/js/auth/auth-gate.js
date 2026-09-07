@@ -26,7 +26,7 @@
 
 import { trapFocus } from '../a11y/focus-trap.js';
 import { deriveAuthGate, interpretExchangeResponse, validateTokenInput } from './auth-gate-state.js';
-import { clearUnauthorized, onUnauthorized } from './auth-state.js';
+import { clearUnauthorized, onUnauthorized, setTokenRequired } from './auth-state.js';
 
 // The PIN overlay lives in its own root at a lower z-index. If both were ever
 // live at once they would fight for focus, so the token gate — which must be
@@ -172,14 +172,40 @@ export function mountAuthGate(root, opts) {
 
   // Any later 401 (net-guard.js) reopens the gate — e.g. the cookie expired
   // mid-session, or the operator restarted the server with a new token.
-  const offUnauthorized = onUnauthorized(() => { if (!disposed) open(); });
+  //
+  // BUG-400: REGISTERED ONLY ONCE THE PROBE HAS SAID A TOKEN IS CONFIGURED,
+  // which is why this is a holder and not the subscription itself. It used to
+  // subscribe HERE, above the probe, while the 'not-required' branch below
+  // returned out of the async IIFE only — so on a deployment with NO
+  // MYTHOS_AUTH_TOKEN the listener survived and every /api/ 401 reopened a
+  // prompt whose own exchange endpoint answers 404 ('nothing to enter').
+  // A PIN-only deployment emits exactly those 401s, so the token overlay
+  // masked pin/pin-lock-screen.js and the operator could not get in by ANY
+  // input — measured on the packaged build 2026-09-03, where the userData
+  // vault carries Identity/pin.json and the repo vault does not.
+  //
+  // The comment on the 'not-required' branch already promised 'do nothing at
+  // all, ever'; this is the code finally keeping that promise. Not subscribing
+  // beats subscribing behind a guard: it leaves no state that can fail open.
+  let offUnauthorized = null;
 
   (async () => {
     const health = await probe('/health');
     if (disposed) return;
     // Default install, no token configured: do nothing at all, ever.
     const early = deriveAuthGate({ health, status: null });
-    if (early.reason === 'not-required') return;
+    if (early.reason === 'not-required') {
+      // BUG-400: tell the store, so a 401 from a PIN-only deployment can never
+      // raise the token flag for ANY subscriber — status-banner.js included,
+      // which would otherwise offer 'Enter token' for a token that does not
+      // exist. Also clears a flag raised by a 401 that raced this probe.
+      setTokenRequired(false);
+      return;
+    }
+    setTokenRequired(true);
+    // Past this line a token IS configured, so an expiring cookie must be able
+    // to reopen the gate. Covers reason 'authenticated' too, deliberately.
+    offUnauthorized = onUnauthorized(() => { if (!disposed) open(); });
     const status = await probe('/api/status');
     if (disposed) return;
     const gate = deriveAuthGate({ health, status });
@@ -194,7 +220,7 @@ export function mountAuthGate(root, opts) {
   const handle = {
     open,
     isOpen: () => Boolean(overlay),
-    cleanup() { disposed = true; offUnauthorized(); teardown(); openCurrentGate = null; },
+    cleanup() { disposed = true; if (offUnauthorized) offUnauthorized(); teardown(); openCurrentGate = null; },
   };
   openCurrentGate = open;
   return handle;

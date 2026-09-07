@@ -80,7 +80,7 @@ describe('R4 contract: identity/boundaries.md fail-safe cascades through real Le
     assert.equal(t2.requireConfirm, true);
   });
 
-  it('a boundaries.md with an out-of-range tier value is treated the same as missing — fail-safe still wins', async () => {
+  it('a boundaries.md with a nonnumeric tier fails safe', async () => {
     const { identity, leash } = await buildStack(
       '# MYTHOS Boundaries\n\n## Max Autonomous Tier\nmax_autonomous_tier: not-a-number\n',
       { AUTONOMOUS_MAX_TIER: 4 }
@@ -89,4 +89,26 @@ describe('R4 contract: identity/boundaries.md fail-safe cascades through real Le
     const t2 = leash.check({ tool: 'launch_app', args: {} }, { goalId: 'g1' });
     assert.equal(t2.requireConfirm, true);
   });
+
+  for (const value of ['99', '-1', '2.5', '2garbage', 'Infinity']) {
+    it('rejects the entire malformed tier value ' + value + ' through the real leash', async () => {
+      const { identity, leash, bus, guardedWrites } = await buildStack(
+        'max_autonomous_tier: ' + value + '\n', { AUTONOMOUS_MAX_TIER: 4 }
+      );
+      assert.equal(identity.getMaxAutonomousTier(), 1);
+      assert.equal(identity.boundariesSource(), 'malformed-failsafe');
+      assert.equal(bus._lastEvent('health.anomaly').payload.kind, 'identity-boundaries-malformed');
+      assert.equal(leash.check({ tool: 'launch_app', args: {} }, { goalId: 'g1' }).requireConfirm, true);
+      assert.deepEqual(guardedWrites, []);
+    });
+  }
+
+  for (const tier of [0, 1, 2, 3, 4]) {
+    it('preserves valid tier ' + tier + ' with whitespace and CRLF', async () => {
+      const { identity, guardedWrites } = await buildStack('max_autonomous_tier:\t' + tier + '  \r\n');
+      assert.equal(identity.getMaxAutonomousTier(), tier);
+      assert.equal(identity.boundariesSource(), 'file');
+      assert.deepEqual(guardedWrites, []);
+    });
+  }
 });

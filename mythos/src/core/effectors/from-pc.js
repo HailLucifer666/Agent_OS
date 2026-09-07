@@ -13,6 +13,7 @@ const { resolveSandboxed, open_folder } = require('./from-computer');
 // The evidence contract: a world-changing effector may only report ok:true with
 // proof from an oracle other than its own call. See evidence.js's header.
 const evidence = require('./evidence');
+const { withWindowList } = require('./window-recovery');
 const { reasonText } = require('../util/reason-text');
 const { visionThink } = require('./vision-call');
 // The window a pid-omitted ui_type/ui_click aims at. Was a bare module-scope
@@ -71,11 +72,12 @@ async function delegate(cmdObj) {
 
   try {
     const resp = await pcChild.sendCommand(cmdObj);
-    if (resp.ok) {
-      return ok(resp.result);
-    } else {
-      return fail(resp.error || 'PC automation command failed.');
-    }
+    if (resp.ok) return ok(resp.result);
+    const why = resp.error || 'PC automation command failed.';
+    // BUG-405: every pid-taking tool passes through here; see ./window-recovery.js.
+    // Skips list_windows itself so the recovery cannot recurse.
+    return fail(cmdObj && cmdObj.pid && cmdObj.cmd !== 'list_windows'
+      ? await withWindowList(why, delegate) : why);
   } catch (err) {
     return fail(err.message);
   }
@@ -143,8 +145,9 @@ async function foregroundThenRetry(pid, cmdObj, opts) {
     }
     if (!focus.ok) {
       implicitTarget.forgetIf(pid);
-      return fail('That window is gone (' + (focus.result || 'could not focus it') +
-        '). Call list_windows again to find the right target — retrying this pid will not help.');
+      // No-main-window is unusable for FOCUS but not universally; see ./window-recovery.js.
+      return fail('That window is gone. ' + (focus.result || 'could not focus it')
+        + ' Call list_windows for the pid of the window you want.');
     }
   }
   return delegateWithRetry(cmdObj, opts);
@@ -452,9 +455,7 @@ async function focus_window({ pid }) {
   // works.
   var detail = String((res && res.error) || (res && res.result) || '');
   if (!res.ok && /cannot find/i.test(detail)) {
-    return fail(detail
-      + ' That pid no longer exists, so nothing was focused. Call list_windows again to find the '
-      + 'right target — retrying this pid will not help.');
+    return fail('That pid no longer exists, so nothing was focused. ' + detail);
   }
   return res;
 }
@@ -478,8 +479,7 @@ async function close_window({ pid }) {
   // exited, or the pid was a non-windowed child of a multi-process browser).
   // Say what to do next instead of returning a bare PowerShell error.
   if (!res.ok && /cannot find/i.test(String(res.result || ''))) {
-    return fail(String(res.result)
-      + ' That pid no longer exists, so nothing was closed. Call list_windows for the app\'s current pid before trying again.');
+    return fail('That pid no longer exists, so nothing was closed. ' + String(res.result));
   }
 
   // AUDIT FIX: a closed pid must not linger as the ui_type/ui_click default —

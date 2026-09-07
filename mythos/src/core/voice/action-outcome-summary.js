@@ -49,11 +49,14 @@ function summarizeActionsForResult(actions) {
         + (a.summary ? ': ' + a.summary : '') + ' (do not repeat it)');
       continue;
     }
-    // KNOWN GAP, deliberately not changed here: an `unverified` entry also
-    // arrives with ok:false and still renders "FAILED", which is the same
-    // flattening one field over. That is BUG-398 R5b (the turn record), which
-    // touches the record shape itself; widening this line to cover it without
-    // that change would make the note and the record disagree.
+    // BUG-398: both producers now carry unverified explicitly. Live's ok is
+    // evidence-level; legacy's is dispatch-level. Neither boolean licenses a
+    // success/failure claim about an unconfirmed effect. Preserve its reason
+    // in history; the abort branch above still owns the stronger no-retry rule.
+    if (a.unverified) {
+      parts.push(a.tool + ' NOT CONFIRMED' + (a.summary ? ': ' + a.summary : ''));
+      continue;
+    }
     const status = a.ok ? 'succeeded' : 'FAILED';
     parts.push(a.tool + ' ' + status + (a.summary ? ': ' + a.summary : ''));
   }

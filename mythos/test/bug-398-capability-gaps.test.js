@@ -102,7 +102,24 @@ describe('BUG-398 E5 — the media widget was always reachable by voice', () => 
   });
 });
 
-describe('BUG-398 E3 — open_web says which browser it can and cannot use', () => {
+// UPDATED 2026-09-03 (BUG-407). This block used to assert that the description
+// SAYS open_web "CANNOT choose" a browser and "cannot be pointed at a named
+// one". Those were the honest words for a real limitation, and pinning them was
+// right — E3 is the operator asking for Chrome three times and getting Brave
+// three times with nothing in the tool explaining why.
+//
+// The limitation is gone: open_web now takes browserName and opens the named
+// browser's real, logged-in profile. So the assertion could not be kept as it
+// stood — a guard that requires a tool to describe a limit it no longer has
+// forces the description to lie, which is the opposite of what E3 wanted.
+//
+// What is pinned instead is the SAME property, against the new contract: the
+// description must still say that the bare browser:true goes to the OS default
+// (so the model does not assume it can pick), and it must still name the route
+// out. That route is now browserName rather than browser_switch. The false
+// statements are also pinned as ABSENT, so nobody restores them from an old
+// diff.
+describe('BUG-398 E3 — open_web says which browser it uses, and how to name one', () => {
   function openWebTool() {
     const src = fs.readFileSync(
       path.resolve(__dirname, '../src/core/effectors/from-dashboard.js'), 'utf8');
@@ -110,27 +127,41 @@ describe('BUG-398 E3 — open_web says which browser it can and cannot use', () 
     assert.ok(desc, 'open_web description must be findable');
     const param = src.match(/browser: 'boolean \(optional\)((?:[^'\\]|\\.)*)'/);
     assert.ok(param, 'the browser param description must be findable');
-    return { description: desc[1], browserParam: param[1] };
+    const named = src.match(/browserName: 'string \(optional\)((?:[^'\\]|\\.)*)'/);
+    assert.ok(named, 'the browserName param description must be findable');
+    return { description: desc[1], browserParam: param[1], browserNameParam: named[1] };
   }
 
-  it('(b) the browser param states that it uses the OS default and cannot choose', () => {
+  it('(b) the browser param still states that ON ITS OWN it uses the OS default', () => {
     const { browserParam } = openWebTool();
     assert.match(browserParam, /DEFAULT/,
       'the operator asked for Chrome three times and got Brave three times, and '
       + 'nothing in the tool said why');
-    assert.match(browserParam, /CANNOT choose/i);
   });
 
-  it('(b) and points at the tools that CAN target a named browser', () => {
-    const { browserParam } = openWebTool();
-    assert.match(browserParam, /browser_switch/,
+  it('(b) and points at the parameter that CAN target a named browser', () => {
+    const { browserParam, browserNameParam, description } = openWebTool();
+    assert.match(browserParam + browserNameParam + description, /browserName/,
       'a limit with no route out of it is where the model improvises');
-    assert.match(browserParam, /browser_navigate/);
+    assert.match(browserNameParam, /chrome, brave or edge/,
+      'and the route must say what it accepts');
+    assert.match(browserNameParam, /whenever the operator named a browser/,
+      'the model needs the trigger condition, not just the capability');
   });
 
   it('the prose says it too, where a reader looks first', () => {
     const { description } = openWebTool();
-    assert.match(description, /OS DEFAULT browser and cannot be pointed at a named one/);
+    assert.match(description, /By default that is the OS DEFAULT browser/);
+    assert.match(description, /if they NAMED a browser/);
+  });
+
+  it('the superseded claims are GONE, not merely outranked by a newer sentence', () => {
+    const { description, browserParam } = openWebTool();
+    const both = description + ' ' + browserParam;
+    assert.doesNotMatch(both, /cannot be pointed at a named one/,
+      'BUG-407 made this false; a tool description that lies is worse than one that is silent');
+    assert.doesNotMatch(both, /CANNOT choose one: there is no browser name to pass here/,
+      'there is a browser name to pass now');
   });
 
   it('BOUNDS: the tool still does what it did — this is a description change only', () => {

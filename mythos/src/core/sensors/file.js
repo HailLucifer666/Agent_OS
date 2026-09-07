@@ -29,7 +29,10 @@ function createFileSensor({ bus, config, vault }) {
 
   function isIgnored(absPath) {
     for (var i = 0; i < IGNORED_DIRS.length; i++) {
-      if (absPath.indexOf(path.sep + IGNORED_DIRS[i] + path.sep) !== -1) return true;
+      // Windows can report the directory itself when a child file changes.
+      // Match the complete segment, not similarly named user directories.
+      var segment = path.sep + IGNORED_DIRS[i];
+      if (absPath.endsWith(segment) || absPath.indexOf(segment + path.sep) !== -1) return true;
     }
     return false;
   }

@@ -230,6 +230,40 @@ describe('BUG-275 H3/H4 — a ranked position given to a name not in the evidenc
     ]), []);
   });
 
+  it('GATE: complete evidence cannot substitute for an incomplete successful lookup', () => {
+    // The omitted tail contains the claimed name. The old filter discarded it
+    // and falsely proved absence against unrelated complete column headers.
+    const raw = 'x'.repeat(EVIDENCE_DIGEST_MAX + 10) + ' Claude Opus 1';
+    const truncated = evidenceRow('web_search', raw);
+    assert.equal(truncated.evidence.truncated, true);
+    assert.ok(raw.includes('Claude Opus 1'));
+    assert.ok(!truncated.evidence.text.includes('claudeopus1'));
+    const complete = evidenceRow('web_search', LIVEBENCH_RESULT);
+    for (const incomplete of [truncated, { tool: 'web_search', ok: true },
+      { tool: 'web_search', ok: true, evidence: { text: '', truncated: false } }]) {
+      for (const [current, recent] of [
+        [[complete], [incomplete]], [[incomplete], [complete]],
+        [[complete, incomplete], []], [[], [incomplete, complete]],
+      ]) {
+        assert.deepEqual(detectUnsourcedRankedEntities(
+          'LMSpeed ranks Claude Opus 1 at global rank 1.', current, recent), [],
+        'an incomplete successful lookup makes absence across the whole window unknown');
+      }
+    }
+  });
+
+  it('BOUND: incomplete failed or unverified lookups do not hide a proven absence', () => {
+    for (const other of [
+      { tool: 'web_search', ok: false },
+      { tool: 'web_search', ok: true, unverified: true },
+      { tool: 'launch_app', ok: true },
+    ]) {
+      assert.equal(detectUnsourcedRankedEntities(
+        'LMSpeed ranks Claude Opus 1 at global rank 1.', [other],
+        [evidenceRow('web_search', LIVEBENCH_RESULT)]).length, 1);
+    }
+  });
+
   it('GATE: future tense is not a claim', () => {
     assert.deepEqual(detectUnsourcedRankedEntities(
       'I will give you the top five: Claude Mythos 5, and Gemini CLI.',

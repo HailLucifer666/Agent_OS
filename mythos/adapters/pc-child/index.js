@@ -1,4 +1,5 @@
 'use strict';
+const { childRuntimeDir } = require('../../src/core/util/child-runtime');
 
 // adapters/pc-child/index.js — untouched CA of app/lib/voice/pc-child.js. Lifecycle
 // management for the PowerShell PC automation child process. Only re-pointing: NOVA's
@@ -327,6 +328,7 @@ function spawnChild() {
   ];
 
   const proc = (spawnImpl || spawn)('powershell.exe', args, {
+    cwd: childRuntimeDir(),
     shell: false,
     windowsHide: true,
     stdio: ['pipe', 'pipe', 'pipe'],

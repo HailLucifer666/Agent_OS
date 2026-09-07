@@ -46,6 +46,22 @@ describe('forge-runner — runPlan', () => {
   });
   afterEach(() => cleanupVaultDir(dir));
 
+  it('planning and building receive the same UI asset contract before a manifest is approved', async () => {
+    const contract = require('../src/core/skills/build-pack')._OUTPUT_CONTRACTS.ui;
+    const seen = [];
+    const restore = mockRunTask(async (prompt) => {
+      seen.push(prompt);
+      return JSON.stringify({ kind: 'website', files: [{ path: 'index.html' }] });
+    });
+    try {
+      const planned = await runner.runPlan('a tiny static tide site', 'website');
+      await runner.runBuild({ dirRel: 'builds/contract-probe', manifest: planned.manifest, spec: 'a tiny static tide site' });
+      assert.equal(seen.length, 2);
+      assert.ok(seen[0].includes(contract), 'planner must see inline-logo rule before proposing files');
+      assert.ok(seen[1].includes(contract), 'builder must retain the same output requirements');
+    } finally { restore(); }
+  });
+
   it('constructor requires a vault fs-store', () => {
     assert.throws(() => createForgeRunner({ config: {}, engine: fakeEngine }));
     assert.throws(() => createForgeRunner({ config: {}, vault: {}, engine: fakeEngine }));

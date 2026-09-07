@@ -56,66 +56,7 @@ const DSH_PACKAGE = '@deepseek-ai/dsh';
 
 const MYTHOS_DIR = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(MYTHOS_DIR, '..');
-const DIR_NAME = 'DeepSeek Harness';
-
-const REPO_DSH_HOME = path.join(REPO_ROOT, DIR_NAME);
-
-function toolsDshHome(env) {
-  const e = env || process.env;
-  if (!e.MYTHOS_TOOLS_DIR) return null;
-  return path.join(path.resolve(e.MYTHOS_TOOLS_DIR), DIR_NAME);
-}
-
-// A WRITE goes to userData/tools when Electron told us where that is, else the
-// repo root. MYTHOS_DSH_INSTALL_DIR overrides both — the documented escape hatch.
-function resolveDshHome(env) {
-  const e = env || process.env;
-  if (e.MYTHOS_DSH_INSTALL_DIR) return path.resolve(e.MYTHOS_DSH_INSTALL_DIR);
-  return toolsDshHome(e) || REPO_DSH_HOME;
-}
-
-// Every home a READ should consider, most-preferred first, de-duplicated. The
-// repo root stays in the list forever: a dev checkout has dsh there and must not
-// be told to reinstall it. mythos/node_modules is included last so a contributor
-// who installed dsh as an ordinary dependency is not told it is missing.
-function dshSearchHomes(env) {
-  const e = env || process.env;
-  const homes = [];
-  if (e.MYTHOS_DSH_INSTALL_DIR) homes.push(path.resolve(e.MYTHOS_DSH_INSTALL_DIR));
-  const tools = toolsDshHome(e);
-  if (tools) homes.push(tools);
-  homes.push(REPO_DSH_HOME);
-  homes.push(MYTHOS_DIR);
-  return homes.filter((h, i) => homes.indexOf(h) === i);
-}
-
-function packageDirFor(home) {
-  return path.join(home, 'node_modules', '@deepseek-ai', 'dsh');
-}
-
-// Read the installed package's own metadata rather than guessing a file name:
-// `bin` is a string on some packages and a map on others, and dsh's own
-// reference is the only authority on which.
-function readInstalled(home) {
-  const pkgDir = packageDirFor(home);
-  const pkgJson = path.join(pkgDir, 'package.json');
-  let pkg;
-  try { pkg = JSON.parse(fs.readFileSync(pkgJson, 'utf8')); } catch { return null; }
-  const bin = pkg.bin;
-  const rel = typeof bin === 'string' ? bin : (bin && (bin.dsh || bin[Object.keys(bin)[0]]));
-  if (!rel) return { home, pkgDir, version: pkg.version, entry: null, reason: 'package declares no bin entry' };
-  const entry = path.join(pkgDir, rel);
-  if (!fs.existsSync(entry)) return { home, pkgDir, version: pkg.version, entry: null, reason: 'bin points at ' + rel + ', which is not in the package' };
-  return { home, pkgDir, version: pkg.version, entry, reason: null };
-}
-
-function findInstalled(env, homes) {
-  for (const home of (homes || dshSearchHomes(env))) {
-    const found = readInstalled(home);
-    if (found) return found;
-  }
-  return null;
-}
+const { REPO_DSH_HOME, resolveDshHome, dshSearchHomes, packageDirFor, readInstalled, findInstalled } = require('../src/core/dsh-location');
 
 function run(cmd, args, opts) {
   return new Promise((resolve) => {
@@ -125,11 +66,15 @@ function run(cmd, args, opts) {
   });
 }
 
-// npm is a .cmd shim on Windows, which spawn cannot execute without a shell. Use
-// the same npm that is running us where possible — process.execPath's sibling —
-// so a machine with several Node installs does not install into a different one.
-function npmCommand() {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+// Measured BUG-402 recovery: spawn('npm.cmd', ..., {shell:false}) returns EINVAL
+// on Windows, so fixing lookup alone leaves Finish setup broken. Only fixed
+// installer arguments reach this shell; reject metacharacters before joining.
+function npmCommand(args, platform = process.platform) {
+  if (platform !== 'win32') return { command: 'npm', args };
+  if (!args.every(arg => typeof arg === 'string' && /^[-@a-zA-Z0-9._/]+$/.test(arg))) {
+    throw new Error('Unsupported npm installer argument');
+  }
+  return { command: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', 'npm.cmd ' + args.join(' ')] };
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +205,8 @@ async function install() {
     }, null, 2) + '\n', 'utf8');
   }
 
-  const res = await run(npmCommand(), ['install', '--save-exact', DSH_PACKAGE + '@' + DSH_VERSION], {
+  const npm = npmCommand(['install', '--save-exact', DSH_PACKAGE + '@' + DSH_VERSION]);
+  const res = await run(npm.command, npm.args, {
     cwd: home,
   });
   if (!res.ok) {
@@ -293,5 +239,6 @@ module.exports = {
   packageDirFor,
   readInstalled,
   findInstalled,
+  npmCommand,
   check,
 };

@@ -287,14 +287,7 @@ function buildTimeISO() {
 // up under mythos/. path.resolve keeps this correct regardless of where the
 // binary is installed (dev checkout or asar-packed app).
 const SERVER_ENTRY = toRealPathIfPackaged(path.resolve(__dirname, '..', 'mythos', 'src', 'main.js'));
-// mythos/ is the child's CWD: MYTHOS_VAULT_ROOT defaults to './vault' and is
-// resolved relative to process.cwd(), so forking without setting cwd made the
-// server use <repo>/vault (empty) instead of mythos/vault (the real one).
-//
-// B3 (audit finding): pinning cwd fixed the fork bug but left the vault
-// inside the install tree — any launcher/portable build/scheduled task with
-// a different cwd still opens an empty vault, and uninstall/reinstall
-// destroys the real one. startChild() below overrides MYTHOS_VAULT_ROOT to a
+// B3: startChild() overrides MYTHOS_VAULT_ROOT to a
 // stable app.getPath('userData') location (see ./vault-migration.js),
 // matching keys.json/the server log/the adblock cache further down — unless
 // the operator (or render.yaml) has already set it explicitly, which always
@@ -474,15 +467,21 @@ function resolveAuthTokenForPriming() {
 // Asking the operator to paste it back after every restart is asking a human
 // to be a password manager for a secret the process already has. A loopback
 // install has no token at all (/health reports authRequired:false) and never
-// reaches past the first line — untouched, per AD-8.
+// sends an exchange request, per AD-8.
 //
 // A failure here (bad token, rate limit, combined-PIN 409, server not up yet)
 // must still land the operator on the existing gate with the server's
 // verbatim message: nothing is swallowed, and nothing beyond a status code is
 // ever logged — the token itself must never reach a URL, a log line, or an
-// error message.
+// error message. Error payloads are omitted because dependencies can reflect
+// credentials in them; stage and HTTP status supply safe diagnostic context.
 async function primeAuthSession(win, token, port) {
-  if (!token) return;
+  // BUG-403: absence of a line formerly meant either success, no credential,
+  // or an unreached call. Record the stages, never response/error payloads
+  // which may contain a credential. This instruments future boots; it does
+  // not establish why the historical packaged boot left no evidence.
+  log('auth.session-prime:', { outcome: 'entered' });
+  if (!token) return log('auth.session-prime:', { outcome: 'skipped', reason: 'no-credential' });
   let res;
   try {
     res = await fetch(`http://127.0.0.1:${port}/api/auth/session`, {
@@ -491,29 +490,28 @@ async function primeAuthSession(win, token, port) {
       body: JSON.stringify({ token }),
     });
   } catch (err) {
-    // Connection refused (server not up yet) etc. — never fatal; the operator
-    // still sees the ordinary gate, and waitForLateReady() already covers the
-    // "server was late" race for the window itself.
-    log('auth.session-prime: request failed —', err && err.message);
+    // Nonfatal: the ordinary gate and waitForLateReady handle late startup.
+    log('auth.session-prime:', { outcome: 'failed', stage: 'request' });
     return;
   }
   if (!res.ok) {
-    log('auth.session-prime: exchange failed, status', res.status);
-    return;
+    return log('auth.session-prime:', { outcome: 'failed', stage: 'exchange', status: res.status });
   }
+  log('auth.session-prime:', { outcome: 'exchanged', status: res.status });
   const setCookie = res.headers.get('set-cookie') || '';
   const value = (/mythos_token=([^;]+)/.exec(setCookie) || [])[1];
   if (!value) {
-    log('auth.session-prime: 200 response carried no mythos_token cookie');
-    return;
+    return log('auth.session-prime:', { outcome: 'failed', stage: 'cookie-read', reason: 'missing-cookie' });
   }
-  await win.webContents.session.cookies.set({
-    url: `http://127.0.0.1:${port}`,
-    name: 'mythos_token',
-    value,
-    httpOnly: true,
-    sameSite: 'lax',
-  });
+  try {
+    await win.webContents.session.cookies.set({
+      url: `http://127.0.0.1:${port}`, name: 'mythos_token', value,
+      httpOnly: true, sameSite: 'lax',
+    });
+    log('auth.session-prime:', { outcome: 'cookie-installed' });
+  } catch (_) {
+    log('auth.session-prime:', { outcome: 'failed', stage: 'cookie-install' });
+  }
 }
 
 // ---- child lifecycle ----------------------------------------------------------
@@ -872,7 +870,9 @@ function startChild() {
   });
 
   child = child_process.fork(SERVER_ENTRY, [], {
-    cwd: MYTHOS_DIR, // .browser-agent.pid etc. still resolve to mythos/
+    // Preserve relative vault/provider settings. Persistent infrastructure
+    // children choose their own runtime cwd; the server's cwd is a contract.
+    cwd: MYTHOS_DIR,
     env: {
       ...process.env,
       ...decryptedKeysForChild(),

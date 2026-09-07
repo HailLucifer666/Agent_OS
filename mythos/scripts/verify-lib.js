@@ -24,7 +24,7 @@ function log(emoji, msg) {
   console.log(`${emoji}  ${msg}`);
 }
 
-// Boot MYTHOS as a detached child. Resolves { child, port } once /health
+// Boot MYTHOS as an owned child. Resolves { child, port } once /health
 // returns 200. Kills the child + rejects on boot failure or timeout.
 function bootMythos(opts) {
   opts = opts || {};
@@ -42,54 +42,59 @@ function bootMythos(opts) {
       cwd: MYTHOS_DIR,
       env: env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
       windowsHide: true
     });
 
-    let stdout = '';
-    let stderr = '';
-    let booted = false;
-    const timers = [];
-
+    let stdout = '', stderr = '';
+    let settled = false, pollTimer = null, request = null;
+    const timeoutMs = Number(opts.bootTimeoutMs) > 0 ? Number(opts.bootTimeoutMs) : BOOT_TIMEOUT_MS;
+    const clean = () => {
+      clearTimeout(pollTimer); clearTimeout(deadlineTimer);
+      if (request) { const req = request; request = null; req.destroy(); }
+    };
+    const fail = async (err) => {
+      if (settled) return;
+      settled = true; clean();
+      // The caller cannot clean up a boot handle it never received.
+      await killTree(child);
+      reject(err);
+    };
+    const deadlineTimer = setTimeout(() => fail(new Error(`boot timed out after ${timeoutMs}ms. stdout tail:\n${stdout.slice(-2000)}`)), timeoutMs);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
-    child.on('error', (err) => {
-      if (!booted) reject(new Error(`spawn error: ${err.message}`));
-    });
-    child.on('close', (code) => {
-      if (!booted) {
-        reject(new Error(`MYTHOS exited before /health responded (code=${code}). stderr:\n${stderr.slice(-2000)}`));
-      }
-    });
+    child.on('error', (err) => fail(new Error(`spawn error: ${err.message}`)));
+    child.on('close', (code) => fail(new Error(`MYTHOS exited before /health responded (code=${code}). stderr:\n${stderr.slice(-2000)}`)));
 
-    // Poll /health until it returns 200 or timeout
-    const deadline = Date.now() + BOOT_TIMEOUT_MS;
     const pollHealth = () => {
-      if (Date.now() > deadline) {
-        reject(new Error(`boot timed out after ${BOOT_TIMEOUT_MS}ms. stdout tail:\n${stdout.slice(-2000)}`));
-        return;
-      }
-      const req = http.get({
-        host: '127.0.0.1', port: port, path: '/health', timeout: 2000
-      }, (res) => {
-        let body = '';
-        res.on('data', (d) => { body += d; });
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            booted = true;
+      if (settled) return;
+      let finished = false;
+      const retry = () => {
+        if (finished || settled) return;
+        finished = true;
+        if (request) { const req = request; request = null; req.destroy(); }
+        pollTimer = setTimeout(pollHealth, HEALTH_POLL_MS);
+      };
+      try {
+        request = http.get({ host: '127.0.0.1', port, path: '/health', timeout: 2000 }, (res) => {
+          res.resume();
+          res.once('error', retry);
+          res.once('aborted', retry);
+          res.once('end', () => {
+            if (finished || settled) return;
+            if (res.statusCode !== 200) return retry();
+            finished = true; settled = true; clean();
             log('✅', `MYTHOS booted on port ${port}`);
             resolve({ child, port, getStdout: () => stdout, getStderr: () => stderr });
-          } else {
-            timers.push(setTimeout(pollHealth, HEALTH_POLL_MS));
-          }
+          });
         });
-      });
-      req.on('error', () => { timers.push(setTimeout(pollHealth, HEALTH_POLL_MS)); });
-      req.on('timeout', () => { req.destroy(); timers.push(setTimeout(pollHealth, HEALTH_POLL_MS)); });
+        request.once('error', retry);
+        request.once('timeout', retry);
+      } catch (err) { fail(err); }
     };
-    timers.push(setTimeout(pollHealth, 800));   // give node a moment to start
+    pollTimer = setTimeout(pollHealth, Math.min(800, timeoutMs / 4));
   });
 }
-
 // ── ATTACH MODE ───────────────────────────────────────────────────────────────
 //
 // bootMythos() above spawns a fresh DEV-TREE process: spawn(process.execPath,
@@ -340,22 +345,44 @@ function dispatchTool(port, tool, args, opts) {
 // return below is what makes "never kill a server you did not start" automatic
 // rather than something each harness has to remember.
 function killTree(child) {
-  if (!child || child.exitCode !== null) return Promise.resolve();
+  if (!child || !child.pid) return Promise.resolve();
+  if (process.platform !== 'win32') {
+    // bootMythos owns a detached process group. Parent exit does not imply
+    // descendant exit, so observe and escalate the group, never just the PID.
+    return new Promise((resolve) => {
+      let poll;
+      const finish = () => { clearTimeout(deadline); clearTimeout(poll); resolve(); };
+      const deadline = setTimeout(() => {
+        try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
+        finish();
+      }, 5000);
+      const check = () => {
+        try { process.kill(-child.pid, 0); }
+        catch (error) { if (error.code === 'ESRCH') return finish(); }
+        poll = setTimeout(check, 100);
+      };
+      try { process.kill(-child.pid, 'SIGTERM'); }
+      catch (error) { if (error.code === 'ESRCH') return finish(); }
+      check();
+    });
+  }
+  // Windows taskkill cannot discover descendants once their parent has exited;
+  // this harness has no Job Object ownership oracle for that case.
+  if (child.exitCode !== null || child.signalCode) return Promise.resolve();
   return new Promise((resolve) => {
     const pid = child.pid;
     if (!pid) return resolve();
-    try {
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
-      } else {
-        process.kill(-pid, 'SIGTERM');
-      }
-    } catch (_) { try { child.kill('SIGTERM'); } catch (__) {} }
-    child.on('close', () => resolve());
-    setTimeout(() => {
+    let done = false;
+    const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
+    child.once('close', finish);
+    const timer = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch (_) {}
-      resolve();
+      finish();
     }, 5000);
+    try {
+      const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+      killer.once('error', () => { try { child.kill('SIGTERM'); } catch (_) {} });
+    } catch (_) { try { child.kill('SIGTERM'); } catch (__) {} }
   });
 }
 

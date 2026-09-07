@@ -27,6 +27,8 @@ const { web_search } = require('./web-search');
 const { vaultRelativePath, vaultUrl, vaultAgeHours } = require('./vault-url');
 const { visionThink } = require('./vision-call');
 const evidence = require('./evidence');
+// BUG-407: open_web(browser:true)'s hand-off, including the named-browser route.
+const externalRoute = require('./open-external-route');
 // BUG-113: surface open spoken commitments in read_status so "where are we
 // on X" is answerable from state instead of memory.
 const { listOpenCommitments } = require('./from-calendar');
@@ -74,16 +76,17 @@ function fail(reason, code) { return code ? { ok: false, result: reason, code: c
 // ('dashboard', 'kanban') must keep working; this only fires on an argument that
 // is shaped like a URL or a bare domain and can therefore only have meant "go
 // to this site".
-const URL_SHAPED = /^(?:https?:\/\/|www\.)/i;
 // A bare domain: at least one dot, a 2+ char alphabetic TLD at the end, no
 // spaces. 'openai.com' and 'news.ycombinator.com/best' match; 'kanban',
 // 'weather in Delhi' and 'Tera Mera Rishta' do not.
-const BARE_DOMAIN_SHAPED = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}(?:[/?#].*)?$/i;
-function looksLikeUrlOrDomain(value) {
-  const s = String(value || '').trim();
-  if (!s || /\s/.test(s)) return false;
-  return URL_SHAPED.test(s) || BARE_DOMAIN_SHAPED.test(s);
-}
+//
+// BUG-407: these two live in ./open-external-route.js and are IMPORTED here
+// rather than defined twice. The browser:true branch moved into that module and
+// its first draft carried its own copy of this rule — which is the shape this
+// codebase keeps getting bitten by (two derivations of one fact, agreeing until
+// they don't). One definition, two consumers, and the tests that pin the shape
+// keep pinning it through this re-export.
+const { URL_SHAPED, looksLikeUrlOrDomain } = externalRoute;
 
 // The remedy text, shared so the two call sites cannot drift into saying
 // different things about the same mistake. Always names browser_navigate AND
@@ -313,13 +316,13 @@ function buildTools(ctx) {
     if (result) result.renderDispatched = true;
     var ack = null;
     try { ack = await widgetRenderer(result); } catch (_) { ack = null; }
-    // A timeout resolves null, and that is NOT the same as an explicit "did not
-    // mount": silence means the HUD never answered (no client attached, or it is
-    // wedged), which is unproven rather than proven-failed. Reporting failure there
-    // would be the mirror-image lie of the one this fixes.
+    // Silence is unknown, not failed. Explicit noopener uncertainty follows the same rule.
     if (!ack) {
       return evidence.unverified(ok(result, uiActions),
         'the dashboard did not answer, so I cannot confirm it rendered');
+    }
+    if (ack.mounted === false && ack.unverified === true && typeof ack.reason === 'string' && ack.reason.trim()) {
+      return evidence.unverified(ok(result, uiActions), ack.reason);
     }
     if (!ack.mounted) {
       return fail('the dashboard did not render this: ' + String(ack.reason || 'no reason given')
@@ -340,7 +343,7 @@ function buildTools(ctx) {
   // (YouTube/web — needs iframe) or a floating widget (search/weather/flights —
   // custom-rendered cards). No API keys needed: Exa MCP search + YouTube embed
   // URLs + Open-Meteo are all free.
-  async function open_web({ type, query, url, title, location, browser }) {
+  async function open_web({ type, query, url, title, location, browser, browserName }) {
     try {
       // Fail loud on an unrecognized/omitted type. Previously this silently
       // defaulted to 'search', turning an ambiguous "open <url>" into a quiet
@@ -365,49 +368,38 @@ function buildTools(ctx) {
       // domains use below, so the client's newtab branch opens the real
       // browser/electron window. Default unchanged: without the flag every
       // type keeps rendering in-dashboard exactly as before.
+      // BUG-272 T2: this used to return widgetType:'newtab' + unverified, and
+      // under the Electron shell that had ZERO working surfaces — the media
+      // window refuses anything but youtube/web by design, and the HUD's
+      // window.open fallback is denied unconditionally by setWindowOpenHandler.
+      // It failed 7/7 in the 2026-08-17 session while reporting ok:true every
+      // time, so the circuit breaker counted seven successes and the model
+      // retried the identical dead call through turn 72. It now really hands the
+      // URL over and FAILS when it cannot — no surface is a failure, not an
+      // unverified success. That distinction is the whole of BUG-272 T2.
+      //
+      // BUG-407 moved the body into ./open-external-route.js and gave it a
+      // browserName, so "open it in Chrome" reaches Chrome's real profile
+      // instead of silently resolving to the OS default. Unnamed is unchanged.
       if (browser) {
-        var bRaw = String(url || q || '').trim();
-        if (!bRaw || !looksLikeUrlOrDomain(bRaw)) {
-          return fail('open_web with browser:true needs a url (or a query that IS one) — a search result list or a weather card cannot open in the real browser. Pass url:"https://…" with browser:true.', OPEN_WEB_CODES.BAD_REQUEST);
+        var target = externalRoute.resolveExternalTarget({ url: url, query: q, browserName: browserName });
+        if (!target.ok) return fail(target.reason, OPEN_WEB_CODES.BAD_REQUEST);
+        var handoff = await externalRoute.performExternalOpen(target, { externalOpener: externalOpener });
+        if (!handoff.opened) {
+          return fail('could not open ' + target.href + ' in your browser: ' + (handoff.reason || 'no reason given')
+            + '. Use browser_navigate to drive a browser directly, or open it yourself.', OPEN_WEB_CODES.PROVIDER_ERROR);
         }
-        var bUrl = URL_SHAPED.test(bRaw) ? (/^www\./i.test(bRaw) ? 'https://' + bRaw : bRaw) : 'https://' + bRaw;
-        // BUG-272 T2: this used to return widgetType:'newtab' + unverified, and
-        // under the Electron shell that had ZERO working surfaces — the media
-        // window refuses anything but youtube/web by design, and the HUD's
-        // window.open fallback is denied unconditionally by
-        // setWindowOpenHandler. It failed 7/7 in the 2026-08-17 session while
-        // reporting ok:true every time, so the circuit breaker counted seven
-        // successes and the model retried the identical dead call through turn 72.
-        //
-        // Now it actually asks the Electron main process to hand the URL to the
-        // operator's real browser, and FAILS when it cannot — no surface is a
-        // failure, not an unverified success. That distinction is the whole bug.
-        if (externalOpener) {
-          var handoff = await externalOpener(bUrl);
-          if (!handoff || !handoff.opened) {
-            return fail('could not open ' + bUrl + ' in your browser: '
-              + ((handoff && handoff.reason) || 'no reason given')
-              + '. Use browser_navigate to drive a browser directly, or open it yourself.', OPEN_WEB_CODES.PROVIDER_ERROR);
-          }
-          // Handed to the OS, which is not the same as "the operator saw the
-          // page" — openExternal resolves on ACCEPTANCE, not on render. Reporting
-          // it as unverified is the honest shape and keeps the evidence contract
-          // intact rather than claiming a confirmation nothing produced.
-          //
-          // BUG-273 B2: the two halves are now separated. The hand-off IS
-          // confirmed — openExternal resolving means the OS took the URL and
-          // dispatched it — so it goes in confirmedStep, where the voice layer is
-          // allowed to say it out loud. `reason` narrows to the only thing actually
-          // unknown. Same data, same unverified verdict; what changes is that
-          // MYTHOS can now tell the operator their browser is opening instead of
-          // being forbidden from claiming anything at all.
-          return evidence.unverified(ok({ widgetType: 'newtab', url: bUrl, title: title || bRaw, handedToBrowser: true }),
-            'whether the page actually rendered in the browser',
-            { confirmedStep: 'your default browser was handed ' + bUrl + ' and accepted it' });
-        }
-        return fail('open_web with browser:true needs the MYTHOS desktop shell to reach your real '
-          + 'browser, and it is not running (this looks like a plain server/browser session). '
-          + 'Use browser_navigate instead, or open ' + bUrl + ' yourself.', OPEN_WEB_CODES.BAD_REQUEST);
+        // Handed to a browser process, which is not the same as "the operator
+        // saw the page" — both routes resolve on ACCEPTANCE, not on render, so
+        // the verdict stays unverified. BUG-273 B2 separated the two halves: the
+        // hand-off IS confirmed and goes in confirmedStep, where the voice layer
+        // may say it out loud, and `reason` narrows to the only unknown.
+        return evidence.unverified(ok({
+          widgetType: 'newtab', url: target.href, title: title || target.href,
+          handedToBrowser: true, browser: handoff.browser || 'os-default',
+          via: handoff.via, windowPidsMayBeStale: true,
+        }), 'whether the page actually rendered in the browser',
+        { confirmedStep: externalRoute.confirmedStepFor(handoff, target.href) });
       }
 
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
@@ -431,7 +423,7 @@ function buildTools(ctx) {
         for (var i = 0; i < ytRes.result.results.length; i++) {
           var r = ytRes.result.results[i];
           var vid = youtubeVideoId(r.url);   // BUG-381: five URL shapes were unreadable
-          if (vid) candidates.push({ id: vid, title: r.title || (title || q) }, OPEN_WEB_CODES.UNPLAYABLE);
+          if (vid) candidates.push({ id: vid, title: r.title || (title || q) });
         }
         if (!candidates.length) return fail('Found results but could not extract a YouTube video ID — the hits were not watch pages. Try a more specific title, or use spotify_play if the operator wanted to listen rather than watch.', OPEN_WEB_CODES.UNPLAYABLE);
 
@@ -1358,7 +1350,7 @@ function buildTools(ctx) {
     // real mechanism — this only makes the first attempt likelier to be right.
     { name: 'navigate', description: 'Switch which MYTHOS dashboard VIEW is showing (e.g. dashboard, kanban, pipeline). This is a HUD router, NOT a browser and NOT a URL bar: it cannot open a website or load a page. For "open <site>" / "go to <url>" use browser_navigate instead.', params: { route: 'string - a dashboard view name, never a URL' }, danger: false, fn: navigate },
     { name: 'close_panel', description: 'Close dashboard panel(s), floating widgets (search/weather/flights/image cards spawned by open_web), AND the Electron media window if one is open (e.g. a YouTube video that will not stop with standard playback controls). Pass all:true to close everything open, omit to close just the top-most one. Reports the real overlaysClosed/widgetsClosed/mediaWindowClosed counts.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
-    { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT the user\'s browser. Despite the name, open_web never browses: use browser_navigate for "search the web", "look up", "open <site>", or anything the user expects to see in a real browser. Only use open_web when the user asked for an at-a-glance card ON THE HUD. Content is rendered in MYTHOS\'s own UI (dashboard overlay/widget, plus MYTHOS\'s own media window for the youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL and requires url: — a domain in query: is REFUSED, not guessed at (that call failed five times in one 2026-08-14 session). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — but you do NOT have to switch tools for a plain "open this site in my browser": pass browser:true WITH url: and open_web itself routes through its newtab mechanism to the real browser window (the same route frame-blocking sites get) — but that is always the OS DEFAULT browser and cannot be pointed at a named one (BUG-398 E3: the operator asked for Chrome three times and got Brave every time). For full browsing control (tabs, navigation of an attached session) use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web, or the target when browser:true', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title', browser: 'boolean (optional) - open the url in the REAL browser window via the newtab route instead of rendering a dashboard card. It goes to whichever browser Windows has set as DEFAULT and CANNOT choose one: there is no browser name to pass here. If the operator asked for a specific browser ("open it in Chrome"), say that this route uses the default, or use browser_switch to attach that browser and then browser_navigate.' }, danger: false, fn: open_web },
+    { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT the user\'s browser. Despite the name, open_web never browses: use browser_navigate for "search the web", "look up", "open <site>", or anything the user expects to see in a real browser. Only use open_web when the user asked for an at-a-glance card ON THE HUD. Content is rendered in MYTHOS\'s own UI (dashboard overlay/widget, plus MYTHOS\'s own media window for the youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL and requires url: — a domain in query: is REFUSED, not guessed at (that call failed five times in one 2026-08-14 session). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — but you do NOT have to switch tools for a plain "open this site in my browser": pass browser:true WITH url: and open_web itself routes through its newtab mechanism to the real browser window (the same route frame-blocking sites get). By default that is the OS DEFAULT browser, which on this machine may not be the one the operator means — if they NAMED a browser (\"open it in Chrome\"), pass browserName:\"chrome\" as well and it opens in the normal logged-in profile of that browser (BUG-407; before that fix a named request silently opened the default, and BUG-398 E3 records the operator asking for Chrome three times and getting Brave every time). For full browsing control (tabs, navigation of an attached session) use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web, or the target when browser:true', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title', browser: 'boolean (optional) - open the url in the REAL browser window via the newtab route instead of rendering a dashboard card. On its own it goes to whichever browser Windows has set as DEFAULT.', browserName: 'string (optional) - chrome, brave or edge. Only meaningful with browser:true. Opens the url in THAT browser using the operator\'s normal profile (logged in, their extensions), by handing the url to the browser executable - not the signed-out MYTHOS debug profile. Pass it whenever the operator named a browser; omit it for a plain "open this in my browser".' }, danger: false, fn: open_web },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline. Prefer jobId (from pipeline_status/job_status) over path — it resolves the real artifact path server-side, so you never have to retype a filename. A wrong path fails with the real path(s) named in the error.', params: { path: 'string (optional if jobId given)', jobId: 'string (optional) - resolves the path from the job record instead of retyping it', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     // REMEDIATION P3-8: needs_result:true added to every status/check/list/

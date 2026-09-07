@@ -49,7 +49,7 @@ function fakeSkillsStore(seedSteps) {
       // Always match so we exercise the persistence branch deterministically.
       var hit = {
         ref: 'sk-multi', score: 1.0,
-        record: { id: 'sk-multi', uses: 3, successRate: 0.8, steps: seedSteps, when: [] },
+        record: { id: 'sk-multi', uses: 3, successRate: 0.8, steps: seedSteps, when: ['A requested workflow needs these steps'] },
         store: 'skills'
       };
       return [hit].slice(0, limit);
@@ -81,7 +81,7 @@ describe('Phase 4 / Area A — goal.plan persistence + markPlanStepDone (B-3, V3
     var g = gs.create({ title: 'do the thing', drive: 'user-service' });
     var d = await gs.plan(g, { memory: { skills: gs._internal } });
     // Use the internal store for recall
-    var skillsStore = { recall: function () { return [{ ref: 'sk-multi', score: 1.0, record: { id: 'sk-multi', uses: 3, successRate: 0.8, steps: steps, when: [] }, store: 'skills' }]; } };
+    var skillsStore = { recall: function () { return [{ ref: 'sk-multi', score: 1.0, record: { id: 'sk-multi', uses: 3, successRate: 0.8, steps: steps, when: ['A requested workflow needs these steps'] }, store: 'skills' }]; } };
     d = await gs.plan(g, { memory: { skills: skillsStore } });
     assert.equal(d.tool, 'shell_run');
     assert.equal(d.args.cmd, 'step-1');
@@ -100,7 +100,7 @@ describe('Phase 4 / Area A — goal.plan persistence + markPlanStepDone (B-3, V3
       { tool: 'shell_run', args: { cmd: 'b' } }
     ];
     var gs = makeGoalSystem(steps);
-    var skillsStore = { recall: function () { return [{ ref: 'sk', score: 1.0, record: { id: 'sk', uses: 1, successRate: 1.0, steps: steps, when: [] }, store: 'skills' }]; } };
+    var skillsStore = { recall: function () { return [{ ref: 'sk', score: 1.0, record: { id: 'sk', uses: 1, successRate: 1.0, steps: steps, when: ['A requested workflow needs these steps'] }, store: 'skills' }]; } };
     var g = gs.create({ title: 'do the thing', drive: 'user-service' });
     var d1 = await gs.plan(g, { memory: { skills: skillsStore } });
     assert.equal(d1.args.cmd, 'a');
@@ -116,7 +116,7 @@ describe('Phase 4 / Area A — goal.plan persistence + markPlanStepDone (B-3, V3
       { tool: 'shell_run', args: { cmd: 'only' } }
     ];
     var gs = makeGoalSystem(steps);
-    var skillsStore = { recall: function () { return [{ ref: 'sk', score: 1.0, record: { id: 'sk', uses: 1, successRate: 1.0, steps: steps, when: [] }, store: 'skills' }]; } };
+    var skillsStore = { recall: function () { return [{ ref: 'sk', score: 1.0, record: { id: 'sk', uses: 1, successRate: 1.0, steps: steps, when: ['A requested workflow needs these steps'] }, store: 'skills' }]; } };
     var g = gs.create({ title: 'do the thing', drive: 'user-service' });
     var d1 = await gs.plan(g, { memory: { skills: skillsStore } });
     assert.ok(d1, 'first step dispatched');
@@ -141,7 +141,7 @@ describe('Phase 4 / Area A — goal.plan persistence + markPlanStepDone (B-3, V3
       { tool: 'shell_run', args: { cmd: 'persist-2' } }
     ];
     var sharedFs = fakeFs();
-    var skillsStore = { recall: function () { return [{ ref: 'sk', score: 1.0, record: { id: 'sk', uses: 1, successRate: 1.0, steps: steps, when: [] }, store: 'skills' }]; } };
+    var skillsStore = { recall: function () { return [{ ref: 'sk', score: 1.0, record: { id: 'sk', uses: 1, successRate: 1.0, steps: steps, when: ['A requested workflow needs these steps'] }, store: 'skills' }]; } };
     var gs1 = goalsMod.createGoalSystem({ fs: sharedFs, config: { SKILL_MIN_SUCCESS_RATE: 0.5 }, bus: { emit: function () {} }, memory: { skills: skillsStore }, brain: null });
     var g = gs1.create({ title: 'persisted', drive: 'user-service' });
     await gs1.plan(g, { memory: { skills: skillsStore } });

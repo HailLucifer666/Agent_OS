@@ -32,7 +32,7 @@ function fakeHub() {
 }
 
 describe('vault-relative path resolution (F6)', () => {
-  let vaultDir, savedAllowedDirs;
+  let vaultDir, outsideDir, savedAllowedDirs;
 
   before(() => {
     savedAllowedDirs = process.env.VOICE_ALLOWED_DIRS;
@@ -40,6 +40,8 @@ describe('vault-relative path resolution (F6)', () => {
     // symlink/realpath check produces (os.tmpdir() can be an 8.3 short path
     // on Windows) — same convention as from-computer-symlink-sandbox.test.js.
     vaultDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-vault-root-')));
+    outsideDir = fs.mkdtempSync(vaultDir + '-outside-');
+    fs.writeFileSync(path.join(outsideDir, 'canary.txt'), 'fixture-owned outside content');
     fs.mkdirSync(path.join(vaultDir, 'builds', 'job-1786743287677-62'), { recursive: true });
     fs.writeFileSync(
       path.join(vaultDir, 'builds', 'job-1786743287677-62', 'index.html'),
@@ -58,6 +60,7 @@ describe('vault-relative path resolution (F6)', () => {
     process.env.VOICE_ALLOWED_DIRS = savedAllowedDirs;
     registerFromComputer(fakeHub(), {}); // clear the injected config for later tests in-process
     fs.rmSync(vaultDir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
   });
 
   it('resolves a vault-relative path under MYTHOS_VAULT_ROOT, not under cwd', () => {
@@ -99,6 +102,59 @@ describe('vault-relative path resolution (F6)', () => {
     assert.match(result.reason, /escapes the vault/);
     assert.match(result.reason, new RegExp(escapeRegExp(vaultDir)), 'must name MYTHOS_VAULT_ROOT');
     assert.match(result.reason, /cwd/i, 'must name the cwd-derived root too, per F6');
+  });
+
+  it('rejects vault junction escapes for reads, listing and nonexistent descendants', () => {
+    // BUG-247: lexical OR real containment let an in-vault junction expose an
+    // outside file. The real read_file call returned this fixture's canary.
+    // Both roots are test-owned; no operator vault or secrets are accessed.
+    const link = path.join(vaultDir, 'escape-link');
+    fs.symlinkSync(outsideDir, link, 'junction');
+    try {
+      for (const raw of ['vault/escape-link/canary.txt', '/vault/escape-link/canary.txt',
+        'file:///vault/escape-link/canary.txt', 'vault/escape-link/new/leaf.txt']) {
+        assert.equal(resolveSandboxed(raw).ok, false, raw);
+      }
+      const read = read_file({ path: 'vault/escape-link/canary.txt' });
+      assert.equal(read.ok, false);
+      assert.ok(!JSON.stringify(read).includes('fixture-owned outside content'));
+      assert.equal(list_folder({ path: 'vault/escape-link' }).ok, false);
+      assert.equal(fs.existsSync(path.join(outsideDir, 'new')), false);
+    } finally { fs.unlinkSync(link); }
+  });
+
+  it('rejects lexical traversal even when an outside alias points back inside', () => {
+    const link = path.join(outsideDir, 'back');
+    fs.symlinkSync(vaultDir, link, 'junction');
+    try {
+      assert.equal(resolveSandboxed('vault/../' + path.basename(outsideDir)
+        + '/back/builds/job-1786743287677-62/index.html').ok, false);
+      assert.equal(resolveSandboxed('vault/../' + path.basename(outsideDir) + '/canary.txt').ok, false,
+        'a sibling sharing the vault prefix is still outside');
+    } finally { fs.unlinkSync(link); }
+  });
+
+  it('accepts in-vault junctions and new descendants of an in-vault ancestor', () => {
+    const link = path.join(vaultDir, 'inside-link');
+    fs.symlinkSync(path.join(vaultDir, 'builds'), link, 'junction');
+    try {
+      assert.equal(read_file({ path: 'vault/inside-link/job-1786743287677-62/index.html' }).ok, true);
+      assert.equal(resolveSandboxed('vault/inside-link/new/leaf.txt').ok, true);
+      assert.equal(fs.existsSync(path.join(vaultDir, 'builds/new')), false);
+    } finally { fs.unlinkSync(link); }
+  });
+
+  it('accepts a configured vault root that is itself a junction', () => {
+    const rootAlias = path.join(outsideDir, 'vault-alias');
+    fs.symlinkSync(vaultDir, rootAlias, 'junction');
+    registerFromComputer(fakeHub(), { config: { MYTHOS_VAULT_ROOT: rootAlias } });
+    try {
+      assert.equal(read_file({ path: 'vault/builds/job-1786743287677-62/index.html' }).ok, true);
+      assert.equal(resolveSandboxed('vault/new/leaf.txt').ok, true);
+    } finally {
+      registerFromComputer(fakeHub(), { config: { MYTHOS_VAULT_ROOT: vaultDir } });
+      fs.unlinkSync(rootAlias);
+    }
   });
 
   it('refuses (rather than guessing) when no vault root was ever configured', () => {

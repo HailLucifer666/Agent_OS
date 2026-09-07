@@ -79,7 +79,7 @@ describe('BUG-171 — log_incident dedups a double-fire without hiding it', () =
     assert.equal(incidentLines.length, 1, 'exactly one line on disk');
   });
 
-  it('dedup is on meaning, not on byte-identical text', async () => {
+  it('dedup ignores case and punctuation without claiming semantic equivalence', async () => {
     const { fs, byName } = makeTools();
     const log = byName('log_incident');
     await log({ text: 'Spotify volume did not change.' });
@@ -94,6 +94,49 @@ describe('BUG-171 — log_incident dedups a double-fire without hiding it', () =
     await log({ text: 'the volume command said it worked but nothing changed' });
     await log({ text: 'screen_look described a window that was not on screen' });
     assert.equal(fs._lines.filter((l) => l.kind !== 'status').length, 2);
+  });
+
+  it('preserves distinct multilingual reports and dedups their actual repeats', async () => {
+    for (const pair of [
+      ['ধ্বনি শোনা যাচ্ছে না', 'পর্দা দেখা যাচ্ছে না'],
+      ['声音无法播放', '屏幕无法显示'],
+      ['क', 'कि'], // the combining vowel mark changes the report
+      ['خطأ ١', 'خطأ ٢'],
+    ]) {
+      const { fs, byName } = makeTools();
+      const log = byName('log_incident');
+      const first = await log({ text: pair[0] });
+      const second = await log({ text: pair[1] });
+      assert.equal(second.result.deduped, undefined, pair.join(' / '));
+      assert.notEqual(second.result.id, first.result.id);
+      const repeat = await log({ text: pair[0] + '!' });
+      assert.equal(repeat.result.existingId, first.result.id);
+      assert.equal(fs._lines.length, 2);
+      assert.deepEqual(byName('list_incidents')({}).result.incidents.map(x => x.text).sort(), pair.slice().sort());
+    }
+  });
+
+  it('does not collapse symbol-only reports to an empty dedup key', async () => {
+    const { fs, byName } = makeTools();
+    const log = byName('log_incident');
+    const first = await log({ text: '⚠️' });
+    for (const text of ['❤️', '☀️', '🔇']) {
+      const distinct = await log({ text });
+      assert.equal(distinct.result.deduped, undefined, text + ' must retain its symbol, not just a variation selector');
+    }
+    const repeat = await log({ text: '  ⚠️  ' });
+    assert.equal(repeat.result.existingId, first.result.id);
+    assert.equal(fs._lines.length, 4);
+  });
+
+  it('dedups canonically equivalent accents while preserving different accented text', async () => {
+    const { fs, byName } = makeTools();
+    const log = byName('log_incident');
+    const first = await log({ text: 'Écran cassé' });
+    const repeat = await log({ text: 'E\u0301cran casse\u0301!' });
+    assert.equal(repeat.result.existingId, first.result.id);
+    await log({ text: 'Ecran casse' });
+    assert.equal(fs._lines.length, 2);
   });
 });
 

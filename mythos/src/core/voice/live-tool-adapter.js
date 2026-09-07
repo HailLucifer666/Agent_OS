@@ -30,6 +30,7 @@
 // uses — a no-op unless assistantText matches the explicit commitment-phrase
 // list, so ordinary Live turns are unaffected.
 const { createHash } = require('crypto');
+const { createProcedureAttribution } = require('./procedure-attribution');
 
 const { logCommitmentIfPresent } = require('../effectors/from-calendar');
 
@@ -277,6 +278,7 @@ function createLiveToolAdapter(deps) {
   // out signatures another call in that same (now-stale) batch already
   // recorded.
   const IDEMPOTENT_READ_TOOLS = {
+    suggest_procedures: true,
     list_windows: true,
     read_status: true,
   };
@@ -476,6 +478,7 @@ function createLiveToolAdapter(deps) {
     return wrapped;
   }
 
+  const suggestedProcedures = createProcedureAttribution();
   async function handleLiveToolCalls(calls, { sendToolResponse }) {
     sweepPendingConfirms();
     // BUG-128 instrumentation: a re-issued batch carries fresh call ids, so the
@@ -589,31 +592,21 @@ function createLiveToolAdapter(deps) {
       liveTurnActions.push(entry);
     }
     const responses = [];
-    // SEQUENTIAL ON PURPOSE — do not convert this to Promise.all / fan-out.
-    //
-    // The 2026-08-19 audit proposed exactly that (backlog M3), on the reasoning
-    // that awaiting each call serialises a batch. Measured against the operator's
-    // audit trail first, counting GATE rows only — dispatch-action.js writes a
-    // second row per call with decision:'completed', and counting both makes
-    // every single call look like a 2-call batch (that error put the multi-call
-    // rate at 22%):
-    //
-    //   1,400 gate rows -> 1,337 batches, 55 multi-call (4.1%), largest 5.
-    //
-    // ~96% of batches hold one call and cannot benefit. And the multi-call
-    // shapes that do occur include strictly ordered chains — ui_type + send_key
-    // (x3), close_window + browser_navigate (x2), navigate + close_panel +
-    // navigate, spotify_volume + spotify_play. Running those concurrently races
-    // a keystroke against the typing it is supposed to follow, which is the
-    // BUG-219 / keystrokes-follow-the-caret failure class. This loop is what
-    // makes an ordered batch work; the ordering is pinned by
-    // test/live-tool-batch-ordering.test.js.
-    //
-    // The dedup half of that item needed no change: isDuplicateCall and
-    // isDuplicateSignature each check-and-record on the same tick, so no await
-    // separates the check from the record and two identical calls can never
-    // both pass. Same test file pins it.
-    for (const call of calls) {
+    // SEQUENTIAL ON PURPOSE: never Promise.all this batch (backlog M3).
+    // The 2026-08-19 audit measured 1,400 GATE rows: 1,337 batches,
+    // 55 multi-call (4.1%), largest 5. Counting dispatch-action's extra
+    // decision:'completed' rows wrongly inflated the rate to 22%.
+    // About 96% cannot benefit from fan-out; the rest include ordered chains:
+    // ui_type + send_key (x3), close_window + browser_navigate (x2),
+    // navigate + close_panel + navigate, spotify_volume + spotify_play.
+    // Parallelism races keystrokes against typing/caret ownership (BUG-219).
+    // Both dedup checks record synchronously before the first await, so
+    // identical calls cannot both pass. live-tool-batch-ordering.test.js
+    // pins ordering and dedup together; procedure provenance changes neither.
+    for (const incomingCall of calls) {
+      // Provenance is not an effector argument or a deduplication discriminator.
+      const { skillRef, ...toolArgs } = incomingCall.args || {};
+      const call = { ...incomingCall, args: toolArgs };
       // BUG-120: answer the repeat, run nothing. The model still gets a
       // functionResponse for the id it asked about (silence would leave the
       // turn hanging), and the reply names the original so it waits for that
@@ -645,6 +638,7 @@ function createLiveToolAdapter(deps) {
         continue;
       }
       const decision = { tool: call.name, args: call.args || {} };
+      if (suggestedProcedures.matches(skillRef, call.name, decision.args)) decision.skillRef = skillRef;
       let verdict;
       try {
         verdict = leash.check(decision, { connectionId, goalId: null });
@@ -776,6 +770,7 @@ function createLiveToolAdapter(deps) {
           };
         } else {
           summary = `${call.name} done.`;
+          if (call.name === 'suggest_procedures') suggestedProcedures.record(ev.result);
           response = { status: 'ok', result: truncateForModel(ev.result) };
           // BUG-295: the success branch, and the one instance A came through.
           // `message` is the instruction on every other branch here, so it is

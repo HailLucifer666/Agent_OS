@@ -4,6 +4,15 @@
 //
 // Incident: "I can't drive Chrome if the browser is already attached to
 // Brave." Correct and honest, then nothing — no remedy path. browser_switch
+// UPDATED 2026-09-03 (BUG-409). The mechanism assertion here moved from
+// browserAgent.disconnect() to browserAgent.closeLaunchedBrowser(), because
+// disconnect() was measured NOT to close a CDP-attached browser: pid 13152
+// stayed alive and kept holding port 9223 after it ran, so browser_switch was
+// launching the next browser onto a port the old one still owned. Every test's
+// intent is unchanged, and one is now STRONGER — "never closes a browser MYTHOS
+// did not launch" watches BOTH calls, where it used to watch only the one that
+// could not have closed anything in the first place.
+//
 // is that remedy: it disconnects the adapter, closes the debug browser
 // MYTHOS ITSELF LAUNCHED (never a browser it merely attached to — that could
 // be the operator's own window), launches the requested browser, and
@@ -24,17 +33,19 @@ const browserMod = require('../src/core/effectors/from-browser');
 const { browser_switch, browser_launch_debug, __setAttachedBrowserForTest } = browserMod;
 
 describe('BUG-107 — browser_switch is a real, reachable remedy for the wrong-browser refusal', () => {
-  let originalGetStatus, originalDisconnect, originalEnsureOnline;
+  let originalGetStatus, originalDisconnect, originalEnsureOnline, originalClose;
 
   beforeEach(() => {
     originalGetStatus = browserAgent.getStatus;
     originalDisconnect = browserAgent.disconnect;
+    originalClose = browserAgent.closeLaunchedBrowser;
     originalEnsureOnline = browserAgent.ensureOnline;
   });
 
   afterEach(() => {
     browserAgent.getStatus = originalGetStatus;
     browserAgent.disconnect = originalDisconnect;
+    browserAgent.closeLaunchedBrowser = originalClose;
     browserAgent.ensureOnline = originalEnsureOnline;
     __setAttachedBrowserForTest(null);
   });
@@ -63,10 +74,10 @@ describe('BUG-107 — browser_switch is a real, reachable remedy for the wrong-b
     assert.equal(disconnectCalled, false);
   });
 
-  test('switching FROM a MYTHOS-launched browser disconnects it, then routes through browser_launch_debug', async () => {
+  test('switching FROM a MYTHOS-launched browser CLOSES it, then routes through browser_launch_debug', async () => {
     __setAttachedBrowserForTest('brave');
-    let disconnectCalled = false;
-    // getStatus reports ONLINE+brave until disconnect() runs, then CONNECTING
+    let closedProfile = null;
+    // getStatus reports ONLINE+brave until the close runs, then CONNECTING
     // — chosen deliberately so the real (unstubbed) browser_launch_debug takes
     // its CONNECTING/join branch, which only calls ensureOnline() and NEVER
     // reaches findBrowserExecutable()/spawn(). Chrome, Brave and Edge are all
@@ -77,12 +88,21 @@ describe('BUG-107 — browser_switch is a real, reachable remedy for the wrong-b
     browserAgent.getStatus = () => online
       ? { state: 'ONLINE', mode: 'launched' }
       : { state: 'CONNECTING', mode: null };
-    browserAgent.disconnect = async () => { disconnectCalled = true; online = false; };
+    browserAgent.closeLaunchedBrowser = async (profileDir) => {
+      closedProfile = profileDir;
+      online = false;
+      return { closed: true, method: 'cdp', survivors: [], reason: null };
+    };
     browserAgent.ensureOnline = async () => true; // joins the "in-flight" connect, no real network/process I/O
 
     const res = await browser_switch({ browser: 'chrome' });
 
-    assert.equal(disconnectCalled, true, 'must disconnect the MYTHOS-launched browser before switching');
+    assert.ok(closedProfile, 'must CLOSE the MYTHOS-launched browser before switching, not merely disconnect from it');
+    // The profile dir is the authorisation: browser-process.js will only act on
+    // a %LOCALAPPDATA%\MYTHOS\*-debug-profile path, and it must be BRAVE's —
+    // the browser being switched away from, never the one being switched to.
+    assert.match(String(closedProfile), /brave-debug-profile$/,
+      'must close the profile of the browser it is switching AWAY from');
     // launched:false is a shape ONLY browser_launch_debug's CONNECTING-join
     // branch returns — proves browser_switch deferred to it instead of
     // fabricating its own "switched" response.
@@ -94,11 +114,14 @@ describe('BUG-107 — browser_switch is a real, reachable remedy for the wrong-b
     __setAttachedBrowserForTest(null); // BUG-106 invariant: null means "merely attached", not "MYTHOS launched"
     browserAgent.getStatus = () => ({ state: 'ONLINE', mode: 'cdp' });
     let disconnectCalled = false;
+    let closeCalled = false;
     browserAgent.disconnect = async () => { disconnectCalled = true; };
+    browserAgent.closeLaunchedBrowser = async () => { closeCalled = true; return { closed: true }; };
 
     const res = await browser_switch({ browser: 'brave' });
 
     assert.equal(disconnectCalled, false, 'must never close a browser MYTHOS did not launch');
+    assert.equal(closeCalled, false, 'and must not reach the real close path either — that is the one that can kill a process');
     assert.equal(res.ok, false);
     assert.match(String(res.result), /did not launch/i);
   });
@@ -111,11 +134,14 @@ describe('BUG-107 — browser_switch is a real, reachable remedy for the wrong-b
     // (unstubbed) call on its CONNECTING/join branch, never touching spawn().
     browserAgent.getStatus = () => ({ state: 'CONNECTING', mode: null });
     let disconnectCalled = false;
+    let closeCalled = false;
     browserAgent.disconnect = async () => { disconnectCalled = true; };
+    browserAgent.closeLaunchedBrowser = async () => { closeCalled = true; return { closed: true }; };
     browserAgent.ensureOnline = async () => true;
 
     const res = await browser_switch({ browser: 'chrome' });
     assert.equal(disconnectCalled, false, 'nothing online to disconnect');
+    assert.equal(closeCalled, false, 'nothing online to close');
     assert.equal(res.ok, true);
     assert.equal(res.result.launched, false, 'deferred to browser_launch_debug\'s own CONNECTING-join branch');
   });

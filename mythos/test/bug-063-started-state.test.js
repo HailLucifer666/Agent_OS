@@ -62,4 +62,13 @@ describe('BUG-063: a started (in-progress) action is not narrated as FAILED', ()
     assert.equal(summarizeActionsForResult([]), null);
     assert.equal(summarizeActionsForResult(null), null);
   });
+
+  it('unverified Live and legacy outcomes are neither failures nor proven successes', () => {
+    for (const ok of [false, true]) {
+      const note = summarizeActionsForResult([{ tool: 'open_web', ok, unverified: true, summary: 'handed URL to the browser' }]);
+      assert.match(note, /open_web NOT CONFIRMED/);
+      assert.doesNotMatch(note, /FAILED|succeeded/);
+      assert.match(note, /handed URL to the browser/);
+    }
+  });
 });

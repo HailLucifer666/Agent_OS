@@ -124,14 +124,22 @@ export function createOverlayManager(root, opts) {
 
     try {
       const mod = await panel.loader();
+      // BUG-019: loading/rendering can outlive close or close-and-reopen.
+      // Ownership belongs to this entry, not merely another panel with its id.
+      if (open.get(panelId) !== entry) return;
       const body = el.querySelector('.hud-panel-body');
       // xss-safe: static template, no interpolation
       body.innerHTML = '';
       // Pass payload to render() for panels that need it (e.g. web-panel gets
       // the embed URL/cards). Existing views ignore the second arg — backward compatible.
       const result = await mod.render(body, payload);
+      if (open.get(panelId) !== entry) {
+        if (typeof result === 'function') result();
+        return;
+      }
       if (typeof result === 'function') entry.cleanup = result;
     } catch (err) {
+      if (open.get(panelId) !== entry) return;
       const body = el.querySelector('.hud-panel-body');
       const msg = document.createElement('div');
       msg.className = 'text-faint';

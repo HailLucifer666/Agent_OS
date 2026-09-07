@@ -356,11 +356,12 @@ describe('dsh-agent — the generated overlay is a CATALOG route', () => {
     }
   });
 
-  it('lives outside the repo and is removed after use', () => {
+  it('uses the configured temporary directory and is removed after use', () => {
     const handle = dsh.writeOverlay(selected);
-    const repoRoot = path.resolve(__dirname, '..', '..');
-    assert.equal(path.resolve(handle.file).startsWith(repoRoot + path.sep), false,
-      'a generated overlay inside the repo would carry a machine path into a tracked tree (AD-7)');
+    // TEMP may deliberately be project-local and gitignored. Its location is
+    // not evidence of tracked content; bypassing TEMP would violate isolation.
+    assert.ok(path.resolve(handle.file).startsWith(path.resolve(os.tmpdir()) + path.sep),
+      'the overlay must use the configured scratch directory');
     dsh.cleanupOverlay(handle);
     assert.equal(fs.existsSync(handle.file), false, 'cleanupOverlay must remove the file');
   });

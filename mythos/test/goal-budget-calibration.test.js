@@ -60,6 +60,49 @@ function system(config) {
 }
 
 describe('B4 an ordinary multi-step goal survives its own planning', () => {
+  it('restores a missing legacy budget using the same zero config caps', async () => {
+    const store = memFs();
+    store.listFiles = () => [{ path: 'Goals/legacy.json' }];
+    store.readJSON = () => ({ id: 'legacy' });
+    store.ensureDir = () => {};
+    const { createGoalSystem } = require('../src/core/goals');
+    const sys = createGoalSystem({ fs: store, config: { GOAL_TOKEN_BUDGET: 0, GOAL_ACTION_BUDGET: 0 },
+      bus: { emit() {} }, memory: { episodic: { write() {} } }, brain: null });
+    await sys.init();
+    assert.equal(sys.get('legacy').budget.tokens, 0);
+    assert.equal(sys.get('legacy').budget.actions, 0);
+    sys.debitBudget('legacy', { tokens: 0, actions: 0 });
+    assert.equal(sys.get('legacy').status, 'paused');
+  });
+  it('preserves explicit zero caps from config and from per-goal options', () => {
+    for (const fromOptions of [false, true]) {
+      const { sys } = system(fromOptions ? {} : { GOAL_TOKEN_BUDGET: 0, GOAL_ACTION_BUDGET: 0 });
+      const goal = sys.create({ title: 'Zero-cap goal', ...(fromOptions ? { budget: { tokens: 0, actions: 0 } } : {}) });
+      assert.equal(goal.budget.tokens, 0);
+      assert.equal(goal.budget.actions, 0);
+      sys.debitBudget(goal.id, { tokens: 0, actions: 0 });
+      assert.equal(sys.get(goal.id).status, 'paused', 'zero cap is already exhausted, as for persisted budgets');
+    }
+  });
+
+  it('defaults only absent/null caps and keeps positive overrides', () => {
+    const { sys } = system({ GOAL_TOKEN_BUDGET: 123, GOAL_ACTION_BUDGET: 7 });
+    for (const budget of [undefined, null, { tokens: null, actions: null }]) {
+      const goal = sys.create({ budget });
+      assert.equal(goal.budget.tokens, 123);
+      assert.equal(goal.budget.actions, 7);
+    }
+    const positive = sys.create({ budget: { tokens: 20, actions: 2 } });
+    assert.equal(positive.budget.tokens, 20);
+    assert.equal(positive.budget.actions, 2);
+    sys.debitBudget(positive.id, { tokens: 19, actions: 1 });
+    assert.notEqual(sys.get(positive.id).status, 'paused');
+    sys.debitBudget(positive.id, { tokens: 1, actions: 1 });
+    assert.equal(sys.get(positive.id).status, 'paused');
+    const defaults = system({ GOAL_TOKEN_BUDGET: null, GOAL_ACTION_BUDGET: null }).sys.create({});
+    assert.equal(defaults.budget.tokens, SCHEMA.GOAL_TOKEN_BUDGET.default);
+    assert.equal(defaults.budget.actions, SCHEMA.GOAL_ACTION_BUDGET.default);
+  });
   it('five planner-sized debits do not exhaust the budget', () => {
     const { sys, emitted } = system();
     const goal = sys.create({ text: 'Set up the backend API endpoints' });

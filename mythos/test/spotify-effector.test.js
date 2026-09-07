@@ -640,6 +640,11 @@ describe('BUG-026 (5th attempt): spotify_play prefers the cua-driver element-add
     assert.equal(result.result.clickedElement, 'Play Bohemian Rhapsody by Queen');
     assert.equal(result.result.verified, true, 'window-title oracle confirmed playback');
     assert.equal(result.result.nowPlaying, 'Queen - Bohemian Rhapsody');
+    assert.equal(require('../src/core/effectors/evidence').isVerified(result), true,
+      'the outer spotify_play result must retain the inner oracle proof');
+    assert.deepEqual(result.evidence, {
+      oracle: 'window-title', observed: 'Queen - Bohemian Rhapsody', expected: 'Bohemian Rhapsody',
+    });
     assert.ok(!callOrder.includes('click_at'), 'click_at must not be used when cua-driver succeeds');
     assert.ok(!callOrder.includes('send_key'), 'send_key must not be used when cua-driver succeeds');
   });

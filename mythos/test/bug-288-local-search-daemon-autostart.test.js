@@ -148,6 +148,25 @@ test('BUG-288: the child is spawned as node, not as a second Electron app', () =
 });
 
 // --- the port cannot drift from the rung ------------------------------------
+test('BUG-404: relative daemon override keeps the same file after child cwd changes', () => {
+  withStubbedSpawn((mod, calls) => {
+    asNonTestRun(() => {
+      const entry = fakeEntry();
+      try {
+        process.env.WEB_SEARCH_LOCAL_ENTRY = path.relative(process.cwd(), entry);
+        const child = mod.createWebSearchChild({ logger: capturingLogger(), config: {} });
+        assert.equal(child.start(), true);
+        assert.equal(calls[0].args[0], entry);
+        assert.ok(path.isAbsolute(calls[0].opts.cwd));
+        assert.notEqual(calls[0].opts.cwd, path.dirname(CHILD));
+        assert.equal(fs.readFileSync(calls[0].args[0], 'utf8'), '// not executed by these tests\n');
+        child.stop();
+      } finally {
+        fs.rmSync(path.dirname(entry), { recursive: true, force: true });
+      }
+    });
+  });
+});
 
 test('BUG-288: the daemon port is DERIVED from the URL the rung fetches', () => {
   const mod = require(CHILD);

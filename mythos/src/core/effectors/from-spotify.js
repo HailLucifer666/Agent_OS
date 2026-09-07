@@ -382,7 +382,7 @@ async function cuaPlayViaDriver(query) {
       // (window-title oracle just matched) should say so explicitly.
       return evidence.verifiedOk(
         { result: { clickedElement: target.label || null, verified: true, nowPlaying: title } },
-        { oracle: 'media-status', observed: title, expected: query }
+        { oracle: 'window-title', observed: title, expected: query }
       );
     }
   }
@@ -655,7 +655,7 @@ async function spotify_play({ query, trackId }) {
       if (cuaResult.unverified) {
         return evidence.unverified({ result: merged }, cuaResult.reason);
       }
-      return ok(merged);
+      return { ...cuaResult, result: merged }; // BUG-085: ok(merged) erased the independent oracle proof.
     }
     focusWarning = focusWarning
       ? `${focusWarning}; cua-driver path failed: ${cuaResult.result}`

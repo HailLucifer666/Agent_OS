@@ -38,47 +38,31 @@
 // headroom. The ratchet was right again — a parser with nine cases belongs
 // somewhere a test can reach it without constructing a dashboard effector.
 
-// Ordered longest-prefix-first so `/embed/` cannot be shadowed by a looser arm.
-// Each entry is (why it exists) -> pattern.
-const ID = '([a-zA-Z0-9_-]{11})';
+const VIDEO_ID = /^[a-zA-Z0-9_-]{11}$/;
 
-const PATH_FORMS = [
-  // youtu.be/ID — the share-sheet short form.
-  new RegExp('youtu\\.be/' + ID),
-  // /embed/ID — including youtube-nocookie.com, which is what a privacy-mode
-  // embed serves and which the old pattern did not know about.
-  new RegExp('youtube(?:-nocookie)?\\.com/embed/' + ID),
-  // /shorts/ID
-  new RegExp('youtube\\.com/shorts/' + ID),
-  // /live/ID — a livestream. This is the miss that produced the logged failures:
-  // a news channel's "live" result is served from this path, never from /watch.
-  new RegExp('youtube\\.com/live/' + ID),
-  // /v/ID — the legacy embed path. Still served by old links.
-  new RegExp('youtube\\.com/v/' + ID),
-];
-
-// `v` ANYWHERE in the query string, not only immediately after `watch?`. A share
-// link is routinely `watch?app=desktop&v=ID` or `watch?feature=share&v=ID`.
-const QUERY_V = new RegExp('[?&]v=' + ID);
-
-// Returns the 11-char id, or null. Null means "this is not a YouTube video URL",
-// which is a different fact from "the search found nothing" — open_web reports
-// them with different codes for exactly that reason.
+// Null means the search result does not identify a YouTube video.
 function youtubeVideoId(url) {
-  const text = String(url == null ? '' : url);
-  if (!text) return null;
-  // The host has to look like YouTube before any path arm is trusted, so an
-  // unrelated URL that happens to contain `/live/<11 chars>` is not mistaken for
-  // a video. Checked on the raw text rather than by parsing, because callers pass
-  // search-result URLs that may be relative or malformed.
-  const looksLikeYouTube = /(?:^|\/\/|\.)(?:youtu\.be|(?:[a-z0-9-]+\.)?youtube(?:-nocookie)?\.com)/i.test(text);
-  if (!looksLikeYouTube) return null;
-  for (const re of PATH_FORMS) {
-    const m = re.exec(text);
-    if (m) return m[1];
+  if (typeof url !== 'string') return null;
+  let parsed;
+  try { parsed = new URL(url); } catch { return null; }
+  if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+  // Search results are untrusted. Match the actual host and the entire ID;
+  // substrings in a redirect query or a longer identifier are not evidence.
+  const host = parsed.hostname;
+  const short = host === 'youtu.be';
+  const youtube = host === 'youtube.com' || host.endsWith('.youtube.com');
+  const privacy = host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com');
+  if (!short && !youtube && !privacy) return null;
+  let id = null;
+  if (youtube && /^\/watch\/?$/.test(parsed.pathname)) {
+    const values = parsed.searchParams.getAll('v');
+    if (values.length === 1) id = values[0];
+  } else {
+    const pattern = short ? /^\/([^/]+)\/?$/
+      : privacy ? /^\/embed\/([^/]+)\/?$/ : /^\/(?:embed|shorts|live|v)\/([^/]+)\/?$/;
+    id = pattern.exec(parsed.pathname)?.[1];
   }
-  const q = QUERY_V.exec(text);
-  return q ? q[1] : null;
+  return typeof id === 'string' && VIDEO_ID.test(id) ? id : null;
 }
 
 // ---------------------------------------------------------------------------
