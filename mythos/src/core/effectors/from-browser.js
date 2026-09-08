@@ -1565,7 +1565,7 @@ function registerFromBrowser(hub, ctx) {
   vaultFs = (ctx && ctx.fs) || null;
   const tools = require('./browser-driver-tools').withBrowserDriver(TOOLS, ctx);
   for (const tool of tools) hub.register(effectorFromTool(tool));
-  return tools.length;
+  return tools.length + require('./from-browser-use').registerFromBrowserUse(hub, { config, browserAgent, launchDebug: browser_launch_debug }).count; // browser_task (2026-09-08): shares this adapter + launcher; main.js is at its ratchet ceiling
 }
 
 module.exports = {

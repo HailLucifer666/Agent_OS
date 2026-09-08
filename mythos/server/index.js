@@ -2923,7 +2923,7 @@ function createServer(deps) {
               browser: config.DESKTOP_OPERATOR_ENABLED ? deps.desktopRuntime?.getBridge() || { getStatus: () => ({ state: 'OFFLINE' }) } : browserAgentAdapter,
               cua: cuaDriverAdapter,
               pcChild,
-              android: androidChildAdapter,
+              android: androidChildAdapter, browserUse: require('../src/core/browser-use-location').statusAdapter(),
             },
           }),
           log: (m) => logger.info('live-tools', { detail: m }),

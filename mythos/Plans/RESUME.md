@@ -70,26 +70,19 @@ does not count toward or against the streak.
 
 ## NEXT ACTION
 
-Phase A merged (PR #74, `451ba73`). The first real golden-path run happened on
-2026-09-07 and named two prerequisites, both now reported as PREREQ-MISSING by
-the runner instead of UNVERIFIED:
+2026-09-08: the plain path is back (operator mode OFF; open_web, Spotify, Notepad verified
+16:30). PR #79 (parser qualifier + open-youtube rediscovery) and this branch's
+`browser_task` are the two changes since. `browser_task` hands a multi-step browser job to
+browser-use (MIT, pinned 0.13.10, `node mythos/scripts/setup-browser-use.js --install`)
+in the debug browser. Measured: gemini-3.6-flash played the second YouTube result 3/3.
 
-1. **No debuggable browser.** Brave was running without
-   `--remote-debugging-port=9222`, so the server withheld all 20 `browser_*`
-   tools before the brain saw them. `scripts/setup-chrome-debug.ps1` launches
-   Chrome or Edge with a SEPARATE profile, which is not the signed-in Brave
-   session Stage 1 names. On `main` there is no path to the operator's own
-   Brave session; that path is the extension work on `codex/windows-operator`.
-2. **Typed turns vanish into Live.** With `VOICE_S2S_ENABLED=true` the server
-   injects a typed utterance into the Gemini Live session (`live.text-injected`)
-   and answers the legacy channel with an empty `done`. The runner cannot
-   observe a spoken reply from that channel.
-
-In order: (a) decide whether the golden path is judged through the extension
-path (merge `codex/windows-operator` Stage 1 first) or through CDP against Brave
-relaunched with the debug flag; (b) give the runner a way to observe the Live
-path, or run with `VOICE_S2S_ENABLED=false` and say so; (c) read the first real
-line. Streak is still 0.
+1. Merge #79 and this PR. Rebuild the installer (browser_task is not in v0.1.11).
+2. Operator: bring a model key that can carry it. Free tiers cannot: Gemini 20 req/day/model
+   (~3 tasks), Groq 8k tokens/request (0 tasks), Mistral key at plan 0. Paid Gemini Flash is
+   a few cents a task; set `BROWSER_USE_MODEL` accordingly.
+3. Then: `node mythos/scripts/verify-browser-use.js` must print PASS for video and form;
+   spoken "play the second video on YouTube" must show `browser_task` ok in the audit; then
+   `golden-path.js` writes its first line on the new path. Streak is still 0.
 
 ## Where the detail lives
 

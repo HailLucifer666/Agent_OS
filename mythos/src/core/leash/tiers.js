@@ -300,6 +300,9 @@ const TIER_TABLE = {
   'browser_click':         3,
   'browser_type':          3,
   'browser_fill_form':     3,  // Phase 4 — autonomous multi-field typing
+  'browser_task':          3,  // 2026-09-08 — hands a whole multi-step job to the browser-use agent in the
+                               // debug browser: clicks and types on the operator's behalf, so the same
+                               // class as browser_click/browser_fill_form, and trusted the same way.
   // Snapshot-and-refs toolkit (2026-08-06). Same tier as their siblings above:
   // each one drives the operator's REAL logged-in browser, so each is a T3
   // confirm the first time and session-grantable thereafter per BUG-119.

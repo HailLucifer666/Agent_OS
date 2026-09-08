@@ -197,6 +197,9 @@ function createLeash(deps) {
   var OPERATOR_TRUSTED_DEFAULT = {
     browser_click: 1, browser_type: 1, browser_fill_form: 1,
     browser_select_option: 1, browser_press_key: 1, browser_upload_file: 1,
+    // 2026-09-08: browser_task is the multi-step form of the six above (browser-use agent in
+    // the debug browser). Same containment: only a human-driven connectionId reaches here.
+    browser_task: 1,
     ui_click: 1, ui_type: 1, click_at: 1,
     see_and_click: 1, cua_click: 1,
     close_window: 1

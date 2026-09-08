@@ -68,9 +68,21 @@ const RULES = [
     // a browser available, so gating it on a browser being available would be a
     // deadlock — and BUG-099 is on record about refusals that name an
     // unreachable remedy.
-    except: (name) => name === 'browser_launch_debug' || name === 'browser_switch',
+    // browser_task too (2026-09-08): it launches the debug browser itself, and the
+    // browser-task rule below judges it on the runner being installed instead. Without this
+    // exemption the prefix match here caught it first and re-created the deadlock.
+    except: (name) => name === 'browser_launch_debug' || name === 'browser_switch' || name === 'browser_task',
     requires: (snap) => snap.browserOnline,
     reason: 'no debuggable browser is attached (CDP endpoint unreachable) — browser_launch_debug can start one',
+  },
+  {
+    // browser_task needs the browser-use runner environment, not a browser: it launches the
+    // debug browser itself when none is attached, so gating it on browserOnline would recreate
+    // the browser_launch_debug deadlock described above.
+    id: 'browser-task',
+    match: (name) => name === 'browser_task',
+    requires: (snap) => snap.browserUseInstalled,
+    reason: 'the browser-use runner is not installed (node mythos/scripts/setup-browser-use.js --install)',
   },
   {
     id: 'cua',
@@ -130,6 +142,7 @@ function buildCapabilitySnapshot({ config, adapters } = {}) {
     googleOAuth: set(cfg.GOOGLE_CLIENT_ID) && set(cfg.GOOGLE_CLIENT_SECRET) && set(cfg.GOOGLE_REFRESH_TOKEN),
     browserOnline: onlineOrUnknown(a.browser),
     cuaOnline: onlineOrUnknown(a.cua),
+    browserUseInstalled: onlineOrUnknown(a.browserUse),
     pcChildOnline: onlineOrUnknown(a.pcChild),
     androidDevice,
     androidOnline,

@@ -28,6 +28,9 @@ const ALLOWLIST = new Set([
   'helpers.js',
   'helpers/mock-spawn-enoent.js',
   'helpers/leash-fixture.js',
+  // Stand-in runner for browser_task tests (test/browser-task.test.js). Guarded: it exits
+  // at once unless spawned with --as-runner, so collection by node --test is harmless.
+  'fixtures/fake-browser-use-runner.js',
   'fixtures/stub-mcp-server.js',
   'fixtures/browser-native-protocol.js', // Pure framing oracle; importing never opens pipes or processes.
   'eval/routing.eval.js',

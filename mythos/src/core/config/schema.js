@@ -446,7 +446,7 @@ const SCHEMA = {
 
   // Browser automation (Phase 9 — playwright-core, drives installed Chrome/Edge)
   BROWSER_CDP_URL:            { type: 'string',  default: 'http://127.0.0.1:9222' },
-  BROWSER_AUTOMATION:         { type: 'bool', default: true },
+  BROWSER_AUTOMATION:         { type: 'bool', default: true }, ...require('./schema-browser-use'),
   DESKTOP_OPERATOR_ENABLED:   { type: 'bool', default: false },
   // Per-page timeout lets lazy-hydrating SPA elements come up before the
   // click; lower fails faster on a genuinely-absent element. Read by the

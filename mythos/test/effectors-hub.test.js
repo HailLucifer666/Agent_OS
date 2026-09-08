@@ -223,7 +223,7 @@ describe('gate: 100 registered count', () => {
     // 2026-08-20 transcript and got "I can't access the...") = 106.
     // Extension driver adds video_list, media_state and media_control to the
     // existing browser catalog. Desktop wrappers are outside this subset.
-    assert.equal(hub.count(), 109);
+    assert.equal(hub.count(), 110); // 110 since 2026-09-08: registerFromBrowser also registers browser_task (from-browser-use.js)
   });
 });
 

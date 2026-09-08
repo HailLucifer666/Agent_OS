@@ -57,13 +57,13 @@ const VERDICT = { PASS: 'PASS', FAIL: 'FAIL', UNVERIFIED: 'UNVERIFIED', PREREQ: 
 // actually starts the video.
 const STEPS = [
   { id: 'open', text: 'Open YouTube and play the third video in the results.',
-    anyOf: ['open_web', 'browser_navigate', 'browser_click', 'browser_press_key'], oracle: 'media' },
+    anyOf: ['browser_task', 'open_web', 'browser_navigate', 'browser_click', 'browser_press_key'], oracle: 'media' },
   { id: 'pause', text: 'Pause the video.',
     anyOf: ['media_key', 'browser_click', 'browser_press_key'] },
   { id: 'resume', text: 'Resume the video.',
     anyOf: ['media_key', 'browser_click', 'browser_press_key'] },
   { id: 'next', text: 'Next video.',
-    anyOf: ['media_key', 'browser_click', 'browser_press_key', 'browser_navigate'] },
+    anyOf: ['browser_task', 'media_key', 'browser_click', 'browser_press_key', 'browser_navigate'] },
 ];
 
 // ---- pure judgement, exported for tests -------------------------------------

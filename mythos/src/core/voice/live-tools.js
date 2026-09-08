@@ -202,6 +202,10 @@ const DEFAULT_ALLOWLIST = [
   // operator-present-trusted status as the two beside it, so there is no safety
   // property that distinguishes it from them.
   'browser_fill_form',
+  // 2026-09-08: the multi-step browser agent. "Play the second video", "fill this form" —
+  // one call, the agent observes and retries; the model no longer drives 17 tools one click
+  // at a time. Same tier and trust as browser_fill_form beside it.
+  'browser_task',
   // Snapshot-and-refs (2026-08-06). browser_snapshot is the READ half of every
   // browser interaction: the model takes a snapshot, sees the page as an
   // accessibility tree with element refs, and acts on a ref instead of guessing

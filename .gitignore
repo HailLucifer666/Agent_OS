@@ -209,3 +209,7 @@ mythos/.tmp-file-walk-test/
 
 # Project-local test, browser, package and audit scratch state; never publish.
 .cache/
+
+# browser-use runner venv (mythos/scripts/setup-browser-use.js --install). Same vendor-root
+# rule as DeepSeek Harness: project-local, pinned, never committed.
+/browser-use/
