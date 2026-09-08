@@ -1,6 +1,6 @@
 {
   "name": "agent-os",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -63,7 +63,10 @@
     ],
     "win": {
       "extraResources": [
-        { "from": ".cache/native-browser-host/mythos-browser-host.exe", "to": "mythos-browser-host.exe" }
+        {
+          "from": ".cache/native-browser-host/mythos-browser-host.exe",
+          "to": "mythos-browser-host.exe"
+        }
       ],
       "target": "nsis",
       "forceCodeSigning": false
