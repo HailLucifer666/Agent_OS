@@ -57,6 +57,10 @@ const SELF_TIMED_TOOLS = new Set([
   'index_project', 'document_ingest', 'security_scan',
   // orchestration — each stage dispatches its own bounded actions
   'run_mission', 'pipeline_execute',
+  // browser-use agent — from-browser-use.js kills its runner at BROWSER_USE_TIMEOUT_MS
+  // (default 120000). Live 2026-09-08 13:31: two spoken tasks were cut at this dispatcher's
+  // 30 s default mid-run (audit: browser_task tool-timeout x2), then the tool was suppressed.
+  'browser_task',
 ]);
 
 async function dispatchAction(decision, ctx) {

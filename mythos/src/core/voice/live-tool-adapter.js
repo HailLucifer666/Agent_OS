@@ -165,6 +165,10 @@ function createLiveToolAdapter(deps) {
     // caught immediately — the unverified status open_web must report is the whole
     // point of that test, and a two-step ack hides it.
     launch_app: true,
+    // 2026-09-08: browser_task runs the browser-use agent — 60-120 s measured (87, 108, 118, 85 s
+    // over four live tasks). Membership is about DURATION: ack at once with "say what you are
+    // doing", deliver the real outcome when the runner reports.
+    browser_task: true,
   };
 
   // BUG-128 — 2026-08-06: SLOW_TOOLS is a hand-maintained list, and the list is

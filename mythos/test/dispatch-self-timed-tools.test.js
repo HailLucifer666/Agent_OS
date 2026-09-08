@@ -54,7 +54,8 @@ describe('dispatchAction must not impose its default budget on self-timed tools'
   });
 
   it('every SELF_TIMED_TOOLS entry survives a budget shorter than its work', async () => {
-    for (const tool of ['revise_project', 'start_project', 'dsh_task',
+    // browser_task added 2026-09-08: two live spoken tasks were killed at 30 s (audit 13:31, 13:33).
+    for (const tool of ['browser_task', 'revise_project', 'start_project', 'dsh_task',
       'kanban_build_card', 'kanban_assemble', 'index_project', 'document_ingest',
       'security_scan', 'run_mission', 'pipeline_execute']) {
       const ctx = makeCtx([[tool, 180]]);
