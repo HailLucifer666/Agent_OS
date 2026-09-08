@@ -343,50 +343,50 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-07",
+  "generated": "2026-09-08",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7407,
+      "value": 7416,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-07"
+      "measuredAt": "2026-09-08"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-07"
+      "measuredAt": "2026-09-08"
     },
     "withheld": {
       "value": 61,
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-07"
+      "measuredAt": "2026-09-08"
     },
     "registered": {
       "value": 186,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-07"
+      "measuredAt": "2026-09-08"
     },
     "voiceReachable": {
       "value": 125,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-07"
+      "measuredAt": "2026-09-08"
     },
     "untriaged": {
       "value": 1,
       "label": "untriaged incidents",
       "tone": "fail",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-09-07",
+      "measuredAt": "2026-09-08",
       "stale": false
     }
   },
@@ -786,7 +786,7 @@
       "tools": [
         "launch_app"
       ],
-      "ok": 83,
+      "ok": 85,
       "f": 13,
       "note": "Opens applications and resolves the real windowed process, not the activation stub.",
       "ev": "14 ok / 0 fail over the last three days"
@@ -944,7 +944,7 @@
       "tools": [
         "web_search"
       ],
-      "ok": 156,
+      "ok": 157,
       "f": 13,
       "note": "Still warn on main, but for a different reason than in this audit. It is no longer 'only Wikipedia': exa-mcp answers again, and a second keyless provider plus an escalating per-provider cooldown are now merged to main. The remaining risk is quota, not deadness - two free tiers of ~150 and ~100 calls a day, both vendor claims since neither endpoint publishes a rate-limit header.",
       "ev": "Measured 2026-08-26 through the shipping module: exa-mcp median 1634ms, you-mcp median 2621ms, 3 of 3 queries each answered. ddg-html is alive again too - 4 of 5 queries in ~1s, and its miss failed in 73ms rather than a 10s timeout - so it is intermittent, not dead as recorded here. Fix is MERGED to main as of 2026-08-26 (PR #26, merge 2c0a4e9). (BUG-361, BUG-365)"
@@ -956,8 +956,8 @@
       "tools": [
         "open_web"
       ],
-      "ok": 144,
-      "f": 26,
+      "ok": 146,
+      "f": 28,
       "note": "Renders search, weather, flight and YouTube cards. 17 distinct failure strings, now all typed with a machine-readable code. Five YouTube URL shapes were unreadable and now parse.",
       "ev": "RE-MEASURED 2026-08-27 (BUG-381 / Track D-4) against the live vault: 135 ok / 25 fail, not 131/19 -- the map was stale AND under-counted the failures. 17 distinct failure strings, not twelve. Grouped by real cause: 9 correct refusals of a malformed call (no url / no type / no query), 10 where upstream genuinely returned nothing, 3 \"could not extract a YouTube video ID\", 3 provider fetch failures. So D-4's named cause is the SMALLEST of the four, but it was real: the extractor regex knew four YouTube URL shapes and missed five. Measured -- MISS on youtube.com/live/ID (a livestream, and the failing queries included \"CNN live news\", \"CNN news dashboard\" and \"today's news\"), MISS on watch?app=desktop&v=ID and watch?feature=share&v=ID (v had to be the FIRST query param, which a share sheet and a mobile redirect both break), MISS on youtube-nocookie.com/embed/ and on the legacy /v/ path. All five now read, extracted to util/youtube-id.js with a host guard so an unrelated URL containing an 11-char path segment cannot yield a fake id. Second half of D-4 also done: all 22 failure sites in the open_web handler now carry a typed `code` (bad-request / no-results / unplayable-results / provider-error, one per measured cause group) beside the unchanged prose, so a caller can finally branch. STILL WARN, not green: the extractor is unit-verified over the real URL shapes but no live search has been driven through it, and 84% (135/160) is not a green number even when most of the remainder is correct refusal."
     },
@@ -998,7 +998,7 @@
         "browser_launch_debug",
         "browser_switch"
       ],
-      "ok": 147,
+      "ok": 149,
       "f": 33,
       "note": "OPEN after 2026-08-27 triage. browser_launch_debug works (15 ok / 1 fail) but nothing auto-launches it on first need. The wiring is the work, and it is not done.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and said plainly rather than left ambiguous. D-6: \"wire the EXISTING browser_launch_debug (15/1) to auto-launch on first need. Do not build a launcher.\" Measured: browser_launch_debug 15 ok / 1 fail, newest failure 2026-08-05 — the tool itself is sound. What is missing is the wiring, so a browser_* call on a cold machine still reports the debug port unreachable instead of starting Chrome once and retrying. Deliberately not attempted in this pass: the change spawns a real browser process on first use, which is a live-behaviour change to a T3 surface that wants its own verification sitting (a harness cannot prove \"launched once, then the retry succeeded\" without actually launching). Left open with the mechanism named rather than half-wired."
@@ -1036,7 +1036,7 @@
         "gmail_read"
       ],
       "ok": 112,
-      "f": 104,
+      "f": 110,
       "note": "gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
       "ev": "LIVE-VERIFIED 2026-08-28 (Track A, BUG-387) — the first time this node has been checked against the provider rather than against its own history. `node mythos/scripts/verify-google-grant.js` reports INVALID: the refresh token minted no access token and Gmail refused. The real effector agrees, which is the two-routes-one-answer cross-check: calling gmail_unread through the registered tool returns \"invalid_grant: Token has been expired or revoked.\" So this row is correct and stays red. THE CODE AROUND IT IS NOT AT FAULT, measured rather than assumed: from-gmail classifies invalid_grant as TERMINAL and its remedy text names the literal command plus the 7-day Testing-publishing-status trap; hub.js latches the terminal result per tool so the provider is not hammered — the 88 recorded failures fall into 60 bursts, nearly all of size ONE, i.e. one attempt per process rather than a retry storm; gmail-sensor raises health.anomaly with needsOperator:true; and explainer.js speaks the whole remedy aloud, verbatim, including `node scripts/google-auth.js`. Nine test files already cover that chain, two of them asserting the SPOKEN text contains the command. WHAT WAS ACTUALLY BROKEN was the one thing an operator would check: `doctor` reported \"OK Gmail / Calendar sensors — configured\" for three weeks while all of the above was failing, because it tests that three strings are PRESENT in .env and presence is not validity. Fixed under BUG-387: doctor now says validity is unchecked and names the verifier. A CORRECTION worth recording: from the episodic `summary` field it looked as though MYTHOS had announced this nine times over eight days and never said what to do — that was WRONG, `summary` truncates at ~100 characters and `detail.text` carries the full remedy. Only the 2026-08-18 utterance is genuinely deficient and it predates the BUG-273 C2 / BUG-278 fixes that repaired exactly it. NEEDS THE OPERATOR: run `node mythos/scripts/google-auth.js`, put the new GOOGLE_REFRESH_TOKEN in mythos/.env, then confirm with `node mythos/scripts/verify-google-grant.js` — which is the point of the new script, since before it there was no way to tell whether the three minutes had worked."
     },
@@ -1166,7 +1166,7 @@
         "get_app_volume",
         "set_app_mute"
       ],
-      "ok": 205,
+      "ok": 217,
       "f": 1,
       "note": "set_volume, get_volume and media_key. Not one failure in 154 calls.",
       "ev": "set_volume 68/0, get_volume 37/0, media_key 49/0, media_status 28/1"
@@ -1282,7 +1282,7 @@
         "toggle_goal",
         "delete_goal"
       ],
-      "ok": 302,
+      "ok": 304,
       "f": 3,
       "note": "Read, create, propose and toggle all work at the data layer. The HUD panel did not reflect a toggle it did not make itself - fixed after the last session, unproven.",
       "ev": "list_goals 60/0, propose_goal 37/1, create_goal 8/0, rest.goals.toggle 13/0\nBUG-290 fixed 2026-08-21 01:00 -- NOT live-verified."
@@ -1298,7 +1298,7 @@
         "reminder_approve_action",
         "calendar_upcoming"
       ],
-      "ok": 73,
+      "ok": 76,
       "f": 3,
       "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
@@ -1440,7 +1440,7 @@
       ],
       "note": "pipeline_status verified 2026-08-28. pipeline_advance had nothing to advance; pipeline_execute is a disposition.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. Built on the real createPipelineEffector({fs, classifier}) over a sandbox vault. pipeline_status passes. pipeline_advance is n/a and honestly so — with an empty sandbox there is no card to advance, and it says \"No pipeline card matching ... found\" rather than inventing a success; verifying the advance path properly needs a seeded pipeline and is worth doing when someone seeds one. pipeline_execute is NOT RUN: T3, and it executes a real pipeline stage rather than describing one. So this node is one of three verbs closed, and stays warn.",
-      "ok": 67,
+      "ok": 68,
       "f": 0
     },
     {
@@ -1496,7 +1496,7 @@
       ],
       "note": "read_status, read_system_specs, system_status, job_status. 2 of 4 verified 2026-08-28: read_status and job_status reach through to the build engine, which a harness cannot supply.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. read_system_specs PASSES on a real oracle: its answer must agree with node's own os.cpus()/platform. That is the point of the tool — BUG-273 records that it exists so the model reads real numbers instead of screenshotting a dashboard to read them off it — so \"it returned something\" would have been the wrong check. system_status also passes (2.2 KB of real payload). read_status and job_status are n/a, not failing: both call buildRunner.listJobs(), and createBuildRunner requires the build engine or a brain lane, neither of which a harness may conjure under the no-spend decision. With it absent they report a failure rather than throwing, which is the honest degradation. Worth recording so nobody re-derives it: the first version of the harness passed buildRunner:null and wrote the resulting message up as a product problem — main.js constructs buildRunner unconditionally and a brain always exists, so null never reaches these in production.",
-      "ok": 188,
+      "ok": 189,
       "f": 0
     },
     {
@@ -1599,7 +1599,7 @@
       ],
       "note": "Historical get_time/get_weather/get_directions checks passed. Latest weather failure was a timeout; location ambiguity remains a separate content gate.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. This node reached the acceptance contract, so it is the strongest of the four promotions. get_time is not merely \"ok:true\": the answer must carry THIS process's current year, and passing timezone:\"Asia/Tokyo\" must actually change it — a tool returning a plausible date is precisely what a self-report cannot rule out, and the mutation that returned a fixed 1999 date was caught. get_weather and get_directions answered over their free lanes (346 and 143 bytes); their CONTENT is not verified against a second source and the harness says so rather than implying it did. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back. Campaign 2026-09-07: latest recorded weather failure was an upstream timeout, preceded by successful calls. A fresh Bangalore query returned Bangalore Town, Sindh, Pakistan; this is not proof of the intended city. No capability downgrade was inferred from a single failure, and content accuracy remains unverified.",
-      "ok": 159,
+      "ok": 162,
       "f": 5
     },
     {

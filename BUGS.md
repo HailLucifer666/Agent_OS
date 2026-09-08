@@ -18,6 +18,52 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 
 ## Windows Operator evidence — 2026-09-07, Stage 1 qualification remains open
 
+### PIN-unlock voice regression — 2026-09-08
+
+The operator installed the reviewed 0.1.11 package and reported perpetual
+hearing/listening with wake word unavailable after entering the PIN. Installed
+ASAR identity matched the reviewed artifact. All three wake-word models existed,
+their HTTP asset requests succeeded, and the eight stored provider keys decrypted;
+missing models or erased credentials did not explain this incident.
+
+The HUD issued VAD, wake-word and speech-to-speech configuration requests before
+PIN verification. Those protected requests returned 401 and were cached for the
+page lifetime. Successful PIN verification had no recovery callback. An isolated
+Chrome reproduction using the production HUD confirmed no wake-word/S2S retry
+after unlock and a subsequent click constructing voice with default tuning.
+
+The repair shares generation-bound configuration across the app and voice widget,
+refreshes all three endpoints after successful unlock, and waits for current facts
+before constructing voice. Proactive speech is deliberately dropped while those
+facts are pending, as while the PIN gate is closed; it must not create an early
+mistuned loop. WebSocket continuation retries a pending refused handshake promptly
+and ignores stale pre-unlock authentication probes. No audio thresholds changed.
+Nine focused regressions passed. The real-browser before/after fixture verifies
+authorized configuration reload and server-provided VAD on an immediate click;
+it uses disposable PIN/HTTP facts, not the operator's microphone or credentials.
+Evidence is `.cache/windows-operator/pin-voice/`. Attended speech remains a separate
+gate until the corrected installed UI is exercised.
+
+The final recursive suite passed **7,416/7,416 tests**, zero failures, skips,
+cancellations or todo, in 235.1 seconds (`pin-voice/full-final.tap`). Two old
+source-shape checks were updated to follow the shared loader; their original
+failure is retained in `full-suite.tap`. Removing the configuration generation
+guard or WebSocket probe generation check in isolated copies fails the intended
+assertions; production hashes remain unchanged (`pin-voice/mutation/proof.json`).
+
+Four installed UI files were backed up and copied with source/target SHA256
+equality. The real installed 0.1.11 boot then returned 200 for all three voice
+configuration routes, with wake word enabled, models present and S2S enabled.
+The operator confirmed that "Hey Jarvis, what time is it?" received a spoken
+answer after PIN entry without reloading. Live evidence at 2026-09-08 09:08 UTC
+records wake detection and a turn with 154 incoming audio chunks and 21 outgoing
+audio parts. This verifies this startup repair on this configuration, not the
+separate ten-run Windows Operator qualification. Installed manifest and sanitized
+HUD facts are `pin-voice/installed-files.json` and `installed-state.json`.
+The startup Gmail announcement is an existing revoked/expired authorization
+alert from the immune explainer. No Gmail account or token was changed; that
+external prerequisite remains blocked separately.
+
 This implementation starts at `55fcf752bef1a31468f6ba22e6db5d316dbc63a0` on
 `codex/windows-operator`. It adds a bounded YouTube desktop owner, not a claim
 that every Windows application is supported. Historical ticket statuses and the

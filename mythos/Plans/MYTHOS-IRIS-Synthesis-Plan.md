@@ -17,6 +17,20 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
+### 2026-09-08 — PIN-unlock voice startup repaired on the installed 0.1.11 app.
+
+Protected voice settings were fetched before PIN entry and cached as unavailable.
+The HUD now refreshes VAD, wake-word and S2S facts after successful unlock, updates
+the voice widget, waits before constructing voice and promptly reconnects its
+authenticated WebSocket. No audio threshold or account setting changed. The
+installed UI was backed up and hash-verified after patching; the operator confirmed
+a spoken answer to "Hey Jarvis, what time is it?" without reloading after PIN entry.
+The full suite passed 7,416 tests with no failures or skips. See BUGS.md's PIN-unlock
+evidence for browser reproduction, mutations, installed hashes and live limits.
+Gmail reauthorization remains separate. Continue the Windows Operator extension
+setup and attended workflow qualification below; this startup repair does not
+close those stage gates.
+
 ### 2026-09-07 — Windows Operator is the active implementation priority.
 
 The operator approved the Windows Operator plan after the ticket campaign. Start
