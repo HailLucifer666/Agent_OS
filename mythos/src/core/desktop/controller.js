@@ -176,7 +176,12 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
     const previous = record(latest.get(ctx.connectionId));
     const intent = parseRequest(request, Boolean(previous?.target));
     if (!intent) return { ok: false, result: 'Stage 1 supports only YouTube third-result playback, pause, resume, or next video' };
-    const execution = { version: 1, owner: 'desktop', state: 'running', phase: 'observing', intent, steps: 0, target: intent.kind !== 'play-third' || intent.contextual ? previous?.target || null : null, observation: null, evidence: null, createdAt: now(), updatedAt: now() };
+    // A fresh "open YouTube" always looks at the browser (reuse a live YouTube tab, else
+    // open one) and never inherits an earlier task's tab: on 2026-09-08 the inherited tab
+    // had been closed and the task blocked on "No tab with id" three times without ever
+    // calling browser_tabs. Contextual verbs (pause/resume/next) still inherit.
+    const inherits = intent.kind !== 'open-youtube' && (intent.kind !== 'play-third' || intent.contextual);
+    const execution = { version: 1, owner: 'desktop', state: 'running', phase: 'observing', intent, steps: 0, target: inherits ? previous?.target || null : null, observation: null, evidence: null, createdAt: now(), updatedAt: now() };
     if (ctx.requestId) execution.requestId = ctx.requestId;
     const goal = goals.create({ title: request, status: 'active', execution, budget: { actions: 16 } });
     latest.set(ctx.connectionId, goal.id); connections.set(goal.id, ctx.connectionId);
