@@ -15,7 +15,10 @@ export function mountDesktopTask({ host = document.body, subscribe = onBroadcast
     const button = document.createElement('button'); button.type = 'button'; button.textContent = { pause: 'Pause task', cancel: 'Cancel task', resume: 'Resume task' }[action];
     button.style.marginRight = '8px';
     button.addEventListener('click', () => {
-      if (!taskId || !connected()) { reason.textContent = 'Not connected. The task has not been changed.'; return; }
+      // Two different facts, two different messages (2026-09-08): a closed socket and a
+      // panel with no task both used to say "Not connected" while the HUD was live.
+      if (!connected()) { reason.textContent = 'HUD is not connected to MYTHOS. The task has not been changed.'; return; }
+      if (!taskId) { reason.textContent = 'No desktop task to control.'; return; }
       send({ type: 'desktop-task-control', taskId, action });
       reason.textContent = { pause: 'Pause requested; awaiting confirmation.', cancel: 'Cancellation requested; awaiting confirmation.', resume: 'Resume requested; awaiting confirmation.' }[action];
     });

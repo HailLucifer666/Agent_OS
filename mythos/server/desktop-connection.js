@@ -47,7 +47,7 @@ function createDesktopConnection({ runtime, connectionId, leash, dispatch, reply
     if (intent.control) {
       cancelSpeech();
       accepted = prior.ok ? await call('desktop_task_control', { taskId: prior.result.taskId, action: intent.control }) : { ok: false, result: 'There is no active desktop task.' };
-    } else if (intent.unsupported) accepted = { ok: false, result: 'This desktop workflow is not supported by the current YouTube qualification stage.' };
+    } else if (intent.unsupported) accepted = { ok: false, result: 'Stage 1 understands only: open YouTube; search YouTube for something and play the third; play the third video; then pause, resume or next. You may name the browser, for example "on Brave".' };
     else accepted = await call('desktop_task_start', { request: intent.request }, msg.reqId);
     if (!current()) return;
     send({ type: 'desktop-task', ...accepted });
