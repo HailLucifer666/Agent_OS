@@ -15,6 +15,10 @@ const google = require('../../../providers/google');
 const ollama = require('../../../providers/ollama');
 
 const { createBreaker } = require('../immune/breakers');
+// BUG-419: the verdict a REAL completion returns about an account, kept instead
+// of thrown away. The liveness probe reads a free /models catalog and therefore
+// cannot see a 402.
+const providerHealth = require('./provider-health');
 const { createLogger } = require('../logger');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
@@ -447,6 +451,11 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
         // backoff to its base delay, so a recovered provider returns to the head
         // of the lane on its own. No hand-edit, no restart.
         if (breaker) breaker.recordSuccess();
+        // BUG-419: an answer is proof the ACCOUNT is fine, so any recorded
+        // account-level refusal is out of date now — cleared immediately rather
+        // than left to expire, so an operator who has just added billing does
+        // not wait out a TTL.
+        providerHealth.recordSuccess(lane);
         // BUG-273 C3: an answer here means any earlier timeout in this run was the
         // provider's own slowness, not a shared local fault — so the deferred
         // cooldowns are taken. Settled before the return, or a successful call
@@ -467,7 +476,21 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
       errors.push(`${lane}:${model}: ${err.message}`);
       reportAttemptEnd({ ok: false, timedOut: attemptTimedOut, error: String(err && err.message || err).slice(0, 200) });
       // Error discrimination: only cooldown on rate-limit (429) or network errors.
-      // Auth failures (401/403) won't recover in 60s — let isAvailable() handle them.
+      //
+      // BUG-419 (2026-09-09) — THE LINE BELOW USED TO SAY "Auth failures
+      // (401/403) won't recover in 60s — let isAvailable() handle them", AND
+      // NOTHING HANDLED THEM. `isAvailable()` is `chainFor('text').length > 0`,
+      // which resolves through registry.isProviderAlive, which for cerebras is
+      // "a key is set AND the /models catalog listed this id". A catalog listing
+      // is free and answers 200 on an unbilled account; the 402 only comes from
+      // /chat/completions. So the refusal was never seen by anything, 402 was
+      // not classified at all (classifyProviderError knows 429, 5xx and network
+      // only), no cooldown and no breaker tick were taken, and cerebras stayed
+      // the last cloud rung of every lane while refusing every call — with nine
+      // dated source comments recording the fact and nothing MYTHOS could say.
+      // A confident comment deferring to a mechanism that does not exist is how
+      // it survived. providerHealth is that mechanism, now built.
+      providerHealth.recordFailure(lane, err);
       // Bad-request (400) means the provider is healthy, the request was wrong — don't
       // penalize the provider. Caller-abort is not a provider fault either.
       // BUG-336: typed identity first (err.kind/err.status/err.code attached

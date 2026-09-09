@@ -602,7 +602,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-416 | open | currently reproduced | Traced 2026-09-09 across bridge, controller and rig: a fresh randomUUID per hello against a persisted target id yields BROWSER_REQUIRED on resume, and the controller rigs accept any id so no test observes it. Consumers: desktop_task_control resume and every leaf that re-observes after a restart. Remaining evidence: live backend restart with the extension attached, which needs the attended Brave setup and has not been run. | mythos/adapters/browser-extension/index.js; mythos/src/core/desktop/controller.js |
 | BUG-417 | open | currently reproduced | Read 2026-09-09 against engine.js snapshot(): the visible() predicate requires viewport intersection, so items are viewport-only and the ordinal indexes that list. Confirms an overclaim in the tool description shipped the same day. Consumers: desktop_task_start ordinal selection. Remaining evidence: live YouTube search page card counts above and below the fold, not yet measured. | mythos/browser-extension/engine.js; mythos/src/core/desktop/controller.js |
 | BUG-418 | open | currently reproduced | Enumerated mythos/providers/ and .env.example on 2026-09-09: eight providers, no Anthropic and no OpenAI, no documented key for either. openai-compat.js is already a base-URL-plus-key factory, so the two differ sharply in cost. Consumers: every brain lane and any buyer supplying their own key. Remaining evidence: none for the gap itself; the implementations do not exist to test. | mythos/providers/openai-compat.js; mythos/src/core/brain/lanes.default.js; mythos/.env.example |
-| BUG-419 | open | currently reproduced | Read from lanes.default.js and its comments 2026-09-09, corroborated by audit rows showing the search chain reporting every provider unavailable with per-provider reasons only in the log line. Consumers: voice, reasoning, memory, simple and text lanes, plus the search chain. Remaining evidence: a live call per provider to confirm current status codes, not yet run. | mythos/src/core/brain/lanes.default.js; mythos/src/core/effectors/web-search.js |
+| BUG-419 | fixed | currently verified | Measured live 2026-09-09, and it is worse than filed: registry.getStatus() reported cerebras aliveModels 3 and chainFor(build)/chainFor(simple) both still ENDED on a cerebras rung. The liveness probe fetches /models, a free catalog that answers 200 on an unbilled account, while the 402 only comes from /chat/completions -- gate E, a proxy admitting the value that breaks you. 402 was also unclassified in chain.js (which knows 429, 5xx, network only), so no cooldown and no breaker tick were ever taken, and the comment deferring auth failures to isAvailable() named a mechanism that did not exist. Now recorded from real calls in provider-health.js, consulted by isProviderAlive and reported on read_status. Consumers: every brain lane and read_status. Remaining evidence: the 402 itself has not been re-observed this session; the recorder is proven against synthetic errors, not against a live Cerebras refusal. | mythos/src/core/brain/provider-health.js; mythos/src/core/brain/registry.js; mythos/src/core/brain/chain.js |
 
 Twelve security/data/boot rows were subsequently read claim-by-claim against current implementation and candidate consumers (032, 033, 047, 048, 167, 168, 238, 247, 249, 254, 303, 307). Their generic gaps above are replaced with concrete proof limits. The associated 11-file historical regression set passed **90/90** (`.cache/campaign/historical-security-memory-tests.log`); this source audit found the additional 247 and 249 defects described in their full entries. That checkpoint covered only this subset; the complete 261-row assessment above supersedes its coverage limit.
 
@@ -1183,28 +1183,35 @@ Two consequences. A search page shows roughly four or five cards, so "play the s
 
 Both must degrade the way every other provider here does -- absent key means the lane skips it and says so -- rather than failing at boot.
 
-## BUG-419 — Cerebras answers 402 on every lane it appears in, and nothing outside a source comment says so (RED DIAGNOSED 2026-09-09, not fixed)
+## BUG-419 — the liveness probe read a free catalog, so a Cerebras account that refuses every call was reported alive and held the last rung of every lane (FIXED 2026-09-09)
 
-**Status:** diagnosed 2026-09-09 from the lane table and its own comments. No code change yet.
+**Status:** FIXED 2026-09-09. Five mutation probes across two files, all landed, all fired, no survivors; both sources restored by byte copy with matching hashes.
 
-**A note on this entry’s own status line, because it is evidence.** The first
-draft of the line above ended "Not fixed." and the register classified the
-ticket as FIXED. `build-index.js` `classify()` tests the fixed-words pattern
-before the diagnosed one, and that pattern matches the word anywhere in the
-status line, so "Not fixed" reads as fixed; the negative-first guard beside it
-only fires on a red circle or on a NOT within the first forty characters. The
-comment above that code already says so -- "ANY of these words ANYWHERE in the
-status line still means fixed" -- and names the real remedy as an explicit
-machine-readable state field. This entry is a live instance of the predicted
-trap, found by writing one new ticket. Worth its own number; not fixed here,
-because reclassifying a 268-row register needs a measured before-and-after of
-every row and must not ride inside an audit commit.
+**Measured live before writing anything, and it is worse than the ticket said.**
 
-Cerebras is ranked in the voice, reasoning, memory, simple and text lanes, and the account is unbilled, so it returns payment-required on every call. `lanes.default.js` records this in a comment and keeps it out of the known-dead list because the model ids are fine; the account is not.
+```
+registry.getStatus() -> cerebras: { configured: true, aliveModels: 3 }
+chainFor(build)      -> [mistral x3, { cerebras, gpt-oss-120b }]
+chainFor(simple)     -> [mistral, google, groq, { cerebras, gemma-4-31b }]
+```
 
-The effect is a silent dead rung. Each of those lanes spends an attempt and a round trip on a provider that cannot answer before falling through, and nothing the operator can see -- not the HUD, not `read_status` -- reports that a configured provider is refusing every request. The same blindness applies to the search chain, which has been observed reporting all providers unavailable with the individual reasons visible only in an audit line.
+The original finding was "nothing outside a source comment says so". True, and incomplete. Cerebras was not merely unreported -- it was reported ALIVE, and therefore still held the last cloud rung of every lane, so every exhausted fallback walked into a provider that refuses every call.
 
-**Proposed fix, not yet applied.** Record the last error per provider where the lane already handles it, and surface a compact provider-health list on `read_status` so a dead key, an unbilled account and an expired token are visible without reading logs. This is the same principle as the Gmail token: name the cause where the operator will meet it.
+**Three failures stacked, and the third is why nine dated comments never became a fix.**
+
+1. **Gate E.** `probeCerebras()` fetches `/models`. A catalog listing is free and answers 200 on an unbilled account; the `402 Payment Required` only comes back from `/chat/completions`. The liveness probe asked the cheaper question standing next to the one that mattered -- the same shape as the `createPublicKey()` case in GATES.md, where a structurally valid key loaded cleanly, cached over the working set, and threw at every real use.
+2. **402 was not classified at all.** `classifyProviderError` in `chain.js` knows 429, 5xx and network. A 402 fell through every arm, so no cooldown and no breaker tick were taken and the provider was retried on every single call, forever, with nothing recorded.
+3. **A confident comment deferred to a mechanism that does not exist** (/kee class 10). `chain.js` read: *"Auth failures (401/403) will not recover in 60s -- let isAvailable() handle them."* `isAvailable()` is `chainFor(text).length > 0`, which resolves through the same catalog probe. Nothing handled them anywhere. That sentence is why the nine `402 unbilled 2026-08-22` comments in `lanes.default.js` stayed comments.
+
+**The fix is not a second probe.** Adding a trial completion to every refresh would spend real tokens every five minutes on a machine whose entire premise is free tiers. The real operation already runs on every call; `provider-health.js` simply stops throwing its verdict away. `chain.js` records an account-level refusal on failure and clears it on success; `isProviderAlive` consults it and it outranks the catalog; `registry.getStatus()` reports it as `accountFailures`, which reaches the operator through `read_status` with no change needed there.
+
+**The boundary IS the design, and it is tested from both sides.** Only 401, 402 and 403 count -- those are facts about the ACCOUNT and do not clear on their own, which is precisely why a 60-second cooldown never caught them. A 429 is a rate limit and a 5xx is an outage; both are transient, both are already handled by the existing cooldown and breaker, and recording either here would remove a WORKING rung from every lane for fifteen minutes over a quota that resets in one. The prose fallback is anchored on `: <code>` rather than a bare number, so `model gpt-402x`, `completed in 402ms` and `used 1402 tokens` do not match -- a provider wrongly held down is worse than one wrongly kept.
+
+**Two ways back, so a bug in the recorder cannot cost a provider permanently.** A real completion clears the verdict immediately, so an operator who has just added billing does not wait out a timer; and entries expire on read after `PROVIDER_HEALTH_TTL_MS` (15 minutes by default), so if `recordSuccess` ever stops firing the system degrades back to today rather than removing a provider forever.
+
+**What this made unreachable, stated rather than discovered later.** Every lane that ended on a Cerebras rung is now one rung shorter while that account refuses. That is correct -- the rung was dead -- but it means an exhausted chain now exhausts sooner, and `All AI providers are currently unavailable` will arrive marginally faster on a bad day. The `aliveModels: 3` field is deliberately still reported beside `accountFailures`: "the catalog lists three models AND the account refuses" is the full truth, and hiding the first half would make the contradiction unreadable.
+
+**Remaining evidence.** The 402 has not been re-observed this session -- the recorder is proven against synthetic errors carrying typed and prose statuses, not against a live Cerebras refusal. What a healthy result looks like: the first real Cerebras call of a session records `accountFailures.cerebras` with status 402, `read_status` reports it with its remedy, and no further call is routed there. A bad one: `accountFailures` populating for a provider that is actually working, which would mean a transient status is reaching `ACCOUNT_STATUSES` and the boundary above has been widened wrongly.
 
 ## BUG-399 — CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable (✅ FIXED 2026-09-02 — three causes, none of them the one this ticket first named)
 

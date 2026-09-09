@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7466,
+      "value": 7480,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5508,23 +5508,23 @@
       {
         "n": 419,
         "shape": "entry",
-        "state": "diagnosed",
-        "title": "Cerebras answers 402 on every lane it appears in, and nothing outside a source comment says so (RED DIAGNOSED 2026-09-09, not fixed)",
+        "state": "fixed",
+        "title": "the liveness probe read a free catalog, so a Cerebras account that refuses every call was reported alive and held the last rung of every lane (FIXED 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** diagnosed 2026-09-09 from the lane table and its own comments. No code change yet. **A note on this entry’s own status line, because it is evidence.** The first draft of the line above ended \"Not fixed.\" and the register classified the ticket as FIXED. `build-index.js` `classify()` tests the fixed-words pattern before the diagnosed one, and that pattern matches the word anywhere in the status line, so \"Not fixed\" reads as fixed; the negative-first guard beside it only fires on a red circle or on a NOT within the first forty characters. The comment above that code already says so -- \"ANY of these words ANYWHERE in the status line still means fixed\" -- and names the real remedy as an explicit machine-readable state field. This entry is a live instance of the predicted trap, found by writing one new ticket. Worth its own number; not fixed here, because reclassifying a 268-row re…",
+        "excerpt": "**Status:** FIXED 2026-09-09. Five mutation probes across two files, all landed, all fired, no survivors; both sources restored by byte copy with matching hashes. **Measured live before writing anything, and it is worse than the ticket said.** ``` registry.getStatus() -> cerebras: { configured: true, aliveModels: 3 } chainFor(build) -> [mistral x3, { cerebras, gpt-oss-120b }] chainFor(simple) -> [mistral, google, groq, { cerebras, gemma-4-31b }] ``` The original finding was \"nothing outside a source comment says so\". True, and incomplete. Cerebras was not merely unreported -- it was reported ALIVE, and therefore still held the last cloud rung of every lane, so every exhausted fallback walked into a provider that refuses every call. **Three failures stacked, and the third is why nine dated comments never became a fix.** 1. **Gate E.** `probeCerebras()` fetches `/models`. A catalog listing…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "Read from lanes.default.js and its comments 2026-09-09, corroborated by audit rows showing the search chain reporting every provider unavailable with per-provider reasons only in the log line. Consumers: voice, reasoning, memory, simple and text lanes, plus the search chain. Remaining evidence: a live call per provider to confirm current status codes, not yet run.",
-          "source": "mythos/src/core/brain/lanes.default.js; mythos/src/core/effectors/web-search.js"
+          "disposition": "currently verified",
+          "evidence": "Measured live 2026-09-09, and it is worse than filed: registry.getStatus() reported cerebras aliveModels 3 and chainFor(build)/chainFor(simple) both still ENDED on a cerebras rung. The liveness probe fetches /models, a free catalog that answers 200 on an unbilled account, while the 402 only comes from /chat/completions -- gate E, a proxy admitting the value that breaks you. 402 was also unclassified in chain.js (which knows 429, 5xx, network only), so no cooldown and no breaker tick were ever taken, and the comment deferring auth failures to isAvailable() named a mechanism that did not exist. Now recorded from real calls in provider-health.js, consulted by isProviderAlive and reported on read_status. Consumers: every brain lane and read_status. Remaining evidence: the 402 itself has not been re-observed this session; the recorder is proven against synthetic errors, not against a live Cerebras refusal.",
+          "source": "mythos/src/core/brain/provider-health.js; mythos/src/core/brain/registry.js; mythos/src/core/brain/chain.js"
         }
       }
     ],
     "counts": {
       "verified": 77,
-      "fixed": 174,
+      "fixed": 175,
       "open": 7,
       "coded": 3,
-      "diagnosed": 5,
+      "diagnosed": 4,
       "duplicate": 2,
       "unrecorded": 0
     },
