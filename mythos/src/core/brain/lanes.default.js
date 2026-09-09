@@ -71,7 +71,49 @@
 // Each entry: { provider, model }. Provider 'nim' entries are expanded by
 // chain.js into one attempt per configured NIM key (key rotation).
 
+// ---------------------------------------------------------------------------
+// BUG-418 (2026-09-09) — the two BYO entries that head six of the eight lanes.
+// ---------------------------------------------------------------------------
+//
+// Free tiers are the DEVELOPMENT constraint, not the product. The operator
+// builds on free keys because paid calls are not affordable while building;
+// the shipped product is bring-your-own-key with any provider. Until now
+// mythos/providers/ held google, mistral, groq, nim, cerebras, ollama, zcode
+// and openrouter -- so a buyer with an Anthropic or OpenAI key had to open an
+// OpenRouter account and pay its margin to use a key they already owned.
+//
+// WHY AT THE HEAD, which is a product decision and not a measurement.
+// Everything else in these tables is ranked on measured free-tier latency and
+// quality (see the header above). These two are ranked on INTENT: a buyer who
+// has gone to the trouble of supplying a paid key wants it used, and a paid
+// key sitting below four free rungs would almost never be reached.
+//
+// THEY COST THIS MACHINE NOTHING, which is why the change is safe to make
+// blind. registry.isProviderAlive returns false for either without its key, so
+// on the development stack both are filtered out before a chain walk begins --
+// measured after the change: chainFor(build) and chainFor(simple) are
+// byte-identical to before.
+//
+// NO LATENCY OR QUALITY CLAIM IS MADE ABOUT EITHER. There is no Anthropic or
+// OpenAI key on this machine, so neither has been probed the way every other
+// entry here was. Deliberately left uncommented rather than given a plausible
+// number -- a stale measurement at the head of a lane is the exact failure this
+// file records three times.
+//
+// A BUYER WHO WANTS THEM ELSEWHERE NEEDS NO CODE CHANGE: CHAIN_VOICE,
+// CHAIN_BUILD, CHAIN_REASONING, CHAIN_TEXT, CHAIN_SIMPLE and CHAIN_MEMORY each
+// replace their table wholesale (see parseOverride in registry.js).
+//
+// NOT ADDED TO PREF_VISION or PREF_EMBED. Both models are vision-capable, but
+// the vision lane passes provider-specific image payloads and the embed lane is
+// a different API entirely; adding an untested entry to either would be a claim
+// this session cannot support.
+const BYO_PREMIUM = [
+  { provider: 'anthropic', model: 'claude-sonnet-4-5' },   // ANTHROPIC_API_KEY; ANTHROPIC_MODEL overrides
+  { provider: 'openai',    model: 'gpt-4.1' },             // OPENAI_API_KEY; OPENAI_MODEL overrides
+];
 const PREF_VOICE = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // gemini-flash-lite was already documented here as "slower than the 8B but far
   // better at this lane's actual job: persona-heavy JSON tool-calling against a
   // ~40k-char prompt". The 2026-08-14 run turned that argument into a
@@ -119,6 +161,7 @@ const PREF_VOICE = [
 // fallbacks below are what absorbs a burst. Watch brain-spend for Cerebras 429s
 // if a burst ever becomes routine.
 const PREF_REASONING = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // REORDERED 2026-08-22, and this is the lane the change matters most for: ten
   // roles ride it (mull, think_deeply, self-reflection x2, reviewer,
   // reality-checker, design verify, orchestrator synthesize, ask_agent,
@@ -155,6 +198,7 @@ const PREF_REASONING = [
 // Terse styling deliberately follows this lane (see schema.js's
 // BRAIN_TERSE_LANES default): consolidated memory should stay compact.
 const PREF_MEMORY = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   { provider: 'google',   model: 'gemini-3-flash-preview' },      // 3090ms, 4/4 — its own per-model quota bucket
   { provider: 'mistral',  model: 'mistral-medium-2604' },         // 461ms, 4/4
   // Unchanged position — it was already last cloud. Noting only that it is
@@ -165,6 +209,7 @@ const PREF_MEMORY = [
 ];
 
 const PREF_BUILD = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // Cloud-first (P22): this lane once led with ollama/hermes3:8b, which was never
   // `ollama pull`ed — silently filtered out, so every build fell through anyway.
   // Optional local models sit last so their absence never costs a build attempt.
@@ -204,6 +249,7 @@ const PREF_BUILD = [
 ];
 
 const PREF_SIMPLE = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // Cheapest/fastest lane. Previously led with mistral-large-2512 — the most
   // expensive model available, in the lane that least needs it.
   // 2026-08-22: groq/llama-3.1-8b-instant REMOVED from the HEAD of this lane.
@@ -249,6 +295,7 @@ const PREF_SIMPLE = [
 // 27.9-second model. registry.js now emits health.anomaly on that path as well,
 // so the substitution is audible rather than merely slower.
 const PREF_TEXT = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // DELETED 2026-08-14: openrouter:inclusionai/ling-3.0-flash:free (404,
   // "unavailable for free") and nim:nvidia/nemotron-3-super-120b-a12b (27.9s —
   // unusable interactively, and past CHAIN_ATTEMPT_TIMEOUT_MS on any tightened
@@ -405,6 +452,9 @@ const UNBILLED_NOT_DEAD = [
 
 module.exports = {
   BRAIN_TABLES, KNOWN_DEAD, UNBILLED_NOT_DEAD,
+  // BUG-418: exported so a guard can derive "the free-tier head of this lane"
+  // rather than typing the BYO provider names a second time (gate D).
+  BYO_PREMIUM,
   PREF_VOICE, PREF_BUILD, PREF_SIMPLE, PREF_REASONING, PREF_MEMORY,
   PREF_TEXT, PREF_VISION, PREF_EMBED,
 };

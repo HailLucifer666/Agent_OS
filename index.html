@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7498,
+      "value": 7512,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5495,14 +5495,14 @@
       {
         "n": 418,
         "shape": "entry",
-        "state": "diagnosed",
-        "title": "a buyer holding an Anthropic or OpenAI key cannot use it: there is no native provider for either, only OpenRouter (RED DIAGNOSED 2026-09-09, not fixed)",
+        "state": "fixed",
+        "title": "a buyer holding an Anthropic or OpenAI key had to pay OpenRouter to use it (FIXED 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** diagnosed 2026-09-09 after the operator confirmed the product model. No code change yet. **The premise this corrects.** Free tiers are the DEVELOPMENT constraint, not the product: the operator builds on free keys because paid ones are not affordable right now, and the shipped product is bring-your-own-key with any provider. Provider coverage is therefore a product gap, not a nice-to-have. `mythos/providers/` holds google, mistral, groq, nim, cerebras, ollama, zcode and openrouter. Neither Anthropic nor OpenAI has a native provider, and `.env.example` documents no key for either. A buyer with an Anthropic or OpenAI key must open an OpenRouter account and pay its margin to use a key they already own. **Cost of the fix is asymmetric and worth stating.** `providers/openai-compat.js` is already a factory over base URL plus key name, and OpenAI speaks exactly that protocol, so nati…",
+        "excerpt": "**Status:** FIXED 2026-09-09. Seven mutation probes, all landed, all fired, no survivors; all three sources restored by byte copy with matching hashes. Neither provider has ever completed a real call -- see the remaining evidence. **The premise, restated because it is the reason this is a product gap and not a nice-to-have.** Free tiers are the DEVELOPMENT constraint: the operator builds on free keys because paid calls are not affordable while building. The shipped product is bring-your-own-key with any provider. `mythos/providers/` held google, mistral, groq, nim, cerebras, ollama, zcode and openrouter -- so a buyer with an Anthropic or OpenAI key had to open an OpenRouter account and pay its margin to use a key they already owned. **The cost is asymmetric, and that shapes the whole fix.** OpenAI speaks exactly the protocol `openai-compat.js` was generalised FROM, so `providers/openai.j…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "Enumerated mythos/providers/ and .env.example on 2026-09-09: eight providers, no Anthropic and no OpenAI, no documented key for either. openai-compat.js is already a base-URL-plus-key factory, so the two differ sharply in cost. Consumers: every brain lane and any buyer supplying their own key. Remaining evidence: none for the gap itself; the implementations do not exist to test.",
-          "source": "mythos/providers/openai-compat.js; mythos/src/core/brain/lanes.default.js; mythos/.env.example"
+          "disposition": "currently verified",
+          "evidence": "providers/openai.js is a config entry over the existing openai-compat factory; providers/anthropic.js is its own provider because the Messages API differs in five ways that each break that factory, and each one fails QUIETLY -- reading choices[0].delta.content off an Anthropic stream returns an empty string as a SUCCESS. Both head the six text-shaped lanes via BYO_PREMIUM, are inert without their key, and are documented in .env.example. Measured after the change: chainFor(build) and chainFor(simple) are byte-identical on this machine, because neither key is set here. Consumers: every brain lane and any buyer supplying their own key. Remaining evidence: no key for either provider exists on this machine, so neither has ever completed a real call -- the wire shape is proven against a loopback HTTP server, not against the vendors.",
+          "source": "mythos/providers/anthropic.js; mythos/providers/openai.js; mythos/src/core/brain/lanes.default.js"
         }
       },
       {
@@ -5521,10 +5521,10 @@
     ],
     "counts": {
       "verified": 77,
-      "fixed": 177,
+      "fixed": 178,
       "open": 7,
       "coded": 3,
-      "diagnosed": 2,
+      "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },

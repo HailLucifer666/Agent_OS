@@ -5,6 +5,11 @@
 // that and degrade honestly — this module never retries forever on its own.
 const registry = require('./registry');
 const zcode = require('../../../providers/zcode');
+// BUG-418: a buyer holding an Anthropic or OpenAI key had to route through
+// OpenRouter and pay its margin to use a key they already owned. Both are inert
+// without their key, exactly like every other lane here.
+const openai = require('../../../providers/openai');
+const anthropic = require('../../../providers/anthropic');
 const nim = require('../../../providers/nim');
 const nim2 = nim.createNimProvider('nim2', 'NIM_API_KEY_2');
 const groq = require('../../../providers/groq');
@@ -22,7 +27,7 @@ const providerHealth = require('./provider-health');
 const { createLogger } = require('../logger');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
-const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter, google, ollama };
+const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter, google, ollama, openai, anthropic };
 
 // BUG-336 (2026-08-24): provider-fault identity. Pure so tests need no
 // providers or network. Priority: explicit kind > numeric status > libuv

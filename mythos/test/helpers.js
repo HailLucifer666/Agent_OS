@@ -115,4 +115,28 @@ function describeJob(job) {
     ' (a stale update + stuck stage means a real hang; a fresh update means the machine is just slow)';
 }
 
-module.exports = { tempVaultDir, cleanupVaultDir, fakeBus, waitForJobFinished };
+
+// BUG-418 (2026-09-09) — the free-tier head of a brain lane.
+//
+// Six lanes now START with the bring-your-own-key entries (anthropic, openai),
+// which are inert without their key and therefore absent from every chain on
+// the development stack. Guards that assert a measured FREE-TIER ranking must
+// ask for the free-tier head rather than prefs[0]: same intent, same strength,
+// pointed at the set they always meant.
+//
+// Derived from the exported BYO_PREMIUM, never a second typed list of provider
+// names, so adding a third BYO provider cannot leave those guards behind.
+//
+// It lives HERE rather than in brain.test.js because that file sits on the
+// file-size ratchet and adding it there pushed it 1097 -> 1109. The ratchet
+// says move the code, not raise the number.
+// Takes only the table: it resolves BYO_PREMIUM itself, so a caller adds ONE
+// binding and no more. brain.test.js sits AT its ratchet ceiling, so a helper
+// that cost it two lines could not be used there at all.
+function freeTierLane(table) {
+  const byo = new Set(require('../src/core/brain/lanes.default').BYO_PREMIUM.map((entry) => entry.provider));
+  return table.filter((entry) => !byo.has(entry.provider));
+}
+function freeTierHead(table) { return freeTierLane(table)[0]; }
+
+module.exports = { tempVaultDir, cleanupVaultDir, fakeBus, waitForJobFinished, freeTierLane, freeTierHead };

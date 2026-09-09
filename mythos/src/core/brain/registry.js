@@ -197,6 +197,14 @@ function isProviderAlive(provider, model, c) {
     case 'mistral':    return c.mistralAlive;
     case 'ollama':     return c.ollamaModels.includes(model);
     case 'zcode':      return !!process.env.ZCODE_API_KEY;
+    // BUG-418. Key presence only, and that is deliberate rather than an
+    // oversight: both are PAID APIs, so a /models catalog probe on every
+    // registry refresh would be a billable request every five minutes on a
+    // buyer's account for no benefit. The account-health record above is what
+    // catches a bad key or an unpaid account, from the first real call, which
+    // is the same door BUG-419 opened for cerebras.
+    case 'openai':     return !!process.env.OPENAI_API_KEY;
+    case 'anthropic':  return !!process.env.ANTHROPIC_API_KEY;
     case 'cerebras':   return !!process.env.CEREBRAS_API_KEY && c.cerebrasModels.includes(model);
     case 'google':     return !!process.env.GOOGLE_API_KEY && c.googleModels.includes(model);
     case 'openrouter': return !!process.env.OPENROUTER_API_KEY && c.openrouterAlive;
@@ -265,6 +273,8 @@ async function getStatus() {
     cerebras:   { configured: !!process.env.CEREBRAS_API_KEY, aliveModels: c.cerebrasModels.length },
     google:     { configured: !!process.env.GOOGLE_API_KEY, aliveModels: c.googleModels.length },
     openrouter: { configured: !!process.env.OPENROUTER_API_KEY, alive: c.openrouterAlive },
+    openai:     { configured: !!process.env.OPENAI_API_KEY },
+    anthropic:  { configured: !!process.env.ANTHROPIC_API_KEY },
     // BUG-419: what a REAL call last said about each account, which is the one
     // thing every field above is structurally unable to report — they all read
     // free catalog endpoints. Empty object means nothing has refused, which is
