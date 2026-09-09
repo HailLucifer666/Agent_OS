@@ -199,12 +199,14 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
   // one condition is what W6 spent a wave undoing. A guard test now derives the real
   // emitted kinds from source and fails on any future phantom.
   var SERIOUS_KINDS = {
+    'config-settings-ignored': true, 'config-settings-unreadable': true,
     'provider-down': true, 'tick-error': true,
     'effector-flapping': true, 'memory-growth': true,
     'identity-boundaries-malformed': true
   };
 
   function isSerious(p) {
+    if (config.VOICE_SETTINGS_WARNINGS_ENABLED === false && /^config-settings-(ignored|unreadable)$/.test(p.kind || '')) return false;
     if (p.severity === 'critical') return true;
     if (p.kind && SERIOUS_KINDS[p.kind]) return true;
     return false;
@@ -272,7 +274,7 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
     lastSpokenAt[kind] = clock();
   }
 
-  function onHealthAnomaly(event) {
+  function onHealthAnomaly(event, collectText) {
     var p = event.payload;
     if (!p) return;
     if (!isSerious(p)) return;
@@ -294,10 +296,33 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
 
     var text = ('Heads up — I have hit a problem: ' + describeCondition(p) + '.' +
       honestCauseClause(p)).slice(0, 300);
-    if (!DRYRUN) speak(text);
+    if (!DRYRUN && !collectText) speak(text);
     bus.emit('conversation.announced', { key: key, text: text, kind: 'anomaly' });
     noteSpoken(kind);
     markAnnounced(kind);
+    return DRYRUN ? null : text;
+  }
+
+  // BUG-429: these anomalies fire before this subscriber exists. Retain the
+  // boot diagnosis, then join the first dashboard greeting at delivery time.
+  // One Live injection avoids adding another self-interruption (BUG-432).
+  function settingsAnomalies(diagnostics) {
+    const d = diagnostics || {};
+    const rows = [];
+    if (d.settingsError) rows.push({ kind: 'config-settings-unreadable', reason: 'The saved settings could not be read; defaults are in use' });
+    const names = (d.settingsUnknown || []).filter((name) => /^[A-Za-z0-9_]{1,64}$/.test(name));
+    if (names.length || (d.settingsDropped || []).length) rows.push({
+      kind: 'config-settings-ignored', target: names.slice(0, 12).join(', ') || 'saved settings',
+      reason: names.length ? 'No such MYTHOS setting' : 'One or more saved settings have invalid names or values',
+    });
+    return rows;
+  }
+  function hasSettingsWarnings(diagnostics) {
+    return !DRYRUN && config.VOICE_SETTINGS_WARNINGS_ENABLED !== false && settingsAnomalies(diagnostics).length > 0;
+  }
+  function appendSettingsWarnings(text, diagnostics) {
+    const notes = settingsAnomalies(diagnostics).map((payload) => onHealthAnomaly({ payload }, true)).filter(Boolean);
+    return [text, ...notes].filter(Boolean).join(' ');
   }
 
   // health.diagnosed carries severity from the diagnostician (anomaly → diagnose
@@ -344,6 +369,7 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
   // than each caller inventing its own Map/timestamp) means one dedup
   // window covers every greeting-shaped source.
   return { start: start, stop: stop, isRecent: isRecent, markAnnounced: markAnnounced,
+    hasSettingsWarnings, appendSettingsWarnings,
     // exposed for tests, like immune/explainer.js's _onHealed
     _onHealthAnomaly: onHealthAnomaly };
 }

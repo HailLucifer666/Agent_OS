@@ -862,7 +862,7 @@ async function main() {
         // Installer parity — which layer set each key, for /api/config/settings
         // and scripts/parity-check.js. See src/core/config/settings-store.js.
         configOrigins: configResult.origins,
-        settingsFile: configResult.settingsFile,
+        settingsFile: configResult.settingsFile, settingsDiagnostics: configResult,
         pinLock: pinLock,
         goalsEffector: goalsEffector,
         kanbanEffector: kanbanEffector,

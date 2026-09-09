@@ -31,6 +31,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { readSettings } = require('../src/core/config/settings-store');
 
 const MYTHOS_DIR = path.resolve(__dirname, '..');
 const REPO_ROOT = path.resolve(MYTHOS_DIR, '..');
@@ -586,9 +587,18 @@ function evaluateKeyChecks(storeNames) {
   });
 }
 
+// BUG-429: reuse the runtime parser, reporting names only. Unknown settings
+// never create features; browser-use remains parked by operator decision.
+function settingsIntegrity(settings = readSettings()) {
+  return (settings.unknown || []).map((name) => ({ name, message: 'no such MYTHOS setting' }));
+}
+
 function buildReport(envDir, opts) {
   const env = loadEnv(envDir);
   const store = keyStoreNames();
+  const settings = opts && opts.settings || readSettings({
+    settingsPath: process.env.MYTHOS_SETTINGS_PATH || (store.file && path.join(path.dirname(store.file), 'config.json')),
+  });
   const keys = evaluateKeyChecks((opts && opts.keyStoreNames) ? opts.keyStoreNames : store.names);
   const assets = assetChecks();
   const gaps = [...keys, ...assets].filter((r) => !r.ok);
@@ -598,6 +608,7 @@ function buildReport(envDir, opts) {
     keys,
     assets,
     settings: collectSettings(),
+    settingsIntegrity: settingsIntegrity(settings),
     voice: voiceIdentity(),
     gaps,
     requiredGaps: gaps.filter((g) => g.required),
@@ -634,6 +645,8 @@ function printReport(report) {
 
   printSection('Keys', report.keys);
   printSection('Models and binaries', report.assets);
+  console.log('\nSettings integrity');
+  for (const row of report.settingsIntegrity || []) console.log('  ' + row.name + ': ' + row.message);
 
   console.log('');
   console.log('Voice identity (must be identical on every machine)');
@@ -742,6 +755,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  settingsIntegrity,
   KEY_CHECKS,
   PARITY_SETTINGS,
   loadEnv,

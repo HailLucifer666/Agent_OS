@@ -2354,17 +2354,13 @@ function createServer(deps) {
   // "upgraded since last boot" check compares the current git ref against
   // Identity/last-boot.json (written at construction, so the diff survives
   // even if the brain is offline when the client connects).
-  // Disable with BOOT_GREETING=false (env, same passthrough convention as
-  // VOICE_INTAKE_IDLE_MS above). Also suppressed under the node test runner
-  // (NODE_TEST_CONTEXT): the greeting fires 2.5s after a WS connection and
-  // its TTS-probe/brain fetches leave sockets open past the last test, which
-  // wedges the test-file child process (the runner then waits forever).
-  let bootGreetingFired = process.env.BOOT_GREETING === 'false' || !!process.env.NODE_TEST_CONTEXT;
+  // BOOT_GREETING=false disables greetings; NODE_TEST_CONTEXT also avoids delayed test fetches.
+  let bootGreetingFired = !!process.env.NODE_TEST_CONTEXT || (process.env.BOOT_GREETING === 'false' && !conversationAnnouncer?.hasSettingsWarnings(deps.settingsDiagnostics));
   // BUG-148: bootGreetingFired means "scheduled", not "spoken" — it is set the
   // moment the timer is armed. The gmail-batch subscriber needs to know whether
   // the greeting has actually been DELIVERED, which is a different question and
   // ~2.5s later. See that subscriber for why.
-  let bootGreetingDelivered = bootGreetingFired;   // pre-satisfied when there will be no greeting
+  let bootGreetingDelivered = bootGreetingFired || process.env.BOOT_GREETING === 'false'; // warning-only speech does not cover the inbox
   const serverBootAt = Date.now();
   // How long after boot the greeting is still considered "about to happen". Only
   // used to bound the gmail suppression below, so a sensor batch arriving hours
@@ -2462,12 +2458,15 @@ function createServer(deps) {
   const GREETING_DEDUP_KEY = 'greeting:session';
 
   async function deliverBootGreeting(targetWs) {
+    if (targetWs && (targetWs.readyState !== 1 || targetWs._mythosNodeId)) { bootGreetingFired = false; return; }
+    if (process.env.BOOT_GREETING === 'false') {
+      await proactiveSpeak(conversationAnnouncer?.appendSettingsWarnings('', deps.settingsDiagnostics), targetWs);
+      return;
+    }
     const hour = new Date().getHours();
     const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-    // TASK B2: fact assembly lives in conversation/briefing.js now (extracted
-    // for the same reason electron/child-exit.js was — testable behaviorally,
+    // TASK B2: fact assembly lives in conversation/briefing.js (testable behaviorally,
     // not just source-shape) and each source is individually time-boxed there.
-    // Deps below are exactly the closure state the inline code used to read.
     // `dispatch` reaches read-only T0 tools (get_weather, reminder_list) via
     // the same dispatchAction() wrapper every other caller uses — AD-1's
     // "one execution surface" rule forbids briefing.js from calling
@@ -2540,15 +2539,17 @@ function createServer(deps) {
       text = salutation + ', sir. ' + (config.MYTHOS_NAME || 'MYTHOS') + ' online.' +
         (bootUpgrade.upgraded ? ' I have received an upgrade since we last spoke.' : ' All systems nominal.');
     }
-    // Mark THE canonical "session opened" greeting so any other greeting-shaped
-    // source (the daily planner's morning brief) sharing this dedup key is
-    // suppressed for conversationAnnouncer's dedup window (BUG-112).
+    // Recheck after generation; a replacement dashboard may already be waiting.
+    if (targetWs && (targetWs.readyState !== 1 || targetWs._mythosNodeId)) {
+      targetWs = [...wss.clients].find((ws) => ws.readyState === 1 && !ws._mythosNodeId);
+      if (!targetWs) { bootGreetingFired = false; return; }
+    }
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
         conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
       }
     } catch (_) {}
-    await proactiveSpeak(text, targetWs);
+    await proactiveSpeak(conversationAnnouncer ? conversationAnnouncer.appendSettingsWarnings(text, deps.settingsDiagnostics) : text, targetWs);
     // BUG-148: set AFTER the greeting has actually been spoken, so the gmail-batch
     // subscriber's suppression window closes at the right moment. Set in a finally-
     // style position rather than early, because a batch arriving while the greeting

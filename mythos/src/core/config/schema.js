@@ -100,7 +100,7 @@ const SCHEMA = {
   // US-leaning female; a British voice is the audible mismatch. Paired with
   // voice-loop.js's PREFERRED_VOICES order — test/voice-identity-consistent.test.js
   // pins the two together.
-  VOICE_TTS_VOICE:          { type: 'string', default: 'en-US-AvaNeural' },
+  VOICE_TTS_VOICE:          { type: 'string', default: 'en-US-AvaNeural' }, VOICE_SETTINGS_WARNINGS_ENABLED: { type: 'bool', default: true }, // false restores pre-BUG-429 speech.
 
   // Which engine speaks the NON-Live paths (boot greeting, proactive speech,
   // batch replies). 'edge' = edge-tts (~900ms/sentence, free, unofficial

@@ -115,6 +115,14 @@ function createLifecycle({ bus, logger, config }) {
   }
 
   function registerShutdown() {
+    // BUG-422: exit cannot await a stream flush. Synchronous stderr reaches the
+    // parent's child log even when no event-loop work remains. No restart policy.
+    for (const [event, msg] of [['beforeExit', 'lifecycle.process-before-exit'], ['exit', 'lifecycle.process-exit']]) {
+      process.on(event, (code) => {
+        try { require('node:fs').writeSync(2, JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg, code }) + '\n'); }
+        catch { /* parent stream-error instrumentation records a broken destination */ }
+      });
+    }
     const signals = ['SIGINT', 'SIGTERM'];
     for (let i = 0; i < signals.length; i++) {
       process.on(signals[i], async function() {

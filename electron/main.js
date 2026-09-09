@@ -146,7 +146,7 @@ function mainLogFile() {
 // The rules and the reasoning live in ./log-rotate.js, where they can be tested for
 // real rather than shape-asserted.
 function log(...args) {
-  const line = args.map((a) => (typeof a === 'string' ? a : safeStringify(a))).join(' ') + '\n';
+  const line = formatLogLine(args, safeStringify);
   try { process.stderr.write(line); } catch { /* broken pipe in GUI mode — swallow */ }
   try {
     const file = mainLogFile();
@@ -154,8 +154,9 @@ function log(...args) {
       rotateLogIfOver(file, MAIN_LOG_MAX_BYTES);
     } catch { /* first write — no file to cap yet */ }
     fs.appendFileSync(file, line);
-  } catch { /* a log that cannot be written must never take the app down */ }
+  } catch (err) { recordLogFailure(mainLogFile, err); }
 }
+const { formatLogLine, recordLogFailure, observeChildLifecycle } = require('./child-lifecycle');
 function safeStringify(v) {
   try { return v instanceof Error ? v.message : JSON.stringify(v); } catch { return String(v); }
 }
@@ -928,6 +929,7 @@ function startChild() {
   // mythos:restart-server) does not resend a report from an update that
   // finished boots ago.
   pendingUpdateResult = null;
+  observeChildLifecycle(child, childLogStream, log);
   if (childLogStream) {
     child.stdout.pipe(childLogStream);
     child.stderr.pipe(childLogStream);

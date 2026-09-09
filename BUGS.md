@@ -585,10 +585,13 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-399 | fixed | blocked | CI uses manual dispatch and Node22; fixtures now keep caller timeout alive, use actual allowed-dir variable, and await sensor-side socket close. Consumers: CI recursive test job and aether/browser capability regressions. Regression oracle: 7295 intermediate local Node26 pass; existing regressions inspected. Remaining evidence: Fresh clean Node22 CI run is distinct from local Node26 integration. | mythos/test/hub-enforces-caller-abort.test.js |
 | BUG-400 | verified | blocked | PIN-only startup correctly skips token exchange; cookie priming logs safe outcomes and preserves combined-auth rejection. Consumers: Packaged boot, unlock UI, auth exchange. Regression oracle: Real dev and packaged no-auth/token/PIN/combined startup matrix. Remaining evidence: Original missing-log cause and unlock retry behavior require their own reproduction. | electron/main.js |
 | BUG-401 | verified | blocked | Voice widget observes stable compose subtree so late creation/replacement updates state and cleanup disconnects. Consumers: HUD compose bar, widget lifecycle. Regression oracle: 7 focused tests plus actual Edge widget listening/speaking probe and mutation. Remaining evidence: Real acoustic speech/capture status remains separate from DOM state. | mythos/ui/public/js/widgets/kinds/voice.js |
-| BUG-402 | open | blocked | Installer and adapter share side-effect-free DSH resolution, validate package/bin/version and preserve override precedence. Consumers: setup-dsh installer, DSH adapter, Forge/build engine. Regression oracle: 81 DSH regressions;4 mutations;actual dev and packaged engine execution. Remaining evidence: Fresh incomplete-install recovery completed: npm installed the pinned engine in 44 minutes, setup executed its version check, and the recovered engine generated real HTML through the adapter in 68.3 seconds. General generated-build quality remains a separate gate. | mythos/src/core/dsh-location.js |
-| BUG-403 | open | blocked | Auth priming emits safe state telemetry, awaits server/exchange/cookie readiness and keeps PIN semantics. Consumers: Electron packaged bootstrap, auth-session routes. Regression oracle: Auth matrix real dev/packaged boots; focused safe-telemetry regressions. Remaining evidence: Original historical failure mechanism is not conclusively reconstructed. | electron/main.js |
-| BUG-404 | open | blocked | Persistent infrastructure children use writable runtime cwd; relative binaries retain original resolution; ADB cleanup limits ownership. Consumers: pc/cua/android, TTS/search children; both raw browser launch sites. Regression oracle: 243 prior lifecycle regressions, packaged shutdown/rename and owned PID checks;browser family117pass. Remaining evidence: Handset/ADB shared-session live behavior, crash recovery and installed-artifact uninstall locks. | mythos/src/core/util/child-runtime.js |
+| BUG-402 | fixed | blocked | Installer and adapter share side-effect-free DSH resolution, validate package/bin/version and preserve override precedence. Consumers: setup-dsh installer, DSH adapter, Forge/build engine. Regression oracle: 81 DSH regressions;4 mutations;actual dev and packaged engine execution. Remaining evidence: Fresh incomplete-install recovery completed: npm installed the pinned engine in 44 minutes, setup executed its version check, and the recovered engine generated real HTML through the adapter in 68.3 seconds. General generated-build quality remains a separate gate. | mythos/src/core/dsh-location.js |
+| BUG-403 | diagnosed | blocked | Auth priming emits safe state telemetry, awaits server/exchange/cookie readiness and keeps PIN semantics. Consumers: Electron packaged bootstrap, auth-session routes. Regression oracle: Auth matrix real dev/packaged boots; focused safe-telemetry regressions. Remaining evidence: Original historical failure mechanism is not conclusively reconstructed. | electron/main.js |
+| BUG-404 | fixed | blocked | Persistent infrastructure children use writable runtime cwd; relative binaries retain original resolution; ADB cleanup limits ownership. Consumers: pc/cua/android, TTS/search children; both raw browser launch sites. Regression oracle: 243 prior lifecycle regressions, packaged shutdown/rename and owned PID checks;browser family117pass. Remaining evidence: Handset/ADB shared-session live behavior, crash recovery and installed-artifact uninstall locks. | mythos/src/core/util/child-runtime.js |
 | BUG-405 | verified | blocked | Every pid-bearing failed PC command passes shared stale-target recovery; non-pid and non-stale failures avoid extra lookup. Consumers: from-pc delegate, focus/close/ui_elements and other pid tools. Regression oracle: Full helper/consumer tests read; browser family117pass includes recovery. Remaining evidence: Actual stale native pid followed by current live window list. | mythos/src/core/effectors/window-recovery.js |
+| BUG-422 | open | blocked | Child lifecycle instrumentation names the next failure; original cause remains unknown. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
+| BUG-429 | fixed | blocked | Unknown settings are announced through repeat backoff and listed by doctor. Voice kill switch and known-key non-change tested; browser-use stays parked. | mythos/scripts/doctor.js |
+| BUG-432 | open | blocked | System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. Timing changes await a measured pass. | mythos/src/core/voice/live-session.js |
 | BUG-406 | open | blocked | Gate telemetry records ownership release reasons and timing; reason labels cannot establish absence of echo. Consumers: Audio capture, playback gate, interruption handling. Regression oracle: Historical corpus34releases/7ceilings and98gate/player regressions. Remaining evidence: Synchronized labeled microphone/playback corpus; numeric latency budget and no-regression controls. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -605,14 +608,12 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-419 | fixed | currently verified | Measured live 2026-09-09, and it is worse than filed: registry.getStatus() reported cerebras aliveModels 3 and chainFor(build)/chainFor(simple) both still ENDED on a cerebras rung. The liveness probe fetches /models, a free catalog that answers 200 on an unbilled account, while the 402 only comes from /chat/completions -- gate E, a proxy admitting the value that breaks you. 402 was also unclassified in chain.js (which knows 429, 5xx, network only), so no cooldown and no breaker tick were ever taken, and the comment deferring auth failures to isAvailable() named a mechanism that did not exist. Now recorded from real calls in provider-health.js, consulted by isProviderAlive and reported on read_status. Consumers: every brain lane and read_status. LIVE-VERIFIED 2026-09-09 against the real key: gpt-oss-120b returned 402 Payment Required in 284ms, cerebras went from 6 of 8 lanes to 0, and read_status carried the remedy in plain English. The same run sharpened the premise: gemma-4-31b answers 404, not 402, so the three lanes that use it keep a dead rung — filed as BUG-420. | mythos/src/core/brain/provider-health.js; mythos/src/core/brain/registry.js; mythos/src/core/brain/chain.js |
 | BUG-420 | open | currently reproduced | Found while live-verifying BUG-419 and deliberately not fixed there. Cerebras GET /models answers 200 and lists gemma-4-31b; POST /chat/completions for it answers 404 "Model does not exist or you do not have access to it". That model is the cerebras rung in the voice, simple and memory lanes, so those three attempt a call that cannot succeed, every session. ACCOUNT_STATUSES is 401/402/403 only, and narrowing it that way is correct — a 404 is about one MODEL, and killing a provider for a bad model id would remove working rungs — so a permanently-404 model has no recorder at all. Consumers: three brain lanes. Two directions in the entry: replace the model in the lane table (helps this operator now), or record health per provider AND model (what a buyer whose key goes bad later needs). | mythos/src/core/brain/provider-health.js; mythos/src/core/brain/registry.js; mythos/src/core/brain/lanes.default.js |
 | BUG-421 | open | currently reproduced | Found while live-verifying BUG-417 and deliberately not widened there. Measured on a real YouTube search page at 1280x800: cards ranked 6, 6, 8, 11, 14 across four 600px scrolls, and result six became clickable on the FOURTH — REVEAL_SCROLLS is 4, so the margin is zero. ORDINAL_WORDS accepts first through twentieth, and anything past roughly the eighth cannot be reached inside the budget. It blocks honestly rather than clicking the wrong video, which is why this is filed rather than hotfixed. Do not simply raise the number: stop on "the ranked count stopped growing" instead, or bound the grammar to what a page can serve and say so in the refusal. One page at one viewport size is one sample. | mythos/src/core/desktop/controller.js; mythos/src/core/desktop/intent.js; mythos/browser-extension/engine.js |
-| BUG-422 | open | currently reproduced | Server child died 19:52:05.685Z mid-conversation, two seconds after a normal Live turn. No error, no Fatal, no shutdown record, no supervisor log line, no Windows crash event, no memory exhaustion (5.7GB free), no restart, nothing on 4478. electron/main.js:1065 always logs on exit and always restarts unless isQuitting - and demonstrably did so earlier the same evening. Consumers: every surface. Do not add a watchdog before knowing why the handler did not fire. | electron/main.js:1065-1084; %APPDATA%/MYTHOS/mythos-server.log lines 4414-5864 |
 | BUG-423 | open | currently reproduced | Zero audit rows mention reddit across the whole day; MYTHOS claimed to be opening it in four separate turns and invented a failed first attempt to explain the absence. claimed-action-not-taken fired 4x, so detection works and containment does not. Second instance: the 19:21:47 greeting said the Gmail token was refreshed 14 seconds before the same process logged gmail-reauth-required. Consumers: every spoken claim. Outranks the crash - a system that reports work it never did cannot verify itself. | mythos/src/core/voice/; vault/Audit/2026-09-10.jsonl; vault/Episodic/2026-09-10.jsonl |
 | BUG-424 | open | currently reproduced | proactive-speech emitted response:browser_navigate{message:This action takes longer than this turn. Say what you are DOING, not what happened - do NOT claim completion...} as speech. The leaked text is the rule whose violation is BUG-423, which suggests the long-running-action guidance is reaching the speech path instead of the model context. Consumers: the spoken channel. | mythos/src/core/voice/live-tools.js; vault/Episodic/2026-09-10.jsonl proactive-speech rows |
 | BUG-425 | open | currently reproduced | browser_navigate received url:"https://www.youtube.comCall browser_navigate using the real YouTube URL to open it in Brave." and failed with Invalid URL. The trailing sentence is open_web's own remedy string. The redirection it belongs to is WORKING - the model called browser_navigate correctly on the next attempt - but a remedy returned as prose in a field the model treats as data is one token from becoming an argument. Consumers: every tool that returns a remedy. | mythos/src/core/effectors/from-dashboard.js; mythos/src/core/effectors/from-browser.js |
 | BUG-426 | open | currently reproduced | chain-whole-lane-timeout x6 on reasoning, every attempt at the 30000ms ceiling, playbook none; think_deeply 0/2 with "The reasoning lane did not return an answer", spoken to the operator. mistral-large-2512 403 not-in-subscription-tier, mistral-small 429, google aborted. 403 IS in ACCOUNT_STATUSES so it should have ejected mistral - it did not appear to, and mistral kept serving other lanes. Consumers: think_deeply and the reasoning lane. | mythos/src/core/brain/chain.js; mythos/src/core/brain/provider-health.js; mythos/src/core/brain/lanes.default.js |
 | BUG-427 | open | currently reproduced | nim 4430ms, nim2 4009ms, google 4005ms - all timedOut=true; vision.call ms=17313 ok=false offline=true attemptsTried=6 chars=0. Consumer here was build-refine, so the landing page shipped with no visual refinement. Same shape as the recorded NIM dead-time finding, now extending to Google, which points at a per-attempt ceiling too short for vision payloads rather than three outages. Measure the ceiling against a real image before re-ranking. | mythos/src/core/brain/lanes.default.js vision table; mythos/src/core/effectors/build-engine.js |
 | BUG-428 | open | currently reproduced | live-turn-no-user-transcript x16, live-turn-no-transcript x4, live-turn-silent x2, live-turn-stalled x2, live-tool-outcome-late-for-turn x4 - 24 of 99 turns. live-turn-stalled: "No reply of any kind - audio, text or a tool call - arrived within 10000ms after the operator stopped speaking." Confound to rule out first: the own-voice capture gate was cycling all session and has eaten 40% of a conversation before. Sum heldMs before blaming the transcriber. Consumers: every spoken turn. | mythos/src/core/voice/live-session.js; vault/Episodic/2026-09-10.jsonl anomaly rows |
-| BUG-429 | open | currently reproduced | config.settings.ignored unknown=["BROWSER_USE_MODEL"] at boot; the operator set it to google/gemini-3.1-flash-lite in the userData config.json and browser-use runs on its default instead. One warn line in a 1,400-line log is the only notice. Either the key belongs in schema.js or the settings surface should refuse it on entry - the two readings need different fixes. Consumers: browser-use. | mythos/src/core/config/schema.js; %APPDATA%/MYTHOS/config.json |
 | BUG-430 | open | currently reproduced | search-provider-failed x36 in 31 minutes (last: HTTP 401), search-provider-unsuppressed x6 cycling ddg-lite/ddg-html/local-websearch, web_fetch 0/2. web_search reports 12/12 ok, which measures completion and not answers: eleven reformulated searches for one question ("latest song by The Kid LAROI") and it was never answered. Large share of session token spend. Consumers: research, and decision D4 which was waiting for exactly this measurement. | mythos/src/core/effectors/from-research.js; mythos/.env.example search provider keys |
 | BUG-431 | open | currently reproduced | browser-agent disconnected unexpectedly x2 plus launched-browser-closed x1 against 18 ECONNREFUSED reconnects; recovery works (connected via CDP, tools grew 105->122) but the drop is invisible mid-task and lands in the same window as BUG-423 - rule it in or out there. dsh-agent.lane-head-skipped: the build produced real output but on a fallback model, and with BUG-427 killing build-refine the operator received an unrefined artifact and was not told it had finished. Also recorded here: tts gemini-tts no-audio failover x1, see_and_click 0/2 at OCR, gmail_unread invalid_grant, open_web 0/3 (one tool-timeout, two correct refusals). | mythos/adapters/browser-agent/index.js; mythos/adapters/dsh-agent/index.js |
 
@@ -829,21 +830,21 @@ it is committed.
 
 `test/bug-401-voice-widget-state.test.js` plus existing S2S-row tests passed **7/7**. Isolated-copy mutation `subtree: true` to `false` preserved initial listening but failed the subsequent speaking assertion, retaining listening: the browser exercised the exact descendant-attribute behavior being repaired. Original source was never mutated. Evidence: project-local `.cache/campaign/voice-widget-before.log`, `voice-widget-after.log`, `voice-widget-mutation.log`, and `voice-widget-tests.tap`. The original fixed-row status is preserved; complete ticket closure still requires the packaged HUD oracle.
 
-## BUG-402 — the packaged build cannot find the build engine it installed: `setup-dsh.js` writes to `MYTHOS_TOOLS_DIR`, `adapters/dsh-agent` never reads it (🔴 DIAGNOSED 2026-09-03, not yet fixed)
+## BUG-402 — the packaged build cannot find the build engine it installed: `setup-dsh.js` writes to `MYTHOS_TOOLS_DIR`, `adapters/dsh-agent` never reads it (FIXED 2026-09-10)
 
-**Status:** 🔴 diagnosed from source and confirmed in the packaged boot log 2026-09-03; no code change yet.
+**Status:** ✅ FIXED 2026-09-10 — shared DSH resolution is covered by `test/bug-402-shared-dsh-location.test.js`. A fresh packaged rebuild remains owed.
 
 `scripts/setup-dsh.js` `dshSearchHomes()` considers four homes — `MYTHOS_DSH_INSTALL_DIR`, `MYTHOS_TOOLS_DIR/DeepSeek Harness`, `<repo>/DeepSeek Harness`, `mythos/` — and WRITES to the tools dir whenever Electron sets it. `adapters/dsh-agent/index.js` `DSH_INSTALL_ROOTS` has two: `<repo>/DeepSeek Harness` and `mythos/node_modules`, both derived from `__dirname`. In a packaged build `__dirname` is `resources/app.asar.unpacked/…`, neither exists there, and the harness is not shipped (`build.files`). Boot log: `dsh-agent.offline … Looked in: …app.asar.unpacked\DeepSeek Harness…, …app.asar.unpacked\mythos\node_modules…` and `impact: every build will fail`. The HUD banner offers **Finish setup**, which installs to the tools dir the adapter will not look in — so the offered remedy cannot work. `%APPDATA%\MYTHOS\tools\DeepSeek Harness` holds only the vendor `package.json`. Writer and reader disagree on a path. Fix: the adapter must consume the same `dshSearchHomes()` (one function, both callers) and a test must assert the two lists are the same list, not two lists that happen to agree in a dev checkout.
 
-## BUG-403 — `primeAuthSession()` produced no log line on a boot where its token was present and its exchange would have answered 409 (🔴 UNDIAGNOSED 2026-09-03)
+## BUG-403 — `primeAuthSession()` produced no log line on a boot where its token was present and its exchange would have answered 409 (DIAGNOSED 2026-09-10)
 
-**Status:** 🔴 open, unexplained. Recorded so the next session does not inherit the assumption that the prime ran.
+**Status:** 🔍 instrumentation shipped 2026-09-10 — `primeAuthSession()` logs `entered` before its first branch. The original cause remains unreconstructed; diagnosed, not fixed.
 
 On the 21:30Z and 21:43Z boots of the packaged build, `%APPDATA%\MYTHOS\logs\main.log` carried no `auth.session-prime:` line at all, and a grep of the whole file finds none ever. `resolveAuthTokenForPriming()` has no loopback guard and `decryptedKeysForChild()` has no key filter; `keystore-recrypt` reported all 9 keys decrypting; the server demanded a token, so the child received one. Every non-success path of `primeAuthSession()` logs, and a 409 from the combined-mode server was certain — yet nothing was written. Either the function is not reached on the path `whenReady()` actually takes when a PIN is configured, or `log()` is not bound to the file at that moment. Check that settles it: a temporary `log('auth.session-prime: entered')` as its first line, one boot. Not investigated further because the operator's fix (BUG-400) does not depend on it.
 
-## BUG-404 — the adb fork-server outlives MYTHOS with its cwd inside the install tree, so the tree cannot be rebuilt, updated or uninstalled until someone finds and kills it (🔴 DIAGNOSED 2026-09-03, not yet fixed)
+## BUG-404 — the adb fork-server outlives MYTHOS with its cwd inside the install tree, so the tree cannot be rebuilt, updated or uninstalled until someone finds and kills it (FIXED 2026-09-10)
 
-**Status:** 🔴 diagnosed live 2026-09-03; no code change yet.
+**Status:** ✅ FIXED 2026-09-10 — persistent children use a writable runtime cwd, covered by `test/bug-404-child-runtime.test.js`. The EBUSY packaged rebuild remains owed.
 
 Measured while rebuilding the packaged app: three consecutive `electron-builder --win --dir` runs failed with `EBUSY: resource busy or locked, rmdir …\app.asar.unpacked\mythos` after every `MYTHOS.exe` process had been stopped. The directory could be emptied but not removed — the signature of a live process whose *current working directory* is that folder. It was `adb.exe -L tcp:5037 fork-server server` (pid 4388, started 6 s after the app, from `%APPDATA%\MYTHOS\tools\Android Platform Tools`). `android-child` spawns adb from the server child, which the Electron main process forks with `cwd: MYTHOS_DIR`; adb's daemon inherits that cwd and, by design, detaches and survives its parent. Killing it released the lock and the fourth build succeeded. The `pc-child` PowerShell (pid 17688) also survived the parent kill and held the tree first — same class, second instance.
 
@@ -1421,9 +1422,21 @@ So one of these is true, and this ticket is not closed until it is known which:
 
 **Preceding signal, possibly related, possibly not:** `loop.stalled` fired 12 times during the session, worst `lagMs 1857 cpuMs 469` against a 250ms threshold. An event loop that stalls for ~2s is not itself a crash, and no stall is recorded adjacent to the death.
 
+**Instrumentation shipped 2026-09-10:** `electron/child-lifecycle.js` timestamps main logs, records main-log write failures separately, observes child close/disconnect/stream errors, and checks for disconnected children without an exit every 30 seconds. Child lifecycle writes beforeExit/exit synchronously. This does not restart or settle the historical cause. Regression: `test/electron-child-lifecycle.test.js`.
+
 **Do not "fix" this by adding a watchdog first.** A supervisor that restarts a child it cannot explain converts a visible outage into an invisible one. Find out why the handler did not fire; the restart is the second question.
 
 **How to reproduce the evidence:** the boot is at line 4414 of `%APPDATA%\MYTHOS\mythos-server.log` and the session's last line is 5864.
+
+## BUG-432 — back-to-back system notices interrupt each other's turn (OPEN, filed 2026-09-10)
+
+**Status:** 🔴 OPEN — measured, not fixed. Serializing notices changes live timing and needs its own measured pass.
+
+**Evidence:** the 2026-09-09 attended session has 35 `live.interrupted` events; 15 were preceded within 300 ms by MYTHOS's own `live.text-injected`. The 19:30:58 silent-turn fallback followed another system notice by 87 ms, with no audio in the superseded turn.
+
+**Scope:** preserve the original events. Do not call every interruption an operator barge-in. BUG-424 can withhold a superseded fallback; that does not serialize the notices or close this ticket.
+
+**Attribution:** diagnoses come from the 2026-09-09 filing session and the 2026-09-10 replay.
 
 ## BUG-423 — MYTHOS narrated an action it never attempted, four times, and invented a failed attempt when challenged (OPEN, found live 2026-09-09)
 
@@ -1438,7 +1451,7 @@ So one of these is true, and this ticket is not closed until it is known which:
 
 The second line is the serious one: **it invents a failed first attempt in order to explain the absence of the first attempt.** There was nothing to fail and nothing to retry. That is BUG-275 H2 — defending an invention when challenged — reproduced verbatim, and it is worse than a plain hallucination because the fabrication is *responsive*: it is generated to answer the operator's doubt.
 
-**The immune system SAW it and the operator was told anyway.** `claimed-action-not-taken` fired **4 times** with playbook `claimed-action-not-taken-known`. So detection works and containment does not: the anomaly reaches the log, the audit and the HUD, while the spoken channel — the only one the operator was using — carries the fabrication unmodified. **Detection without suppression is the defect.**
+**Replay corrected the diagnosis (2026-09-10).** `detectUnbackedClaims` returned `[]` for the four reddit utterances. The four anomaly rows did not prove detection of these claims. The correction path worked when it fired at 19:52:03. At 19:42:54, `browser_navigate` was withheld as UNAVAILABLE without telling the model: preceding `close_window` calls had closed its automation browser (BUG-431). Missing capability context and missed phrasing are the measured causes; containment was not shown broken.
 
 **A second instance, in the FIRST thing it said.** The 19:21:47 proactive greeting: *"That Gmail token's refreshed, and the Torch's back online."* Fourteen seconds later the same process emitted `gmail-reauth-required` — *"Gmail has stopped working and it will not recover on its own: the Google refresh token is expired or revoked."* The greeting asserted the opposite of a fact the process already held, before any operator input existed to be confused by. That points at the greeting being composed from an assumed or stale capability snapshot rather than from live state — see [[live-prompt-freezes-capability-snapshot]].
 
@@ -1528,17 +1541,19 @@ live-tool-outcome-late-for-turn x4   playbook live-tool-outcome-late-known
 
 **Note the confound before diagnosing:** the echo/own-voice gate was active throughout (`voice.capture-suspend` with `own-voice-hold` and `own-voice-ceiling-no-evidence-of-echo` alternating), and [[mic-gate-zeroed-40-percent-of-a-conversation]] records a prior session where that gate ate a large fraction of the audio. **Sum `heldMs` from this session's capture-suspend rows before blaming the transcriber.**
 
-## BUG-429 — a config.json key the schema does not know is dropped with only a boot-time warning (OPEN, found live 2026-09-09)
+## BUG-429 — unknown settings are now announced and listed by doctor (FIXED 2026-09-10)
 
-**Status:** OPEN, low severity, trivially confusing. Reproduced live 2026-09-09.
+**Status:** ✅ FIXED 2026-09-10 — unknown and unreadable settings receive a spoken warning through the existing repeat backoff; doctor names unknown keys. `VOICE_SETTINGS_WARNINGS_ENABLED=false` restores the former speech behavior. Browser-use remains parked; no schema key or wiring was added for it.
 
 ```
 config.settings.ignored  file=%APPDATA%\MYTHOS\config.json  unknown=["BROWSER_USE_MODEL"]  dropped=[]
 ```
 
-The operator set `BROWSER_USE_MODEL: "google/gemini-3.1-flash-lite"` in the userData `config.json`. The schema does not declare it, so it is discarded — browser-use runs on its default, not the chosen model, and nothing says so at the point of use. The single boot-time warn is the only notice, and it scrolls past in a 1,400-line log.
+The operator set `BROWSER_USE_MODEL` in userData config.json, but it was never a MYTHOS setting. The parked browser-use skill is not a runtime integration. The 2026-09-10 decision removes the unused local key; no browser-use wiring is wanted.
 
-**Two candidate readings, and they need different fixes:** either the key is legitimate and missing from `config/schema.js` (in which case add it), or it was never a real setting and the operator is holding a belief about their configuration that is false (in which case the settings UI should refuse it on entry). Related: the audit already records 53 documented-but-unschema'd env keys as a standing item.
+**Disposition (2026-09-10):** the key is not legitimate. The runtime still drops it; the new notice and doctor section expose the ignored setting. The parked skill remains in the tree. Regression: `test/bug-429-settings-ignored-visible.test.js`; both warning kinds, repeat backoff, kill switch, known-key non-change, and names-only doctor output.
+
+**Startup wire verified in the real server path (2026-09-10):** review caught that the boot anomaly precedes announcer subscription. Retained settings diagnostics now reach the existing dashboard-ready timer; warning and greeting share one Live injection. With BOOT_GREETING=false, warning-only speech skips the brain greeting. The speech kill switch, history eviction, actual WebSocket delivery, and repeated-warning backoff are pinned by test/bug-429-startup-settings-speech.test.js; three additional mutations failed and restored with matching SHA256.
 
 ## BUG-430 — the search chain degrades continuously — 36 provider failures in a 31-minute session (OPEN, found live 2026-09-09)
 
@@ -7933,13 +7948,13 @@ All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 i
 
 **Status:** 🔴 PARTIALLY FIXED — H2, H3 and H4 are closed with detectors and a
 mutation-proven test suite (2026-09-02); **H5 and H7 are REFUTED and were never
-defects**; H1's stated mechanism was measured and is WRONG; H1 and H2 remain
+defects**; H1's stated mechanism was measured and is WRONG; H1 remains
 genuinely open. All three of this entry's own "check first" items were answered
 2026-08-28 (evidence relocated, H8 reclassified as narration-loss, H6 refuted).
 **BUG-394 step 1:** like BUG-274, this entry previously rested entirely on the
 words "NOT STARTED" appearing somewhere in its prose, so an editorial rewrite
 could have silently unrecorded it. H2 — defending an invention when challenged —
-is the highest-severity half and is untouched.
+was the highest-severity half and closed on 2026-09-02; H1 remains deliberately open.
 
 > ### ✅ H3 AND H4 CLOSED 2026-09-02 — and THREE of this ticket's findings were measured and are wrong
 >
@@ -19083,7 +19098,7 @@ with no skills at all.
 
 ## BUG-268 — Ctrl+Alt+X (screen text capture / OCR) does nothing
 
-**Status:** 🔴 OPEN, and it is **BLOCKED ON ONE KEYPRESS**, not on engineering.
+**Status:** 🔴 OPEN — blocked on the operator pressing Ctrl+Alt+X once in a build carrying the 2026-08-20 markers. Operator action deferred on 2026-09-10.
 Narrowed 2026-09-02 from five candidates to two, and a separate real defect was
 found in its test coverage. No code fix is claimed.
 
@@ -20809,16 +20824,21 @@ those records remain owed (this section is the index until then).
   unreachable and were deleted; BUG-098 was given a Status line from its own words
   rather than relaxing the guard that caught it.
 
+- BUG-432 - back-to-back system notices interrupt each other; 15 of 35
+  interruptions followed a system injection within 300 ms. Measured; timing work remains open.
+
 - BUG-422 - the server child exits silently mid-session and the supervisor
   neither logs it nor restarts. CRITICAL: the operator lost the app mid-
   conversation while Gemini Live kept speaking into a dead microphone path.
   Cause unknown; find out why the exit handler did not fire before adding any
   watchdog.
+  **INSTRUMENTED 2026-09-10** — timestamps, write-failure counter/sidecar, child
+  close/disconnect/stream errors, sync process exit, and a log-only 30s probe.
 
 - BUG-423 - MYTHOS narrated opening reddit.com four times and never issued a
   single tool call, inventing a failed attempt when challenged. The immune
-  system detected it (claimed-action-not-taken x4) and the operator was told
-  anyway. Highest behavioural severity: it makes the system unable to verify
+  system missed these utterances in the 2026-09-10 replay; the later correction
+  path worked. Missing browser tools were never explained to the model. Highest behavioural severity: it makes the system unable to verify
   itself. Same class as BUG-275 H2.
 
 - BUG-424 - internal tool-response scaffolding ("do NOT claim completion…")
@@ -20840,6 +20860,8 @@ those records remain owed (this section is the index until then).
 
 - BUG-429 - config.json keys unknown to the schema are dropped with only a
   boot-time warning; BROWSER_USE_MODEL is set by the operator and ignored.
+  **FIXED 2026-09-10** — the existing anomaly backoff now announces ignored and
+  unreadable settings; doctor lists unknown names. Browser-use stays parked.
 
 - BUG-430 - 36 search-provider failures in 31 minutes, and eleven searches for
   one unanswered question. web_search reporting 12/12 ok measures completion,

@@ -549,6 +549,20 @@ function campaignAssessments(text) {
   return result;
 }
 
+function assertConsistentStatus(bug) {
+  // Current Status paragraph only: history and unresolved siblings are valid.
+  const paragraph = (bug.body.match(/^\*\*Status:\*\*[^\n]*(?:\n(?!\s*\n)[^\n]+)*/m) || [''])[0].replace(/\*/g, '');
+  const states = new Map();
+  const lists = /\b(H\d+(?:(?:,\s*|\s+(?:and|or)\s+)H\d+)*)\s+(?:(?:are|is|remain|remains|still|genuinely)\s+)*(closed|open)\b/gi;
+  for (const match of paragraph.matchAll(lists)) {
+    for (const id of match[1].toUpperCase().match(/H\d+/g)) {
+      const state = match[2].toLowerCase();
+      if (states.has(id) && states.get(id) !== state) throw new Error('BUG-' + bug.n + ' ' + id + ' is both closed and open in its Status paragraph');
+      states.set(id, state);
+    }
+  }
+}
+
 function buildRegister(deps = {}) {
   const text = deps.bugsText ?? fs.readFileSync(BUGS_FILE, 'utf8');
   const { set: openSet, section } = openSetFrom(text);
@@ -560,6 +574,7 @@ function buildRegister(deps = {}) {
     + 'refusing to publish a register whose open set would be empty by accident.');
 
   const bugs = parseBugs(text).map((b) => {
+    assertConsistentStatus(b);
     const sec = sections(b.body);
     const row = {
       n: b.n,
