@@ -85,6 +85,9 @@ drain causes `{type:"desktop-speech-drained",speechId}`; server delivery alone
 does not release final task narration. A 15-second missing receipt produces an
 explicit failure, never proof that the operator heard speech.
 
-The initial executor supports YouTube open/third-video/pause/resume/next only.
+The initial executor supports YouTube open, playback of an observed result
+1 through 20, and pause/resume/next only. An ordinal addresses the Nth card of
+the single observed list; a missing or ambiguous list blocks rather than
+choosing a different card.
 Unsupported browser operations refuse rather than silently switching to a CDP
 profile. Global physical-input detection and nested frames are later gates.

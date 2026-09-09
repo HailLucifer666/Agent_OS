@@ -41,6 +41,19 @@ test('takeover from another browser/tab cannot cancel unrelated task', async t =
   wire.emit('message', 'client', { type: 'user-takeover', taskId: 'task', tabId: 8, inputType: 'pointerdown' });
   assert.equal((await bridge.execute('observe', target(), { taskId: 'task' })).code, 'CANCELLED');
 });
+
+test('disconnected bridge reports missing extension instead of a successful empty browser list', async t => {
+  const { bridge, wire } = await setup(t);
+  wire.emit('disconnected', 'client');
+  const missing = await bridge.execute('tabs', {}, { taskId: 'task' });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.code, 'EXTENSION_DISCONNECTED');
+  assert.match(missing.error, /MYTHOS Browser Operator/);
+  wire.emit('message', 'reconnected', { type: 'hello', extensionId: ID });
+  const restored = await bridge.execute('tabs', {}, { taskId: 'task' });
+  assert.equal(restored.ok, true);
+  assert.equal(restored.result.tabs.length, 1);
+});
 test('mutations require exact task/browser/tab/frame/document and consume fresh observation once', async t => {
   const { bridge, target, sent } = await setup(t);
   const observed = await bridge.execute('observe', target(), { taskId: 'task' }); assert.equal(observed.ok, true);

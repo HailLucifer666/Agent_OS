@@ -17,6 +17,17 @@ the first external user exists).
 
 *Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
 
+### 2026-09-08 — Brave second-video workflow is under live qualification.
+
+Voice startup repair is pushed as `284eead42c0a6b8e4b5cf5da06e90e64245cd632`.
+The operator confirmed normal spoken replies, then reported second-video failure.
+Observed ordinal selection now supports positions 1 through 20; the full suite
+passed 7,422 tests and a wrong-index mutation failed the intended assertion.
+The supplied Brave extension was registered and the installed backend now reports
+operator mode enabled. Backend restart exposed missing extension reconnection;
+repair and attended playback proof are the immediate next work. No stage gate
+advances on these code or configuration checks. See BUGS.md for current evidence.
+
 ### 2026-09-08 — PIN-unlock voice startup repaired on the installed 0.1.11 app.
 
 Protected voice settings were fetched before PIN entry and cached as unavailable.

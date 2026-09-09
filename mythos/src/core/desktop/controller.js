@@ -1,5 +1,5 @@
 'use strict';
-const { parseRequest } = require('./intent');
+const { parseRequest, selectionOrdinal } = require('./intent');
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const youtube = (url) => { try { const h = new URL(url).hostname; return h === 'youtube.com' || h.endsWith('.youtube.com') || h === 'youtu.be'; } catch (_) { return false; } };
 
@@ -9,7 +9,7 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
   if (!goals || typeof executeTool !== 'function') throw new Error('Desktop controller requires goals and authorized executeTool');
   const running = new Map();
   const latest = new Map(), connections = new Map(), disconnected = new Set();
-  function record(id) { const e = goals.get(id)?.execution; return e?.owner === 'desktop' && e.version === 1 && ['open-youtube', 'play-third', 'pause', 'resume', 'next'].includes(e.intent?.kind) && Number.isInteger(e.steps) ? e : null; }
+  function record(id) { const e = goals.get(id)?.execution; return e?.owner === 'desktop' && e.version === 1 && (selectionOrdinal(e.intent) || ['open-youtube', 'pause', 'resume', 'next'].includes(e.intent?.kind)) && Number.isInteger(e.steps) ? e : null; }
   function save(id, patch) {
     const e = record(id);
     if (!e) throw new Error('Desktop task no longer exists');
@@ -123,12 +123,15 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
           o = await observe(target);
         }
         const before = o.playback || {};
-        if (e.intent.kind === 'play-third') {
+        const ordinal = selectionOrdinal(e.intent);
+        if (ordinal) {
+          // Ordinals address only this fresh normal-card list. Missing cards do
+          // not authorize a different result, coordinates, or a second list.
           o = await readiness(target, o, (current) => {
             if (current.ambiguous === true) throw stopError('More than one visible video list; select the intended list first');
-            return Boolean(current.items?.[2]?.ref && current.items[2].videoId);
-          }, 'Three playable results did not become ready within the observation budget');
-          const item = o.items[2];
+            return Boolean(current.items?.[ordinal - 1]?.ref && current.items[ordinal - 1].videoId);
+          }, 'Requested playable result ' + ordinal + ' did not become ready within the observation budget');
+          const item = o.items[ordinal - 1];
           expected = { kind: 'playing', videoId: item.videoId };
           save(id, { phase: 'acting', expected });
           await leaf('browser_click', { target: o.target, ref: item.ref }, true);
@@ -175,8 +178,8 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
     if (running.size) return { ok: false, result: 'Pause or cancel the current desktop task first' };
     const previous = record(latest.get(ctx.connectionId));
     const intent = parseRequest(request, Boolean(previous?.target));
-    if (!intent) return { ok: false, result: 'Stage 1 supports only YouTube third-result playback, pause, resume, or next video' };
-    const execution = { version: 1, owner: 'desktop', state: 'running', phase: 'observing', intent, steps: 0, target: intent.kind !== 'play-third' || intent.contextual ? previous?.target || null : null, observation: null, evidence: null, createdAt: now(), updatedAt: now() };
+    if (!intent) return { ok: false, result: 'Stage 1 supports YouTube observed result 1 through 20 playback, pause, resume, or next video' };
+    const execution = { version: 1, owner: 'desktop', state: 'running', phase: 'observing', intent, steps: 0, target: !selectionOrdinal(intent) || intent.contextual ? previous?.target || null : null, observation: null, evidence: null, createdAt: now(), updatedAt: now() };
     if (ctx.requestId) execution.requestId = ctx.requestId;
     const goal = goals.create({ title: request, status: 'active', execution, budget: { actions: 16 } });
     latest.set(ctx.connectionId, goal.id); connections.set(goal.id, ctx.connectionId);
