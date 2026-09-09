@@ -167,7 +167,7 @@ function createLiveSession(deps) {
     systemInstruction,      // string — full RULES + persona (Phase 6)
     functionDeclarations,   // [] from live-tools.js, or a () => [] rebuilt per open — see currentFunctionDeclarations
     onToolCall,             // async (calls[], {sendToolResponse}) => void  (Phase 3)
-    onAudioOut,             // (base64Pcm24k) => void
+    onAudioOut, onEchoCheck, // audio sink; numeric transcript verdict ({ ratio, matched })
     onTranscript,           // ({role:'user'|'assistant', text, final}) => void
     onState,                // ({state, reason}) => void
     onTurnComplete,         // ({userText, assistantText}) => void
@@ -638,9 +638,7 @@ function createLiveSession(deps) {
         // BUG-272 V3: the filter fired ZERO times across 72 turns and nothing
         // could say why — match() collapses every non-match to null, so a
         // near-miss at 0.59 and "MYTHOS had said nothing at all" produced the
-        // same silence. inspect() returns the whole decision; one echo-check
-        // line per inputTranscription makes the answer readable from the log
-        // instead of inferable a day later.
+        // same silence. inspect() records one verdict per inputTranscription.
         //
         // Every field is a number, a boolean or a fixed enum. The privacy
         // invariant (a log line never carries transcript text) is binding and
@@ -659,6 +657,7 @@ function createLiveSession(deps) {
           msSinceAssistantAudio: lastAssistantAudioAt ? Date.now() - lastAssistantAudioAt : null,
         });
         const echoRatio = echoCheck.matched ? echoCheck.ratio : null;
+        if (onEchoCheck) onEchoCheck({ ratio: echoCheck.ratio, matched: echoCheck.matched });
         if (echoRatio !== null) {
           // The ratio only, never the text — transcripts are operator
           // speech, the log is not. Kept alongside echo-check because

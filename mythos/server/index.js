@@ -2960,9 +2960,9 @@ function createServer(deps) {
             // know the frame.
             send({ type: 'live-turn-complete', ...(desktop ? { operatorReqId } : {}) });
           },
-          // Direct per-connection barge-in callback — NOT the shared bus (see
-          // live-session.js's onInterrupted comment: a bare bus.subscribe here
-          // would fire for every OTHER connection's interruption too).
+          onEchoCheck: ({ ratio, matched }) => { if (config.VOICE_ECHO_VERDICT_TO_CLIENT !== false && outputGeneration === liveOutputGeneration) send({ type: 'live-echo-check', ratio, matched }); },
+          // Direct per-connection callbacks — a bare bus.subscribe here
+          // would fire for every OTHER connection's interruption too.
           onInterrupted: () => { if (outputGeneration === liveOutputGeneration) send({ type: 'live-interrupted', ...(desktop ? { operatorReqId } : {}) }); },
           // BUG-170: Live produced a reply the operator could read and no
           // audio at all — which is indistinguishable, from the room, from

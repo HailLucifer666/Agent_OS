@@ -3,7 +3,7 @@
 *Under 100 lines, by rule. The 5,278-line roadmap and its RESUME blocks are the
 archive; this file is the position. Rewrite it in place, never append.*
 
-## Position (2026-09-07)
+## Position (2026-09-10)
 
 **One workflow, until it is boring.** The Windows Operator build is collapsed to
 Stage 1 by operator decision on 2026-09-07. Stages 2-7 are PAUSED, not cancelled,
@@ -12,6 +12,14 @@ across at least two cold boots, sustained for a week.
 
 Phase A landed via PR #74 (`451ba73`). The Windows Operator implementation
 itself continues on `codex/windows-operator` and is not on `main` yet.
+
+The September 10 ticket campaign is stacked for review in four pull requests:
+[register #83](https://github.com/HailLucifer666/Agent_OS/pull/83),
+[brain #84](https://github.com/HailLucifer666/Agent_OS/pull/84),
+[voice #85](https://github.com/HailLucifer666/Agent_OS/pull/85), and
+[echo #82](https://github.com/HailLucifer666/Agent_OS/pull/82).
+These local fixes and replay checks provide no new attended voice or acoustic
+proof. No pull request was merged, and the golden-path streak remains **0**.
 
 ## The golden path
 
@@ -51,44 +59,36 @@ FAIL and counts neither for nor against it.
   `mythos/`. Run it before a push; CI still runs `sync-test-count --check`.
 - This file exists. `CLAUDE.md`'s plan-file ceiling names it explicitly.
 
-## Still open, not in this branch
+## Still open
 
 - Live/hardware gates from the 261-ticket campaign (mic/playback 027/406,
   Ctrl+Alt+X 268, grounded speech 275) — see the roadmap's 2026-09-07 block.
 - Licensing and release decisions (step 6.5, 274 T3). No release authorized.
+- The seven open tickets are **268, 274, 275, 406, 421, 422, and 432**.
+  BUG-421 still lacks reveal margin; BUG-422 needs a diagnosed child failure;
+  BUG-432 notice collisions need measured scheduling work. BUG-428 is coded,
+  with its acoustic proof still owed under BUG-406.
 - Phase B of the subtraction plan: one tool-definition object in
   `effectors/hub.js` carrying `tier` and `schema`, so leash, live-tools and the
   capability map read one source. Separate session, after review.
 
 ## NEXT ACTION
 
-**Live verification of BUG-414..419 is DONE (2026-09-09): five passed against
-real hardware, the sixth has no key here.** Numbers are in each BUGS.md entry.
-It answers question (a) above — judge the golden path through the operator's
-REAL Brave, not a debug profile. Opening a page there now verifies itself off
-the window title (414), the launcher starts Brave rather than Chrome (415),
-identity survives a reconnect through the real compiled host (416), an ordinal
-addresses the Nth RESULT on a real page (417), and a refusing provider leaves
-every lane on its first real call (419).
+Review the four pull requests, then arrange the next attended Stage 1 pass.
+The September 9 component checks for BUG-414..419 remain historical evidence;
+they did not establish one successful golden-path run.
 
-**Two things before Stage 1 can be judged, neither of them code:**
+Before that pass, verify the installed native host and extension match the
+BUG-416 code. The September 9 check found the installed host still stripped
+`instanceId`; rebuilding the native host and reloading the extension remain
+operator work. Decide how the runner observes Live injections, then judge the
+spoken golden path through the existing signed-in browser. No operator session,
+native-host rebuild, extension reload, or golden-path run occurred in this campaign.
 
-1. **Rebuild the native host and reload the extension.** The host registered
-   for Brave points at the installed app's `resources/mythos-browser-host.exe`,
-   built 2026-09-08 — before the 416 fix — so it still strips `instanceId` and
-   would refuse every hello. `node mythos/scripts/build-browser-native-host.js`.
-   Expect exactly one `browser.extension.protocol-mismatch` when the old
-   extension reconnects, none after the reload.
-2. **Decide how the runner sees the Live path** (question (b), unchanged):
-   observe `live.text-injected`, or run `VOICE_S2S_ENABLED=false` and log it.
-
-**Streak is still 0.** Five green component verifications are not one green
-end-to-end run, and nothing in this pass ran the golden path.
-
-**Filed, not fixed:** BUG-420 (a Cerebras model that always 404s stays in three
-lanes — only 401/402/403 are recorded) and BUG-421 (the grammar accepts
-ordinals 1-20; the reveal budget reaches about 6, with zero margin measured).
-BUG-418's provider wire stays unverifiable here: no Anthropic or OpenAI key.
+**BUG-420 has a local code fix:** retired-model defaults and scoped 403/404
+health handling are covered by replay and deterministic tests. New provider
+calls remain untested. **BUG-421 stays open:** ordinals 1-20 still exceed the
+measured reveal budget. BUG-418 still lacks a real Anthropic/OpenAI provider call.
 ## Where the detail lives
 
 - Archive and history: `MYTHOS-IRIS-Synthesis-Plan.md` (roadmap),

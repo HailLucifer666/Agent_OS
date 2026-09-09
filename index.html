@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7628,
+      "value": 7634,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5333,10 +5333,10 @@
         "state": "open",
         "title": "the half-duplex gate held the operator's microphone for 40% of a conversation, and 92 seconds of that ended in a timeout rather than in actual echo (🔴 DIAGNOSED 2026-09-03, deliberately NOT fixed here)",
         "detail": {},
-        "excerpt": "**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. **Measured from `voice.capture-suspend` releases, operator session 2026-09-03 (~11 minutes of conversation):** | release reason | n | total held | worst single hold | frames zeroed | |---|---|---|---|---| | `own-voice-ended` (normal) | 25 | 159.4s | 11.0s | 37,918 | | `own-voice-ceiling-near-field-energy` | 5 | 68.1s | **21.4s** | 6,810 | | `own-voice-ceiling-no-evidence-of-echo` | 2 | 24.2s | 13.1s | 2,235 | | `suspend-window-elapsed` | 2 | 16.0s | 8.0s | 0 | | **total** | **34** | **267.7s** | | **46,963** | `framesDropped` was 0 throughout — nothing was lost in transport. The audio was **zeroed**, deliberately, by the own-voice gate. **The signal is the ceiling releases, not the total.** Holding the mic while MYTHOS is genuinely speaking is correct half-duplex behaviour, and `own-voice-ended` is that…",
+        "excerpt": "**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. **2026-09-10 update:** BUG-428 wires the server's numeric echo verdict into the existing ceiling decision, behind `VOICE_ECHO_VERDICT_TO_CLIENT=false` rollback. No timer tuning and no barge-in echo veto. A verdict is evidence of a transcript, not a labelled acoustic sample; a live room is still required and no operator session was run here. Also, the historical `frames zeroed` column sums cumulative counter snapshots; it cannot establish the number of distinct frames lost. Release durations remain directly measured. **Measured from `voice.capture-suspend` releases, operator session 2026-09-03 (~11 minutes of conversation):** | release reason | n | total held | worst single hold | frames zeroed | |---|---|---|---|---| | `own-voice-ended` (normal) | 25 | 159.4s | 11.0s | 37,918 | | `own-voice-ceiling-near…",
         "campaign": {
           "disposition": "blocked",
-          "evidence": "Gate telemetry records ownership release reasons and timing; reason labels cannot establish absence of echo. Consumers: Audio capture, playback gate, interruption handling. Regression oracle: Historical corpus34releases/7ceilings and98gate/player regressions. Remaining evidence: Synchronized labeled microphone/playback corpus; numeric latency budget and no-regression controls.",
+          "evidence": "Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room.",
           "source": "mythos/src/core/voice/live-session.js"
         }
       },
@@ -5625,14 +5625,14 @@
       {
         "n": 428,
         "shape": "entry",
-        "state": "open",
-        "title": "roughly one in five voice turns produced no user transcript (OPEN, found live 2026-09-09)",
+        "state": "coded",
+        "title": "voice turns produced no user transcript (CODED, found live 2026-09-09; acoustic proof pending)",
         "detail": {},
-        "excerpt": "**Status:** OPEN. Reproduced live 2026-09-09 across 99 turns. ``` live-turn-no-user-transcript x16 playbook live-turn-no-transcript-known live-turn-no-transcript x4 playbook none live-turn-silent x2 playbook live-turn-silent-known live-turn-stalled x2 playbook none live-tool-outcome-late-for-turn x4 playbook live-tool-outcome-late-known ``` `live-turn-stalled` carries its own description: *\"No reply of any kind — audio, text or a tool call — arrived within 10000ms after the operator stopped speaking. The turn was never answered.\"* 24 turns of 99 had a transcript problem of some kind. The operator experiences this as being ignored or having to repeat themselves, and it is upstream of everything else — a turn with no transcript cannot be answered correctly no matter how good the rest of the stack is. **Note the confound before diagnosing:** the echo/own-voice gate was active throughout (`v…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-10. Real-log replay preceded the verdict wiring; deterministic wire/ceiling checks and adjacent regressions pass. Acoustic improvement is not established; BUG-406 stays open for a live room. Rollback: `VOICE_ECHO_VERDICT_TO_CLIENT=false`, then restart. ``` live-turn-no-user-transcript x16 playbook live-turn-no-transcript-known live-turn-no-transcript x4 playbook none live-turn-silent x2 playbook live-turn-silent-known live-turn-stalled x2 playbook none live-tool-outcome-late-for-turn x4 playbook live-tool-outcome-late-known ``` `live-turn-stalled` carries its own description: *\"No reply of any kind — audio, text or a tool call — arrived within 10000ms after the operator stopped speaking. The turn was never answered.\"* 24 turns of 99 had a transcript problem of some kind. The operator experiences this as being ignored or having to repeat themselves, and it is…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "live-turn-no-user-transcript x16, live-turn-no-transcript x4, live-turn-silent x2, live-turn-stalled x2, live-tool-outcome-late-for-turn x4 - 24 of 99 turns. live-turn-stalled: \"No reply of any kind - audio, text or a tool call - arrived within 10000ms after the operator stopped speaking.\" Confound to rule out first: the own-voice capture gate was cycling all session and has eaten 40% of a conversation before. Sum heldMs before blaming the transcriber. Consumers: every spoken turn.",
-          "source": "mythos/src/core/voice/live-session.js; vault/Episodic/2026-09-10.jsonl anomaly rows"
+          "disposition": "blocked",
+          "evidence": "Replay: 30 ceiling releases held 356039ms; 8 unique missing-user-transcript anomalies, 3 within ±2s of a ceiling; 81 echo checks, none matched. Numeric verdict reaches only ceilingDecision; transcript presence is separate from ratio; VOICE_ECHO_VERDICT_TO_CLIENT=false restores the prior path. Barge-in veto and 8s/30s limits unchanged. Real room proof remains BUG-406.",
+          "source": "mythos/src/core/voice/live-session.js; mythos/test/bug-428-echo-verdict-reaches-ceiling.test.js"
         }
       },
       {
@@ -5691,8 +5691,8 @@
     "counts": {
       "verified": 82,
       "fixed": 181,
-      "open": 8,
-      "coded": 7,
+      "open": 7,
+      "coded": 8,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
@@ -5703,7 +5703,6 @@
       275,
       421,
       422,
-      428,
       432
     ],
     "pointerOnly": 11,

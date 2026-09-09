@@ -41,6 +41,7 @@ import { openMicWithFallback } from './mic-device.js';
 import { createBargeInPolicy } from './barge-in-policy.js';
 import { createBargeInBackstop, rmsFromPcm16 } from './barge-in-backstop.js';
 import { createLiveNoiseGate } from './live-noise-gate.js';
+import { createEchoVerdictTracker } from './echo-verdict.js';
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -153,6 +154,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   let onInterruptedMsg = null;
   let onLiveStateMsg = null;
   let onTranscriptMsg = null;
+  let onEchoCheckMsg = null;
   let onWatchdogClearMsg = null;
   // BUG-274 step 5: 'live-turn-complete' has been broadcast by server/index.js since it
   // was written and, until this change, was read by NOTHING in the HUD — the exact
@@ -560,22 +562,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   let bargeVetoed = 0;
   let lastVetoReason = null;
 
-  // The echo filter's verdict for the current hold, or null when there is none.
-  //
-  // HONEST LIMITATION, stated rather than papered over: this is currently ALWAYS
-  // null, because the echo filter runs server-side (live-session.js) and the
-  // server does not send its verdict to the client. Feeding it would mean a new
-  // wire message, and this slice deliberately changes no wire format.
-  //
-  // The policy is written to use the signal because it is the one input that can
-  // separate bleed from speech on amplitude alone — but it is not needed for the
-  // primary fix, which is the protection window plus the sustain requirement plus
-  // the learned floor. Whether it is worth a wire message is precisely what slice
-  // 2's live.echo-check lines will answer: if they report 'no-reference' during
-  // bleed, then no transcript exists at that moment and there is nothing to send.
-  // Wiring a channel before knowing that would be building a mechanism on a
-  // guess, which is how this bug has already burned two sessions.
-  const lastEchoRatio = null;
+  // BUG-428: only the ceiling reads the verdict; observe() keeps null so a
+  // wrong echo ratio cannot veto barge-in. 8s idle / 30s max hold are unchanged.
+  // VOICE_ECHO_VERDICT_TO_CLIENT=false sends nothing and preserves today's path.
+  // Reset on each hold; ignore verdicts outside it. No hold id exists on this
+  // protocol, so in-flight cross-hold attribution still needs live-room proof.
+  const echoVerdict = createEchoVerdictTracker();
 
   // BUG-274: the policy's OWN reason for the veto, and the level it refused.
   //
@@ -649,8 +641,8 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // different timer. That collision is why BUG-272's count of 16 cannot be
       // split by cause: two unrelated ceilings, one label.
       const verdict = bargePolicy.ceilingDecision({
-        echoRatio: lastEchoRatio,
-        hasTranscript: lastEchoRatio !== null,
+        echoRatio: echoVerdict.echoRatio,
+        hasTranscript: echoVerdict.transcriptSeen,
         peakRms: ownVoicePeakRms,
       });
       if (!verdict.release) {
@@ -689,6 +681,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   function holdOwnVoiceGate() {
     if (!halfDuplexEnabled() || ownVoiceGate) return;
     ownVoiceGate = true;
+    echoVerdict.reset();
     preroll = [];
     prerollDropped = 0;
     ownVoicePeakRms = 0;
@@ -1018,6 +1011,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       }
     };
     onTranscriptMsg = (msg) => { if (onCaption && msg) onCaption(msg.text, msg.role === 'user' ? 'heard' : 'reply'); };
+    onEchoCheckMsg = (msg) => { if (ownVoiceGate) echoVerdict.accept(msg); };
     // Wave 2 (2026-08-13, resume-on-activity watchdog): the server tells us a
     // Live turn came back with no operator transcript. We're the only side
     // that knows whether captureSuspended is actually set right now — a
@@ -1039,6 +1033,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     onBroadcast('live-interrupted', onInterruptedMsg);
     onBroadcast('live-state', onLiveStateMsg);
     onBroadcast('live-transcript', onTranscriptMsg);
+    onBroadcast('live-echo-check', onEchoCheckMsg);
     onBroadcast('live-watchdog-clear', onWatchdogClearMsg);
 
     sendMessage({ type: 'live-open' });
@@ -1081,7 +1076,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         // which is the discriminator the log has been missing for five tickets.
         lastPolicyDecision = bargePolicy.observe({
           rms: rmsFromPcm16(e.data),
-          echoRatio: lastEchoRatio,
+          echoRatio: null,
         });
         policyAllowsRelease = lastPolicyDecision.release;
         // Q1 — WHAT ELSE MATCHES THIS? Without this line the attempt flag below
@@ -1286,6 +1281,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (onInterruptedMsg) { offBroadcast('live-interrupted', onInterruptedMsg); onInterruptedMsg = null; }
     if (onLiveStateMsg) { offBroadcast('live-state', onLiveStateMsg); onLiveStateMsg = null; }
     if (onTranscriptMsg) { offBroadcast('live-transcript', onTranscriptMsg); onTranscriptMsg = null; }
+    if (onEchoCheckMsg) { offBroadcast('live-echo-check', onEchoCheckMsg); onEchoCheckMsg = null; }
     if (onWatchdogClearMsg) { offBroadcast('live-watchdog-clear', onWatchdogClearMsg); onWatchdogClearMsg = null; }
     if (onTurnCompleteMsg) { offBroadcast('live-turn-complete', onTurnCompleteMsg); onTurnCompleteMsg = null; }
     // A suppression must not survive the session that armed it.

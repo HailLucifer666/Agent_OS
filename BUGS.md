@@ -592,7 +592,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-422 | open | blocked | Child lifecycle instrumentation names the next failure; original cause remains unknown. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
 | BUG-429 | fixed | blocked | Unknown settings are announced through repeat backoff and listed by doctor. Voice kill switch and known-key non-change tested; browser-use stays parked. | mythos/scripts/doctor.js |
 | BUG-432 | open | blocked | System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. Timing changes await a measured pass. | mythos/src/core/voice/live-session.js |
-| BUG-406 | open | blocked | Gate telemetry records ownership release reasons and timing; reason labels cannot establish absence of echo. Consumers: Audio capture, playback gate, interruption handling. Regression oracle: Historical corpus34releases/7ceilings and98gate/player regressions. Remaining evidence: Synchronized labeled microphone/playback corpus; numeric latency budget and no-regression controls. | mythos/src/core/voice/live-session.js |
+| BUG-406 | open | blocked | Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
 | BUG-409 | verified | blocked | Close checks owned profile processes, polls actual survivors and escalates. Repaired unknown initial ownership allowing close and null post-kill oracle falsely claiming exit. Consumers: closeLaunchedBrowser and browser_switch. Regression oracle: 2new assertions red before;30close/neighbourpass;initial known-then-null fixtures preserve distinct paths. Remaining evidence: Actual cold/warm browser process exit and port release on current artifact. | mythos/adapters/browser-agent/browser-process.js |
@@ -613,7 +613,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-425 | fixed | blocked | Typed remedies separate executable arguments from refusal prose through effector adapter, hub, dispatch and Live response. Late outcomes retain the structured field in the existing notice path. Invalid URLs remain loud; legacy batch formatting remains unchanged. | mythos/test/bug-425-remedy-is-not-a-value.test.js |
 | BUG-426 | coded | blocked | The Sept 10 replay found reasoning reduced to nim+nim2 while mistral-medium was cooling on 429 and Cerebras was 402-ejected. Whole-lane exemptions now retain per-pair streaks: calls 1-2 stay exempt, call 3 earns cooldown and breaker failure. Code checks passed; provider recovery timing still needs a live run. Diagnoses: Sept 9 filing and Sept 10 replay. | mythos/src/core/brain/chain.js; mythos/test/bug-426-persistent-whole-lane-timeout.test.js |
 | BUG-427 | coded | blocked | build-refine now forwards configured vision budgets, keeps the PNG artifact and sends JPEG quality 80. Byte counts and maximum loop.stalled lag observed during critique expose the payload/stall confound. Code checks passed; whether JPEG quality 80 is sufficient for the real judge remains untested. Diagnoses: Sept 9 filing and Sept 10 replay. | mythos/src/core/effectors/build-refine.js; mythos/src/core/effectors/build-runner.js; mythos/src/main.js |
-| BUG-428 | open | currently reproduced | live-turn-no-user-transcript x16, live-turn-no-transcript x4, live-turn-silent x2, live-turn-stalled x2, live-tool-outcome-late-for-turn x4 - 24 of 99 turns. live-turn-stalled: "No reply of any kind - audio, text or a tool call - arrived within 10000ms after the operator stopped speaking." Confound to rule out first: the own-voice capture gate was cycling all session and has eaten 40% of a conversation before. Sum heldMs before blaming the transcriber. Consumers: every spoken turn. | mythos/src/core/voice/live-session.js; vault/Episodic/2026-09-10.jsonl anomaly rows |
+| BUG-428 | coded | blocked | Replay: 30 ceiling releases held 356039ms; 8 unique missing-user-transcript anomalies, 3 within ±2s of a ceiling; 81 echo checks, none matched. Numeric verdict reaches only ceilingDecision; transcript presence is separate from ratio; VOICE_ECHO_VERDICT_TO_CLIENT=false restores the prior path. Barge-in veto and 8s/30s limits unchanged. Real room proof remains BUG-406. | mythos/src/core/voice/live-session.js; mythos/test/bug-428-echo-verdict-reaches-ceiling.test.js |
 | BUG-430 | coded | blocked | The healer now shares the search ladder first cooldown of 60s. Live function responses caution after four searches within 120s without a successful fetch; pending and late rows share one trace. Jina keyless remains deliberate. These changes reduce churn; they do not make blocked scrapers answer. Search procurement D4 remains the operator decision. Diagnoses: Sept 9 filing and Sept 10 replay. | mythos/src/core/immune/healer.js; mythos/src/core/voice/action-evidence-ledger.js; mythos/src/core/voice/live-tool-adapter.js |
 | BUG-431 | fixed | blocked | The measured CDP drops followed close_window calls. Attached-browser closure is refused; offline transitions use the existing announcement ladder. Slow outcomes survive closed/rejected Live delivery, and final artifact fallback-model evidence reaches jobs/cards/speech. Local wire/mutation tests pass; attended behavior remains untested. | mythos/test/bug-431b-finished-work-reaches-the-operator.test.js |
 
@@ -882,6 +882,8 @@ Every Brave process on the machine carried a start time of 22:35:18 and pid 6960
 ## BUG-406 — the half-duplex gate held the operator's microphone for 40% of a conversation, and 92 seconds of that ended in a timeout rather than in actual echo (🔴 DIAGNOSED 2026-09-03, deliberately NOT fixed here)
 
 **Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note.
+
+**2026-09-10 update:** BUG-428 wires the server's numeric echo verdict into the existing ceiling decision, behind `VOICE_ECHO_VERDICT_TO_CLIENT=false` rollback. No timer tuning and no barge-in echo veto. A verdict is evidence of a transcript, not a labelled acoustic sample; a live room is still required and no operator session was run here. Also, the historical `frames zeroed` column sums cumulative counter snapshots; it cannot establish the number of distinct frames lost. Release durations remain directly measured.
 
 **Measured from `voice.capture-suspend` releases, operator session 2026-09-03 (~11 minutes of conversation):**
 
@@ -1533,9 +1535,9 @@ Related and previously recorded: [[vision-lane-nim-dead-time]] (8s per look burn
 
 **Checks:** bug-427-vision-caller-timeout-parity.test.js derives every effector vision caller and verifies configured budget propagation; bug-427-vision-payload-size.test.js checks the two screenshot calls, exact JPEG bytes, retained PNG, maximum lag and observer cleanup. Three mutations fired on 2026-09-10 and were restored by absolute-path byte copy with matching SHA256. Existing build-refine tests and file-size ratchets passed. JPEG quality 80 and end-to-end provider latency still need a real judge run.
 
-## BUG-428 — roughly one in five voice turns produced no user transcript (OPEN, found live 2026-09-09)
+## BUG-428 — voice turns produced no user transcript (CODED, found live 2026-09-09; acoustic proof pending)
 
-**Status:** OPEN. Reproduced live 2026-09-09 across 99 turns.
+**Status:** 🔧 CODED 2026-09-10. Real-log replay preceded the verdict wiring; deterministic wire/ceiling checks and adjacent regressions pass. Acoustic improvement is not established; BUG-406 stays open for a live room. Rollback: `VOICE_ECHO_VERDICT_TO_CLIENT=false`, then restart.
 
 ```
 live-turn-no-user-transcript   x16   playbook live-turn-no-transcript-known
@@ -1550,6 +1552,30 @@ live-tool-outcome-late-for-turn x4   playbook live-tool-outcome-late-known
 24 turns of 99 had a transcript problem of some kind. The operator experiences this as being ignored or having to repeat themselves, and it is upstream of everything else — a turn with no transcript cannot be answered correctly no matter how good the rest of the stack is.
 
 **Note the confound before diagnosing:** the echo/own-voice gate was active throughout (`voice.capture-suspend` with `own-voice-hold` and `own-voice-ceiling-no-evidence-of-echo` alternating), and [[mic-gate-zeroed-40-percent-of-a-conversation]] records a prior session where that gate ate a large fraction of the audio. **Sum `heldMs` from this session's capture-suspend rows before blaming the transcriber.**
+
+**Replay measured 2026-09-10 before wiring:** `scripts/measure-own-voice-ceiling.js` read the real `%APPDATA%/MYTHOS/mythos-server.log` and `vault/Episodic/2026-09-10.jsonl`, selecting 2026-09-09 19:21:00 through 19:53:00 UTC. Diagnoses come from the 2026-09-09 filing session and the 2026-09-10 replay.
+
+```json
+{
+  "malformedLines": 150,
+  "byReason": {
+    "own-voice-ended": { "releases": 53, "heldMs": 343874, "framesZeroedSnapshotSum": 174461 },
+    "own-voice-ceiling-no-evidence-of-echo": { "releases": 17, "heldMs": 203041, "framesZeroedSnapshotSum": 37352 },
+    "own-voice-ceiling-near-field-energy": { "releases": 13, "heldMs": 152998, "framesZeroedSnapshotSum": 35090 }
+  },
+  "ceilingReleases": 30,
+  "ceilingHeldMs": 356039,
+  "noUserTranscript": 8,
+  "anomaliesNearCeiling": 3,
+  "ceilingsNearAnomaly": 3,
+  "echoChecks": 81,
+  "matchedEchoChecks": 0
+}
+```
+
+The earlier 16 counts each anomaly and its acknowledgement twice: eight distinct missing-user-transcript events remain, three within ±2 seconds of a ceiling release. The broader "24 of 99" filing count therefore is not a verified count of distinct affected turns. `framesZeroed` is a cumulative session counter; its snapshot sums above are **not** distinct lost-frame counts. The 150 non-JSON lines across the input files were ignored and reported. No matched echo occurred in 81 checks, so this replay demonstrates gate exposure and the missing verdict channel, **not** acoustic benefit or causation for all eight anomalies. BUG-406 requires a labelled live room before closure.
+
+**Coded scope:** `live-session.js` emits `{ratio, matched}` on every input transcript; the server forwards it only when enabled. `echo-verdict.js` separately tracks `transcriptSeen` and `echoRatio` for each hold, and only `ceilingDecision` consumes them. `observe()` continues to receive `null`, so this does not activate the barge-in echo veto. The 8000ms idle and 30000ms absolute ceilings are unchanged. The old path remains when no verdict arrives, including switch-off. No hold identifier exists in this protocol, so in-flight cross-hold attribution is a named remaining limit. Tests: `measure-own-voice-ceiling`, `echo-verdict-tracker`, `bug-428-echo-verdict-reaches-ceiling`; eight dated mutation probes all failed and each source was restored by absolute copy with matching SHA256.
 
 ## BUG-429 — unknown settings are now announced and listed by doctor (FIXED 2026-09-10)
 
@@ -20869,9 +20895,10 @@ those records remain owed (this section is the index until then).
   build-refine now forwards configured vision budgets, keeps the PNG artifact and sends JPEG quality 80. Byte counts and maximum loop.stalled lag observed during critique expose the payload/stall confound. Code checks passed; whether JPEG quality 80 is sufficient for the real judge remains untested.
   timeouts at ~4s, 17.3s total, build-refine got nothing.
 
-- BUG-428 - 24 of 99 voice turns had a transcript problem (16 with no user
-  transcript at all). Sum heldMs from capture-suspend before blaming the
-  transcriber - the own-voice gate has eaten audio before.
+- BUG-428 - **FIXED 2026-09-10 missing verdict channel only; status CODED.**
+  Replay measured 356039ms across 30 ceiling releases and eight distinct
+  missing-user-transcript anomalies (three within ±2s). Verdict wiring has
+  a kill switch; acoustic improvement remains unproven under open BUG-406.
 
 - BUG-429 - config.json keys unknown to the schema are dropped with only a
   boot-time warning; BROWSER_USE_MODEL is set by the operator and ignored.
