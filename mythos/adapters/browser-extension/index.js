@@ -111,9 +111,15 @@ function createBrowserExtensionBridge({ runtimeDir, allowedExtensionIds = [], bu
       taskSignals.set(taskId, () => signal.removeEventListener('abort', abortTask));
     }
     if (!OPERATIONS.has(operation)) return fail('UNSUPPORTED', 'Unsupported browser operation');
+    // No authenticated extension is a missing prerequisite, not an empty page and
+    // not a wrong browser choice. This guard first covered `tabs` alone, because
+    // that was the operation whose empty-but-ok answer was observed; the reason it
+    // was written -- "nothing is connected" is a different fact from anything the
+    // caller passed -- was never about `tabs`. Every other operation fell through
+    // to BROWSER_REQUIRED ("choose an observed connected browser"), which tells the
+    // operator to pick among zero browsers instead of to reconnect the extension.
+    if (!clients.size) return fail('EXTENSION_DISCONNECTED', 'MYTHOS Browser Operator is disconnected. Open the extension in the intended browser to reconnect.');
     if (operation === 'tabs') {
-      // No authenticated extension is a missing prerequisite, not an empty page.
-      if (!clients.size) return fail('EXTENSION_DISCONNECTED', 'MYTHOS Browser Operator is disconnected. Open the extension in the intended browser to reconnect.');
       const results = await Promise.all([...clients.keys()].map(id => request(id, operation, {}, taskId, signal)));
       if (results.some(r => !r.ok)) return results.find(r => !r.ok);
       return { ok: true, result: { tabs: results.flatMap(r => r.result.tabs) } };
