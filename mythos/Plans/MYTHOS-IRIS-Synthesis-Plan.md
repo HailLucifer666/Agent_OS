@@ -13,9 +13,13 @@ file — the reason the product name gates **release** rather than step 7's tick
 (`build.appId` is Windows' install/upgrade key and is free to change only until
 the first external user exists).
 
-## RESUME HERE
+> **2026-09-07: the current position lives in `RESUME.md` in this directory.** This
+> file is the archive. Its RESUME HERE blocks below are dated history and are no
+> longer rewritten; the second one, near the end, was a stale duplicate.
 
-*Rewrite this block every session. It is the first and sometimes only thing the next machine reads.*
+## RESUME HERE (archive — see RESUME.md)
+
+*Historical. Rewritten every session until 2026-09-07; superseded by `RESUME.md`.*
 
 ### 2026-09-09 (third pass) — all six audit findings closed. Nothing is live-verified.
 
@@ -5183,7 +5187,7 @@ Picking those up here will produce work that cannot be finished.
 
 ---
 
-## RESUME HERE
+## RESUME HERE (historical duplicate, 2026-08-28 — see RESUME.md)
 
 **Position: EVERY TRACK IS DONE AS FAR AS A SESSION CAN TAKE IT.** D, B, C, F,
 the code half of A and the no-microphone half of E are complete. What remains

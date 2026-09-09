@@ -120,14 +120,18 @@ two documents that must be read together:**
 > (§3), the 23 frozen MYTHOS seams with line numbers (§4), full source for
 > `live-session.js`/`live-tools.js`, the persona table, §7.1–§7.7, Electron.
 
-Read the roadmap's **RESUME HERE** block first — it names the current position in
-the merged execution order, the next action, and anything blocking. Do the next
+Read **`mythos/Plans/RESUME.md`** first (added 2026-09-07, under 100 lines by rule)
+— it names the current position, the next action, and anything blocking. The
+roadmap's own RESUME HERE blocks are the archive behind it. Do the next
 unchecked `- [ ]` step, tick it only when **live-verified**, add a row to its
-Progress log with the commit SHA, rewrite RESUME HERE, then commit and **push**.
+Progress log with the commit SHA, rewrite `RESUME.md` in place, then commit and **push**.
 A tick that isn't pushed does not exist as far as the next machine is concerned.
-Do not start a **fourth** plan document. There are now three, deliberately, and
+Do not start a **fifth** plan document. There are now four, deliberately, and
 that is the ceiling:
 
+> **`RESUME.md`** — the position. Under 100 lines, rewritten in place, never
+> appended. Added 2026-09-07 because the roadmap had grown to 5,278 lines with
+> two RESUME HERE blocks and every session paid to read it.
 > **`MYTHOS-IRIS-Synthesis-Plan.md`** — the roadmap/delta for the active build.
 > **`MYTHOS-IRIS-Synthesis-Plan-V2-spine.md`** — source-level detail for it.
 > **`MYTHOS-Post-Parity-Plan.md`** — added 2026-07-31: everything that starts
@@ -136,7 +140,7 @@ that is the ceiling:
 > arbitration). Downstream by construction; the roadmap wins on any overlap.
 
 The original "no third document" rule existed to stop planning from living in
-**untracked** files — that is how the V2 spine was nearly lost. All three are
+**untracked** files — that is how the V2 spine was nearly lost. All four are
 tracked, cross-linked from each other, and none of them is a point-in-time
 handoff note. Adding scope to an existing one is still preferred over creating a
 new file.
@@ -376,8 +380,10 @@ testing discipline (below).
   suite by `mythos/scripts/sync-test-count.js` (`--check` to verify, `--write`
   to fix) — run `--write` and commit the result whenever the test count
   changes, instead of hand-editing numbers in those files.
-- CI workflow (`.github/workflows/ci.yml`) runs on push/PR to main and also
-  gates on `sync-test-count.js --check`. Pre-commit hook
+- CI workflow (`.github/workflows/ci.yml`) is manual-dispatch (2,000-minute cap)
+  and gates on `sync-test-count.js --check`. Pre-commit hook
   (`.githooks/pre-commit`) blocks commits that raise test failures above
-  baseline (0) or leave test-count docs stale — activate once per clone with
-  `git config core.hooksPath .githooks`.
+  baseline (0) — and, since 2026-09-07, nothing else. The documentation gates
+  (`sync-test-count`, `lint-bug-registry`, `build-index`, `build-capability-map`)
+  are `cd mythos && npm run docs:check`; run it before a push. Activate the hook
+  once per clone with `git config core.hooksPath .githooks`.

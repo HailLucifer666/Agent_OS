@@ -14,10 +14,12 @@ name: ci
 # `pull_request` and again for `push: main` on the merge commit — the same
 # commits, ~56 billed minutes per PR, ~18 PRs of headroom.
 #
-# WHAT STILL GATES A COMMIT. Nothing was weakened locally. `.githooks/pre-commit`
-# runs the full recursive suite plus `sync-test-count --check`,
-# `build-index --check` and `build-capability-map --check` on every commit, which
-# is where this repo's real gate has always lived. What is deferred is only the
+# WHAT STILL GATES A COMMIT. `.githooks/pre-commit` runs the full recursive suite
+# on every commit and blocks on any failure — that is where this repo's real gate
+# has always lived. Since 2026-09-07 the documentation gates (`sync-test-count
+# --check`, `lint-bug-registry`, `build-index --check`, `build-capability-map
+# --check`) are `npm run docs:check` in mythos/, run before a push, and the count
+# check still runs here. What is deferred is only the
 # clean-room check: a fresh checkout, on the pinned Node 22 (dev runs 26), with
 # no gitignored fixtures or local vault. That difference is real and has caught
 # three defects before — see BUG-399 — so run this before any release.

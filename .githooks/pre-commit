@@ -1,6 +1,13 @@
 #!/bin/sh
-# Blocks commits that raise the mythos test-failure count above the known baseline (0),
-# or that leave README.md/ROADMAP.md test-count mentions stale (see sync-test-count.js).
+# Blocks commits that raise the mythos test-failure count above the known baseline (0).
+#
+# That is the ONLY gate here as of 2026-09-07 (subtraction plan, Phase A). The four
+# documentation gates this hook used to run — sync-test-count --check,
+# lint-bug-registry, build-index --check, build-capability-map --check — moved to
+# `npm run docs:check` in mythos/. They guard documents ABOUT the code, not the
+# code, and running them on every commit made the commit the expensive step,
+# which made commits big and rare, which is what the shared-index collisions in
+# BUGS.md are made of. Run docs:check before a push; CI still runs the count check.
 cd "$(git rev-parse --show-toplevel)/mythos" || exit 1
 
 # --- Environment, decided here rather than left to whoever is committing -----
@@ -147,48 +154,6 @@ if [ "$fails" -gt 0 ]; then
     printf '%s\n' "$out" | tail -40
   fi
   echo "pre-commit: BLOCKED — failure count above baseline. Fix or revert."
-  exit 1
-fi
-if ! printf '%s' "$out" | node scripts/sync-test-count.js --check; then
-  echo "pre-commit: BLOCKED — tracked test-count numbers are stale. Run 'node scripts/sync-test-count.js --write' and commit the result."
-  exit 1
-fi
-
-# BUG numbering. Two numbers already carry two unrelated defects each (BUG-280,
-# BUG-360) because "re-grep the max before you assign one" is a rule that lives
-# in a human's memory. ~0.8s, no network.
-#
-# KNOWN LAG, stated rather than papered over: this reads committed history, so a
-# number that appears ONLY in the message of the commit being made is not seen
-# until the next commit. A number that also appears in source or in BUGS.md —
-# which is every number worth gating on — is seen immediately, because those are
-# read from the working tree.
-if ! node scripts/lint-bug-registry.js; then
-  echo "pre-commit: BLOCKED — bug registry. Renumber, write the missing BUGS.md entries, or"
-  echo "            adjudicate with a reason in scripts/lint-bug-registry.js."
-  exit 1
-fi
-
-# The capability map must keep describing the code it claims to describe. This
-# reads only the repository (the registered tool list, live-tools' allowlist and
-# the committed suite numbers) — it does NOT run the suite and does NOT need the
-# operator's live vault, so it costs about a second and is satisfiable on a
-# worktree and on a CI runner. The vault-derived vital is exempt from the check
-# for exactly that reason; see the script's header.
-# The ticket register in the same file, generated from BUGS.md. Separate gate
-# from the map above because a different generator owns it: the map owns nodes
-# and vitals, this owns the register. Both splice their own key into one island
-# and preserve the rest, so the order they run in does not matter.
-if ! node scripts/build-index.js --check; then
-  echo "pre-commit: BLOCKED — the ticket register in index.html disagrees with BUGS.md."
-  echo "            Run: node mythos/scripts/build-index.js --write"
-  exit 1
-fi
-
-if ! node scripts/build-capability-map.js --check; then
-  echo "pre-commit: BLOCKED — the capability map disagrees with the code. A tool was added or"
-  echo "            removed and no node covers it, or a node names a tool that no longer exists."
-  echo "            Map the tool to a node, then: node mythos/scripts/build-capability-map.js --write"
   exit 1
 fi
 exit 0
