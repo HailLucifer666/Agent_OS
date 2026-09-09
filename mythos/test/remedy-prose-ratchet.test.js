@@ -22,8 +22,8 @@ const PROSE_BASELINE = {
     "e28da3b6159edf95"
   ],
   "from-android.js": [
-    "e9e3096defb727c3",
-    "2107eb983ef23338"
+    "45dbd21b86f3109c",
+    "a7d09bd610728999"
   ],
   "from-browser.js": [
     "a975b9905d7d2947",
@@ -77,16 +77,16 @@ const PROSE_BASELINE = {
     "c66c1c5a23142e85",
     "c23975ac085b0403",
     "6724cb9544588cf0",
-    "e49a56e074ae9b25",
-    "6575cdb897b1a9f3",
-    "13d70aa309e3a77c",
-    "31ca6a9b27e07b31",
-    "9438aab09588cb62",
-    "f22ecd6607c1c160",
-    "c98ff81414dec905",
-    "ab022fe5b6891ced",
-    "09df20a9e8e2d42e",
-    "b5344d35b7ba1ec5"
+    "19bc0806640b90b2",
+    "1adc7b106a487c93",
+    "e09870975d9f1611",
+    "da227a0c1b53dbd5",
+    "8e0298bb1ac1d826",
+    "63c728c55fedf326",
+    "16840d9d2521158e",
+    "4fcfad525cdbccbd",
+    "d2d12fb7a10a1b68",
+    "22546be8773c0393"
   ],
   "from-desktop.js": [
     "458175d1e982f809"
@@ -110,7 +110,7 @@ const PROSE_BASELINE = {
     "08ed606029ae8c3c"
   ],
   "from-runner.js": [
-    "b79f4a56b87602a1"
+    "761881b9148f56cc"
   ],
   "from-skills.js": [
     "65266bcfb3983575"
@@ -131,7 +131,7 @@ const PROSE_BASELINE = {
     "d5daf7bada6efe3f"
   ],
   "web-search.js": [
-    "185525e2053df937"
+    "59110f0d052dbca5"
   ],
   "window-recovery.js": [
     "fd8def33381464cd"
@@ -160,7 +160,9 @@ function adviceStrings(source) {
 function inventory() {
   const out = {};
   for (const file of fs.readdirSync(DIR).filter(f => f.endsWith('.js'))) {
-    const entries = adviceStrings(fs.readFileSync(path.join(DIR, file), 'utf8'));
+    // Review 2026-09-10: two Android literals span lines, so the raw hash carried the
+    // checkout's line ending — recorded from a CRLF worktree, red on an LF clone and CI.
+    const entries = adviceStrings(fs.readFileSync(path.join(DIR, file), 'utf8').replace(/\r\n/g, '\n'));
     if (entries.length) out[file] = entries;
   }
   return out;
