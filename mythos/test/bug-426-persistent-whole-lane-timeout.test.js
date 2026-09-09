@@ -3,6 +3,8 @@
 // Mutation probes 2026-09-10: limit Infinity (3 fails), omit success reset (1),
 // omit 429 reset (1), omit late-loaded env (1). Absolute copy + matching SHA256 restored each.
 // Accepted: a real shared outage can bench hot pairs for 60s after recovery.
+// Probe 2026-09-10 (review fold): restore `if (!names.length) return;` before the
+// warn — the walk-3 assertion fails with rows.length 2. Verified red, then restored.
 const { it, beforeEach, after } = require('node:test');
 const assert = require('node:assert/strict');
 const chain = require('../src/core/brain/chain');
@@ -32,8 +34,13 @@ it('walks 1 and 2 preserve C3; walk 3 cools both and trips their breakers', asyn
   assert.equal(chain._internal.cooldowns.size, 2);
   for (const breaker of chain._internal.getBreakers().values()) assert.equal(breaker.state, 'open');
   const rows = events.filter(e => e.data.kind === 'chain-whole-lane-timeout');
-  assert.equal(rows.length, 2, 'no exemption anomaly once every pair is cooled');
+  // Review 2026-09-10: walk 3 used to emit nothing — the benching that matters
+  // most was the one walk with no line. Every walk reports now.
+  assert.equal(rows.length, 3, 'the all-benched walk emits its own anomaly');
   assert.equal(rows[0].data.forcedCooldowns, 0);
+  assert.equal(rows[2].data.forcedCooldowns, 2);
+  assert.equal(rows[2].data.attempts, 2);
+  assert.ok(rows[2].data.reason.includes("no pair left exempt; 2 pair(s) at the 3-walk streak limit"), rows[2].data.reason);
 });
 it('a success mid-streak resets that pair', async () => {
   await assert.rejects(walk); await assert.rejects(walk);
