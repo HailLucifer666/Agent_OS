@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7480,
+      "value": 7489,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5469,14 +5469,14 @@
       {
         "n": 416,
         "shape": "entry",
-        "state": "diagnosed",
-        "title": "the extension bridge issues a new browser identity on every reconnect, so a desktop task can never be resumed after a backend restart (RED DIAGNOSED 2026-09-09, not fixed)",
+        "state": "fixed",
+        "title": "the bridge issued a new browser identity on every reconnect, so a desktop task could never be resumed (FIXED 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** traced through source 2026-09-09; not reproduced live, because the desktop operator is not yet set up on this checkout. Recorded before the attempt so the next session does not read the refusal as a new defect. `adapters/browser-extension/index.js` mints `browserId = randomUUID()` on every `hello`. The desktop controller persists its target and, on resume, calls `browser_video_list` with the OLD id. The bridge looks that id up among live clients, does not find it, and answers BROWSER_REQUIRED -- \"Choose an observed connected browser\". `observe()` retries three times and blocks with that reason. So the reconnection work committed in 8afc989 restores the PIPE and cannot restore the TASK. The failure names the wrong cause, which is the part most likely to cost a session. **Why the tests do not see it.** The controller rigs accept any `browserId`, so every resume test passes arou…",
+        "excerpt": "**Status:** FIXED 2026-09-09. Six mutation probes across three files, all landed, all fired, no survivors; all three restored by byte copy with matching hashes. Not exercised against a live backend restart with the extension attached -- see the remaining evidence. **The defect, traced through source rather than reproduced** (the desktop operator is not set up on this checkout, and the original entry said so). `hello` minted `randomUUID()` on every connection. The controller persists its target -- `save(id, { target })` in `src/core/desktop/controller.js` -- and on resume calls `browser_video_list` with the browserId inside it. After a backend restart the bridge looks that id up among live clients, does not find it, and answers BROWSER_REQUIRED, \"Choose an observed connected browser\". `observe()` retries three times and blocks with that reason. So the reconnection shipped in `8afc989` res…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "Traced 2026-09-09 across bridge, controller and rig: a fresh randomUUID per hello against a persisted target id yields BROWSER_REQUIRED on resume, and the controller rigs accept any id so no test observes it. Consumers: desktop_task_control resume and every leaf that re-observes after a restart. Remaining evidence: live backend restart with the extension attached, which needs the attended Brave setup and has not been run.",
-          "source": "mythos/adapters/browser-extension/index.js; mythos/src/core/desktop/controller.js"
+          "disposition": "currently verified",
+          "evidence": "The extension now persists a UUID instance id in chrome.storage.local and sends it behind a protocol bump; the bridge adopts it as browserId, refuses a malformed one, and refuses a SECOND live client claiming the same id while leaving the running session untouched. The first pass of this fix could not have worked: electron/native-browser-host.cs rebuilds hello from a four-field allowlist and stripped instanceId, so production would have refused every connection while every unit test stayed green -- only the compiled-host test saw it. Controller rigs and the reconnect fixture were tightened in the same change, so resume tests no longer pass around the bridge. Consumers: desktop_task_control resume and every leaf that re-observes after a restart. Remaining evidence: no live backend restart with the extension attached; that needs the attended Brave setup this checkout does not have.",
+          "source": "mythos/adapters/browser-extension/index.js; mythos/browser-extension/background.js; electron/native-browser-host.cs"
         }
       },
       {
@@ -5521,10 +5521,10 @@
     ],
     "counts": {
       "verified": 77,
-      "fixed": 175,
+      "fixed": 176,
       "open": 7,
       "coded": 3,
-      "diagnosed": 4,
+      "diagnosed": 3,
       "duplicate": 2,
       "unrecorded": 0
     },

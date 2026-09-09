@@ -6,6 +6,10 @@ const path = require('node:path');
 const { createBrowserExtensionBridge } = require('../adapters/browser-extension');
 const { tempVaultDir, cleanupVaultDir } = require('./helpers');
 const ID = 'a'.repeat(32);
+// BUG-416: the browser identity is now supplied BY THE EXTENSION and persists
+// across reconnects, so the fixture has to supply a stable one too — a rig that
+// omitted it would exercise the refusal path, not the reconnect path.
+const INSTANCE = '11111111-2222-4333-8444-555555555555';
 async function setup(t) {
   const dir = tempVaultDir(); const wire = new EventEmitter(); let browserId;
   wire.start = async () => ({ sid: 'fixture', sddl: 'fixture' }); wire.stop = async () => {};
@@ -23,12 +27,12 @@ async function setup(t) {
     });
   };
   const bridge = createBrowserExtensionBridge({ runtimeDir: path.resolve(dir), allowedExtensionIds: [ID], transportFactory: () => wire, requestTimeoutMs: 1000 });
-  await bridge.start(); wire.emit('message', 'client', { type: 'hello', extensionId: ID });
+  await bridge.start(); wire.emit('message', 'client', { type: 'hello', protocol: 2, instanceId: INSTANCE, extensionId: ID });
   t.after(async () => { await bridge.stop(); cleanupVaultDir(dir); });
   return { bridge, wire, sent, target: () => ({ browserId, tabId: 8, frameId: 0 }) };
 }
 test('bridge requires explicit allowlist and rejects unapproved extension without registering browser', async t => {
-  const env = await setup(t); env.wire.emit('message', 'outsider', { type: 'hello', extensionId: 'b'.repeat(32) });
+  const env = await setup(t); env.wire.emit('message', 'outsider', { type: 'hello', protocol: 2, instanceId: INSTANCE, extensionId: 'b'.repeat(32) });
   assert.equal(env.bridge.getStatus().browsers.length, 1);
   assert.equal((await env.bridge.execute('tabs')).code, 'TASK_REQUIRED');
   await assert.rejects(createBrowserExtensionBridge({ runtimeDir: path.resolve('.'), allowedExtensionIds: [] }).start(), /Explicit/);
@@ -49,7 +53,7 @@ test('disconnected bridge reports missing extension instead of a successful empt
   assert.equal(missing.ok, false);
   assert.equal(missing.code, 'EXTENSION_DISCONNECTED');
   assert.match(missing.error, /MYTHOS Browser Operator/);
-  wire.emit('message', 'reconnected', { type: 'hello', extensionId: ID });
+  wire.emit('message', 'reconnected', { type: 'hello', protocol: 2, instanceId: INSTANCE, extensionId: ID });
   const restored = await bridge.execute('tabs', {}, { taskId: 'task' });
   assert.equal(restored.ok, true);
   assert.equal(restored.result.tabs.length, 1);

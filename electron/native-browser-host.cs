@@ -90,9 +90,32 @@ internal static class MythosNativeBrowserHost {
       try { while ((frame = ReadFrame(input)) != null) {
         var message = Object(json, Utf8.GetString(frame));
         if (!hello) {
-          if ((Value(message, "type") as string) != "hello" || (Value(message, "extensionId") as string) != extensionId || !Equals(Value(message, "protocol"), 1)) throw new InvalidDataException("Invalid extension handshake");
+          // BUG-416 (2026-09-09) — protocol 2, and why this line is load-bearing.
+          //
+          // This host does not forward the extension's hello. It REBUILDS it
+          // from an allowlist of four fields, which is deliberate: the frame
+          // arrives from a browser extension and everything not named here is
+          // dropped at the trust boundary rather than sanitised downstream.
+          //
+          // That is also why BUG-416's first pass was structurally incapable of
+          // working. The extension began sending a persisted `instanceId` and
+          // the bridge began requiring one — and this reconstruction silently
+          // deleted it in between, so in production every hello would have been
+          // refused as identity-invalid. Every unit test passed, because they
+          // inject into the bridge directly and never traverse this host. Only
+          // the compiled-host test saw it.
+          //
+          // So `instanceId` joins the allowlist, and is validated HERE as well
+          // as in the bridge — not belt-and-braces: this is the edge, and a
+          // malformed value must be refused before it is ever written to the
+          // pipe. Guid.TryParseExact with "D" is the exact 8-4-4-4-12 form the
+          // bridge's own check accepts; the two must agree or a frame that
+          // passes one is rejected by the other.
+          Guid parsedInstance;
+          string instanceId = Value(message, "instanceId") as string;
+          if ((Value(message, "type") as string) != "hello" || (Value(message, "extensionId") as string) != extensionId || !Equals(Value(message, "protocol"), 2) || String.IsNullOrEmpty(instanceId) || !Guid.TryParseExact(instanceId, "D", out parsedInstance)) throw new InvalidDataException("Invalid extension handshake");
           hello = true;
-          message = new Dictionary<string, object> { { "type", "hello" }, { "protocol", 1 }, { "extensionId", extensionId }, { "browserName", Value(message, "browserName") as string } };
+          message = new Dictionary<string, object> { { "type", "hello" }, { "protocol", 2 }, { "instanceId", instanceId }, { "extensionId", extensionId }, { "browserName", Value(message, "browserName") as string } };
         } else if ((Value(message, "type") as string) == "hello") throw new InvalidDataException("Duplicate extension handshake");
         byte[] bytes = Utf8.GetBytes(json.Serialize(message) + "\n"); pipe.Write(bytes, 0, bytes.Length); pipe.Flush();
       } } finally { stopping = true; }

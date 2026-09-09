@@ -3,7 +3,7 @@
   "name": "MYTHOS Browser Operator",
   "version": "0.1.0",
   "description": "Connect explicitly selected existing browser tabs to MYTHOS tasks.",
-  "permissions": ["debugger", "tabs", "nativeMessaging"],
+  "permissions": ["debugger", "tabs", "nativeMessaging", "storage"],
   "background": { "service_worker": "background.js" },
   "action": { "default_title": "Connect MYTHOS Browser Operator" }
 }
