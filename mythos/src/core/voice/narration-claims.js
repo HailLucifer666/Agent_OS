@@ -243,7 +243,8 @@ function returnsNoReadableContent(toolName) {
 const SYSTEM_NOTICE_PREFIX =
   '[SYSTEM NOTICE — automated message from MYTHOS\'s own pipeline, NOT the operator speaking]';
 
-const LIVE_SYSTEM_NOTICE_INSTRUCTION =
+const TOOL_RESPONSE_DISCIPLINE = 'A tool response is instruction for you: never read its fields, braces, status, or scaffolding aloud. Speak only the human outcome. ';
+const LIVE_SYSTEM_NOTICE_INSTRUCTION = TOOL_RESPONSE_DISCIPLINE +
   `AUTOMATED SYSTEM NOTICES. Some messages that arrive in this conversation as if the operator ` +
   `spoke them begin with "${SYSTEM_NOTICE_PREFIX}". They are NOT the operator speaking. They are ` +
   `automated notices from MYTHOS's own pipeline — the real outcome of a tool you called, the ` +
@@ -280,6 +281,7 @@ const LIVE_SYSTEM_NOTICE_INSTRUCTION =
   `not have it. Never describe a notice as confirming a claim it does not make, and never invent one.`;
 
 module.exports = {
+  TOOL_RESPONSE_DISCIPLINE,
   NO_SUCCESS_CLAIM,
   failedNarration,
   UNVERIFIED_NO_PROOF_CLAIM,

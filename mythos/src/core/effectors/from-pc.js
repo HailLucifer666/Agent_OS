@@ -460,34 +460,7 @@ async function focus_window({ pid }) {
   return res;
 }
 
-async function close_window({ pid }) {
-  if (!pid) return fail('PID is required.');
-  var res = await delegate({ cmd: 'close_window', pid });
-
-  // BUG-103: the PowerShell handler used to return `@{closed=$false; note=…}` on
-  // a graceful-close timeout — a hashtable, so the dispatcher recorded ok:true
-  // for a window that was still open (the 2026-08-05 Brave incident). The
-  // handler is honest now; this is the Node-side backstop, because a plain
-  // `ok:true` on a world-changing action is exactly what the evidence contract
-  // forbids (src/core/CLAUDE.md).
-  if (res.ok && res.result && res.result.closed === false) {
-    return fail(String(res.result.note || 'The window did not close and is still open.')
-      + ' Nothing was closed — the window is still open.');
-  }
-
-  // A vanished pid is the other half of the same incident (Chrome had already
-  // exited, or the pid was a non-windowed child of a multi-process browser).
-  // Say what to do next instead of returning a bare PowerShell error.
-  if (!res.ok && /cannot find/i.test(String(res.result || ''))) {
-    return fail('That pid no longer exists, so nothing was closed. ' + String(res.result));
-  }
-
-  // AUDIT FIX: a closed pid must not linger as the ui_type/ui_click default —
-  // Windows recycles PIDs, so a stale value could target an unrelated process.
-  // Only on a REAL close: a failed close leaves the window (and the pid) valid.
-  if (res.ok) implicitTarget.forgetIf(pid);
-  return res;
-}
+const close_window = require('./close-window-guard').makeCloseWindow({ delegate, fail, implicitTarget });
 
 async function media_key({ key }) {
   if (!key) return fail('Key name is required (play_pause, next_track, prev_track, volume_up, volume_down, volume_mute).');

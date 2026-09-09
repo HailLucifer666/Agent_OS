@@ -1,5 +1,4 @@
 'use strict';
-
 const path = require('path');
 
 // MYTHOS Phase 0 config schema
@@ -707,6 +706,7 @@ const SCHEMA = {
   // live session fails. Flipping back to false is a total, zero-code rollback
   // (V2 §16). See .env.example for the full story on each key, including the
   // voice choice.
+  LIVE_VOICE_HONESTY_ENABLED: { type: 'bool', default: true },
   VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
 
   // BUG-251: inject Semantic/user-facts.md into the Live session instruction so

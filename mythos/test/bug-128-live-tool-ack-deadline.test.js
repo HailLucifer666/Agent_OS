@@ -174,7 +174,11 @@ describe('BUG-128 — the ack deadline is operator-tunable', () => {
   test('the server call site passes config.TOOL_ACK_DEADLINE_MS into the adapter', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
     const at = src.indexOf('createLiveToolAdapter({');
-    const block = src.slice(at, src.indexOf('});', at));
+    // BUG-431, 2026-09-10: nested callbacks can contain `});`; end at installation.
+    // Same-date mutation removes the deadline binding; this wire check still fails.
+    const end = src.indexOf('liveAdaptersByConnection.set(connectionId', at);
+    assert.ok(at >= 0 && end > at, 'the adapter construction and installation must both exist');
+    const block = src.slice(at, end);
     assert.match(block, /toolAckDeadlineMs:\s*config\.TOOL_ACK_DEADLINE_MS/,
       'the seam existed since BUG-128 but nothing fed it — without this line the .env.example dial silently does nothing');
   });

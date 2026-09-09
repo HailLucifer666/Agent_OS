@@ -427,7 +427,7 @@ function createLiveToolAdapter(deps) {
       abortedInFlight: !dispatchOk && Boolean(outcome && outcome.effectMayHaveLanded),
       abortReason: (outcome && typeof outcome.reason === 'string' && outcome.reason) || null,
       result,
-      rawError,
+      rawError, remedy: outcome && outcome.remedy,
       reason: isUnverified ? String(outcome.reason || 'no confirmation available') : null,
       // BUG-273 B2: the independently-established step, when the effector named
       // one. Read straight off the outcome like `reason` — effectors/evidence.js
@@ -692,7 +692,7 @@ function createLiveToolAdapter(deps) {
       // the same [SYSTEM] sendText channel resolveLiveConfirm already uses.
       // BUG-300: one call site, ahead of both dispatch paths below, so a note can
       // never reach the effector unstamped by going down the slow branch.
-      stampProvenanceIfUnbacked(decision);
+      stampProvenanceIfUnbacked(decision); const startedAt = (deps.now || Date.now)();
 
       if (SLOW_TOOLS[call.name]) {
         commitAction(pendingAck(call.name, call.id));
@@ -701,8 +701,8 @@ function createLiveToolAdapter(deps) {
         }});
         // Deliberately not awaited: the whole point is that the turn does not wait.
         dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id })
-          .then((outcome) => reportLateOutcome(call.name, outcome, call.id))
-          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id));
+          .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
+          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
         continue;
       }
 
@@ -722,8 +722,8 @@ function createLiveToolAdapter(deps) {
             status: 'started', message: STARTED_MESSAGE,
           }});
           pending
-            .then((outcome) => reportLateOutcome(call.name, outcome, call.id))
-            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id));
+            .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
+            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
           continue;
         }
         if (settled.error) throw settled.error;
@@ -751,7 +751,7 @@ function createLiveToolAdapter(deps) {
           // unverified/started branches; `summary` stays the bare reason so the
           // audit/episodic record is not polluted with prompt text.
           response = {
-            status: 'failed',
+            status: 'failed', ...(ev.remedy ? { remedy: ev.remedy } : {}),
             error: reason.slice(0, 500),
             message: failedNarration(call.name, reason.slice(0, 500)),
           };
@@ -819,7 +819,7 @@ function createLiveToolAdapter(deps) {
   // Pushes straight to liveTurnActions rather than through commitAction: this
   // arrival is EXPECTED, so it must not raise the late-for-turn anomaly that
   // exists to catch accidental misattribution.
-  function reportLateOutcome(toolName, outcome, traceId) {
+  function reportLateOutcome(toolName, outcome, traceId, startedAt) {
     const ev = evaluateOutcome(outcome);
     let verdict;
     // BUG-116: the closing instruction is what the model is allowed to SAY about
@@ -879,7 +879,8 @@ function createLiveToolAdapter(deps) {
       evidence: evidenceFor(toolName, ev.result) };
     liveTurnActions.push(lateEntry);
     recentActionLedger.record(lateEntry);
-    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
+    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName, remedy: ev.remedy,
+      speech: require('./action-outcome-summary').lateOutcomeSpeech(toolName, { ...ev, rawError: sanitizeResultError(ev.rawError) }, (deps.now || Date.now)() - startedAt),
       claim: ev.abortedInFlight ? 'aborted-in-flight'
         : (!ev.dispatchOk ? 'failed' : (ev.unverified ? (ev.confirmedStep ? 'unverified-partial' : 'unverified') : 'ok')) });
   }
@@ -918,22 +919,25 @@ function createLiveToolAdapter(deps) {
   function sendSystemNotice(verdict, instruction, meta) {
     const liveSession = getLiveSession ? getLiveSession() : null;
     const m = meta || {};
-    if (!liveSession || !liveSession.isOpen()) {
+    const message = `${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}${m.remedy ? " Structured remedy: " + JSON.stringify({ remedy: m.remedy }) : ""}`;
+    const open = !!liveSession && liveSession.isOpen();
+    const delivered = open && liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null, claim: m.claim || null }) !== false;
+    if (!delivered) {
       // Logged on the way out too: "the outcome never reached the model" and "the
       // model was told and said nothing" are different failures that used to look
       // identical from here, and the audit records only the former.
       logger.info('live.system-notice', { site: m.site || 'unknown', tool: m.tool || null,
-        delivered: false, reason: 'no open live session' });
+        delivered: false, reason: open ? 'live send rejected' : 'no open live session' });
+      if (m.speech && deps.config?.LIVE_VOICE_HONESTY_ENABLED !== false && deps.speakWhenClosed) {
+        Promise.resolve().then(() => deps.speakWhenClosed(m.speech)).catch(err => logger.warn('live.late-outcome.tts-failed', { error: sanitize(err) }));
+      }
       return false; // best-effort, same as confirms
     }
-    const message = `${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`;
     // The delivered line is written by live-session.sendText itself, which is the
     // ONE door every injection in the process goes through — including seven in
     // server/index.js this module cannot see. Logging here as well would give the
     // adapter's injections two lines and the others one, which is a worse log than
     // no log: the counts would not mean the same thing.
-    liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null,
-      claim: m.claim || null });
     return true;
   }
 
@@ -1249,7 +1253,7 @@ function createLiveToolAdapter(deps) {
       // BUG-357: the detector also sees the bounded recent-turn ledger; ledger
       // first so a CURRENT-turn row wins any Map collision below.
       const knownActions = [...recentActionLedger.forClaims(), ...actionsThisTurn];
-      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims());
+      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims(), { voiceHonesty: deps.config?.LIVE_VOICE_HONESTY_ENABLED !== false });
       const statusByTool = new Map(knownActions.map((a) => [a.tool, a.status || actionStatus(a)]));
       for (const claim of unbackedClaims) {
         // A3: name the actual tool and its real status. `tool`/`target` stay the

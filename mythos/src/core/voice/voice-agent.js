@@ -860,7 +860,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
       try {
         const unbacked = allFailedActions.concat(allUnverifiedActions)
           .map((a) => ({ tool: a.tool, ok: false })); // unverified never backs a claim (module contract)
-        const claims = detectUnbackedClaims(finalSay, unbacked);
+        const claims = detectUnbackedClaims(finalSay, unbacked, [], { voiceHonesty: false }); // BUG-423: legacy progressive patterns stay unchanged.
         if (claims.length) {
           const byTool = new Map();
           allFailedActions.concat(allUnverifiedActions).forEach((a) => {

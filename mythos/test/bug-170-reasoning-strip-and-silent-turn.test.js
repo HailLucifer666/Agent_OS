@@ -236,7 +236,7 @@ describe('BUG-170 — the server speaks a silent turn through the TTS chain', ()
 
   it('wires onSilentTurn to proactiveSpeak with skipLive', () => {
     assert.match(SERVER, /onSilentTurn:/, 'server/index.js must wire the callback at all');
-    const block = /onSilentTurn:[\s\S]{0,600}?\n\s{10}\},/.exec(SERVER);
+    const block = /onSilentTurn:[\s\S]{0,950}?\n\s{10}\},/.exec(SERVER);
     assert.ok(block, 'onSilentTurn handler must be findable');
     assert.match(block[0], /proactiveSpeak\(text, ws, \{ skipLive: true \}\)/,
       'it must route to the TTS chain, and skipLive is what stops it going back into the session that just failed to speak');

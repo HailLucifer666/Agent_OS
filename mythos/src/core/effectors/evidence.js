@@ -216,7 +216,18 @@ function attemptedPhrase(action, reason) {
     (asText(reason).trim() || 'no oracle available') + ')';
 }
 
+// A remedy is an explicit call, never an instruction to concatenate into args.
+function remedy(tool, args, why, needsInput = []) {
+  const { TIER_TABLE } = require('../leash/tiers');
+  if (!Object.prototype.hasOwnProperty.call(TIER_TABLE, tool)) throw new TypeError('remedy: unknown tool');
+  if (!isPlainObject(args) || ![Object.prototype, null].includes(Object.getPrototypeOf(args))) throw new TypeError('remedy: args must be a plain object');
+  if (typeof why !== 'string' || !why.trim()) throw new TypeError('remedy: why must explain the call');
+  if (!Array.isArray(needsInput) || needsInput.some(k => typeof k !== 'string' || !/^[a-z][a-zA-Z0-9_]*$/.test(k) || Object.hasOwn(args, k))) throw new TypeError('remedy: needsInput must name missing arguments');
+  return { tool, args: { ...args }, why: why.trim(), ...(needsInput.length ? { needsInput: [...new Set(needsInput)] } : {}) };
+}
+
 module.exports = {
+  remedy,
   ORACLES: ORACLES,
   verifiedOk: verifiedOk,
   unverified: unverified,

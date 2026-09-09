@@ -106,6 +106,7 @@ const CLAIM_CATEGORIES = [
   },
   {
     name: 'opening',
+    incidentProgressiveRe: /^(?:opening(?!\s+hours\b)|launching|navigating\s+to)\b|\bi(?:'m| am)\s+retrying\b[^.]{0,70}\b(?:open|launch|navigate)\b|\bi(?:'m| am)\s+working on\b[^.]{0,70}\b(?:open|launch|navigate)\b/i,
     // BUG-398 row 7, found while measuring it: open_folder and open_file were in
     // NO category, so a SUCCESSFUL open_folder could not back "I opened the
     // Downloads folder" — `re` matched "I opened", the backed check looked only
@@ -133,6 +134,7 @@ const CLAIM_CATEGORIES = [
     // have flagged it however the tiers were written. The gap was the category
     // table, not the regexes.
     name: 'window-control',
+    incidentProgressiveRe: /^(?:closing|dismissing|spawning)\b|\bi(?:'m| am)\s+retrying\b[^.]{0,70}\b(?:close|dismiss|spawn)\b|\bi(?:'m| am)\s+working on\b[^.]{0,70}\b(?:closed|dismissed|spawned|close|dismiss|spawn)\b/i,
     tools: ['close_panel', 'close_window', 'manage_widget', 'spawn_widget'],
     re: /\b(?:i(?:'ve| have) |i )(closed|dismissed|opened up|spawned)\b[^.]{0,30}\b(widget|panel|window|card)\b|\b(?:the\s+)?(widget|panel|window|card)\b[^.]{0,20}\b(?:has been|is now)\s+(?:closed|dismissed|open)\b/i,
     progressiveRe: /\b(?:closing|dismissing|opening|spawning)\b[^.]{0,40}\b(widget|panel|window|card)\b|\b(?:is|am|'m)\s+(?:now\s+)?(?:closing|dismissing)\b/i,
@@ -297,7 +299,7 @@ function splitSentences(text) {
 // carry their own `status` when the caller precomputed one (live-tool-adapter's
 // ledger does); anything without one is derived here from ok/unverified, same
 // as actionStatus() would.
-function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
+function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, options) {
   const text = String(assistantText || '');
   if (!text) return [];
 
@@ -364,7 +366,7 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
       // with a pending row is silent here, and the premature-claim path owns it.
       if (!match && category.progressiveRe && !gate.some((tool) => pendingTools.has(tool))
           && !PROGRESSIVE_SUBJECT_IS_THEIRS_RE.test(sentence)) {
-        match = category.progressiveRe.exec(sentence);
+        match = category.progressiveRe.exec(sentence) || (options?.voiceHonesty !== false && category.incidentProgressiveRe?.exec(sentence));
       }
       if (!match) continue;
       // A fact-finding tool that SUCCEEDED backs the claim. This is what stops

@@ -22,7 +22,8 @@ const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = r
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
-const { buildBriefingFacts } = require('../src/core/conversation/briefing');
+const { buildBriefingFacts, GREETING_FACT_DISCIPLINE } = require('../src/core/conversation/briefing');
+const { TOOL_RESPONSE_DISCIPLINE } = require('../src/core/voice/narration-claims');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
@@ -33,7 +34,6 @@ const { _PATTERNS: LOG_SECRET_PATTERNS } = require('../src/core/effectors/creden
 // S2S (V2 §6-§10, merged-order step 4, Phase 5 wiring): Gemini Live transport,
 // hub->functionDeclarations conversion, and the tool-adapter safety seam.
 const { createLiveSession } = require('../src/core/voice/live-session');
-const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
 // Installer parity (2026-08-11): do not DECLARE a tool whose adapter or
 // credentials do not exist on this machine — the fresh install fired
 // gmail_unread/media_status/spotify_status against neither. See tool-capability.js.
@@ -215,6 +215,7 @@ function createServer(deps) {
   const engagementManager = deps.engagementManager;     // Engagement layer — .engagement.{list,findById,transition}, .handleEngagementAction; Phase 1 executor lives on it (may be undefined in tests)
   const conversationGateway = deps.conversationGateway; // Engagement layer — .receive()/.classify()/.route() utterance classification
   const getCapabilityDigest = deps.getCapabilityDigest; // B2 — pre-context live capability digest (may be undefined in tests)
+  const stopBrowserOfflineNotice = browserAgentAdapter.onOffline(p => { if (config.LIVE_VOICE_HONESTY_ENABLED !== false) bus.emit('health.anomaly', { kind: 'browser-automation-offline', reason: p.reason, target: 'browser automation' }); });
   const identity = deps.identity;                      // S2S (Phase 5) — identity.persona() for buildLiveSystemInstruction (may be undefined in tests)
   const pinLock = deps.pinLock;                        // §7.3 — local PIN lock (may be undefined in tests)
   // Voice Nodes — the per-phone Aether scanner-proxy (src/core/aether/
@@ -257,12 +258,12 @@ function createServer(deps) {
   // embedded-JSON contract) + persona + version + capability digest + skills
   // catalog. Same content as today's per-turn voice prompt, assembled once —
   // V2 estimates ~50x cheaper under S2S (today ~3,524 tokens x every turn).
-  function buildLiveSystemInstruction() {
+  function buildLiveSystemInstruction(extra) {
     // BUG-117: the transport has no system role after setup, so every pipeline
     // injection arrives as user-role realtimeInput and the model attributed it
     // to the operator. This clause is the other half of SYSTEM_NOTICE_PREFIX —
     // both live in live-tool-adapter.js so they cannot drift apart.
-    const parts = [RULES, LIVE_SYSTEM_NOTICE_INSTRUCTION];
+    const parts = [RULES, config.LIVE_VOICE_HONESTY_ENABLED === false ? LIVE_SYSTEM_NOTICE_INSTRUCTION.replace(TOOL_RESPONSE_DISCIPLINE, '') : LIVE_SYSTEM_NOTICE_INSTRUCTION];
     try {
       const persona = identity && typeof identity.persona === 'function' ? identity.persona() : null;
       if (persona) parts.push(persona);
@@ -335,7 +336,7 @@ function createServer(deps) {
       const now = new Date();
       parts.push('Current local date/time: ' + now.toString());
     } catch (err) { logger.warn('live.time-compose-failed', { error: err.message }); }
-    return parts.filter(Boolean).join('\n\n');
+    return parts.filter(Boolean).join('\n\n') + (extra || '');
   }
 
   // Server-initiated camera look: broadcast a frame request; any connected UI
@@ -2506,7 +2507,7 @@ function createServer(deps) {
               'The correct greeting for right now is exactly "' + salutation + '" — open with it or a natural ' +
               'equivalent for that same time of day, and do not invent, guess, or state a different time of day ' +
               '(do not say "morning" if the salutation says afternoon or evening, and so on). ' +
-              'Facts you may use:\n- ' +
+              (config.LIVE_VOICE_HONESTY_ENABLED === false ? '' : GREETING_FACT_DISCIPLINE) + 'Facts you may use:\n- ' +
               facts.join('\n- ') + '\n' +
               'If a "Last time we spoke" fact is present, open by picking up that thread in half a sentence, ' +
               'the way someone resumes a conversation rather than starting one.\n' +
@@ -2889,12 +2890,14 @@ function createServer(deps) {
           leash, dispatchAction: (decision, ctx) => dispatchAction(decision, { ...ctx, connectionId }), bus, logger, connectionId,
           memory, historyAppend, reflection,
           summarizeActionsForResult,
-          getLiveSession: () => liveSession,
+          getLiveSession: () => liveSession, speakWhenClosed: async text => {
+            await proactiveSpeak(text, ws, { skipLive: true });
+          },
           sanitizeErrorForClient,
           goals, // BUG-113: commitment-ledger logging in onLiveTurnComplete
           // Fix-plan 2.3: the schema key the .env.example doc points at —
           // without this the documented dial silently did nothing.
-          toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS,
+          toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS, config,
         });
         liveAdaptersByConnection.set(connectionId, liveAdapter);
       }
@@ -2906,46 +2909,10 @@ function createServer(deps) {
         // rotation, contradicting this function's own comment below. Passed as a
         // FUNCTION now, the same way buildLiveSystemInstruction is (BUG-079), so
         // live-session.js rebuilds it on every open()/reconnect.
-        const rebuildDeclarations = () => buildFunctionDeclarations(effectors, {
-          allowlist: String(config.LIVE_TOOL_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
-          // Do not declare a tool whose machinery is absent on this machine.
-          // The freshly installed build fired gmail_unread / media_status /
-          // spotify_status before the operator had spoken, against credentials
-          // and adapters the install does not have. Built HERE, per session, not
-          // at boot: an adapter that comes online later must become declarable
-          // on the next session without a restart. See core/voice/tool-capability.js.
-          capability: buildCapabilitySnapshot({
-            config,
-            // The adapter modules are singletons holding their own connection
-            // state, and pc-child is already require()d at the top of this file
-            // for exactly that reason. getStatus() is a pure read; requiring
-            // these starts nothing.
-            adapters: {
-              browser: config.DESKTOP_OPERATOR_ENABLED ? deps.desktopRuntime?.getBridge() || { getStatus: () => ({ state: 'OFFLINE' }) } : browserAgentAdapter,
-              cua: cuaDriverAdapter,
-              pcChild,
-              android: androidChildAdapter,
-            },
-          }),
-          log: (m) => logger.info('live-tools', { detail: m }),
-        });
-        const { declarations, withheld, unavailable } = rebuildDeclarations();
-        // Only the tool NAMES go to the session; withheld/unavailable are
-        // reported here. Re-logging them on every rotation would turn a
-        // once-per-session diagnostic into a recurring one, so the rebuild
-        // closure below deliberately keeps just `declarations`.
-        const declarationsForSession = () => rebuildDeclarations().declarations.filter(d => !desktop || require('./desktop-connection').conversationToolAllowed(d.name));
-        if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
-        // Logged as its own event, not folded into the line above: "withheld by
-        // curation" and "withheld because this machine cannot do it" are
-        // different findings and only one of them is a setup problem.
-        if (unavailable && unavailable.length) {
-          logger.warn('live-tools.unavailable', {
-            count: unavailable.length,
-            tools: unavailable.map((u) => u.name),
-            reasons: [...new Set(unavailable.map((u) => u.reason))],
-          });
-        }
+        const liveDeclarations = require('../src/core/voice/live-declarations').createLiveDeclarations({
+          config, effectors, logger, desktop, desktopRuntime: deps.desktopRuntime,
+          browserAgentAdapter, cuaDriverAdapter, pcChild, androidChildAdapter,
+          conversationToolAllowed: require('./desktop-connection').conversationToolAllowed });
         const outputGeneration = liveOutputGeneration;
         liveSession = createLiveSession({
           // liveConfigNow() carries a voice picked in the HUD since boot.
@@ -2960,10 +2927,10 @@ function createServer(deps) {
           // buildSetup() calls it fresh on every open()/reconnect so the local
           // time (and anything else composed here) never goes stale across a
           // long-running or rotated session.
-          systemInstruction: buildLiveSystemInstruction,
+          systemInstruction: () => buildLiveSystemInstruction(liveDeclarations.instructionBlock()),
           // BUG-079's reasoning applied to the catalog, not just the prompt: a
           // function, so a rotation re-reads which adapters are actually up.
-          functionDeclarations: declarationsForSession,
+          functionDeclarations: liveDeclarations.forSession,
           onToolCall: (calls, handlers) => desktop ? require('./desktop-connection').conversationTools(calls, handlers, liveAdapter) : liveAdapter.handleLiveToolCalls(calls, handlers),
           onAudioOut: (b64) => {
             if (outputGeneration !== liveOutputGeneration) return;
@@ -3002,9 +2969,11 @@ function createServer(deps) {
           // being ignored. Speak it through the TTS chain instead. skipLive
           // is not optional here: routing it back into the session that just
           // failed to speak would be the same silence again.
-          onSilentTurn: ({ turnId, text }) => {
-            if (desktop) return; // The operator sink reports missing native audio; no competing TTS turn.
+          onSilentTurn: ({ turnId, text, interrupts }) => {
+            if (desktop) return; // Native operator audio owns this turn.
             if (outputGeneration !== liveOutputGeneration) return;
+            const reason = config.LIVE_VOICE_HONESTY_ENABLED !== false && require('../src/core/voice/silent-turn').silentTurnWithheld({ text, interrupts });
+            if (reason) { logger.info('live.turn-silent.withheld', { turnId, reason }); return; }
             logger.warn('live.turn-silent.speaking-via-tts', { turnId, chars: text.length });
             proactiveSpeak(text, ws, { skipLive: true })
               .catch((err) => logger.warn('live.turn-silent.tts-failed', { turnId, error: err.message }));
@@ -4630,6 +4599,7 @@ function createServer(deps) {
   }
 
   function stop() {
+    stopBrowserOfflineNotice();
     return new Promise((resolve) => {
       try {
         for (const client of wss.clients) {

@@ -80,8 +80,8 @@ var REVIEW_SKIPPED = 'skipped';
 // Refine outcomes that mean the artifact was LOOKED AT and found wanting.
 var REFINE_REJECTED = ['reverted', 'exhausted'];
 
-function deriveCompletionPayload({ reviewStatus, buildEngine, refineStatus, reviewRequired } = {}) {
-  var isFallbackEngine = buildEngine === 'brain-fallback' || buildEngine === 'fallback';
+function deriveCompletionPayload({ reviewStatus, buildEngine, refineStatus, reviewRequired, laneFallback } = {}) {
+  var isFallbackEngine = laneFallback === true || buildEngine === 'brain-fallback' || buildEngine === 'fallback';
   var refineRejected = REFINE_REJECTED.indexOf(refineStatus) !== -1;
   var reviewProven = reviewStatus === REAL_REVIEW_APPROVED
     || (reviewStatus === REVIEW_SKIPPED && reviewRequired === false);
@@ -109,7 +109,7 @@ function completionForJob(job) {
     : j.reviewVerdict === 'approve' ? 'approved' : 'skipped');
   return deriveCompletionPayload({
     reviewStatus: reviewStatus,
-    buildEngine: j.engine,
+    buildEngine: j.engine, laneFallback: j.laneFallback,
     refineStatus: j.refineStatus,
     reviewRequired: j.reviewRequired === undefined ? false : j.reviewRequired,
   });

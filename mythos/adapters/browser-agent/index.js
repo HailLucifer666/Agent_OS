@@ -211,7 +211,7 @@ async function connect(url, opts) {
         if (!intentionalDisconnect) {
           state = 'OFFLINE';
           hint = 'Chrome disconnected unexpectedly.';
-          log.warn('browser-agent disconnected unexpectedly');
+          log.warn('browser-agent disconnected unexpectedly'); require('./offline-notice').notifyOffline(hint, log);
         }
         browser = null;
       });
@@ -381,7 +381,7 @@ async function launchLocal(userDataDir) {
       if (!intentionalDisconnect) {
         state = 'OFFLINE';
         hint = 'Launched browser closed unexpectedly.';
-        log.warn('browser-agent launched browser closed unexpectedly');
+        log.warn('browser-agent launched browser closed unexpectedly'); require('./offline-notice').notifyOffline(hint, log);
       }
       clearBrowserPidFile(); // BUG-029: browser gone — pidfile no longer needed
       context = null;
@@ -764,7 +764,7 @@ module.exports = {
   processOnPort: browserProcess.processOnPort,
   identifyBrowserOnPort: browserProcess.identifyBrowserOnPort,
   isMythosDebugProfile: browserProcess.isMythosDebugProfile,
-  getStatus,
+  getStatus, onOffline: require('./offline-notice').onOffline,
   withPage,
   withNewPage,
   launchLocal,

@@ -260,7 +260,7 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
       // production, completion-status.js's deriveCompletionPayload() must gain
       // an explicit branch for it — do not assume it is covered by the existing
       // 'brain-fallback'/'fallback' check.
-      job.engine = (result && result.engine) || (hasEngine ? 'dsh' : 'brain');
+      job.engine = (result && result.engine) || (hasEngine ? 'dsh' : 'brain'); job.laneFallback = !!result?.laneFallback;
 
       if (!result || result.offline) {
         // Carry the engine's real reason (usually the install hint) — "brain
@@ -309,7 +309,7 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
             'build-runner-retry:' + job.id
           );
           if (retryResult && !retryResult.offline) {
-            raw = retryResult.content;
+            raw = retryResult.content; job.laneFallback = !!retryResult.laneFallback;
             // Re-verify the retry — only rule-based issues block shipment.
             var reverify = await verifier.verify(raw, job.spec || prompt);
             if (reverify.warnings && reverify.warnings.length) {
@@ -440,7 +440,7 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
                 job._verifyWarnings = refineVerify.warnings;
               }
             }
-            raw = candidate;
+            raw = candidate; job.laneFallback = !!refineResult.laneFallback;
             lastGood = candidate;
             // The candidate has passed the SOURCE verifier but has not been
             // rendered yet. Whether it throws is unknown, and unknown must not

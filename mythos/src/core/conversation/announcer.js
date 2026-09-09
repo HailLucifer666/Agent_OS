@@ -122,12 +122,13 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
     // so the 2026-08-22 artifact the visual gate rejected with six issues was
     // announced as "Completed and verified, Sir." completionForJob applies the
     // same allowlist the ship path and job_status use, from the job record.
-    var completion = completionStatusLib.completionForJob(p);
+    var completion = completionStatusLib.completionForJob(config?.LIVE_VOICE_HONESTY_ENABLED === false ? { ...p, laneFallback: false } : p);
     if (completion.status === 'needs-work') {
       var reasonBits = [];
       if (p.reviewVerdict === 'reject' && Array.isArray(p.reviewIssues) && p.reviewIssues.length > 0) {
         reasonBits.push('the review found issues: ' + p.reviewIssues.slice(0, 3).join('; ')); // Limit to first 3 issues
       }
+      if (p.laneFallback && config?.LIVE_VOICE_HONESTY_ENABLED !== false) reasonBits.push('the requested model was unavailable, so a fallback model produced it');
       if (p.engine === 'brain-fallback' || p.engine === 'fallback') {
         reasonBits.push('it was produced by the fallback engine, not the real one, so it is not confirmed working');
       }
@@ -200,7 +201,7 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
   // emitted kinds from source and fails on any future phantom.
   var SERIOUS_KINDS = {
     'config-settings-ignored': true, 'config-settings-unreadable': true,
-    'provider-down': true, 'tick-error': true,
+    'provider-down': true, 'tick-error': true, 'browser-automation-offline': true,
     'effector-flapping': true, 'memory-growth': true,
     'identity-boundaries-malformed': true
   };

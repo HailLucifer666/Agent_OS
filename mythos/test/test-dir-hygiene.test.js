@@ -26,6 +26,7 @@ const TEST_DIR = path.join(__dirname);
 // not full harnesses that boot real processes.
 const ALLOWLIST = new Set([
   'helpers.js',
+  'pr3-wire-helpers.cjs', // Pure fake socket/dependency fixtures; import never starts a server.
   'helpers/mock-spawn-enoent.js',
   'helpers/leash-fixture.js',
   'fixtures/stub-mcp-server.js',

@@ -64,4 +64,18 @@ function summarizeActionsForResult(actions) {
   return 'Action outcomes: ' + parts.join('; ') + '.';
 }
 
-module.exports = { summarizeActionsForResult };
+// A completed slow task deserves an outcome even during Live rotation. No
+// prompt scaffolding or raw tool JSON is spoken; the lost model notice is not
+// retried (BUG-275 H8). Short interactive outcomes keep the old silent path.
+function lateOutcomeSpeech(tool, ev, elapsedMs) {
+  if (!(elapsedMs >= 30000)) return null;
+  const label = tool === 'dsh_task' ? 'Your build task' : String(tool).replace(/_/g, ' ');
+  if (ev.abortedInFlight) return label + ' was not confirmed. It may still have completed; do not repeat it yet.';
+  if (ev.unverified) return label + ' ran, but its result could not be confirmed.';
+  if (!ev.ok) {
+    const detail = require('../util/reason-text').reasonText(ev.rawError || ev.result || 'No result was returned.').slice(0, 200);
+    return label + ' failed. ' + (require('./silent-turn').silentTurnWithheld({ text: detail }) ? 'Open the activity log for details.' : detail);
+  }
+  return label + (ev.result?.laneFallback ? ' completed using a fallback model and needs your attention.' : ' finished.');
+}
+module.exports = { lateOutcomeSpeech, summarizeActionsForResult };

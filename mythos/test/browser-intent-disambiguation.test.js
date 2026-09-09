@@ -23,8 +23,11 @@
 // nor a real dashboard route — those are working features, and this session's
 // whole failure mode was a tool succeeding at the wrong thing.
 
+// 2026-09-10 BUG-425: URL assertions now read the structured call, not refusal prose.
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+// BUG-425 adjacent controls exercise routing, never live search/geocoding.
+require('node:test').mock.method(globalThis, 'fetch', async () => { throw new Error('offline routing fixture'); });
 
 const { buildTools } = require('../src/core/effectors/from-dashboard');
 
@@ -59,18 +62,18 @@ describe('A1 open_web: a URL-shaped query on type:"web" is refused WITH the reme
     assert.match(reason, /browser_navigate/,
       'the remedy must NAME the right tool — the proven-effective shape from checkBrowserTarget '
       + '(from-browser.js, BUG-099/107). A refusal with no remedy is what got repeated five times.');
-    assert.match(reason, /https:\/\/openai\.com/,
+    assert.match(res.remedy.args.url, /https:\/\/openai\.com/,
       'and must name the exact url: value to use, so the next call needs no invention');
   });
 
   it('handles a full https URL and a www. host too, not just a bare domain', async () => {
     const withScheme = await toolFn('open_web')({ type: 'web', query: 'https://news.ycombinator.com' });
     assert.equal(withScheme.ok, false);
-    assert.match(String(withScheme.result), /url:"https:\/\/news\.ycombinator\.com"/);
+    assert.equal(withScheme.remedy.args.url, 'https://news.ycombinator.com');
 
     const withWww = await toolFn('open_web')({ type: 'web', query: 'www.openai.com' });
     assert.equal(withWww.ok, false);
-    assert.match(String(withWww.result), /url:"https:\/\/www\.openai\.com"/,
+    assert.equal(withWww.remedy.args.url, 'https://www.openai.com',
       'a www. host is already a URL missing only its scheme — do not prepend https:// twice');
   });
 

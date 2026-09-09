@@ -747,7 +747,7 @@ async function runTask(prompt, opts) {
 
   var entry = resolveDshEntry();
   var selected = selectModel(opts.model || null);
-  lastModel = { laneProvider: selected.laneProvider, route: selected.route, model: selected.model };
+  lastModel = { laneProvider: selected.laneProvider, route: selected.route, model: selected.model, rejected: selected.rejected || [] }; if (opts.onModelSelected) opts.onModelSelected(lastModel);
   if (selected.rejected && selected.rejected.length) {
     // The lane head being unreachable is a real operational fact — an unbilled
     // Cerebras account, an unset key — and it must not be invisible just

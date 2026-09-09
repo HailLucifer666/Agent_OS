@@ -71,20 +71,23 @@ function buildTools() {
         + ': ' + reasonText(err));
     }
     try {
-      var reply = await engine.runTask(task, {
+      var selectedModel = null, reply = await engine.runTask(task, {
         cwd: ws,
         // An operator-delegated agent task is expected to write — that is what
         // distinguishes it from build-engine.generate, which runs read-only. The
         // sandbox still confines every write to `ws`.
         writeRoot: ws,
-        autoApprove: true,
+        autoApprove: true, onModelSelected: model => { selectedModel = model; },
       });
       if (!reply) return fail('the build engine returned an empty response');
       return ok({
+        laneFallback: !!selectedModel?.rejected?.length,
+        // BUG-431: another overlapping task can replace the adapter's global
+        // model; keep this task's facts before the reply so truncation retains them.
+        status: { ...engine.getStatus(), ...(selectedModel ? { model: selectedModel } : {}) },
         reply: reply.slice(0, MAX_REPLY_CHARS),
         workspace: ws,
         files: listWorkspace(ws),
-        status: engine.getStatus(),
       });
     } catch (err) {
       // Report the workspace on failure too. A task that wrote three files and

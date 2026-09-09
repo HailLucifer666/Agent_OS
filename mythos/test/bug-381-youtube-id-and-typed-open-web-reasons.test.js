@@ -185,7 +185,8 @@ describe('BUG-381 — typed reason codes, so a caller can branch on a failure', 
     // dressed as a diagnostic improvement.
     const src = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'core', 'effectors', 'from-dashboard.js'), 'utf8');
-    assert.match(src, /function fail\(reason, code\)/,
+    // BUG-425, 2026-09-10: the optional structured remedy is additive too.
+    assert.match(src, /function fail\(reason, code(?:, remedy)?\)/,
       'fail() takes an optional code');
     assert.match(src, /result: reason/,
       'and the prose stays exactly where every existing consumer reads it');

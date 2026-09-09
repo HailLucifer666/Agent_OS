@@ -854,7 +854,7 @@ function createLiveSession(deps) {
         // silent. Detected before the counters reset, and handed to the caller
         // (this session demonstrably cannot speak it itself).
         const shownText = (turn.assistantText || turnPartText).trim();
-        const wasSilent = !!shownText && turnAudioParts === 0;
+        const wasSilent = !!shownText && turnAudioParts === 0, silentInterrupts = turnInterrupts;
         turnTextParts = 0; turnThoughtParts = 0; turnAudioParts = 0;
         turnReasoningStrips = 0; turnPartText = ''; turnAudioIn = 0;
         turnInterrupts = 0; turnStartedAt = Date.now();
@@ -914,7 +914,7 @@ function createLiveSession(deps) {
             bus.emit('health.anomaly', { kind: 'live-turn-silent', turnId: turnCounter });
           }
           if (onSilentTurn) {
-            try { onSilentTurn({ turnId: turnCounter, text: shownText }); }
+            try { onSilentTurn({ turnId: turnCounter, text: shownText, interrupts: silentInterrupts }); }
             catch (err) { logger.warn('live.silent-turn-handler-failed', { error: err.message }); }
           }
         }

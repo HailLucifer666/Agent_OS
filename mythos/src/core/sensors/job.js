@@ -52,7 +52,7 @@ function createJobSensor({ bus, buildRunner }) {
       // rejected — job.engine is stamped by build-runner.js's pump() before
       // run() ever returns (see completion-status.js for why both signals
       // matter).
-      engine: job.engine || null
+      engine: job.engine || null, laneFallback: !!job.laneFallback
     });
   }
 
