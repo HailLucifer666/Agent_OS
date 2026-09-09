@@ -19,6 +19,10 @@ const fs = require('fs');
 const path = require('path');
 const { createLogger } = require('../../src/core/logger');
 const browserProcess = require('./browser-process');
+// BUG-415: "which browser" is answered once, in browser-target.js. This adapter
+// was the third site deriving it independently, and the only one still hardcoding
+// a two-entry ladder that could not name the operator's default.
+const browserTarget = require('../../src/core/effectors/browser-target');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
 const CONNECT_TIMEOUT_MS = 10000;
@@ -218,6 +222,91 @@ async function connect(url, opts) {
   return connectingPromise;
 }
 
+// ---------------------------------------------------------------------------
+// BUG-415 — which browser does launchLocal actually start? (2026-09-09)
+// ---------------------------------------------------------------------------
+//
+// MEASURED ON THE OPERATOR'S MACHINE, 2026-09-09, before changing anything:
+//
+//   osDefaultBrowser()          -> { name:'brave', progId:'BraveHTML', drivable:true }
+//   resolveLaunchTarget(null)   -> { name:'brave', source:'os-default' }
+//   findBrowserExecutable('brave') -> ...\BraveSoftware\Brave-Browser\...\brave.exe
+//   findBrowserExecutable('chrome') -> ...\Google\Chrome\Application\chrome.exe
+//   findBrowserExecutable('edge')   -> null    <- Edge is NOT installed here
+//
+// So the resolver already answers "brave", correctly, and has since BUG-407.
+// launchLocal is the one launch site in this codebase that never asks it: it
+// tried playwright channel 'chrome' and fell back to 'msedge', full stop. On
+// this machine that silently starts CHROME — a browser the operator does not
+// use — and on a machine with neither it fails outright while Brave sits
+// installed and reachable.
+//
+// browser-target.js's own header states the rule this violates: "when a change
+// derives the same fact twice by different means, point both at the same
+// input". Three sites now answer "which browser" and two of them read the
+// resolver; this was the third.
+//
+// WHY A LIST AND NOT ONE ANSWER. resolveLaunchTarget returns the best answer,
+// not the only viable one — a UserChoice entry can outlive an uninstall, and a
+// browser can be installed but unlaunchable. The old chrome-then-edge ladder
+// existed for that reason and is kept as the tail, deduplicated, so the
+// resolver's answer is tried FIRST and nothing that used to work stops working.
+//
+// PROFILE: STILL A FRESH ONE, DELIBERATELY (BUG-415's recorded decision). This
+// launcher drives a browser with CDP; pointing it at the operator's real
+// profile would put an automated agent inside their logged-in session and,
+// worse, browser-process.js's close path is authorised ONLY for a directory
+// shaped like MYTHOS/<name>-debug-profile — a real profile could never be
+// closed by us, and a mis-scoped close is the failure that guard exists for.
+// What DOES change is that the profile now follows the browser:
+// debugProfileDir(name) gives brave its own directory instead of handing it the
+// one Chrome wrote, which is exactly why that function takes a name. Pinned by
+// a test, and the fresh profile is now stated in browser_launch_debug's own
+// description rather than left for the operator to discover.
+//
+// Playwright has channels for chrome and msedge and none for brave, so a
+// browser with no channel is launched by executablePath. Same Chromium either
+// way; the channel form is kept where it exists so nothing about the two
+// browsers that already worked changes.
+const PLAYWRIGHT_CHANNELS = { chrome: 'chrome', edge: 'msedge' };
+
+// Pure. The ordered list of launch attempts, so the CHOICE can be tested with
+// no Playwright, no registry and no browser installed anywhere.
+function planLocalLaunch(userDataDir, deps) {
+  const d = deps || {};
+  const resolve = d.resolveLaunchTarget || browserTarget.resolveLaunchTarget;
+  const findExe = d.findBrowserExecutable || browserTarget.findBrowserExecutable;
+  const profileFor = d.debugProfileDir || browserTarget.debugProfileDir;
+
+  const order = [];
+  let preferred = null;
+  try { preferred = resolve(null); } catch (_) { preferred = null; }
+  if (preferred && preferred.name && !preferred.error) order.push(preferred.name);
+  for (const name of browserTarget.BROWSER_SEARCH_ORDER) {
+    if (order.indexOf(name) === -1) order.push(name);
+  }
+
+  const attempts = [];
+  for (const name of order) {
+    const channel = PLAYWRIGHT_CHANNELS[name] || null;
+    let exe = null;
+    try { exe = findExe(name); } catch (_) { exe = null; }
+    // A channel can start a browser this resolver cannot find on disk (a
+    // machine-wide install under a root we do not enumerate), so a channel
+    // candidate is kept even with no exe. One with neither is not a candidate.
+    if (!channel && !exe) continue;
+    let profileDir = userDataDir;
+    try { profileDir = profileFor(name) || userDataDir; } catch (_) { profileDir = userDataDir; }
+    attempts.push({
+      name,
+      profileDir,
+      options: channel ? { channel } : { executablePath: exe },
+      source: name === (preferred && preferred.name) ? (preferred.source || 'resolved') : 'search-order',
+    });
+  }
+  return attempts;
+}
+
 async function launchLocal(userDataDir) {
   if (browser || context) {
     log.info('browser-agent already connected, disconnecting first');
@@ -232,8 +321,6 @@ async function launchLocal(userDataDir) {
   mode = null;
 
   try {
-    // Playwright expects channel as a string, not array. Try Chrome first, fall back to Edge.
-    //
     // BUG-410 (self-review 2026-09-03): RECORD WHICH ONE ACTUALLY STARTED. This
     // function has always known — it is the one that catches the Chrome failure
     // and asks for Edge — and it has never told anyone, so from-browser.js's
@@ -242,22 +329,42 @@ async function launchLocal(userDataDir) {
     // identity-from-assumption defect BUG-410 fixed in browser_launch_debug, at
     // a site the first pass of that fix did not touch. The launcher answering
     // for itself beats any caller re-deriving it.
-    try {
-      context = await chromium.launchPersistentContext(userDataDir, {
-        channel: 'chrome', headless: false, viewport: null,
-      });
-      launchedChannel = 'chrome';
-    } catch (e1) {
-      context = await chromium.launchPersistentContext(userDataDir, {
-        channel: 'msedge', headless: false, viewport: null,
-      });
-      launchedChannel = 'msedge';
+    //
+    // BUG-415: the ladder is now DERIVED (see planLocalLaunch above) rather than
+    // the hardcoded chrome-then-edge pair, so the operator's actual default gets
+    // the first attempt and Brave is reachable at all. `launchedChannel` carries
+    // the browser NAME now, which browserNameForChannel already normalises — for
+    // chrome and edge the value is unchanged.
+    const attempts = planLocalLaunch(userDataDir, {});
+    if (!attempts.length) {
+      throw new Error('no supported browser found ('
+        + browserTarget.supportedBrowserList() + ') — install one, or set BROWSER_EXECUTABLE to its path');
     }
+    let lastErr = null;
+    let profileDir = userDataDir;
+    for (const attempt of attempts) {
+      try {
+        context = await chromium.launchPersistentContext(attempt.profileDir,
+          Object.assign({ headless: false, viewport: null }, attempt.options));
+        launchedChannel = attempt.name;
+        profileDir = attempt.profileDir;
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        context = null;
+      }
+    }
+    // Report the LAST browser's failure rather than a generic one: on a machine
+    // with none of them installed the operator needs to see a real Playwright
+    // message, not "launch failed".
+    if (!context) throw (lastErr || new Error('no browser could be launched'));
     launched = true;
     mode = 'launched';
     state = 'ONLINE';
-    const browserPid = writeBrowserPidFile(context, userDataDir); // BUG-029
-    log.info('browser-agent launched local browser', { userDataDir, pages: context.pages().length, browserPid });
+    const browserPid = writeBrowserPidFile(context, profileDir); // BUG-029
+    log.info('browser-agent launched local browser',
+      { browser: launchedChannel, userDataDir: profileDir, pages: context.pages().length, browserPid });
 
     context.on('close', function() {
       if (!intentionalDisconnect) {
@@ -650,6 +757,10 @@ module.exports = {
   withPage,
   withNewPage,
   launchLocal,
+  // BUG-415 seam: the CHOICE of browser and profile, separated from the launch
+  // so it can be tested with no Playwright, no registry and no browser
+  // installed. The launch itself stays untestable here and is named as such.
+  planLocalLaunch,
   ensureOnline,
   startAutoConnect,    // background CDP auto-connect poller (safe, never launches)
   stopAutoConnect,

@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7449,
+      "value": 7466,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5455,14 +5455,15 @@
       {
         "n": 415,
         "shape": "entry",
-        "state": "diagnosed",
-        "title": "the browser MYTHOS launches is never the operator’s: the launcher knows only Chrome and Edge, and starts them on a throwaway profile (RED DIAGNOSED 2026-09-09, not fixed)",
-        "detail": {},
-        "excerpt": "**Status:** diagnosed from source 2026-09-09. No code change yet. `adapters/browser-agent/index.js` `launchLocal()` tries `channel: ‘chrome’` and falls back to `channel: ‘msedge’`. There is no third rung. The operator’s browser is Brave, so on a machine where Brave is the default and Chrome is absent the launch fails outright, and where Chrome is present it opens a browser the operator does not use. Worse when it succeeds: `launchPersistentContext(userDataDir)` starts a SEPARATE profile, so the window that appears carries none of the operator’s logins, cookies or extensions. For anything that needs a signed-in session -- ordering food, reading mail, a paid account -- a successful launch is still a dead end. **Not the same as the Brave tickets already closed.** BUG-410 and BUG-411 fixed browser IDENTITY (what answered on the debug port) and adoption of an already-running browser. Neither…",
+        "state": "verified",
+        "title": "the launcher never asked which browser the operator uses, so it started Chrome on a Brave machine (FIXED 2026-09-09)",
+        "detail": {
+          "fix": "`planLocalLaunch` (pure, exported, testable with no Playwright and no browser installed) builds the ordered attempt list: the resolver answer first, then `BROWSER_SEARCH_ORDER` deduplicated behind it. The tail is kept on purpose -- the resolver returns the best answer, not the only viable one, and a UserChoice entry can outlive an uninstall. Playwright has channels for chrome and msedge and none for brave, so a browser with no channel is launched by `executablePath`; a candidate with neither is dropped rather than burning a real launch timeout. **The profile now follows the browser, which is a defect the fix itself would otherwise have created.** `debugProfileDir(name)` takes a name precisely so switching browsers does not hand Brave the directory Chrome wrote, and the caller passes a hardcoded `chrome-debug-profile` path. Every resulting directory is still shaped `MYTHOS/\u003cname>-debug-pr…"
+        },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "Source-read 2026-09-09: launchLocal tries chrome then msedge only, and launchPersistentContext uses a dedicated profile directory, so a launched browser carries none of the operator signed-in state. Distinct from BUG-410/411, which fixed identity and adoption rather than the channel list. Consumers: browser_launch_debug and every browser tool that reaches requireOnline with nothing already attached. Remaining evidence: live launch on this machine with Brave as default, not yet run.",
-          "source": "mythos/adapters/browser-agent/index.js"
+          "disposition": "currently verified",
+          "evidence": "Measured on this machine before the change: osDefaultBrowser() answers brave (BraveHTML, drivable), resolveLaunchTarget(null) answers brave/os-default, brave and chrome resolve on disk and EDGE IS NOT INSTALLED -- so the hardcoded chrome-then-msedge ladder silently started Chrome, and on a machine without Chrome would have failed outright with Brave sitting installed. The resolver has answered correctly since BUG-407; launchLocal was the one launch site that never asked it. Now derived through planLocalLaunch, with the profile following the browser so Brave is not handed the directory Chrome wrote. Fresh profile KEPT deliberately and now stated in the tool description. Consumers: requireOnline lazy bring-up and every browser tool that reaches it. Remaining evidence: no live launch -- whether Playwright starts Brave by executablePath is unproven here.",
+          "source": "mythos/adapters/browser-agent/index.js; mythos/test/bug-415-launch-the-operators-browser.test.js"
         }
       },
       {
@@ -5519,11 +5520,11 @@
       }
     ],
     "counts": {
-      "verified": 76,
+      "verified": 77,
       "fixed": 174,
       "open": 7,
       "coded": 3,
-      "diagnosed": 6,
+      "diagnosed": 5,
       "duplicate": 2,
       "unrecorded": 0
     },
