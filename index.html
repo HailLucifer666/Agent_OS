@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7489,
+      "value": 7498,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5482,14 +5482,14 @@
       {
         "n": 417,
         "shape": "entry",
-        "state": "diagnosed",
-        "title": "an ordinal addresses the Nth VISIBLE card, while the tool description promises result 1 through 20 (RED DIAGNOSED 2026-09-09, wording not yet corrected)",
+        "state": "fixed",
+        "title": "an ordinal addressed the Nth VISIBLE card while the tool promised result 1 through 20 (FIXED 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** confirmed by reading the observation code 2026-09-09, alongside the 1-20 selection shipped in 8afc989. `browser-extension/engine.js` `snapshot()` ranks only cards that pass its `visible()` predicate, which requires the element to intersect the viewport. The list handed to the controller is therefore viewport-only, and `ordinal` indexes into it. Two consequences. A search page shows roughly four or five cards, so \"play the sixth result\" polls until the observation budget is spent and then blocks -- honestly, but for a reason the operator will read as a bug, since the tool advertises 1 through 20. And if the page is already scrolled, \"the second video\" selects the second card CURRENTLY IN VIEW, which may be result seven; verification cannot catch that, because the expected identity is derived from the same observation that made the wrong choice. **Decided fix, not yet applied (…",
+        "excerpt": "**Status:** FIXED 2026-09-09. Seven mutation probes across the engine and the controller, all landed, all fired, no survivors. Not run against a live YouTube page -- see the remaining evidence. **The defect.** `snapshot()` ranked a card only if `visible(card)` AND `refs.has(el)`, and `refs` is filled by the targets loop above it, which also requires `visible()`. The item list was therefore viewport-only and `ordinal` indexed into it. A search page shows roughly four or five cards, so \"play the sixth result\" polled until the observation budget ran out and blocked -- honestly, but for a reason the operator reads as a bug, because `desktop_task_start` advertises result 1 through 20. And on an already-scrolled page \"the second video\" selected the second card CURRENTLY IN VIEW, which might be result seven; verification could never catch that, because the expected identity is derived from the…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "Read 2026-09-09 against engine.js snapshot(): the visible() predicate requires viewport intersection, so items are viewport-only and the ordinal indexes that list. Confirms an overclaim in the tool description shipped the same day. Consumers: desktop_task_start ordinal selection. Remaining evidence: live YouTube search page card counts above and below the fold, not yet measured.",
-          "source": "mythos/browser-extension/engine.js; mythos/src/core/desktop/controller.js"
+          "disposition": "currently verified",
+          "evidence": "snapshot() now ranks every non-ad card in the region, giving an off-screen one a null ref plus its visible flag and top offset, and the controller scrolls at most four times to reveal a requested card, re-observing each time and stopping early once the list stops growing. A null ref is unclickable by shape: actOnNode resolves refs from a node map that only holds visible elements and separately refuses any target outside the viewport. The engine ranking had NO direct coverage before this -- browser-extension-engine.test.js stubs Runtime.evaluate, so snapshot never ran against a DOM there. Consumers: desktop_task_start ordinal selection. Remaining evidence: no live YouTube page; card counts above and below the fold are modelled, not measured.",
+          "source": "mythos/browser-extension/engine.js; mythos/src/core/desktop/controller.js; mythos/test/bug-417-rank-below-the-fold.test.js"
         }
       },
       {
@@ -5521,10 +5521,10 @@
     ],
     "counts": {
       "verified": 77,
-      "fixed": 176,
+      "fixed": 177,
       "open": 7,
       "coded": 3,
-      "diagnosed": 3,
+      "diagnosed": 2,
       "duplicate": 2,
       "unrecorded": 0
     },

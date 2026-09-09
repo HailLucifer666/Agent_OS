@@ -88,6 +88,52 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
         delay = Math.min(delay * 2, 1500);
       }
     }
+    // BUG-417 — bounded scroll-to-reveal, the operator's chosen design.
+    //
+    // The card exists (readiness proved it) but sits below the fold, so it has a
+    // null ref and cannot be clicked. Scroll down, re-observe, repeat.
+    //
+    // THREE BOUNDS, each closing a different way this could run forever or lie:
+    //   - at most REVEAL_SCROLLS attempts, so a page that never reveals the card
+    //     blocks with a reason instead of scrolling to the end of an infinite
+    //     feed;
+    //   - stop EARLY when the list stops growing AND the card is still hidden —
+    //     more scrolling cannot help once the region has stopped producing
+    //     cards, and continuing would just burn the observation budget before
+    //     the caller could report anything useful;
+    //   - every re-observation is a fresh one through observe(), so the ref that
+    //     is finally clicked belongs to the observation it was read from. Reusing
+    //     a pre-scroll ref would be the stale-observation bug that actOnNode's
+    //     identity check exists to catch.
+    //
+    // The scroll DISTANCE is deliberately not restated here. browser_scroll owns
+    // it (browser-driver-tools.js turns direction into a bounded deltaY), and a
+    // second copy of 600 in this file would be one edit away from disagreeing
+    // with the tool it calls. One step is less than a viewport on purpose: an
+    // overshoot would push the card past the TOP edge, and actOnNode refuses a
+    // target above the fold just as firmly as one below it.
+    const REVEAL_SCROLLS = 4;
+    async function reveal(target, initial, ordinal) {
+      let o = initial;
+      for (let attempt = 0; attempt < REVEAL_SCROLLS; attempt += 1) {
+        const item = o.items?.[ordinal - 1];
+        if (item?.ref) return o;
+        check();
+        const before = o.items?.length || 0;
+        await leaf('browser_scroll', { target: o.target, direction: 'down' });
+        o = await observe(target);
+        const after = o.items?.length || 0;
+        const revealed = o.items?.[ordinal - 1];
+        if (revealed?.ref) return o;
+        // The list stopped growing and the card is still not in view. Scrolling
+        // again cannot change that.
+        if (after <= before && !revealed?.ref) break;
+      }
+      if (o.items?.[ordinal - 1]?.ref) return o;
+      throw stopError('Result ' + ordinal + ' is in the list but did not come into view after '
+        + REVEAL_SCROLLS + ' scrolls, so it cannot be clicked');
+    }
+
     try {
       let e = record(id), target = e.target;
       if (!target) {
@@ -127,10 +173,18 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
         if (ordinal) {
           // Ordinals address only this fresh normal-card list. Missing cards do
           // not authorize a different result, coordinates, or a second list.
+          //
+          // BUG-417: the card may EXIST and be below the fold. The engine now
+          // ranks every card in the region and gives an off-screen one a null
+          // ref, so readiness first waits for the card to exist at all, then
+          // scrolls a bounded number of times to bring it into view. Waiting
+          // alone was the old behaviour and could never succeed for result six
+          // on a page showing five.
           o = await readiness(target, o, (current) => {
             if (current.ambiguous === true) throw stopError('More than one visible video list; select the intended list first');
-            return Boolean(current.items?.[ordinal - 1]?.ref && current.items[ordinal - 1].videoId);
-          }, 'Requested playable result ' + ordinal + ' did not become ready within the observation budget');
+            return Boolean(current.items?.[ordinal - 1]?.videoId);
+          }, 'Requested result ' + ordinal + ' never appeared in the observed list');
+          o = await reveal(target, o, ordinal);
           const item = o.items[ordinal - 1];
           expected = { kind: 'playing', videoId: item.videoId };
           save(id, { phase: 'acting', expected });

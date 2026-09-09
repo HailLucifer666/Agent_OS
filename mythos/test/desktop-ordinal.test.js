@@ -5,25 +5,37 @@ const { parseRequest } = require('../src/core/desktop/intent');
 const { createDesktopController } = require('../src/core/desktop/controller');
 const { createGoalSystem } = require('../src/core/goals');
 
-function rig({ count = 3, ambiguous = false, missingRef = false, wrongVideo = false, stationary = false, ad = false } = {}) {
+// BUG-417: the rig now models a page taller than the viewport. `visibleCount`
+// is how many of the ranked cards are ON SCREEN — the rest are ranked with a
+// null ref, which is what the engine now reports — and `revealPerScroll` is how
+// many more each browser_scroll brings into view. revealPerScroll: 0 models a
+// list that never reveals the card, which must block after a bounded number of
+// scrolls rather than scrolling forever.
+function rig({ count = 3, ambiguous = false, missingRef = false, wrongVideo = false, stationary = false, ad = false, visibleCount = null, revealPerScroll = 0, growBy = 0 } = {}) {
   const goals = createGoalSystem({ fs: { writeJSON() {} }, config: {}, bus: { emit() {} },
     memory: { episodic: { write() {} } }, brain: null });
-  const calls = []; let selected = null, reads = 0;
+  const calls = []; let selected = null, reads = 0, scrolls = 0;
   const ctx = { connectionId: 'ordinal-session' };
   const controller = createDesktopController({ goals, wait: async () => {}, executeTool: async (name, args) => {
     calls.push({ name, args });
     if (name === 'browser_tabs') return { ok: true, result: { tabs: [{ browserId: 'brave', tabId: 7, active: true, url: 'https://www.youtube.com/' }] } };
     if (name === 'browser_click') { selected = Number(args.ref.slice(1)); return { ok: true, result: { delivered: true } }; }
     if (name === 'browser_navigate') return { ok: true, result: { delivered: true } };
+    if (name === 'browser_scroll') { scrolls++; return { ok: true, result: { commandAccepted: true } }; }
     assert.equal(name, 'browser_video_list');
     reads++;
     return { ok: true, result: {
       target: { browserId: 'brave', tabId: 7, frameId: 0, observationId: 'snapshot-' + reads, url: 'https://www.youtube.com/' },
-      ambiguous, items: Array.from({ length: count }, (_, index) => ({ ref: missingRef ? null : 'v' + (index + 1), videoId: 'id-' + (index + 1) })),
+      ambiguous, items: Array.from({ length: count + growBy * scrolls }, (_, index) => {
+        const onScreen = visibleCount === null
+          ? !missingRef
+          : index < visibleCount + revealPerScroll * scrolls;
+        return { ref: onScreen ? 'v' + (index + 1) : null, videoId: 'id-' + (index + 1), visible: onScreen };
+      }),
       playback: { videoId: wrongVideo ? 'unrequested' : 'id-' + selected, currentTime: stationary ? 0 : reads, paused: false, ad },
     } };
   } });
-  return { controller, goals, calls, ctx };
+  return { controller, goals, calls, ctx, scrollCount: () => scrolls };
 }
 async function run(r, request) {
   const accepted = r.controller.start({ request }, r.ctx);
@@ -67,18 +79,85 @@ test('second and twentieth selection bind observed reference and verify the requ
 });
 
 test('short or ambiguous observed lists block ordinal selection without clicking another card', async () => {
-  for (const options of [{ count: 1 }, { count: 3, ambiguous: true }, { missingRef: true }]) {
+  // BUG-417 SPLIT THIS TEST, and the split is the point. `{ missingRef: true }`
+  // used to belong here: a card with no ref meant "not ready", and the run
+  // blocked. It now means "ranked but below the fold", which is a case the
+  // controller must RESOLVE by scrolling rather than refuse — so it moved to its
+  // own test below. What stays here is the genuinely unresolvable set: a list
+  // too short to contain the ordinal, and a page with more than one list.
+  for (const options of [{ count: 1 }, { count: 3, ambiguous: true }]) {
     const r = rig(options);
     const state = await run(r, 'Play second on YouTube');
     assert.equal(state.state, 'blocked');
     assert.equal(state.evidence, null);
     assert.equal(r.calls.some(call => call.name === 'browser_click'), false);
+    assert.equal(r.scrollCount(), 0, 'a card that does not exist is not somewhere further down');
     // Not /2/: that matches any digit 2 anywhere in the reason, including the
     // "snapshot-2" observation id, so it would pass on the wrong message.
     assert.match(state.reason, options.ambiguous
       ? /More than one visible video list/
-      : /Requested playable result 2 did not become ready/);
+      : /Requested result 2 never appeared in the observed list/);
   }
+});
+
+test('BUG-417 — a card below the fold is scrolled into view, not refused', async () => {
+  // The measured complaint: a YouTube search page shows roughly four or five
+  // cards, so "play the sixth result" polled until the observation budget ran
+  // out and blocked, while the tool advertises result 1 through 20.
+  const r = rig({ count: 8, visibleCount: 4, revealPerScroll: 2 });
+  const state = await run(r, 'Play the sixth video on YouTube');
+  assert.equal(state.state, 'completed', 'result six exists two scrolls down');
+  const clicks = r.calls.filter(call => call.name === 'browser_click');
+  assert.equal(clicks.length, 1);
+  assert.equal(clicks[0].args.ref, 'v6', 'the SIXTH card, not the last visible one');
+  assert.equal(r.scrollCount(), 1, 'one scroll reveals cards 5 and 6; a second would be waste');
+  // The ref must come from the observation taken AFTER the scroll. A pre-scroll
+  // ref would be a stale observation, which is what actOnNode's identity check
+  // exists to catch — better not to send one at all. Counted up to the CLICK,
+  // not over the whole run: verification reads afterwards would inflate it and
+  // make this assert something else by accident.
+  const clickAt = r.calls.findIndex(call => call.name === 'browser_click');
+  const readsBeforeClick = r.calls.slice(0, clickAt).filter(call => call.name === 'browser_video_list').length;
+  assert.equal(clicks[0].args.target.observationId, 'snapshot-' + readsBeforeClick);
+  const scrollAt = r.calls.findIndex(call => call.name === 'browser_scroll');
+  assert.ok(scrollAt < clickAt && scrollAt !== -1, 'the scroll happens before the click');
+  assert.ok(r.calls.slice(scrollAt, clickAt).some(call => call.name === 'browser_video_list'),
+    're-observed between scrolling and clicking, so the ref is not a pre-scroll one');
+});
+
+test('BUG-417 — scrolling is bounded, and stops early once the list stops growing', async () => {
+  // revealPerScroll 0: the card is ranked and never comes into view. Without a
+  // bound this scrolls an infinite feed forever; without the growth check it
+  // burns the whole budget before reporting anything.
+  const r = rig({ count: 8, visibleCount: 4, revealPerScroll: 0 });
+  const state = await run(r, 'Play the sixth video on YouTube');
+  assert.equal(state.state, 'blocked');
+  assert.equal(state.evidence, null);
+  assert.equal(r.calls.some(call => call.name === 'browser_click'), false,
+    'a card that cannot be seen must never be clicked, and a different one must never be substituted');
+  assert.equal(r.scrollCount(), 1, 'the list did not grow, so one attempt settles it');
+  assert.match(state.reason, /did not come into view after 4 scrolls/);
+});
+
+test('BUG-417 — a growing list is given the full scroll budget, and no more', async () => {
+  // A lazy feed that adds cards on every scroll but never reveals the target:
+  // the early-stop rule cannot fire, so the hard cap is the only thing that
+  // ends it.
+  const r = rig({ count: 8, visibleCount: 4, revealPerScroll: 0, growBy: 3 });
+  const state = await run(r, 'Play the sixth video on YouTube');
+  assert.equal(state.state, 'blocked');
+  assert.equal(r.scrollCount(), 4, 'exactly the cap — never an unbounded walk down an infinite feed');
+  assert.match(state.reason, /did not come into view after 4 scrolls/);
+});
+
+test('BUG-417 — a card already in view is clicked without scrolling at all', async () => {
+  // The adjacent case that must keep passing. Everything above is worthless if
+  // the common path now pays for a scroll it does not need.
+  const r = rig({ count: 8, visibleCount: 8 });
+  const state = await run(r, 'Play second on YouTube');
+  assert.equal(state.state, 'completed');
+  assert.equal(r.scrollCount(), 0);
+  assert.equal(r.calls.find(call => call.name === 'browser_click').args.ref, 'v2');
 });
 
 test('second-card delivery cannot prove success for another video, stationary playback, or an ad', async () => {

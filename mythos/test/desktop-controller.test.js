@@ -238,7 +238,7 @@ test('permanently empty results exhaust bounded read readiness without mutation'
   } } : undefined, { now: () => clock, wait: async ms => { clock += ms; } });
   const result = await run(r);
   assert.equal(result.result.state, 'blocked'); assert.equal(result.result.evidence, null);
-  assert.match(result.result.reason, /did not become ready.*budget/);
+  assert.match(result.result.reason, /Requested result 3 never appeared in the observed list/);
   assert.equal(r.calls.some(c => c.name === 'browser_click'), false);
   assert.ok(r.calls.length <= 16); assert.ok(clock < 30000);
 });

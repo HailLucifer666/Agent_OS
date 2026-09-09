@@ -20,13 +20,43 @@
     const youtube = /(^|\.)youtube\.com$/.test(location.hostname);
     const roots = youtube ? [...document.querySelectorAll('ytd-search,ytd-browse[page-subtype="home"] ytd-rich-grid-renderer')].filter(visible) : [];
     const ambiguous = roots.length !== 1;
+    // BUG-417 (2026-09-09): rank EVERY card in the region, not only the ones in
+    // the viewport.
+    //
+    // Before this, the card loop required visible(card) and refs.has(el) — and
+    // `refs` only holds elements the targets loop above accepted, which also
+    // requires visible(). So the list handed to the controller was viewport-only
+    // and `ordinal` indexed into it. Two consequences, both measured by reading
+    // this code against the tool description shipped the same day: a search page
+    // shows roughly four or five cards, so "play the sixth result" polled until
+    // the observation budget ran out and blocked — honestly, but for a reason the
+    // operator reads as a bug, since the tool advertises 1 through 20. And on an
+    // already-scrolled page "the second video" selected the second card CURRENTLY
+    // IN VIEW, which might be result seven; verification could never catch that,
+    // because the expected identity is derived from the same observation that
+    // made the wrong choice.
+    //
+    // An off-screen card is now ranked with `ref: null` plus `visible:false` and
+    // its `top` offset, so the controller can scroll to reveal it. A null ref is
+    // structurally unclickable: `actOnNode` looks the ref up in `nodes`, which
+    // only ever contains visible elements, and additionally refuses any target
+    // whose rect is outside the viewport. Making the bad state unrepresentable
+    // rather than merely detectable — the ordinal can name a card that cannot yet
+    // be clicked, and there is no path that clicks it anyway.
     if (!ambiguous) for (const card of roots[0].querySelectorAll('ytd-video-renderer,ytd-rich-item-renderer,ytd-grid-video-renderer')) {
-      if (!visible(card) || card.closest('ytd-ad-slot-renderer,ytd-promoted-video-renderer,ytd-display-ad-renderer,ytd-in-feed-ad-layout-renderer,[is-ad]') || card.querySelector('[class*="badge-style-type-ad"],[aria-label="Sponsored"],[aria-label="Ad"]')) continue;
+      if (card.closest('ytd-ad-slot-renderer,ytd-promoted-video-renderer,ytd-display-ad-renderer,ytd-in-feed-ad-layout-renderer,[is-ad]') || card.querySelector('[class*="badge-style-type-ad"],[aria-label="Sponsored"],[aria-label="Ad"]')) continue;
       const el = card.querySelector('a#video-title[href],a#video-title-link[href]');
-      if (!el || !refs.has(el) || /\/shorts\//.test(el.href)) continue;
+      if (!el || /\/shorts\//.test(el.href)) continue;
       const id = videoId(el.href), text = label(el);
       if (!id || !text || seen.has(id)) continue;
-      seen.add(id); items.push({ ref: refs.get(el), videoId: id, title: text, href: el.href, ordinal: items.length + 1 });
+      // A card whose renderer has not laid out yet has no position worth
+      // reporting; it is still ranked so the ordinal stays stable as the page
+      // fills in, which is the whole point of ranking beyond the fold.
+      const rect = card.getBoundingClientRect();
+      const onScreen = refs.has(el) && visible(card);
+      seen.add(id);
+      items.push({ ref: onScreen ? refs.get(el) : null, videoId: id, title: text, href: el.href,
+        ordinal: items.length + 1, visible: onScreen, top: Math.round(rect.top) });
     }
     globalThis.__mythosObservation = { observationId, nodes };
     return { url: location.href, title: document.title, targets, items, ambiguous,
