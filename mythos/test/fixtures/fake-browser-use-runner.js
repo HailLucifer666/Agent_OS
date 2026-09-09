@@ -16,7 +16,7 @@ process.stdin.on('end', () => {
   const say = (o, code) => { process.stdout.write(JSON.stringify(o) + '\n'); process.exit(code); };
   if (t.startsWith('DONE_WATCH')) return say({ ...base, ok: true, done: true, successful: true, result: 'Played it.', final_url: 'https://www.youtube.com/watch?v=abc', final_title: 'Song - YouTube', urls: ['https://www.youtube.com/', 'https://www.youtube.com/watch?v=abc'] }, 0);
   if (t.startsWith('DONE_BLANK')) return say({ ...base, ok: true, done: true, successful: true, result: 'Done.', final_url: 'about:blank', final_title: '' }, 0);
-  if (t.startsWith('EXIT2')) return say({ ...base, ok: false, done: false, error: 'stopped before the task was done', steps: 20 }, 2);
+  if (t.startsWith('EXIT2')) return say({ ...base, ok: false, done: false, error: 'stopped before the task was done', steps: 20, final_url: 'https://www.youtube.com/watch?v=reached', final_title: 'Reached - YouTube' }, 2);
   if (t.startsWith('EXIT3')) return say({ ...base, ok: false, error: '429 RESOURCE_EXHAUSTED quota exceeded' }, 3);
   if (t.startsWith('EXIT4')) return say({ ...base, ok: false, error: 'no debuggable browser at ' + req.cdp_url }, 4);
   if (t.startsWith('GARBAGE')) { process.stdout.write('not json at all\n'); process.stderr.write('Traceback: boom\n'); process.exit(1); }

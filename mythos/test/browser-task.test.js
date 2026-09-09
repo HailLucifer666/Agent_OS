@@ -65,6 +65,7 @@ test('each exit code has its own reason, and a provider error names the provider
   const four = await tool.fn({ task: 'EXIT4 no browser' }, {});
   for (const r of [two, three, four]) assert.equal(r.ok, false);
   assert.match(two.result, /stopped before finishing after 20 steps/);
+  assert.match(two.result, /last page reached was "Reached - YouTube" at https:/, 'a stopped run still names the page it reached (live 13:58 case)');
   assert.match(three.result, /google model error/);
   assert.match(three.result, /429/);
   assert.match(four.result, /No debuggable browser/);

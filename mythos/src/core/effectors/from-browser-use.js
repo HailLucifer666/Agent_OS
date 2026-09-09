@@ -57,7 +57,12 @@ function reasonFor(code, payload, provider) {
   if (code === 4) return 'No debuggable browser was reachable for the browser task' + (err ? ' (' + err + ')' : '') + '.';
   if (code === 3) return 'The browser task stopped on a ' + provider + ' model error: ' + (err || 'provider refused the request') + '. That is the ' + provider + ' key\'s quota or plan, not the page.';
   if (code === 5) return 'The browser task runner rejected its input: ' + err;
-  if (code === 2) return 'The browser task stopped before finishing' + (payload && payload.steps ? ' after ' + payload.steps + ' steps' : '') + (err ? ': ' + err : '') + '.';
+  if (code === 2) {
+    // Live 2026-09-08 13:58: the run reached the trailer's watch page, then the model 503'd on the
+    // next step and this said only "stopped" — the operator was told nothing opened while it played.
+    const reached = payload && payload.final_url && payload.final_url !== 'about:blank' ? ' The last page reached was ' + (payload.final_title ? JSON.stringify(payload.final_title) + ' at ' : '') + payload.final_url + ', which may already be what you asked for.' : '';
+    return 'The browser task stopped before finishing' + (payload && payload.steps ? ' after ' + payload.steps + ' steps' : '') + (err ? ': ' + err : '') + '.' + reached;
+  }
   return 'The browser task runner exited with code ' + code + (err ? ': ' + err : '') + '.';
 }
 
