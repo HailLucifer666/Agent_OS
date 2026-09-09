@@ -437,6 +437,11 @@ module.exports = {
   browserCandidatePaths,
   findBrowserExecutable,
   identifyBrowserByExecutable,
+  // Exported 2026-09-09 for the reason the comment above it already gave: it is
+  // the ONE derived exe-leaf mapping, and the second hand-written copy that
+  // comment warned about had by then appeared in browser-agent's pid lookup and
+  // gone blind to Brave. Reuse this; do not retype the names.
+  executableIndex,
   debugProfileDir,
   // BUG-407 seams. Every step of the OS-default chain is separately testable:
   // the two parsers are pure, and osDefaultBrowser/resolveLaunchTarget take an

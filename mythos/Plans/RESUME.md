@@ -18,38 +18,30 @@ itself continues on `codex/windows-operator` and is not on `main` yet.
 Spoken, in the operator's already-signed-in browser: **open YouTube, play the
 third video, pause, resume, next.**
 
-The instrument is `mythos/scripts/golden-path.js`. It attaches to the running
-MYTHOS, sends the four turns over the HUD's own WebSocket path, judges each on
-tool evidence plus the media oracle, and appends ONE line to
+The instrument is `mythos/scripts/golden-path.js` — run it once a day with
+MYTHOS up (`cd mythos && node scripts/golden-path.js`). It attaches to the
+running server, sends the four turns over the HUD's own WebSocket path, judges
+each on tool evidence plus the media oracle, and appends ONE line to
 `.cache/windows-operator/golden-path.log` (gitignored):
 
 ```
 <iso-time> PASS|FAIL|UNVERIFIED|PREREQ-MISSING steps=<n>/4 ackP95ms=<n> <notes>
 ```
 
-**The consecutive-PASS streak it prints is the one number that matters.** Today: 0.
-
-Run it once a day, with MYTHOS running:
-
-```
-cd mythos && node scripts/golden-path.js
-```
-
-PREREQ-MISSING (no provider, no browser, server down) is separate from FAIL and
-does not count toward or against the streak.
-
+**The consecutive-PASS streak it prints is the one number that matters. Today:
+0.** PREREQ-MISSING (no provider, no browser, server down) is separate from
+FAIL and counts neither for nor against it.
 ## Stages
 
 - [ ] **Stage 1 — ACTIVE.** Spoken YouTube third-video selection, pause, resume,
   next, in the existing signed-in browser session. Bar: 10 consecutive attended
   spoken successes across two cold boots; p95 acknowledgement 2 s, local stop
   250 ms, spoken cancellation 1.5 s. Measure; do not weaken after failures.
-- [ ] Stage 2 — PAUSED. Windows discovery, target identity, input takeover, modals.
-- [ ] Stage 3 — PAUSED. Browser navigation, Gmail drafts; Amazon stops at order review.
-- [ ] Stage 4 — PAUSED. Transactional DOCX/XLSX/PDF and OneNote edits.
-- [ ] Stage 5 — PAUSED. Advanced PDF replacement and OCR with BYO Acrobat.
-- [ ] Stage 6 — PAUSED. Spoken DSH builds against functional acceptance.
-- [ ] Stage 7 — PAUSED. Packaged-bytes repeat: cold boot, reconnect, cancel, restart.
+- [ ] **Stages 2-7 — PAUSED** by the 2026-09-07 decision, not cancelled: windows
+  discovery and input takeover; browser navigation and Gmail drafts (Amazon
+  stops at order review); transactional DOCX/XLSX/PDF and OneNote; advanced PDF
+  and OCR with BYO Acrobat; spoken DSH builds; packaged-bytes repeat. They stay
+  paused until the Stage 1 streak above holds.
 
 ## Gates that changed on 2026-09-07 (Phase A of the subtraction plan)
 
@@ -70,27 +62,33 @@ does not count toward or against the streak.
 
 ## NEXT ACTION
 
-Phase A merged (PR #74, `451ba73`). The first real golden-path run happened on
-2026-09-07 and named two prerequisites, both now reported as PREREQ-MISSING by
-the runner instead of UNVERIFIED:
+**Live verification of BUG-414..419 is DONE (2026-09-09): five passed against
+real hardware, the sixth has no key here.** Numbers are in each BUGS.md entry.
+It answers question (a) above — judge the golden path through the operator's
+REAL Brave, not a debug profile. Opening a page there now verifies itself off
+the window title (414), the launcher starts Brave rather than Chrome (415),
+identity survives a reconnect through the real compiled host (416), an ordinal
+addresses the Nth RESULT on a real page (417), and a refusing provider leaves
+every lane on its first real call (419).
 
-1. **No debuggable browser.** Brave was running without
-   `--remote-debugging-port=9222`, so the server withheld all 20 `browser_*`
-   tools before the brain saw them. `scripts/setup-chrome-debug.ps1` launches
-   Chrome or Edge with a SEPARATE profile, which is not the signed-in Brave
-   session Stage 1 names. On `main` there is no path to the operator's own
-   Brave session; that path is the extension work on `codex/windows-operator`.
-2. **Typed turns vanish into Live.** With `VOICE_S2S_ENABLED=true` the server
-   injects a typed utterance into the Gemini Live session (`live.text-injected`)
-   and answers the legacy channel with an empty `done`. The runner cannot
-   observe a spoken reply from that channel.
+**Two things before Stage 1 can be judged, neither of them code:**
 
-In order: (a) decide whether the golden path is judged through the extension
-path (merge `codex/windows-operator` Stage 1 first) or through CDP against Brave
-relaunched with the debug flag; (b) give the runner a way to observe the Live
-path, or run with `VOICE_S2S_ENABLED=false` and say so; (c) read the first real
-line. Streak is still 0.
+1. **Rebuild the native host and reload the extension.** The host registered
+   for Brave points at the installed app's `resources/mythos-browser-host.exe`,
+   built 2026-09-08 — before the 416 fix — so it still strips `instanceId` and
+   would refuse every hello. `node mythos/scripts/build-browser-native-host.js`.
+   Expect exactly one `browser.extension.protocol-mismatch` when the old
+   extension reconnects, none after the reload.
+2. **Decide how the runner sees the Live path** (question (b), unchanged):
+   observe `live.text-injected`, or run `VOICE_S2S_ENABLED=false` and log it.
 
+**Streak is still 0.** Five green component verifications are not one green
+end-to-end run, and nothing in this pass ran the golden path.
+
+**Filed, not fixed:** BUG-420 (a Cerebras model that always 404s stays in three
+lanes — only 401/402/403 are recorded) and BUG-421 (the grammar accepts
+ordinals 1-20; the reveal budget reaches about 6, with zero margin measured).
+BUG-418's provider wire stays unverifiable here: no Anthropic or OpenAI key.
 ## Where the detail lives
 
 - Archive and history: `MYTHOS-IRIS-Synthesis-Plan.md` (roadmap),

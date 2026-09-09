@@ -139,7 +139,13 @@ function createBrowserExtensionBridge({ runtimeDir, allowedExtensionIds = [], bu
     transport.on('stopped', () => { started = false; for (const id of clients.keys()) disconnect(id); });
     security = await transport.start();
     started = true;
-    fs.writeFileSync(path.join(runtimeDir, 'browser-extension-host.json'), JSON.stringify({ protocol: 1, pipeName, allowedExtensionIds }, null, 2));
+    // PROTOCOL, not a literal. Found by reading this file back during BUG-416's
+    // live run on 2026-09-09: the handshake had been bumped to 2 and this copy
+    // of the number still said 1, so the file on disk contradicted the wire it
+    // describes. Nothing reads it today — the C# host takes only pipeName and
+    // allowedExtensionIds — which is precisely why a wrong value here would have
+    // survived indefinitely and misled the next person to add a reader.
+    fs.writeFileSync(path.join(runtimeDir, 'browser-extension-host.json'), JSON.stringify({ protocol: PROTOCOL, pipeName, allowedExtensionIds }, null, 2));
     return getStatus();
   }
   async function stop() {

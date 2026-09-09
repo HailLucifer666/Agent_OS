@@ -45,30 +45,41 @@ function pageTimeoutMs() {
 // cleanup step) can kill any orphan before booting.
 const BROWSER_PID_FILE = path.join(__dirname, '..', '..', '.browser-agent.pid');
 
-// Found live-verifying BUG-029 (2026-07-24, playwright-core 1.61.1): neither
-// accessor below actually yields a process on this version — ctx.browser()
-// returns null for a persistent context, and ctx._browser._process is
-// undefined too — so writeBrowserPidFile silently returned null every time
-// ("browserPid":null in the launch log) and .browser-agent.pid was never
-// written, leaving Start Agent OS.bat's orphan-cleanup step with no PID to
-// check. Fall back to identifying the process by its unique --user-data-dir,
-// the same distinguishing signal the .bat's own provenance check already
-// uses, instead of depending on Playwright-internal accessors.
-function findChromePidByUserDataDir(userDataDir) {
+// Playwright's accessors do not yield a process for a persistent context
+// (BUG-029, 2026-07-24: ctx.browser() is null and ctx._browser._process is
+// undefined), so the launched browser is identified by its unique
+// --user-data-dir instead — the same signal the .bat's provenance check uses.
+//
+// This ran its OWN PowerShell query until 2026-09-09, filtered on
+// `$_.Name -eq 'chrome.exe' -or 'msedge.exe'`, and LIVE-VERIFYING BUG-415 found
+// it blind: BUG-415 made Brave the first launch attempt on a Brave machine, so
+// a real launch produced seven brave.exe processes, "browserPid":null in the
+// log, and no .browser-agent.pid — disarming that file's only consumer, `Start
+// Agent OS.bat`'s orphan reap. BUG-029's exact symptom, reintroduced for the
+// default browser by a fix somewhere else.
+//
+// The repair is a DELETION: browser-process.js already asks this, with the same
+// `--type=` filter and quote escaping, no name filter (so never blind), and a
+// harder guard — isMythosDebugProfile refuses anything but
+// `.../MYTHOS/<x>-debug-profile`, so no wildcard reaches the `-like` and the
+// query cannot be pointed at the operator's real browser. Third copy, only
+// broken one. The name list now only IDENTIFIES a row, never filters the query,
+// and is derived from BROWSER_SUBPATHS via executableIndex() — the mapping whose
+// own comment predicted this: "a hand-written second copy of the same mapping
+// would not be [free], and would fail in the fail-open direction".
+//
+// Null rather than a guess when nothing matches: `--type=` excludes renderers
+// but not the crashpad handler, which also carries --user-data-dir. Returning
+// its pid would be worse than returning none — the .bat's provenance check
+// passes, it tree-kills crashpad, and the orphan survives a reap that reported
+// success.
+function findChromePidByUserDataDir(userDataDir, deps) {
   try {
-    const { execFileSync } = require('child_process');
-    const escaped = userDataDir.replace(/'/g, "''");
-    // Top-level browser process carries --user-data-dir but not --type= (every
-    // renderer/gpu-process/utility child process does carry --type=). Single
-    // quotes only (no -Filter WQL string) — execSync's shell-string form with
-    // nested double quotes silently returned empty output on Windows (cmd.exe
-    // mangles the escaping); execFileSync with an args array bypasses the
-    // shell entirely, same pattern pc-child/index.js already uses to spawn
-    // powershell.exe.
-    const psCmd = `(Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -like '*${escaped}*' -and $_.CommandLine -notlike '*--type=*' } | Select-Object -First 1 -ExpandProperty ProcessId)`;
-    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', psCmd], { timeout: 5000, windowsHide: true }).toString().trim();
-    const pid = parseInt(out, 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : null;
+    const rows = browserProcess.processesForProfile(userDataDir, deps);
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const known = browserTarget.executableIndex();
+    const row = rows.find((r) => known[String(r.name || '').toLowerCase()]);
+    return row && Number.isInteger(row.pid) && row.pid > 0 ? row.pid : null;
   } catch (_) {
     return null;
   }
@@ -761,6 +772,11 @@ module.exports = {
   // so it can be tested with no Playwright, no registry and no browser
   // installed. The launch itself stays untestable here and is named as such.
   planLocalLaunch,
+  // Live-verification finding, same day: the pidfile writer knew two browsers
+  // while the launcher had learned three. Exported so the lookup can be driven
+  // with an injected PowerShell runner and asked the question that matters —
+  // "does a Brave profile yield Brave's pid" — instead of a string assertion.
+  findChromePidByUserDataDir,
   ensureOnline,
   startAutoConnect,    // background CDP auto-connect poller (safe, never launches)
   stopAutoConnect,

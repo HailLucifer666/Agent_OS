@@ -343,11 +343,11 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-09",
+  "generated": "2026-09-10",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7528,
+      "value": 7534,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -365,28 +365,28 @@
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-09"
+      "measuredAt": "2026-09-10"
     },
     "registered": {
       "value": 186,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-09"
+      "measuredAt": "2026-09-10"
     },
     "voiceReachable": {
       "value": 125,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-09"
+      "measuredAt": "2026-09-10"
     },
     "untriaged": {
       "value": 1,
       "label": "untriaged incidents",
       "tone": "fail",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-09-09",
+      "measuredAt": "2026-09-10",
       "stale": false
     }
   },
@@ -5441,14 +5441,14 @@
       {
         "n": 414,
         "shape": "entry",
-        "state": "fixed",
+        "state": "verified",
         "title": "the real-browser route never had an oracle: 33 of 33 opens told the operator \"I cannot confirm the page rendered\" (FIXED 2026-09-09)",
         "detail": {
           "fix": "`open-external-route.js` gains `settleExternalOpen`, which reads the browser own top-level window title back through pc-child `list_windows` after the hand-off -- the same move `from-computer.js` `open_folder` makes against Explorer, bounded poll and all. Three looks, 250ms apart, first match wins, so the whole oracle fits inside the 1500ms ack deadline `open_web` is measured against (BUG-295 counted 44 breaches in one session, and `live-tool-adapter.js` argues `open_web` out of SLOW_TOOLS on the grounds that it is not slow). The title token is DERIVED from the hostname, never a site table: strip `www`, drop the public-suffix label, keep labels of three or more characters that start with a letter, take the longest. `news.google.com` gives `google`, `open.bigmodel.cn` gives `bigmodel`, `google.co.uk` cannot contribute `co`, and an IP address yields nothing so the oracle is skipped rather…"
         },
         "campaign": {
           "disposition": "currently verified",
-          "evidence": "Re-measured before any code was written, and the re-measurement DISPROVED the filed cause: splitting the vault by row shape gives 108 open_web request rows, 33 of them browser:true (the real browser, correctly chosen) and 75 HUD cards of which exactly one is website-shaped. Selection is not broken. What is: 0 of those 33 real-browser opens is verified, because the branch returns straight out of the hand-off while its HUD sibling has had a render ack since BUG-273 B3. Fixed by reading the browser own window title back through pc-child. Consumers: every open_web(browser:true) turn. Remaining evidence: live attended run against a real Brave with pc-child up, not yet possible on this checkout; the oracle cannot see a background tab or a cold start, both stated in code.",
+          "evidence": "Re-measured before any code was written, and the re-measurement DISPROVED the filed cause: splitting the vault by row shape gives 108 open_web request rows, 33 of them browser:true (the real browser, correctly chosen) and 75 HUD cards of which exactly one is website-shaped. Selection is not broken. What is: 0 of those 33 real-browser opens is verified, because the branch returns straight out of the hand-off while its HUD sibling has had a render ack since BUG-273 B3. Fixed by reading the browser own window title back through pc-child. Consumers: every open_web(browser:true) turn. LIVE-VERIFIED 2026-09-09: real pc-child, the operator's own Brave (pid 12400), unverified:false with evidence.oracle window-title and observed \"YouTube - Brave\" in 893ms over three polls. Remaining evidence: the unnamed OS-default route needs Electron's shell.openExternal, so the run used browserName brave, which reaches the identical oracle by a different handoff.",
           "source": "mythos/src/core/effectors/open-external-route.js; mythos/test/bug-414-external-open-oracle.test.js"
         }
       },
@@ -5462,76 +5462,104 @@
         },
         "campaign": {
           "disposition": "currently verified",
-          "evidence": "Measured on this machine before the change: osDefaultBrowser() answers brave (BraveHTML, drivable), resolveLaunchTarget(null) answers brave/os-default, brave and chrome resolve on disk and EDGE IS NOT INSTALLED -- so the hardcoded chrome-then-msedge ladder silently started Chrome, and on a machine without Chrome would have failed outright with Brave sitting installed. The resolver has answered correctly since BUG-407; launchLocal was the one launch site that never asked it. Now derived through planLocalLaunch, with the profile following the browser so Brave is not handed the directory Chrome wrote. Fresh profile KEPT deliberately and now stated in the tool description. Consumers: requireOnline lazy bring-up and every browser tool that reaches it. Remaining evidence: no live launch -- whether Playwright starts Brave by executablePath is unproven here.",
+          "evidence": "Measured on this machine before the change: osDefaultBrowser() answers brave (BraveHTML, drivable), resolveLaunchTarget(null) answers brave/os-default, brave and chrome resolve on disk and EDGE IS NOT INSTALLED -- so the hardcoded chrome-then-msedge ladder silently started Chrome, and on a machine without Chrome would have failed outright with Brave sitting installed. The resolver has answered correctly since BUG-407; launchLocal was the one launch site that never asked it. Now derived through planLocalLaunch, with the profile following the browser so Brave is not handed the directory Chrome wrote. Fresh profile KEPT deliberately and now stated in the tool description. Consumers: requireOnline lazy bring-up and every browser tool that reaches it. LIVE-VERIFIED 2026-09-09: launchLocal returned true in 1147ms, launchedChannel brave, seven brave.exe processes under MYTHOS/brave-debug-profile and zero chrome.exe, closed cleanly with no survivors. The same run found that the fix disarmed BUG-029's orphan reap for Brave (the pid lookup filtered on chrome/msedge), repaired by deleting that query in favour of browser-process.processesForProfile.",
           "source": "mythos/adapters/browser-agent/index.js; mythos/test/bug-415-launch-the-operators-browser.test.js"
         }
       },
       {
         "n": 416,
         "shape": "entry",
-        "state": "fixed",
+        "state": "verified",
         "title": "the bridge issued a new browser identity on every reconnect, so a desktop task could never be resumed (FIXED 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** FIXED 2026-09-09. Six mutation probes across three files, all landed, all fired, no survivors; all three restored by byte copy with matching hashes. Not exercised against a live backend restart with the extension attached -- see the remaining evidence. **The defect, traced through source rather than reproduced** (the desktop operator is not set up on this checkout, and the original entry said so). `hello` minted `randomUUID()` on every connection. The controller persists its target -- `save(id, { target })` in `src/core/desktop/controller.js` -- and on resume calls `browser_video_list` with the browserId inside it. After a backend restart the bridge looks that id up among live clients, does not find it, and answers BROWSER_REQUIRED, \"Choose an observed connected browser\". `observe()` retries three times and blocks with that reason. So the reconnection shipped in `8afc989` res…",
+        "excerpt": "**Status:** FIXED 2026-09-09. Six mutation probes across three files, all landed, all fired, no survivors; all three restored by byte copy with matching hashes. Not exercised against a live backend restart with the extension attached -- see the remaining evidence. LIVE-VERIFIED 2026-09-09 end to end through the real compiled C# host over a real named pipe. **The defect, traced through source rather than reproduced** (the desktop operator is not set up on this checkout, and the original entry said so). `hello` minted `randomUUID()` on every connection. The controller persists its target -- `save(id, { target })` in `src/core/desktop/controller.js` -- and on resume calls `browser_video_list` with the browserId inside it. After a backend restart the bridge looks that id up among live clients, does not find it, and answers BROWSER_REQUIRED, \"Choose an observed connected browser\". `observe()`…",
         "campaign": {
           "disposition": "currently verified",
-          "evidence": "The extension now persists a UUID instance id in chrome.storage.local and sends it behind a protocol bump; the bridge adopts it as browserId, refuses a malformed one, and refuses a SECOND live client claiming the same id while leaving the running session untouched. The first pass of this fix could not have worked: electron/native-browser-host.cs rebuilds hello from a four-field allowlist and stripped instanceId, so production would have refused every connection while every unit test stayed green -- only the compiled-host test saw it. Controller rigs and the reconnect fixture were tightened in the same change, so resume tests no longer pass around the bridge. Consumers: desktop_task_control resume and every leaf that re-observes after a restart. Remaining evidence: no live backend restart with the extension attached; that needs the attended Brave setup this checkout does not have.",
+          "evidence": "The extension now persists a UUID instance id in chrome.storage.local and sends it behind a protocol bump; the bridge adopts it as browserId, refuses a malformed one, and refuses a SECOND live client claiming the same id while leaving the running session untouched. The first pass of this fix could not have worked: electron/native-browser-host.cs rebuilds hello from a four-field allowlist and stripped instanceId, so production would have refused every connection while every unit test stayed green -- only the compiled-host test saw it. Controller rigs and the reconnect fixture were tightened in the same change, so resume tests no longer pass around the bridge. Consumers: desktop_task_control resume and every leaf that re-observes after a restart. LIVE-VERIFIED 2026-09-09 through the freshly compiled C# host over a real named pipe: browserId equals the extension's own instanceId, survives kill-and-reconnect, a duplicate id is refused with the first client untouched, and protocol 1 and a malformed id are both refused at the host. Remaining evidence: no real Brave with the extension attached, and the INSTALLED native host predates this fix, so shipping needs it rebuilt and the extension reloaded.",
           "source": "mythos/adapters/browser-extension/index.js; mythos/browser-extension/background.js; electron/native-browser-host.cs"
         }
       },
       {
         "n": 417,
         "shape": "entry",
-        "state": "fixed",
+        "state": "verified",
         "title": "an ordinal addressed the Nth VISIBLE card while the tool promised result 1 through 20 (FIXED 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** FIXED 2026-09-09. Seven mutation probes across the engine and the controller, all landed, all fired, no survivors. Not run against a live YouTube page -- see the remaining evidence. **The defect.** `snapshot()` ranked a card only if `visible(card)` AND `refs.has(el)`, and `refs` is filled by the targets loop above it, which also requires `visible()`. The item list was therefore viewport-only and `ordinal` indexed into it. A search page shows roughly four or five cards, so \"play the sixth result\" polled until the observation budget ran out and blocked -- honestly, but for a reason the operator reads as a bug, because `desktop_task_start` advertises result 1 through 20. And on an already-scrolled page \"the second video\" selected the second card CURRENTLY IN VIEW, which might be result seven; verification could never catch that, because the expected identity is derived from the…",
+        "excerpt": "**Status:** FIXED 2026-09-09. Seven mutation probes across the engine and the controller, all landed, all fired, no survivors. Not run against a live YouTube page -- see the remaining evidence. LIVE-VERIFIED 2026-09-09 on a real YouTube search page -- with a measured margin of zero, see BUG-421. **The defect.** `snapshot()` ranked a card only if `visible(card)` AND `refs.has(el)`, and `refs` is filled by the targets loop above it, which also requires `visible()`. The item list was therefore viewport-only and `ordinal` indexed into it. A search page shows roughly four or five cards, so \"play the sixth result\" polled until the observation budget ran out and blocked -- honestly, but for a reason the operator reads as a bug, because `desktop_task_start` advertises result 1 through 20. And on an already-scrolled page \"the second video\" selected the second card CURRENTLY IN VIEW, which might b…",
         "campaign": {
           "disposition": "currently verified",
-          "evidence": "snapshot() now ranks every non-ad card in the region, giving an off-screen one a null ref plus its visible flag and top offset, and the controller scrolls at most four times to reveal a requested card, re-observing each time and stopping early once the list stops growing. A null ref is unclickable by shape: actOnNode resolves refs from a node map that only holds visible elements and separately refuses any target outside the viewport. The engine ranking had NO direct coverage before this -- browser-extension-engine.test.js stubs Runtime.evaluate, so snapshot never ran against a DOM there. Consumers: desktop_task_start ordinal selection. Remaining evidence: no live YouTube page; card counts above and below the fold are modelled, not measured.",
+          "evidence": "snapshot() now ranks every non-ad card in the region, giving an off-screen one a null ref plus its visible flag and top offset, and the controller scrolls at most four times to reveal a requested card, re-observing each time and stopping early once the list stops growing. A null ref is unclickable by shape: actOnNode resolves refs from a node map that only holds visible elements and separately refuses any target outside the viewport. The engine ranking had NO direct coverage before this -- browser-extension-engine.test.js stubs Runtime.evaluate, so snapshot never ran against a DOM there. Consumers: desktop_task_start ordinal selection. LIVE-VERIFIED 2026-09-09 on a real YouTube search page at 1280x800: six results ranked at first paint against two visible, off-screen cards carrying a videoId with a null ref, and result six clickable after four scrolls with its videoId unchanged across all five snapshots. Remaining evidence: the margin is zero — four scrolls is the whole budget — and the grammar accepts up to twentieth, filed as BUG-421.",
           "source": "mythos/browser-extension/engine.js; mythos/src/core/desktop/controller.js; mythos/test/bug-417-rank-below-the-fold.test.js"
         }
       },
       {
         "n": 418,
         "shape": "entry",
-        "state": "fixed",
+        "state": "verified",
         "title": "a buyer holding an Anthropic or OpenAI key had to pay OpenRouter to use it (FIXED 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** FIXED 2026-09-09. Seven mutation probes, all landed, all fired, no survivors; all three sources restored by byte copy with matching hashes. Neither provider has ever completed a real call -- see the remaining evidence. **The premise, restated because it is the reason this is a product gap and not a nice-to-have.** Free tiers are the DEVELOPMENT constraint: the operator builds on free keys because paid calls are not affordable while building. The shipped product is bring-your-own-key with any provider. `mythos/providers/` held google, mistral, groq, nim, cerebras, ollama, zcode and openrouter -- so a buyer with an Anthropic or OpenAI key had to open an OpenRouter account and pay its margin to use a key they already owned. **The cost is asymmetric, and that shapes the whole fix.** OpenAI speaks exactly the protocol `openai-compat.js` was generalised FROM, so `providers/openai.j…",
+        "excerpt": "**Status:** FIXED 2026-09-09. Seven mutation probes, all landed, all fired, no survivors; all three sources restored by byte copy with matching hashes. Neither provider has ever completed a real call -- see the remaining evidence. Degradation half LIVE-VERIFIED 2026-09-09; the provider wire remains unverifiable on this machine. **The premise, restated because it is the reason this is a product gap and not a nice-to-have.** Free tiers are the DEVELOPMENT constraint: the operator builds on free keys because paid calls are not affordable while building. The shipped product is bring-your-own-key with any provider. `mythos/providers/` held google, mistral, groq, nim, cerebras, ollama, zcode and openrouter -- so a buyer with an Anthropic or OpenAI key had to open an OpenRouter account and pay its margin to use a key they already owned. **The cost is asymmetric, and that shapes the whole fix.**…",
         "campaign": {
           "disposition": "currently verified",
-          "evidence": "providers/openai.js is a config entry over the existing openai-compat factory; providers/anthropic.js is its own provider because the Messages API differs in five ways that each break that factory, and each one fails QUIETLY -- reading choices[0].delta.content off an Anthropic stream returns an empty string as a SUCCESS. Both head the six text-shaped lanes via BYO_PREMIUM, are inert without their key, and are documented in .env.example. Measured after the change: chainFor(build) and chainFor(simple) are byte-identical on this machine, because neither key is set here. Consumers: every brain lane and any buyer supplying their own key. Remaining evidence: no key for either provider exists on this machine, so neither has ever completed a real call -- the wire shape is proven against a loopback HTTP server, not against the vendors.",
+          "evidence": "providers/openai.js is a config entry over the existing openai-compat factory; providers/anthropic.js is its own provider because the Messages API differs in five ways that each break that factory, and each one fails QUIETLY -- reading choices[0].delta.content off an Anthropic stream returns an empty string as a SUCCESS. Both head the six text-shaped lanes via BYO_PREMIUM, are inert without their key, and are documented in .env.example. Measured after the change: chainFor(build) and chainFor(simple) are byte-identical on this machine, because neither key is set here. Consumers: every brain lane and any buyer supplying their own key. LIVE 2026-09-09, degradation half only: BYO_PREMIUM heads the six text lanes and not vision or embed, neither provider reaches any built chain without a key, and each refuses by naming its missing key rather than crashing or answering empty. Remaining evidence: no key for either provider exists on this machine, so neither has ever completed a real call -- the wire shape is proven against a loopback HTTP server, not against the vendors.",
           "source": "mythos/providers/anthropic.js; mythos/providers/openai.js; mythos/src/core/brain/lanes.default.js"
         }
       },
       {
         "n": 419,
         "shape": "entry",
-        "state": "fixed",
+        "state": "verified",
         "title": "the liveness probe read a free catalog, so a Cerebras account that refuses every call was reported alive and held the last rung of every lane (FIXED 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** FIXED 2026-09-09. Five mutation probes across two files, all landed, all fired, no survivors; both sources restored by byte copy with matching hashes. **Measured live before writing anything, and it is worse than the ticket said.** ``` registry.getStatus() -> cerebras: { configured: true, aliveModels: 3 } chainFor(build) -> [mistral x3, { cerebras, gpt-oss-120b }] chainFor(simple) -> [mistral, google, groq, { cerebras, gemma-4-31b }] ``` The original finding was \"nothing outside a source comment says so\". True, and incomplete. Cerebras was not merely unreported -- it was reported ALIVE, and therefore still held the last cloud rung of every lane, so every exhausted fallback walked into a provider that refuses every call. **Three failures stacked, and the third is why nine dated comments never became a fix.** 1. **Gate E.** `probeCerebras()` fetches `/models`. A catalog listing…",
+        "excerpt": "**Status:** FIXED 2026-09-09. Five mutation probes across two files, all landed, all fired, no survivors; both sources restored by byte copy with matching hashes. LIVE-VERIFIED 2026-09-09 against the real Cerebras account -- and the premise was sharpened, see BUG-420. **Measured live before writing anything, and it is worse than the ticket said.** ``` registry.getStatus() -> cerebras: { configured: true, aliveModels: 3 } chainFor(build) -> [mistral x3, { cerebras, gpt-oss-120b }] chainFor(simple) -> [mistral, google, groq, { cerebras, gemma-4-31b }] ``` The original finding was \"nothing outside a source comment says so\". True, and incomplete. Cerebras was not merely unreported -- it was reported ALIVE, and therefore still held the last cloud rung of every lane, so every exhausted fallback walked into a provider that refuses every call. **Three failures stacked, and the third is why nine…",
         "campaign": {
           "disposition": "currently verified",
-          "evidence": "Measured live 2026-09-09, and it is worse than filed: registry.getStatus() reported cerebras aliveModels 3 and chainFor(build)/chainFor(simple) both still ENDED on a cerebras rung. The liveness probe fetches /models, a free catalog that answers 200 on an unbilled account, while the 402 only comes from /chat/completions -- gate E, a proxy admitting the value that breaks you. 402 was also unclassified in chain.js (which knows 429, 5xx, network only), so no cooldown and no breaker tick were ever taken, and the comment deferring auth failures to isAvailable() named a mechanism that did not exist. Now recorded from real calls in provider-health.js, consulted by isProviderAlive and reported on read_status. Consumers: every brain lane and read_status. Remaining evidence: the 402 itself has not been re-observed this session; the recorder is proven against synthetic errors, not against a live Cerebras refusal.",
+          "evidence": "Measured live 2026-09-09, and it is worse than filed: registry.getStatus() reported cerebras aliveModels 3 and chainFor(build)/chainFor(simple) both still ENDED on a cerebras rung. The liveness probe fetches /models, a free catalog that answers 200 on an unbilled account, while the 402 only comes from /chat/completions -- gate E, a proxy admitting the value that breaks you. 402 was also unclassified in chain.js (which knows 429, 5xx, network only), so no cooldown and no breaker tick were ever taken, and the comment deferring auth failures to isAvailable() named a mechanism that did not exist. Now recorded from real calls in provider-health.js, consulted by isProviderAlive and reported on read_status. Consumers: every brain lane and read_status. LIVE-VERIFIED 2026-09-09 against the real key: gpt-oss-120b returned 402 Payment Required in 284ms, cerebras went from 6 of 8 lanes to 0, and read_status carried the remedy in plain English. The same run sharpened the premise: gemma-4-31b answers 404, not 402, so the three lanes that use it keep a dead rung — filed as BUG-420.",
           "source": "mythos/src/core/brain/provider-health.js; mythos/src/core/brain/registry.js; mythos/src/core/brain/chain.js"
+        }
+      },
+      {
+        "n": 420,
+        "shape": "entry",
+        "state": "open",
+        "title": "a model that always 404s stays in the lane forever, because only account-level refusals are recorded (OPEN, found live 2026-09-09)",
+        "detail": {},
+        "excerpt": "**Status:** OPEN. Found while live-verifying BUG-419; not fixed there on purpose. **Measured 2026-09-09** against the operator's real Cerebras key: `GET /models` answers 200 and lists `gemma-4-31b`, while `POST /chat/completions` for that model answers `404 Model does not exist or you do not have access to it`. `gemma-4-31b` is the cerebras rung in the voice, simple and memory lanes, so those three lanes attempt a call that cannot succeed on every session, and the liveness probe -- which reads the catalog -- will keep saying it is alive. **Why BUG-419 does not cover it, deliberately.** `ACCOUNT_STATUSES` is 401/402/403 only. A 404 says something about one MODEL, not about the account, and killing a provider outright for a bad model id would remove rungs that work. The narrowing is right; the consequence is that a permanently-404 model has no recorder at all. **The shape a fix probably ta…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "Found while live-verifying BUG-419 and deliberately not fixed there. Cerebras GET /models answers 200 and lists gemma-4-31b; POST /chat/completions for it answers 404 \"Model does not exist or you do not have access to it\". That model is the cerebras rung in the voice, simple and memory lanes, so those three attempt a call that cannot succeed, every session. ACCOUNT_STATUSES is 401/402/403 only, and narrowing it that way is correct — a 404 is about one MODEL, and killing a provider for a bad model id would remove working rungs — so a permanently-404 model has no recorder at all. Consumers: three brain lanes. Two directions in the entry: replace the model in the lane table (helps this operator now), or record health per provider AND model (what a buyer whose key goes bad later needs).",
+          "source": "mythos/src/core/brain/provider-health.js; mythos/src/core/brain/registry.js; mythos/src/core/brain/lanes.default.js"
+        }
+      },
+      {
+        "n": 421,
+        "shape": "entry",
+        "state": "open",
+        "title": "the ordinal grammar accepts 1 through 20 and the reveal budget reaches about 6 (OPEN, found live 2026-09-09)",
+        "detail": {},
+        "excerpt": "**Status:** OPEN. Found while live-verifying BUG-417; not widened there on purpose. **Measured 2026-09-09** on a real YouTube search page in Brave at 1280x800. Cards ranked: 6 at first paint, then 6, 8, 11, 14 after each of four 600px scrolls. Result six gained a clickable ref on the FOURTH scroll; `REVEAL_SCROLLS` is 4. So the sixth result succeeds with zero margin, and `ORDINAL_WORDS` in `src/core/desktop/intent.js` accepts up to \"twentieth\" -- ordinals past roughly the eighth cannot be reached inside the budget at all, and will block with \"cannot be clicked\". **Blocking is honest, which is why this is not urgent** -- nothing clicks the wrong video. But the tool promises a range it cannot serve, and a promise a system cannot keep is the shape of BUG-417 itself. **Do NOT just raise the number.** The budget exists so a page that never reveals a card stops instead of scrolling forever. Tw…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "Found while live-verifying BUG-417 and deliberately not widened there. Measured on a real YouTube search page at 1280x800: cards ranked 6, 6, 8, 11, 14 across four 600px scrolls, and result six became clickable on the FOURTH — REVEAL_SCROLLS is 4, so the margin is zero. ORDINAL_WORDS accepts first through twentieth, and anything past roughly the eighth cannot be reached inside the budget. It blocks honestly rather than clicking the wrong video, which is why this is filed rather than hotfixed. Do not simply raise the number: stop on \"the ranked count stopped growing\" instead, or bound the grammar to what a page can serve and say so in the refusal. One page at one viewport size is one sample.",
+          "source": "mythos/src/core/desktop/controller.js; mythos/src/core/desktop/intent.js; mythos/browser-extension/engine.js"
         }
       }
     ],
     "counts": {
-      "verified": 77,
-      "fixed": 178,
-      "open": 7,
+      "verified": 82,
+      "fixed": 173,
+      "open": 9,
       "coded": 3,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 268,
+    "total": 270,
     "openDeclared": [
       274,
-      275
+      275,
+      420,
+      421
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
