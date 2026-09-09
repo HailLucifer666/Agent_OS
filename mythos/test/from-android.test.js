@@ -40,11 +40,12 @@ describe('from-android.js — ships 14 registered effectors (13 rows in the corr
   // dual-tier row is expanded into its two constituent tool names. Dropping
   // phone_flashlight_toggle removes exactly one row/one effector from the
   // original 14-row/15-effector table, landing here at 13 rows / 14 effectors.
-  it('registers exactly 14 tool effectors', () => {
-    assert.equal(TOOLS.length, 14);
+  it('registers exactly 15 tool effectors (14 + phone_torch, 2026-09-08)', () => {
+    assert.equal(TOOLS.length, 15);
   });
-  it('never registers phone_flashlight_toggle (no reliable stock command exists — AD-4)', () => {
+  it('the flashlight ships as phone_torch (tile read-back oracle measured 2026-09-08), never as a blind phone_flashlight_toggle', () => {
     assert.equal(TOOLS.some((t) => t.name === 'phone_flashlight_toggle'), false);
+    assert.equal(TOOLS.some((t) => t.name === 'phone_torch'), true);
   });
   it('never registers a raw phone_shell (would be a de facto T4 bypass of the tier table)', () => {
     assert.equal(TOOLS.some((t) => t.name === 'phone_shell'), false);

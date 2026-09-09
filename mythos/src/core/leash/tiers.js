@@ -267,6 +267,7 @@ const TIER_TABLE = {
   'phone_wifi_toggle':      2,
   'phone_bluetooth_toggle': 2,
   'phone_hotspot_toggle':   2,
+  'phone_torch':            2,  // 2026-09-08 — flashlight via the quick-settings tile; same reversible radio-toggle class
   'phone_app_launch':       2,
   'phone_app_close':        2,
 

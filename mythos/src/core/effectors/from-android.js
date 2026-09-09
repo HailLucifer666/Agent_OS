@@ -6,12 +6,22 @@
 // expects — but backed by adapters/android-child (per-device queues over
 // one-shot adb calls) instead of pc-child's persistent PowerShell daemon.
 //
-// SHIPS 13 TOOLS, NOT 14. `phone_flashlight_toggle` is deliberately NOT
-// registered — the plan's own tool table concedes "no reliable stock adb
+// FLASHLIGHT: `phone_flashlight_toggle` was deliberately NOT registered for
+// two months — the plan's own tool table conceded "no reliable stock adb
 // command exists", and a tool that always fails pollutes both
 // capabilities.md and the Live functionDeclarations list, where model
-// accuracy degrades with tool count (AD-4). If a real capability probe ever
-// exists, register it then — not before.
+// accuracy degrades with tool count (AD-4). The header used to say "if a real
+// capability probe ever exists, register it then — not before." It exists as
+// of 2026-09-08, measured on a real device (OnePlus 7T, Android 12): there is
+// still no `svc`/`cmd` for the torch, and `cmd statusbar click-tile` only
+// reaches third-party TileServices, but the quick-settings Flashlight tile is
+// an accessibility Switch (content-desc "Torch" on OxygenOS, "Flashlight" on
+// AOSP) whose `checked` attribute IS a read-back oracle. So `phone_torch`
+// below drives it the way a finger does — expand quick settings, read the
+// tile, tap it only if it is not already in the requested state, read it
+// again, collapse — and reports the tile state it observed, never the tap.
+// The blind spot is honest and stated in the tool description: the oracle is
+// the tile, not the LED, so a device whose tile lies would be believed.
 //
 // `phone_whatsapp_send` RESOLUTION: no physical phone was available to
 // live-verify a tap primitive on, and none of these 13 tools taps or types
@@ -267,10 +277,12 @@ function delay(ms) {
 // permission error), the caller must still see that mismatch — not the
 // unreadable attempt's `verified:false`, which would smuggle a contradicted
 // request through as "dispatched-but-unverified" instead of a real failure.
-async function observeState(readFn, want) {
+async function observeState(readFn, want, attempts, delayMs) {
+  const maxAttempts = attempts || READBACK_ATTEMPTS;
+  const pause = delayMs || READBACK_DELAY_MS;
   let observed = { verified: false, reason: 'read-back never ran.' };
-  for (let attempt = 0; attempt < READBACK_ATTEMPTS; attempt++) {
-    if (attempt > 0) await delay(READBACK_DELAY_MS);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) await delay(pause);
     const result = await readFn();
     if (result.verified && result.on === want) return result;
     if (result.verified || !observed.verified) observed = result;
@@ -367,6 +379,107 @@ async function phone_hotspot_toggle({ deviceId, state }) {
   return ok({ hotspot: s, note: 'Best-effort — no single stock command is guaranteed across OEMs/Android versions.' });
 }
 
+// ---- phone_torch: the quick-settings tile as both actuator and oracle ----
+//
+// Measured 2026-09-08 on a OnePlus 7T (Android 12 / SDK 31): `cmd statusbar
+// expand-settings` opens the shade; `uiautomator dump` then lists the tile as
+//   <node class="android.widget.Switch" content-desc="Torch" checkable="true"
+//         checked="false" bounds="[786,349][1017,588]" .../>
+// (AOSP names it "Flashlight"); one `input tap` at the tile's centre flipped
+// checked to "true" and the LED came on; `cmd statusbar collapse` closes the
+// shade. Timing matters: the dump read an EMPTY tree when taken ~1.5 s after
+// expanding and a complete one at 2 s, so the shade is given TORCH_SETTLE_MS
+// before every read and the read-back is retried on its own cadence.
+//
+// The oracle is the tile's `checked` attribute, not the LED. A device whose
+// tile does not exist (removed from quick settings, or an OEM with no torch
+// tile) fails BEFORE any tap — tapping blind at a remembered coordinate is
+// how a "torch" tool turns on Do Not Disturb.
+const TORCH_TILE_RE = /^(torch|flashlight)\b/i;
+const TORCH_DUMP_PATH = '/sdcard/mythos-qs-dump.xml';
+// One mutable object rather than three consts so the unit tests can zero the
+// waits (a 2 s settle times four read-backs is 10 s per failing-path test).
+// Production never writes to it.
+const TORCH_TIMING = { settleMs: 2000, readbackAttempts: 4, readbackDelayMs: 600 };
+
+function parseTorchTile(xml) {
+  const nodes = String(xml || '').match(/<node\b[^>]*>/g) || [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    const desc = /content-desc="([^"]*)"/.exec(n);
+    if (!desc || !TORCH_TILE_RE.test(desc[1])) continue;
+    if (!/checkable="true"/.test(n)) continue;
+    const checked = /checked="(true|false)"/.exec(n);
+    const bounds = /bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/.exec(n);
+    if (!checked || !bounds) continue;
+    return {
+      on: checked[1] === 'true',
+      // floor, not round: (786+1017)/2 = 901.5 and the tap that was measured to work landed on 901,468
+      x: Math.floor((Number(bounds[1]) + Number(bounds[3])) / 2),
+      y: Math.floor((Number(bounds[2]) + Number(bounds[4])) / 2),
+      label: desc[1],
+    };
+  }
+  return null;
+}
+
+function validateTorchState(state) {
+  const s = String(state || '').trim().toLowerCase();
+  if (s === 'on' || s === 'enable') return 'on';
+  if (s === 'off' || s === 'disable') return 'off';
+  return null;
+}
+
+// One remote command, fixed literal path (never operator-supplied), so a
+// single adb round-trip returns the tree and leaves nothing behind.
+async function readTorchTile(serial) {
+  await delay(TORCH_TIMING.settleMs);
+  const res = await shellDelegate(serial,
+    'uiautomator dump ' + TORCH_DUMP_PATH + ' >/dev/null 2>&1; cat ' + TORCH_DUMP_PATH + '; rm -f ' + TORCH_DUMP_PATH,
+    { timeoutMs: 15000 });
+  if (!res.ok) return { verified: false, reason: 'quick-settings dump failed: ' + String(res.result) };
+  const tile = parseTorchTile(res.result.output);
+  if (!tile) return { verified: false, reason: 'no Flashlight/Torch tile found in the expanded quick settings.' };
+  return { verified: true, on: tile.on, tile: tile };
+}
+
+async function phone_torch({ deviceId, state }) {
+  const devErr = checkDevice(deviceId);
+  if (devErr) return devErr;
+  const s = validateTorchState(state);
+  if (!s) return fail('state must be "on" or "off".');
+  const want = s === 'on';
+
+  const opened = await shellDelegate(deviceId, 'cmd statusbar expand-settings');
+  if (!opened.ok) return opened;
+  try {
+    const before = await readTorchTile(deviceId);
+    if (!before.verified) {
+      // Nothing was tapped, so nothing changed: this is a plain failure with
+      // the cause, not an "unverified" — there is no dispatched action to be
+      // unsure about.
+      return fail('Could not read the torch tile, so nothing was tapped: ' + before.reason);
+    }
+    if (before.on === want) {
+      return ok({ torch: s, verified: true, changed: false, observed: 'tile "' + before.tile.label + '" already checked=' + before.on });
+    }
+    const tapped = await shellDelegate(deviceId, 'input tap ' + before.tile.x + ' ' + before.tile.y);
+    if (!tapped.ok) return tapped;
+    const after = await observeState(function() { return readTorchTile(deviceId); }, want,
+      TORCH_TIMING.readbackAttempts, TORCH_TIMING.readbackDelayMs);
+    if (!after.verified) return ok(unverified('torch', after.reason));
+    if (after.on !== want) {
+      return fail('Tapped the torch tile to turn it ' + s + ', but it still reads checked=' + after.on +
+        ' — the change did not take effect.');
+    }
+    return ok({ torch: s, verified: true, changed: true, observed: 'tile "' + after.tile.label + '" checked=' + after.on });
+  } finally {
+    // Always put the shade back, success or not — a phone left with quick
+    // settings open is the kind of side effect nobody reports.
+    await shellDelegate(deviceId, 'cmd statusbar collapse');
+  }
+}
+
 async function phone_app_launch({ deviceId, packageName }) {
   const devErr = checkDevice(deviceId);
   if (devErr) return devErr;
@@ -438,9 +551,10 @@ async function phone_file_push({ deviceId, localPath, remotePath }) {
 }
 
 // ---- tool catalog ----
-// 13 tools. phone_flashlight_toggle deliberately NOT registered — see file
-// header. phone_shell deliberately NOT registered — a raw shell tool would
-// be a de facto T4 bypass of the entire tier table.
+// 15 tools. phone_torch is the flashlight, registered 2026-09-08 once a real
+// read-back oracle was measured — see file header. phone_shell deliberately
+// NOT registered — a raw shell tool would be a de facto T4 bypass of the
+// entire tier table.
 
 const TOOLS = [
   { name: 'phone_list_devices', description: 'List paired/connected Android devices with their serial, model, and authorization state.', params: {}, danger: false, fn: phone_list_devices, needs_result: true },
@@ -453,6 +567,7 @@ const TOOLS = [
   { name: 'phone_wifi_toggle', description: 'Enable or disable WiFi on the phone, then read the state back and report what was actually observed. If the state cannot be read back, reports the command as dispatched-but-unverified rather than as success.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - enable|disable' }, danger: false, fn: phone_wifi_toggle, needs_result: true },
   { name: 'phone_bluetooth_toggle', description: 'Enable or disable Bluetooth on the phone, then read the state back and report what was actually observed. If the state cannot be read back, reports the command as dispatched-but-unverified rather than as success.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - enable|disable' }, danger: false, fn: phone_bluetooth_toggle, needs_result: true },
   { name: 'phone_hotspot_toggle', description: 'Best-effort enable or disable the phone\'s WiFi hotspot. Not guaranteed to work on every device — no single stock command covers all OEMs.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - enable|disable' }, danger: false, fn: phone_hotspot_toggle },
+  { name: 'phone_torch', description: 'Turn the phone\'s flashlight (torch) on or off by tapping its quick-settings tile, then read the tile state back and report what was observed. Fails before tapping if no Flashlight/Torch tile exists in quick settings. The oracle is the tile, not the LED.', params: { deviceId: 'string - device serial from phone_list_devices', state: 'string - on|off' }, danger: false, fn: phone_torch, needs_result: true },
   { name: 'phone_app_launch', description: 'Launch an app on the phone by its Android package name, then confirm a process for it is actually running. If that cannot be checked, reports the launch as dispatched-but-unverified rather than as success.', params: { deviceId: 'string - device serial from phone_list_devices', packageName: 'string - Android package name, e.g. com.whatsapp' }, danger: false, fn: phone_app_launch, needs_result: true },
   { name: 'phone_app_close', description: 'Force-stop an app on the phone by its Android package name, then confirm no process for it is left running. If that cannot be checked, reports the close as dispatched-but-unverified rather than as success.', params: { deviceId: 'string - device serial from phone_list_devices', packageName: 'string - Android package name' }, danger: false, fn: phone_app_close, needs_result: true },
   { name: 'phone_file_pull', description: 'Copy a file from the phone to this PC. Creates or OVERWRITES the destination file with phone-side content — same risk class as write_file.', params: { deviceId: 'string - device serial from phone_list_devices', remotePath: 'string - source path on the phone', localPath: 'string - destination path on this PC' }, danger: true, fn: phone_file_pull, needs_result: true },
@@ -480,6 +595,9 @@ module.exports = {
   phone_wifi_toggle: phone_wifi_toggle,
   phone_bluetooth_toggle: phone_bluetooth_toggle,
   phone_hotspot_toggle: phone_hotspot_toggle,
+  phone_torch: phone_torch,
+  parseTorchTile: parseTorchTile, // exported for unit tests only
+  TORCH_TIMING: TORCH_TIMING,     // exported so unit tests can zero the waits; production never writes it
   phone_app_launch: phone_app_launch,
   phone_app_close: phone_app_close,
   phone_file_pull: phone_file_pull,

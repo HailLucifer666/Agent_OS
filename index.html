@@ -361,7 +361,7 @@
       "measuredAt": "2026-09-08"
     },
     "withheld": {
-      "value": 61,
+      "value": 52,
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
@@ -1358,12 +1358,13 @@
         "phone_wifi_toggle",
         "phone_bluetooth_toggle",
         "phone_hotspot_toggle",
+        "phone_torch",
         "phone_app_launch",
         "phone_app_close",
         "phone_file_pull",
         "phone_file_push"
       ],
-      "note": "FIXED since this audit. adb WAS installed all along - the adapter just looked for it on PATH while the installer put it project-local, and doctor.js resolved it the other way and reported 'No gaps'. The adapter now shares the installer's resolver. No handset is currently attached, so the verbs are reachable but unproven end-to-end.",
+      "note": "FIXED since this audit. adb WAS installed all along - the adapter just looked for it on PATH while the installer put it project-local, and doctor.js resolved it the other way and reported 'No gaps'. The adapter now shares the installer's resolver. 2026-09-08: a handset (Android 12) was attached over USB for the first time; phone_torch was added and live-verified against it (quick-settings tile read-back), and the whole phone_* group moved onto the voice allowlist. The other verbs remain unproven end-to-end on hardware.",
       "ev": "Measured 2026-08-26: findInstalledAdb() -> \"\u003crepo>\\Android Platform Tools\\platform-tools\\adb.exe\", spawn OK, \"Android Debug Bridge version 1.0.41\". Live manifest: \"android-child: ONLINE\". \"adb devices\" returns an empty list - no device plugged in. (BUG-360 (b))",
       "ok": 0,
       "f": 0

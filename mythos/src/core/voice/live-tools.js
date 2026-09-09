@@ -137,6 +137,17 @@ const DEFAULT_ALLOWLIST = [
   // "show desktop" / "minimize everything" — same window-management verb family,
   // and the only tool that does it in one call.
   'show_desktop',
+  // Android bridge (Task 10). Sat on VOICE_ALLOWLIST_EXEMPT for two months as
+  // "not yet part of the curated voice surface", which was honest while no
+  // phone had ever been attached to a running MYTHOS. 2026-09-08: a OnePlus 7T
+  // was attached over USB, the operator said "switch on the flash" by voice,
+  // and the model answered that it had no such tool — TRUE for every phone_*
+  // tool, because none of them was declared. The group moves together, as its
+  // old exempt comment promised; tool-capability.js still withholds all of it
+  // whenever no device is attached, so an install without a phone sees nothing.
+  'phone_list_devices','phone_screenshot','phone_notifications','phone_contacts_search',
+  'phone_app_launch','phone_app_close','phone_wifi_toggle','phone_bluetooth_toggle','phone_hotspot_toggle',
+  'phone_torch',
   // open_folder's own description says it "is the ONLY way to open a folder —
   // never pass a path to launch_app". launch_app is reachable and this was not,
   // so that instruction pointed at a tool the model could not call: the BUG-099
@@ -343,11 +354,8 @@ const VOICE_ALLOWLIST_EXEMPT = [
   'mcp_list_servers','mcp_list_tools',
   // Open Knowledge Format bundle tools -- not a spoken verb.
   'okf_list','okf_import','okf_export',
-  // Android bridge (Task 10, step 6) -- debugging/status reads AND device
-  // controls for an optional adapter, not yet part of the curated voice surface.
-  // The whole group moves together the day the phone adapter is curated in.
-  'phone_list_devices','phone_screenshot','phone_notifications','phone_contacts_search',
-  'phone_app_launch','phone_app_close','phone_wifi_toggle','phone_bluetooth_toggle','phone_hotspot_toggle',
+  // Android bridge: the phone_* group moved to DEFAULT_ALLOWLIST on 2026-09-08
+  // (see its entry there). Nothing phone-related stays exempt.
   // Artifact generation (image/deck/pdf/spreadsheet) -- long-running producers
   // with their own HUD/Forge surface and their own artifact plumbing; a spoken
   // "make me a deck" belongs to a goal/build flow, not a one-shot Live call.

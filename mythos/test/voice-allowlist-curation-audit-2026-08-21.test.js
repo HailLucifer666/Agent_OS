@@ -65,8 +65,20 @@ const STILL_WITHHELD = {
   generate_deck: 'long-running producer with its own Forge/HUD surface',
   index_project: 'zero calls ever; opt-in power feature with its own UI',
   search_code: 'zero calls ever; opt-in power feature with its own UI',
-  phone_screenshot: 'adb absent on this machine — capability-gated anyway',
+  // phone_screenshot left this list 2026-09-08: its reason ("adb absent on this
+  // machine") stopped being true when a OnePlus 7T was attached over USB and the
+  // operator asked for the torch by voice. The whole phone_* group is promoted
+  // below; tool-capability.js still withholds it whenever no device is attached.
 };
+
+// Promoted 2026-09-08 (phone attached, live-measured): the android bridge group
+// that live-tools.js's exempt comment always said "moves together the day the
+// phone adapter is curated in". phone_torch is new the same day.
+const PROMOTED_PHONE_GROUP = [
+  'phone_list_devices', 'phone_screenshot', 'phone_notifications', 'phone_contacts_search',
+  'phone_app_launch', 'phone_app_close', 'phone_wifi_toggle', 'phone_bluetooth_toggle', 'phone_hotspot_toggle',
+  'phone_torch',
+];
 
 describe('voice allowlist curation (2026-08-21 capability audit)', () => {
   it('the lists parsed and are non-trivial (negative control)', () => {
@@ -93,6 +105,13 @@ describe('voice allowlist curation (2026-08-21 capability audit)', () => {
       assert.ok(!exempt.has(name), name + ' must no longer be listed as exempt');
     });
   }
+
+  it('the phone_* group moves together (2026-09-08): every member reachable, none still exempt', () => {
+    const missing = PROMOTED_PHONE_GROUP.filter((n) => !allow.has(n));
+    const stillExempt = PROMOTED_PHONE_GROUP.filter((n) => exempt.has(n));
+    assert.deepEqual(missing, [], 'phone group partially promoted — missing from DEFAULT_ALLOWLIST: ' + JSON.stringify(missing));
+    assert.deepEqual(stillExempt, [], 'phone group members left on the exempt list: ' + JSON.stringify(stillExempt));
+  });
 
   // The file's own doctrine, stated in the exempt list: "promoting one alone is
   // what creates the gaps this file documents." The file-management verbs are
