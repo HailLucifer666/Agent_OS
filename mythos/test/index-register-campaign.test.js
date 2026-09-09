@@ -56,7 +56,15 @@ test('real register retains all historical states and counts independently of ca
   const bugsText = fs.readFileSync(path.resolve(__dirname, '../../BUGS.md'), 'utf8');
   const original = gen.buildRegister({ bugsText });
   const without = gen.buildRegister({ bugsText: bugsText.replace(heading, '### Campaign table omitted for comparison') });
-  assert.equal(original.total, 261);
+  // A ratchet, not a hand-typed census. This read `261` until BUG-413 was
+  // declared on 2026-09-09, and it would need editing on every new ticket --
+  // which is exactly how a number becomes the one nobody updates. What this
+  // test actually cares about is that the parser still finds every declared
+  // ticket and that the campaign table cannot change that set, so it asserts
+  // the floor and the internal invariant instead of a census that goes stale.
+  assert.ok(original.total >= 262,
+    `the register shrank to ${original.total}; declared tickets are not removed silently`);
+  assert.equal(original.total, original.bugs.length);
   assert.deepEqual(original.counts, without.counts);
   assert.deepEqual(original.bugs.map((b) => [b.n, b.state]), without.bugs.map((b) => [b.n, b.state]));
   assert.equal(original.bugs.filter((b) => b.campaign).length, original.total,

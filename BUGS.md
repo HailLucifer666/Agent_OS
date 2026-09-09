@@ -18,6 +18,38 @@ Comprehensive issue log covering the entire MYTHOS history, mined from:
 
 ## Windows Operator evidence — 2026-09-07, Stage 1 qualification remains open
 
+### Brave second-video selection and reconnection — 2026-09-08
+
+The operator confirmed that voice now answers, but selecting the second YouTube
+video fails. The previous deterministic desktop parser accepted only the third
+video. Selection now accepts observed positions 1 through 20, preserving the
+historical third-video execution record. Missing or ambiguous lists still block;
+completion still requires the expected video identity and advancing playback time,
+with no advertisement playing. An unknown previous write is observed on explicit
+resume rather than clicked again.
+
+The six new ordinal regressions passed with the full recursive suite:
+7,422 tests, no failures or skips, in 237.8 seconds. An isolated wrong-index
+mutation failed the expected second-video identity assertion; the baseline and
+restored copies passed and production hashes stayed unchanged. Evidence is
+`.cache/windows-operator/ordinal-mutation/proof.json` and
+`.cache/windows-operator/brave-setup/full-suite.tap`.
+
+The supplied Brave extension identity was registered explicitly for the installed
+native helper. Desktop operator mode is enabled; authenticated installed HUD
+configuration returned HTTP 200 with `operatorEnabled: true`. The installed
+parser, controller and tool description match authored source hashes, with
+recoverable backups in `brave-setup/module-backup/`. This does not establish
+playback success or refresh the older installer artifact identity.
+
+Backend restart exposed a separate reconnect gap: the native host exits on pipe
+closure, but the extension only reconnects on a click or browser startup. Its
+asynchronous debugger cleanup can also race a new connection. Separately, no
+authenticated extension incorrectly returned a successful empty tab list; the
+bridge now reports `EXTENSION_DISCONNECTED` with a reconnect instruction. That
+regression failed before repair and passed afterward, including reconnection.
+Attended playback and restart recovery remain unverified until observed in Brave.
+
 ### PIN-unlock voice regression — 2026-09-08
 
 The operator installed the reviewed 0.1.11 package and reported perpetual
@@ -299,7 +331,7 @@ Evidence files reside under ignored project-local .cache/campaign and mythos/.ca
 
 ### Individual declared-ticket dispositions
 
-Each blocked row requires its named remaining evidence before promotion; complete-body source review has already been performed. A listed test is a candidate reference, not evidence that its assertions cover the whole ticket. Reference counts include citation matches and must not be read as consumer coverage. Blocked rows retain their named missing evidence. All 261 rows now have substantive source assessments: 247 blocked, 5 currently verified, 8 superseded, 1 duplicate. A blocked disposition can retain a repaired and regression-tested mechanism while its separate native/model/operator oracle remains unavailable. Superseded and duplicate dispositions do not imply current live verification.
+Each blocked row requires its named remaining evidence before promotion; complete-body source review has already been performed. A listed test is a candidate reference, not evidence that its assertions cover the whole ticket. Reference counts include citation matches and must not be read as consumer coverage. Blocked rows retain their named missing evidence. All 262 rows now have substantive source assessments: 247 blocked, 6 currently verified, 8 superseded, 1 duplicate. A blocked disposition can retain a repaired and regression-tested mechanism while its separate native/model/operator oracle remains unavailable. Superseded and duplicate dispositions do not imply current live verification.
 
 | Ticket | Recorded state | Campaign disposition | Current evidence / missing proof | Candidate test or source |
 |---|---|---|---|---|
@@ -564,6 +596,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-410 | verified | blocked | Attached browser identity derives from observed debug-port executable, otherwise explicitly assumed. Consumers: browser_launch_debug, browser navigation identity guard. Regression oracle: Observed/not-requested fixtures in117familypass. Remaining evidence: Real debug-port owner and requested browser agreement. | mythos/src/core/effectors/from-browser.js |
 | BUG-411 | verified | blocked | OFFLINE adapter attempts adoption before spawn, preserving foreign browser ownership and refusing named mismatch. Consumers: browser_launch_debug and switch. Regression oracle: Adoption/concurrency tests, added actual missing-executable regression;117familypass. Remaining evidence: Live occupied/free CDP port behavior across browser processes. | mythos/src/core/effectors/from-browser.js |
 | BUG-412 | verified | blocked | Shared namedRequestRefusal guards online/adopted paths. CONNECTING branch deliberately defers identity; action guard remains downstream. Consumers: browser_launch_debug/checkBrowserTarget and local launch fallback. Regression oracle: Named/unknown/connecting fixtures in117familypass. Remaining evidence: Deferred connecting narration, asynchronous shutdown closure and fallback default selection remain recorded residuals. | mythos/src/core/effectors/browser-target.js |
+| BUG-413 | verified | currently verified | Explicit caller-supplied token now outranks the host environment; an omitted token still falls back to it. Reproduced on this machine before the change (the suite was red here and green on machines without the variable) and mutation-proven after: restoring the logical-or fallback fails the explicit-empty test and leaves the adjacent omitted-token test green. Consumers: every scripts/verify-*.js harness that attaches rather than boots. Remaining evidence: none for this contract; the harness fleet itself is still unexercised against a packaged install. | mythos/test/verify-lib-attach.test.js; mythos/scripts/verify-lib.js |
 
 Twelve security/data/boot rows were subsequently read claim-by-claim against current implementation and candidate consumers (032, 033, 047, 048, 167, 168, 238, 247, 249, 254, 303, 307). Their generic gaps above are replaced with concrete proof limits. The associated 11-file historical regression set passed **90/90** (`.cache/campaign/historical-security-memory-tests.log`); this source audit found the additional 247 and 249 defects described in their full entries. That checkpoint covered only this subset; the complete 261-row assessment above supersedes its coverage limit.
 
@@ -1040,6 +1073,20 @@ Two vacuous guards out of seven probes, in a change written specifically about v
 
 - **`main.js:1301` calls the non-closing `disconnect()` on shutdown**, and it is now the last caller that means *close*. Its sibling comment names BUG-029 exactly — *"leaves an orphan holding a browser… after MYTHOS is gone"*. Not swapped for `closeLaunchedBrowser()` because `stopRunningLoops()` is **synchronous by design** and the close is genuinely async (a PowerShell query plus a verification poll); a fire-and-forget async call there would not complete, which is the un-awaited-write class. `Start Agent OS.bat`'s orphan cleanup is the existing backstop. **Revisit trigger:** a debug browser found alive after a clean MYTHOS exit. **Durable form:** an awaited async shutdown step, or a synchronous kill by the recorded pid.
 - **`launchLocal` cannot launch Brave and never consults the OS default.** Playwright's `channel:` accepts its own channel names, and Brave is not one — reaching it needs `executablePath`, whose precedence against `channel` is a vendor-resolution question (class 13) that has not been read. So the lazy bring-up in `requireOnline()` can still start Chrome or Edge on a machine whose default is Brave. In BUG-407's set by its own reason; a capability gap rather than a wrong answer, and the label is now honest either way. **Revisit trigger:** an operator report of the lazy path opening the wrong browser. **Durable form:** `launchLocal` taking a resolved executable from `browser-target.js`, so all three launch routes share one resolver.
+
+## BUG-413 — the attach harness read the machine’s auth token when the caller explicitly passed none, so its own “no token” test could not fail on a machine that had one (✅ FIXED 2026-09-09, mutation-proven)
+
+**Status:** ✅ fixed 2026-09-09. Found while auditing why the pre-commit hook was red on the operator’s machine and green everywhere else.
+
+**THE BUG.** `scripts/verify-lib.js` resolved its token as `opts.token || process.env.MYTHOS_AUTH_TOKEN || ""`. An explicit `token: ""` means *the caller is deliberately supplying no token*, but `||` cannot tell that from *the caller said nothing* — empty string is falsy — so it fell through to the environment. This machine carries a User-scope `MYTHOS_AUTH_TOKEN` (set for the phone node), so `attachMythos({ port, token: "" })` attached successfully and `verify-lib-attach.test.js`’s “fails loudly when the server wants a token and none was given” never saw its rejection.
+
+**WHY NOT HYPOTHETICAL.** Measured 2026-09-09: the full suite was red on this machine with exactly this one subtest failing (`Missing expected rejection`), so the pre-commit hook blocked every commit here while CI and other machines stayed green. It is defect class 3 — the fixture was friendlier than production — and class 14: the test was structurally incapable of observing the contract it was written to protect, on any machine that had the variable set.
+
+**THE FIX.** `opts.token !== undefined ? String(opts.token) : (process.env.MYTHOS_AUTH_TOKEN || "")`. An omitted token still consults the environment; an explicit one, including the empty string, wins. The test no longer depends on the host: it now *sets* `MYTHOS_AUTH_TOKEN` deliberately before asserting the rejection, and a second test pins the adjacent case — an omitted token must still fall back to the environment — so the guard has known bounds in both directions.
+
+**PROOF.** Probe run 2026-09-09 with `MYTHOS_AUTH_TOKEN` set in the shell: restoring the `||` fallback made test (a) fail with `Missing expected rejection` while (b) stayed green; the mutation was confirmed applied by `git diff` and `grep` before the run, and the file was restored from a full-path backup afterwards. Baseline 23/23 before and after.
+
+**SCOPE.** `parseHarnessTarget` has the same `||` shape for its own flag/env merge and was deliberately left alone: there an empty `--token` flag and an absent one mean the same thing to a CLI user, and no test claims otherwise. Only `attachMythos`, which has a caller-supplied options object and a test asserting the distinction, was changed.
 
 ## BUG-399 — CI's `test` job fails on every run, the failing set is different each time, and the suite is green locally: the gate is unusable (✅ FIXED 2026-09-02 — three causes, none of them the one this ticket first named)
 
@@ -6732,7 +6779,7 @@ gate ranks above it: the freshness matcher reads operator speech, and a garbled 
 happens to contain "result" routes to RSS and receives a plausible headline.
 
 `src/core/effectors/web-search.js`; `test/bug-280-search-has-a-working-provider.test.js`.
-## BUG-280 — close_window said "no window to close" about a dialog that was on screen (✅ RESOLVED 2026-08-20, live-verified)
+## BUG-280 (close_window) — close_window said "no window to close" about a dialog that was on screen (✅ RESOLVED 2026-08-20, live-verified)
 
 **Measured, not theorised.** On main @ `5cfe91a`, through a real node → pc-child round
 trip (a PowerShell-tool probe is UIPI-blocked and measures nothing):

@@ -27,6 +27,8 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const lint = require('../scripts/lint-bug-registry.js');
 
@@ -82,6 +84,43 @@ describe('lint-bug-registry — the numbers it reports', () => {
       assert.strictEqual(a.kind, 'known-collision', `BUG-${n} must not be filed as benign`);
       assert.match(a.reason, /REAL collision/, 'the record must not soften what it is');
     }
+  });
+
+  // BUG-413 (2026-09-09). The linter pins a collided number at two DECLARATIONS;
+  // it says nothing about whether a reader can tell those two apart. When this was
+  // first checked, one of the two BUG-280 headings carried no qualifier at all --
+  // it read as the plain, canonical `## BUG-280`, so grepping for that number
+  // found an entry that looked authoritative and was half the story. The header
+  // above calls the qualifiers "papered over" and that is fair, but a MISSING
+  // qualifier is strictly worse than a weak one.
+  //
+  // Probe, run 2026-09-09 against a temp COPY of BUGS.md via MYTHOS_BUGS_LEDGER:
+  // removing the "(close_window)" qualifier fails this test naming BUG-280 line
+  // 6781; the unmutated copy passes. The tracked ledger was never modified.
+  test('every heading of a collided number is disambiguated, so the two are distinguishable', () => {
+    // Overridable ONLY so that probe can run against a copy; the assertion below
+    // pins that production still resolves the real ledger, so the seam cannot
+    // silently disable the guard it was added for.
+    const ledgerPath = process.env.MYTHOS_BUGS_LEDGER || path.resolve(__dirname, '..', '..', 'BUGS.md');
+    assert.strictEqual(path.basename(ledgerPath), 'BUGS.md');
+    const lines = fs.readFileSync(ledgerPath, 'utf8').split(/\r?\n/);
+    const offenders = [];
+    for (const n of report.knownCollisions) {
+      const heading = new RegExp('^##[ \\t]+BUG-0*' + n + '\\b(.*)$');
+      const hits = [];
+      lines.forEach((line, i) => {
+        const m = heading.exec(line);
+        if (m) hits.push({ line: i + 1, rest: m[1] });
+      });
+      assert.strictEqual(hits.length, 2, `BUG-${n} should have exactly two headings in BUGS.md`);
+      for (const hit of hits) {
+        // A qualifier sits between the number and the em-dash summary:
+        // '## BUG-360 (a) - ...'. Without one the two entries look identical.
+        if (!/^\s*\(/.test(hit.rest)) offenders.push(`BUG-${n} line ${hit.line}`);
+      }
+    }
+    assert.deepStrictEqual(offenders, [],
+      'each heading of a collided number needs a qualifier like "(a)" or "(close_window)"');
   });
 
   test('it does not flag BUG-323/324, the known false positive', () => {
