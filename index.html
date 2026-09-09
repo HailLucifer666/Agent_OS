@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7430,
+      "value": 7449,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5441,14 +5441,15 @@
       {
         "n": 414,
         "shape": "entry",
-        "state": "diagnosed",
-        "title": "the voice model reaches for the HUD card tool when the operator asks to open a website, and prose is the only thing telling it not to (RED DIAGNOSED 2026-09-09, not fixed)",
-        "detail": {},
-        "excerpt": "**Status:** diagnosed from the operator’s own audit vault 2026-09-09. No code change yet. **Measured, not theorised.** `%APPDATA%\\MYTHOS\\vault\\Audit`, 2026-08-18 to 2026-09-08, 2,835 entries: | tool | calls | notes | |---|---|---| | `open_web` | 97 | 34 clean ok; 22 \"whether the page actually rendered\"; 14 \"the dashboard did not answer\"; 3 could-not-confirm-tab | | `browser_navigate` | 4 | the tool that drives the real browser | | `browser_launch_debug` | 9 | | Roughly 24 calls to the dashboard-card tool for every one to the real browser, and about a third of those card renders unproven. **Why this is not the already-fixed tickets.** BUG-215, BUG-264 and BUG-293 all repaired `open_web`’s HONESTY: it now refuses clearly, names `browser_navigate` in the remedy, and reports unverified rather than claiming success. Every one of those shipped before this window. What none of them changed is S…",
+        "state": "fixed",
+        "title": "the real-browser route never had an oracle: 33 of 33 opens told the operator \"I cannot confirm the page rendered\" (FIXED 2026-09-09)",
+        "detail": {
+          "fix": "`open-external-route.js` gains `settleExternalOpen`, which reads the browser own top-level window title back through pc-child `list_windows` after the hand-off -- the same move `from-computer.js` `open_folder` makes against Explorer, bounded poll and all. Three looks, 250ms apart, first match wins, so the whole oracle fits inside the 1500ms ack deadline `open_web` is measured against (BUG-295 counted 44 breaches in one session, and `live-tool-adapter.js` argues `open_web` out of SLOW_TOOLS on the grounds that it is not slow). The title token is DERIVED from the hostname, never a site table: strip `www`, drop the public-suffix label, keep labels of three or more characters that start with a letter, take the longest. `news.google.com` gives `google`, `open.bigmodel.cn` gives `bigmodel`, `google.co.uk` cannot contribute `co`, and an IP address yields nothing so the oracle is skipped rather…"
+        },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "Measured from 2,835 audit rows over three weeks: 97 open_web calls against 4 browser_navigate, 36 of the 97 unverified. Distinct from BUG-215/264/293, which fixed honesty and shipped before this window; selection was never addressed. Consumers: every spoken \"open a website\" turn. Remaining evidence: none needed for the diagnosis; the fix itself is unwritten and unverified.",
-          "source": "mythos/src/core/effectors/from-dashboard.js; mythos/src/core/voice/voice-agent.js"
+          "disposition": "currently verified",
+          "evidence": "Re-measured before any code was written, and the re-measurement DISPROVED the filed cause: splitting the vault by row shape gives 108 open_web request rows, 33 of them browser:true (the real browser, correctly chosen) and 75 HUD cards of which exactly one is website-shaped. Selection is not broken. What is: 0 of those 33 real-browser opens is verified, because the branch returns straight out of the hand-off while its HUD sibling has had a render ack since BUG-273 B3. Fixed by reading the browser own window title back through pc-child. Consumers: every open_web(browser:true) turn. Remaining evidence: live attended run against a real Brave with pc-child up, not yet possible on this checkout; the oracle cannot see a background tab or a cold start, both stated in code.",
+          "source": "mythos/src/core/effectors/open-external-route.js; mythos/test/bug-414-external-open-oracle.test.js"
         }
       },
       {
@@ -5519,10 +5520,10 @@
     ],
     "counts": {
       "verified": 76,
-      "fixed": 173,
+      "fixed": 174,
       "open": 7,
       "coded": 3,
-      "diagnosed": 7,
+      "diagnosed": 6,
       "duplicate": 2,
       "unrecorded": 0
     },

@@ -390,16 +390,23 @@ function buildTools(ctx) {
             + '. Use browser_navigate to drive a browser directly, or open it yourself.', OPEN_WEB_CODES.PROVIDER_ERROR);
         }
         // Handed to a browser process, which is not the same as "the operator
-        // saw the page" — both routes resolve on ACCEPTANCE, not on render, so
-        // the verdict stays unverified. BUG-273 B2 separated the two halves: the
-        // hand-off IS confirmed and goes in confirmedStep, where the voice layer
-        // may say it out loud, and `reason` narrows to the only unknown.
-        return evidence.unverified(ok({
-          widgetType: 'newtab', url: target.href, title: title || target.href,
-          handedToBrowser: true, browser: handoff.browser || 'os-default',
-          via: handoff.via, windowPidsMayBeStale: true,
-        }), 'whether the page actually rendered in the browser',
-        { confirmedStep: externalRoute.confirmedStepFor(handoff, target.href) });
+        // saw the page" — both routes resolve on ACCEPTANCE, not on render.
+        // BUG-273 B2 separated the two halves: the hand-off IS confirmed and
+        // goes in confirmedStep, and `reason` narrows to the only unknown.
+        // BUG-414 closes the sibling gap the branch below has had since B3 —
+        // the HUD asks whether it rendered, this asked nothing, and 33 of 33
+        // real-browser opens in the operator's vault came back unverified.
+        // settleExternalOpen reads the browser's own window title back and
+        // returns verifiedOk when it can; every other path is the old verdict
+        // with a sharper reason. See open-external-route.js for the numbers.
+        return externalRoute.settleExternalOpen({
+          href: target.href, handoff: handoff,
+          payload: ok({
+            widgetType: 'newtab', url: target.href, title: title || target.href,
+            handedToBrowser: true, browser: handoff.browser || 'os-default',
+            via: handoff.via, windowPidsMayBeStale: true,
+          }),
+        });
       }
 
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
