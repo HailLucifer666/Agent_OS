@@ -5437,6 +5437,84 @@
           "evidence": "Explicit caller-supplied token now outranks the host environment; an omitted token still falls back to it. Reproduced on this machine before the change (the suite was red here and green on machines without the variable) and mutation-proven after: restoring the logical-or fallback fails the explicit-empty test and leaves the adjacent omitted-token test green. Consumers: every scripts/verify-*.js harness that attaches rather than boots. Remaining evidence: none for this contract; the harness fleet itself is still unexercised against a packaged install.",
           "source": "mythos/test/verify-lib-attach.test.js; mythos/scripts/verify-lib.js"
         }
+      },
+      {
+        "n": 414,
+        "shape": "entry",
+        "state": "diagnosed",
+        "title": "the voice model reaches for the HUD card tool when the operator asks to open a website, and prose is the only thing telling it not to (RED DIAGNOSED 2026-09-09, not fixed)",
+        "detail": {},
+        "excerpt": "**Status:** diagnosed from the operator’s own audit vault 2026-09-09. No code change yet. **Measured, not theorised.** `%APPDATA%\\MYTHOS\\vault\\Audit`, 2026-08-18 to 2026-09-08, 2,835 entries: | tool | calls | notes | |---|---|---| | `open_web` | 97 | 34 clean ok; 22 \"whether the page actually rendered\"; 14 \"the dashboard did not answer\"; 3 could-not-confirm-tab | | `browser_navigate` | 4 | the tool that drives the real browser | | `browser_launch_debug` | 9 | | Roughly 24 calls to the dashboard-card tool for every one to the real browser, and about a third of those card renders unproven. **Why this is not the already-fixed tickets.** BUG-215, BUG-264 and BUG-293 all repaired `open_web`’s HONESTY: it now refuses clearly, names `browser_navigate` in the remedy, and reports unverified rather than claiming success. Every one of those shipped before this window. What none of them changed is S…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "Measured from 2,835 audit rows over three weeks: 97 open_web calls against 4 browser_navigate, 36 of the 97 unverified. Distinct from BUG-215/264/293, which fixed honesty and shipped before this window; selection was never addressed. Consumers: every spoken \"open a website\" turn. Remaining evidence: none needed for the diagnosis; the fix itself is unwritten and unverified.",
+          "source": "mythos/src/core/effectors/from-dashboard.js; mythos/src/core/voice/voice-agent.js"
+        }
+      },
+      {
+        "n": 415,
+        "shape": "entry",
+        "state": "diagnosed",
+        "title": "the browser MYTHOS launches is never the operator’s: the launcher knows only Chrome and Edge, and starts them on a throwaway profile (RED DIAGNOSED 2026-09-09, not fixed)",
+        "detail": {},
+        "excerpt": "**Status:** diagnosed from source 2026-09-09. No code change yet. `adapters/browser-agent/index.js` `launchLocal()` tries `channel: ‘chrome’` and falls back to `channel: ‘msedge’`. There is no third rung. The operator’s browser is Brave, so on a machine where Brave is the default and Chrome is absent the launch fails outright, and where Chrome is present it opens a browser the operator does not use. Worse when it succeeds: `launchPersistentContext(userDataDir)` starts a SEPARATE profile, so the window that appears carries none of the operator’s logins, cookies or extensions. For anything that needs a signed-in session -- ordering food, reading mail, a paid account -- a successful launch is still a dead end. **Not the same as the Brave tickets already closed.** BUG-410 and BUG-411 fixed browser IDENTITY (what answered on the debug port) and adoption of an already-running browser. Neither…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "Source-read 2026-09-09: launchLocal tries chrome then msedge only, and launchPersistentContext uses a dedicated profile directory, so a launched browser carries none of the operator signed-in state. Distinct from BUG-410/411, which fixed identity and adoption rather than the channel list. Consumers: browser_launch_debug and every browser tool that reaches requireOnline with nothing already attached. Remaining evidence: live launch on this machine with Brave as default, not yet run.",
+          "source": "mythos/adapters/browser-agent/index.js"
+        }
+      },
+      {
+        "n": 416,
+        "shape": "entry",
+        "state": "diagnosed",
+        "title": "the extension bridge issues a new browser identity on every reconnect, so a desktop task can never be resumed after a backend restart (RED DIAGNOSED 2026-09-09, not fixed)",
+        "detail": {},
+        "excerpt": "**Status:** traced through source 2026-09-09; not reproduced live, because the desktop operator is not yet set up on this checkout. Recorded before the attempt so the next session does not read the refusal as a new defect. `adapters/browser-extension/index.js` mints `browserId = randomUUID()` on every `hello`. The desktop controller persists its target and, on resume, calls `browser_video_list` with the OLD id. The bridge looks that id up among live clients, does not find it, and answers BROWSER_REQUIRED -- \"Choose an observed connected browser\". `observe()` retries three times and blocks with that reason. So the reconnection work committed in 8afc989 restores the PIPE and cannot restore the TASK. The failure names the wrong cause, which is the part most likely to cost a session. **Why the tests do not see it.** The controller rigs accept any `browserId`, so every resume test passes arou…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "Traced 2026-09-09 across bridge, controller and rig: a fresh randomUUID per hello against a persisted target id yields BROWSER_REQUIRED on resume, and the controller rigs accept any id so no test observes it. Consumers: desktop_task_control resume and every leaf that re-observes after a restart. Remaining evidence: live backend restart with the extension attached, which needs the attended Brave setup and has not been run.",
+          "source": "mythos/adapters/browser-extension/index.js; mythos/src/core/desktop/controller.js"
+        }
+      },
+      {
+        "n": 417,
+        "shape": "entry",
+        "state": "diagnosed",
+        "title": "an ordinal addresses the Nth VISIBLE card, while the tool description promises result 1 through 20 (RED DIAGNOSED 2026-09-09, wording not yet corrected)",
+        "detail": {},
+        "excerpt": "**Status:** confirmed by reading the observation code 2026-09-09, alongside the 1-20 selection shipped in 8afc989. `browser-extension/engine.js` `snapshot()` ranks only cards that pass its `visible()` predicate, which requires the element to intersect the viewport. The list handed to the controller is therefore viewport-only, and `ordinal` indexes into it. Two consequences. A search page shows roughly four or five cards, so \"play the sixth result\" polls until the observation budget is spent and then blocks -- honestly, but for a reason the operator will read as a bug, since the tool advertises 1 through 20. And if the page is already scrolled, \"the second video\" selects the second card CURRENTLY IN VIEW, which may be result seven; verification cannot catch that, because the expected identity is derived from the same observation that made the wrong choice. **Decided fix, not yet applied (…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "Read 2026-09-09 against engine.js snapshot(): the visible() predicate requires viewport intersection, so items are viewport-only and the ordinal indexes that list. Confirms an overclaim in the tool description shipped the same day. Consumers: desktop_task_start ordinal selection. Remaining evidence: live YouTube search page card counts above and below the fold, not yet measured.",
+          "source": "mythos/browser-extension/engine.js; mythos/src/core/desktop/controller.js"
+        }
+      },
+      {
+        "n": 418,
+        "shape": "entry",
+        "state": "diagnosed",
+        "title": "a buyer holding an Anthropic or OpenAI key cannot use it: there is no native provider for either, only OpenRouter (RED DIAGNOSED 2026-09-09, not fixed)",
+        "detail": {},
+        "excerpt": "**Status:** diagnosed 2026-09-09 after the operator confirmed the product model. No code change yet. **The premise this corrects.** Free tiers are the DEVELOPMENT constraint, not the product: the operator builds on free keys because paid ones are not affordable right now, and the shipped product is bring-your-own-key with any provider. Provider coverage is therefore a product gap, not a nice-to-have. `mythos/providers/` holds google, mistral, groq, nim, cerebras, ollama, zcode and openrouter. Neither Anthropic nor OpenAI has a native provider, and `.env.example` documents no key for either. A buyer with an Anthropic or OpenAI key must open an OpenRouter account and pay its margin to use a key they already own. **Cost of the fix is asymmetric and worth stating.** `providers/openai-compat.js` is already a factory over base URL plus key name, and OpenAI speaks exactly that protocol, so nati…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "Enumerated mythos/providers/ and .env.example on 2026-09-09: eight providers, no Anthropic and no OpenAI, no documented key for either. openai-compat.js is already a base-URL-plus-key factory, so the two differ sharply in cost. Consumers: every brain lane and any buyer supplying their own key. Remaining evidence: none for the gap itself; the implementations do not exist to test.",
+          "source": "mythos/providers/openai-compat.js; mythos/src/core/brain/lanes.default.js; mythos/.env.example"
+        }
+      },
+      {
+        "n": 419,
+        "shape": "entry",
+        "state": "diagnosed",
+        "title": "Cerebras answers 402 on every lane it appears in, and nothing outside a source comment says so (RED DIAGNOSED 2026-09-09, not fixed)",
+        "detail": {},
+        "excerpt": "**Status:** diagnosed 2026-09-09 from the lane table and its own comments. No code change yet. **A note on this entry’s own status line, because it is evidence.** The first draft of the line above ended \"Not fixed.\" and the register classified the ticket as FIXED. `build-index.js` `classify()` tests the fixed-words pattern before the diagnosed one, and that pattern matches the word anywhere in the status line, so \"Not fixed\" reads as fixed; the negative-first guard beside it only fires on a red circle or on a NOT within the first forty characters. The comment above that code already says so -- \"ANY of these words ANYWHERE in the status line still means fixed\" -- and names the real remedy as an explicit machine-readable state field. This entry is a live instance of the predicted trap, found by writing one new ticket. Worth its own number; not fixed here, because reclassifying a 268-row re…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "Read from lanes.default.js and its comments 2026-09-09, corroborated by audit rows showing the search chain reporting every provider unavailable with per-provider reasons only in the log line. Consumers: voice, reasoning, memory, simple and text lanes, plus the search chain. Remaining evidence: a live call per provider to confirm current status codes, not yet run.",
+          "source": "mythos/src/core/brain/lanes.default.js; mythos/src/core/effectors/web-search.js"
+        }
       }
     ],
     "counts": {
@@ -5444,11 +5522,11 @@
       "fixed": 173,
       "open": 7,
       "coded": 3,
-      "diagnosed": 1,
+      "diagnosed": 7,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 262,
+    "total": 268,
     "openDeclared": [
       274,
       275
