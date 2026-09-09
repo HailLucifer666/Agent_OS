@@ -470,7 +470,7 @@ async function main() {
       var buildRefiner = null;
       if (config.BUILD_REFINE_ENABLED) {
         buildRefiner = require('./core/effectors/build-refine').createBuildRefiner({
-          vault: memory.fs, brain: brain, logger: logger,
+          vault: memory.fs, brain: brain, logger: logger, config: config,
         });
       }
       buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier, buildEngine: buildEngine, refiner: buildRefiner });

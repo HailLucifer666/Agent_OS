@@ -65,6 +65,7 @@ function createRecentActionLedger() {
     if (!entry || !entry.tool) return;
     entries.push({
       tool: entry.tool,
+      traceId: entry.traceId || null,
       ok: entry.ok,
       unverified: entry.unverified === true,
       status: actionStatus(entry),
@@ -99,7 +100,18 @@ function createRecentActionLedger() {
     return entries;
   }
 
-  return { record, forClaims };
+  // BUG-430: reformulations need no shared words. A real read breaks the storm.
+  // ponytail: reuse the bounded 120s ledger; this advises Live only, never builds.
+  // Count one trace once: a pending ACK and its late result are the same search.
+  function searchStormDetected() {
+    if (process.env.LIVE_SEARCH_STORM_GUARD_ENABLED === 'false') return false;
+    const rows = forClaims(), first = rows.findIndex(row => row.tool === 'web_search');
+    if (first < 0 || rows.slice(first + 1).some(row => row.tool === 'web_fetch' && row.ok === true)) return false;
+    const searches = rows.slice(first).filter(row => row.tool === 'web_search');
+    return new Set(searches.map(row => row.traceId || row)).size >= 4;
+  }
+
+  return { record, forClaims, searchStormDetected };
 }
 
 // A3 (2026-08-14): PENDING IS NOT FAILURE. Both started/ack-deadline paths used

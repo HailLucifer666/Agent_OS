@@ -374,7 +374,7 @@ function createBuildRunner({ config, brain, bus, vault, verifier, buildEngine, r
             var rendered = await refiner.render(raw, job.id + '-' + iteration);
             heldRuntimeErrors = (rendered.pageErrors || []).concat(rendered.consoleErrors || []);
             var critique = await refiner.critique({
-              screenshotB64: rendered.screenshotB64,
+              screenshotB64: rendered.screenshotB64, screenshotBytes: rendered.screenshotBytes,
               renderError: rendered.error || null,
               consoleErrors: rendered.consoleErrors || [],
               pageErrors: rendered.pageErrors || [],

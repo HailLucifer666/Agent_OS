@@ -175,6 +175,7 @@ function createBuildRefiner(opts) {
   const o = opts || {};
   const vault = o.vault;
   const brain = o.brain;
+  const config = o.config || {};
   const logger = o.logger || null;
   const chromePath = resolveChromePath(o.chromePath);
   // Test seam. Production passes nothing and gets the real playwright-core.
@@ -242,12 +243,14 @@ function createBuildRefiner(opts) {
       await page.waitForTimeout(SETTLE_MS);
       const observations = await observe(page);
       const shot = await page.screenshot({ path: pngAbs, fullPage: false });
+      const payload = await page.screenshot({ type: 'jpeg', quality: 80 });
       await browser.close();
       browser = null;
       return {
         ok: true,
         screenshotPath: pngAbs,
-        screenshotB64: Buffer.from(shot).toString('base64'),
+        screenshotB64: Buffer.from(payload).toString('base64'),
+        screenshotBytes: shot.length,
         consoleErrors: consoleErrors,
         pageErrors: pageErrors,
         observations: observations,
@@ -329,12 +332,29 @@ function createBuildRefiner(opts) {
     const visionOpts = {
       prompt: prompt,
       b64: a.screenshotB64,
-      mime: 'image/png',
+      mime: 'image/jpeg',
+      timeoutMs: config.VISION_CALL_TIMEOUT_MS,
+      attemptTimeoutMs: config.VISION_ATTEMPT_TIMEOUT_MS,
       source: 'build-refine',
       logger: logger,
     };
     if (chainFor) visionOpts.chainFor = chainFor;
-    const res = await visionThink(brain, visionOpts);
+    // BUG-427: Sept 9's 1857ms loop stall overlapped vision. Reuse logged facts;
+    // no second timer, no global maximum that attributes an old stall to this call.
+    let maxLoopStallMs = 0, unsubscribe = null, res;
+    try {
+      if (logger && typeof logger.onLog === 'function') unsubscribe = logger.onLog(entry => {
+        if (entry.msg === 'loop.stalled') maxLoopStallMs = Math.max(maxLoopStallMs, Number(entry.lagMs) || 0);
+      });
+    } catch (_) { /* telemetry must not disable refinement */ }
+    try { res = await visionThink(brain, visionOpts); }
+    finally {
+      try { if (unsubscribe) unsubscribe(); } catch (_) { /* telemetry only */ }
+      try { if (logger) logger.info('build-refine.vision-payload', {
+        screenshotBytes: a.screenshotBytes ?? null,
+        visionPayloadBytes: Buffer.from(a.screenshotB64, 'base64').length, maxLoopStallMs,
+      }); } catch (_) { /* telemetry only */ }
+    }
 
     if (res.offline || res.timedOut || !res.content) {
       // Honest unknown. NOT a pass (that would ship on silence) and NOT a fail

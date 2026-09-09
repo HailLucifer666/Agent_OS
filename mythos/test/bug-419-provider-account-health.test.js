@@ -65,7 +65,8 @@ describe('BUG-419 (a,b,c) — only an ACCOUNT refusal counts, and only when it r
   it('(a) reads a typed status and the prose fallback the same way', () => {
     assert.equal(providerHealth.accountStatusOf({ status: 402 }), 402);
     assert.equal(providerHealth.accountStatusOf({ status: 401 }), 401);
-    assert.equal(providerHealth.accountStatusOf({ status: 403 }), 403);
+    // 2026-09-10: Sept 9 mistral-large-2512 403 coexisted with working siblings.
+    assert.equal(providerHealth.accountStatusOf({ status: 403 }), null);
     // BUG-336 attached typed statuses at the openai-compat/ollama/openrouter
     // throw sites, but not every provider is re-pointed, so prose still has to
     // work — in the same `: <code>` shape classifyProviderError already uses.
@@ -187,10 +188,11 @@ describe('BUG-419 — the operator can finally be told', () => {
 
   it('each status gets its own remedy, because they need different actions', () => {
     providerHealth.recordFailure('groq', { status: 401 });
-    providerHealth.recordFailure('nim', { status: 403 });
+    providerHealth.recordModelFailure('nim', 'vision', { status: 403 });
     const snap = providerHealth.snapshot();
     assert.match(snap.groq.reason, /\.env\.example/, '401 is a key problem, so point at the key');
-    assert.match(snap.nim.reason, /plan or region/, '403 is a permission problem, not a missing key');
+    // 2026-09-10: the refusal is now visible without ejecting the whole account.
+    assert.equal(providerHealth.modelSnapshot()['nim:vision'].status, 403);
   });
 
   it('healthy is an empty object, which reads as healthy', () => {

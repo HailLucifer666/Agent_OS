@@ -811,6 +811,7 @@ function createLiveToolAdapter(deps) {
         } });
       }
     }
+    for (const row of responses) if (row.name === 'web_search' && recentActionLedger.searchStormDetected()) row.response.message = (row.response.message ? row.response.message + ' ' : '') + 'four searches in two minutes and nothing read — web_fetch one result or tell the operator you cannot find it';
     if (responses.length) sendToolResponse(responses);
   }
 

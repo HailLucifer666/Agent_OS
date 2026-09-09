@@ -130,7 +130,6 @@ const PREF_VOICE = [
   // not a dead model: it returns the moment the account is funded, and its
   // 336ms/3-of-4 measurement below still stands. Kept last so a lane call stops
   // paying an attempt for it while the account is dry.
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 336ms, 3/4 (2026-08-14); 402 unbilled 2026-08-22
   // REMOVED 2026-08-22: groq/llama-3.3-70b-versatile. It is not a renamed id —
   // Groq's /models advertises 13 ids and NONE of them is any Llama 3.3, so a
   // call returns `404 does not exist or you do not have access`. Its 2026-08-14
@@ -204,7 +203,6 @@ const PREF_MEMORY = [
   // Unchanged position — it was already last cloud. Noting only that it is
   // currently `402` (unbilled Cerebras account), so this lane is effectively
   // two-deep in the cloud until the account is funded.
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 336ms, 3/4; 402 unbilled 2026-08-22
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
@@ -284,7 +282,6 @@ const PREF_SIMPLE = [
   // `content` is a clean string, 0/7 leaks across both probes.
   { provider: 'groq',     model: 'openai/gpt-oss-20b' },          // 776ms median, no max_tokens sent (2026-08-22)
   // Demoted below Google, not deleted: 402 unbilled, returns when funded.
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 519ms; 402 unbilled 2026-08-22
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
@@ -416,6 +413,7 @@ const BRAIN_TABLES = {
 // is what let inclusionai/ling-3.0-flash:free sit in two lanes for three weeks
 // after it started 404ing.
 const KNOWN_DEAD = [
+  { provider: 'cerebras', model: 'gemma-4-31b', reason: '404 measured 2026-09-09 — unavailable despite catalog listing' },
   { provider: 'openrouter', model: 'inclusionai/ling-3.0-flash:free', reason: '404 unavailable for free' },
   { provider: 'google',     model: 'gemini-2.5-pro',                  reason: '404 no longer available to new users' },
   { provider: 'google',     model: 'gemini-2.5-flash',                reason: '404 no longer available to new users' },
@@ -437,17 +435,10 @@ const KNOWN_DEAD = [
   { provider: 'cerebras',   model: 'zai-glm-4.7',                     reason: '404 archived and unavailable for the organization (was rank 2 of reasoning, head of text)' },
 ];
 
-// NOT in KNOWN_DEAD on purpose, because they are not dead: every `cerebras/*`
-// entry currently returns `402 Payment required` because that ACCOUNT is
-// unbilled, and Cerebras advertises only `gpt-oss-120b` and `gemma-4-31b` at
-// all. Billing the account restores both. They were demoted to last-cloud in
-// their lanes on 2026-08-22 rather than deleted, so a dry account costs one
-// attempt at the end of a walk instead of two at the start — and funding it
-// needs no code change. A test asserting no PREF_* lists a KNOWN_DEAD entry
-// would delete them permanently, which is the wrong call for a billing state.
+// gpt-oss-120b remains: its measured 402 is billing state. gemma's later 404
+// supersedes the older unbilled diagnosis (2026-09-09), so it moved above.
 const UNBILLED_NOT_DEAD = [
   { provider: 'cerebras', model: 'gpt-oss-120b', reason: '402 Payment required — unbilled account, not a dead model' },
-  { provider: 'cerebras', model: 'gemma-4-31b',  reason: '402 Payment required — unbilled account, not a dead model' },
 ];
 
 module.exports = {

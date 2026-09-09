@@ -18,7 +18,7 @@
 // so a verification never outlives the window the cooldown already blocks
 // re-application for.
 const BUILD_ENGINE_VERIFY_MS = 60000;
-
+const { DEFAULT_LADDER_MS } = require('../effectors/provider-cooldown'); // BUG-430: shared first cooldown, 60s.
 // Task C2 review follow-up: probe-provider (used by rotate-nim-key below) is
 // structurally the same defect as reprobe-build-engine — registry.refresh()
 // returns { ok: true, result: { probedAt } } unconditionally; probedAt is a
@@ -140,7 +140,7 @@ const SEED_PLAYBOOKS = [
     title: 'skip of a failing search provider',
     when: { kind: 'search-provider-failed' },
     then: [{ do: 'suppress-search-provider', args: { provider: '$evidence.provider' } }],
-    cooldownMs: 30000
+    cooldownMs: DEFAULT_LADDER_MS[0]
   },
   {
     id: 'build-engine-reprobe',
@@ -440,7 +440,7 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
     'suppress-search-provider': async function(diagnosis, args) {
       const provider = args.provider;
       if (!provider) return { ok: false, reason: 'missing-arg:provider' };
-      suppressedSearchProviders[provider] = { restoreAt: Date.now() + 30000 };
+      suppressedSearchProviders[provider] = { restoreAt: Date.now() + DEFAULT_LADDER_MS[0] };
       return { ok: true, result: { provider: provider, suppressedUntil: suppressedSearchProviders[provider].restoreAt } };
     },
 
@@ -864,7 +864,7 @@ function isSearchProviderSuppressed(provider) {
 
 function suppressSearchProvider(provider, ttlMs) {
   if (!provider) return false;
-  suppressedSearchProviders[provider] = { restoreAt: Date.now() + (ttlMs || 30000) };
+  suppressedSearchProviders[provider] = { restoreAt: Date.now() + (ttlMs || DEFAULT_LADDER_MS[0]) };
   return true;
 }
 

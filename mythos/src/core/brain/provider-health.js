@@ -1,6 +1,6 @@
 'use strict';
 
-// provider-health.js — what a real call last said about a provider's ACCOUNT.
+// provider-health.js — real completion refusals, scoped to account or model.
 //
 // BUG-419, measured on the operator's machine 2026-09-09:
 //
@@ -35,7 +35,7 @@
 // just stops throwing its verdict away.
 //
 // DELIBERATELY NARROW: ACCOUNT-LEVEL STATUSES ONLY.
-//   401 unauthorised · 402 payment required · 403 forbidden
+//   401 unauthorised · 402 payment required
 // These are facts about the ACCOUNT, not the moment: they do not clear on their
 // own, which is exactly why a 60-second cooldown never caught them. A 429 is a
 // rate limit and a 5xx is an outage — both transient, both already handled by
@@ -52,7 +52,12 @@
 
 // Account-level HTTP statuses. A rule, not a denylist of providers: any
 // provider reporting one of these is unusable for the same reason.
-const ACCOUNT_STATUSES = [401, 402, 403];
+const ACCOUNT_STATUSES = [401, 402];
+const MODEL_STATUSES = [403, 404];
+const MODEL_HEALTH_TTL_MS = 24 * 60 * 60 * 1000;
+// main loads .env after imports; read raw environment knobs at use, not require.
+function modelHealthTtlMs() { return Number(process.env.PROVIDER_MODEL_HEALTH_TTL_MS) || MODEL_HEALTH_TTL_MS; }
+const modelFailures = new Map();
 
 // Long enough that a dead account is not re-probed on every call, short enough
 // that a fixed account recovers without a restart even if no other call
@@ -110,6 +115,41 @@ function recordSuccess(provider) {
   if (id) failures.delete(id);
 }
 
+// BUG-420/427 (2026-09-10): a model-specific refusal is not an account outage.
+// Kill switch: PROVIDER_MODEL_HEALTH_ENABLED=false disables model benching.
+// A wrong base URL returning 404 benches every attempted model until TTL/restart;
+// a suspended account returning 403 costs one attempt per model. Both are visible.
+function recordModelFailure(provider, model, err, nowMs, bus) {
+  if (process.env.PROVIDER_MODEL_HEALTH_ENABLED === 'false') return null;
+  if (!provider || !model) return null;
+  const status = err && err.status;
+  if (!MODEL_STATUSES.includes(status)) return null;
+  const key = provider + ':' + model;
+  if (modelFailureFor(provider, model, nowMs)) return modelFailures.get(key);
+  const entry = { status, message: String(err.message || '').slice(0, 200), at: nowMs ?? Date.now() };
+  modelFailures.set(key, entry);
+  try { if (bus) bus.emit('health.anomaly', { kind: 'model-benched', provider, model, status }); }
+  catch (_) { /* telemetry must never break the chain */ }
+  return entry;
+}
+
+function recordModelSuccess(provider, model) { modelFailures.delete(provider + ':' + model); }
+function modelFailureFor(provider, model, nowMs) {
+  if (process.env.PROVIDER_MODEL_HEALTH_ENABLED === 'false') return null;
+  const key = provider + ':' + model, entry = modelFailures.get(key);
+  if (!entry) return null;
+  if ((nowMs ?? Date.now()) - entry.at >= modelHealthTtlMs()) { modelFailures.delete(key); return null; }
+  return entry;
+}
+function modelSnapshot(nowMs) {
+  const out = {};
+  for (const [key, entry] of modelFailures) {
+    if ((nowMs ?? Date.now()) - entry.at >= modelHealthTtlMs()) modelFailures.delete(key);
+    else out[key] = { ...entry };
+  }
+  return out;
+}
+
 // The live entry, or null. Expiry is applied on READ so nothing has to run a
 // timer; a bug that stops recordSuccess from firing still degrades back to
 // today's behaviour within one TTL instead of removing a provider forever.
@@ -157,10 +197,13 @@ function reasonFor(provider, status) {
 // success or by its own expiry.
 function _reset() {
   failures.clear();
+  modelFailures.clear();
 }
 
 module.exports = {
   ACCOUNT_STATUSES,
+  MODEL_STATUSES, MODEL_HEALTH_TTL_MS,
+  recordModelFailure, recordModelSuccess, modelFailureFor, modelSnapshot,
   HEALTH_TTL_MS,
   accountStatusOf,
   isAccountFailure,

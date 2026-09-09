@@ -185,14 +185,18 @@ function isProviderAlive(provider, model, c) {
   // lane while refusing every call. What a real completion said is the only
   // answer to "can this account actually be used", and now it outranks the probe.
   //
-  // Narrow on purpose: ONLY 401/402/403, only until a success or the health TTL
+  // Narrow on purpose: 401/402 per account, 403/404 per model, until success/TTL
   // clears them. A 429 or a 5xx must NOT reach here — those are transient and
   // already handled by chain.js's cooldown and breaker, and holding a provider
   // down for a quota that resets in a minute would remove a working rung. The
   // boundary is enforced in provider-health.js and tested from both sides.
+  // NIM is a catalog family; the chain expands it to separately entitled keys.
+  if (provider === 'nim') return c.nimModels.includes(model) && [
+    ['nim', process.env.NIM_API_KEY], ['nim2', process.env.NIM_API_KEY_2],
+  ].some(([lane, key]) => key && key.trim() && !providerHealth.failureFor(lane) && !providerHealth.modelFailureFor(lane, model));
   if (providerHealth.failureFor(provider)) return false;
+  if (providerHealth.modelFailureFor(provider, model)) return false;
   switch (provider) {
-    case 'nim':        return c.nimModels.includes(model) && nimKeys().length > 0;
     case 'groq':       return c.groqAlive;
     case 'mistral':    return c.mistralAlive;
     case 'ollama':     return c.ollamaModels.includes(model);
@@ -281,6 +285,7 @@ async function getStatus() {
     // the healthy state and reads as such. This is what puts the 402 in front of
     // the operator: read_status returns probes.getStatus(), which returns this.
     accountFailures: providerHealth.snapshot(),
+    modelFailures: providerHealth.modelSnapshot(),
     // Observability only — checked 2026-08-14, `chains` has NO consumer in src/
     // or ui/. It is here so an operator reading provider status can see which
     // models a lane would actually walk. Nothing depends on its shape, so adding

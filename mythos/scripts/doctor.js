@@ -645,6 +645,7 @@ function printReport(report) {
 
   printSection('Keys', report.keys);
   printSection('Models and binaries', report.assets);
+  console.log('  Runtime model refusals: read_status reports modelFailures (403/404, per model; clears on success, TTL or restart). The doctor process cannot read another process\'s in-memory health.');
   console.log('\nSettings integrity');
   for (const row of report.settingsIntegrity || []) console.log('  ' + row.name + ': ' + row.message);
 

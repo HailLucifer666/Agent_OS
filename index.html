@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7551,
+      "value": 7573,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5521,14 +5521,14 @@
       {
         "n": 420,
         "shape": "entry",
-        "state": "open",
-        "title": "a model that always 404s stays in the lane forever, because only account-level refusals are recorded (OPEN, found live 2026-09-09)",
+        "state": "coded",
+        "title": "a model that always 404s stays in the lane forever, because only account-level refusals are recorded (CODED 2026-09-10; found live 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** OPEN. Found while live-verifying BUG-419; not fixed there on purpose. **Measured 2026-09-09** against the operator's real Cerebras key: `GET /models` answers 200 and lists `gemma-4-31b`, while `POST /chat/completions` for that model answers `404 Model does not exist or you do not have access to it`. `gemma-4-31b` is the cerebras rung in the voice, simple and memory lanes, so those three lanes attempt a call that cannot succeed on every session, and the liveness probe -- which reads the catalog -- will keep saying it is alive. **Why BUG-419 does not cover it, deliberately.** `ACCOUNT_STATUSES` is 401/402/403 only. A 404 says something about one MODEL, not about the account, and killing a provider outright for a bad model id would remove rungs that work. The narrowing is right; the consequence is that a permanently-404 model has no recorder at all. **The shape a fix probably ta…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-10. The retired Cerebras gemma model is removed from every default lane. Real 403/404 refusals now bench only provider:model for 24h; 401/402 remain account-wide. Registry modelFailures exposes the verdict. Code checks passed; new vendor calls remain untested. **Measured 2026-09-09** against the operator's real Cerebras key: `GET /models` answers 200 and lists `gemma-4-31b`, while `POST /chat/completions` for that model answers `404 Model does not exist or you do not have access to it`. `gemma-4-31b` is the cerebras rung in the voice, simple and memory lanes, so those three lanes attempt a call that cannot succeed on every session, and the liveness probe -- which reads the catalog -- will keep saying it is alive. **Correction and code change, 2026-09-10.** The Sept 9 mistral-large-2512 refusal is model entitlement, so 403 joins 404 in model health; only 401/4…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "Found while live-verifying BUG-419 and deliberately not fixed there. Cerebras GET /models answers 200 and lists gemma-4-31b; POST /chat/completions for it answers 404 \"Model does not exist or you do not have access to it\". That model is the cerebras rung in the voice, simple and memory lanes, so those three attempt a call that cannot succeed, every session. ACCOUNT_STATUSES is 401/402/403 only, and narrowing it that way is correct — a 404 is about one MODEL, and killing a provider for a bad model id would remove working rungs — so a permanently-404 model has no recorder at all. Consumers: three brain lanes. Two directions in the entry: replace the model in the lane table (helps this operator now), or record health per provider AND model (what a buyer whose key goes bad later needs).",
-          "source": "mythos/src/core/brain/provider-health.js; mythos/src/core/brain/registry.js; mythos/src/core/brain/lanes.default.js"
+          "disposition": "blocked",
+          "evidence": "The retired Cerebras gemma model is removed from every default lane. Real 403/404 refusals now bench only provider:model for 24h; 401/402 remain account-wide. Registry modelFailures exposes the verdict. Code checks passed; new vendor calls remain untested. Diagnoses: Sept 9 filing and Sept 10 replay.",
+          "source": "mythos/src/core/brain/provider-health.js; mythos/src/core/brain/registry.js; mythos/src/core/brain/chain.js; mythos/src/core/brain/lanes.default.js"
         }
       },
       {
@@ -5599,27 +5599,27 @@
       {
         "n": 426,
         "shape": "entry",
-        "state": "open",
-        "title": "the reasoning lane times out on every attempt; think_deeply failed 2 of 2 and told the operator so (OPEN, found live 2026-09-09)",
+        "state": "coded",
+        "title": "the reasoning lane times out on every attempt; think_deeply failed 2 of 2 and told the operator so (CODED 2026-09-10; found live 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** OPEN. Reproduced live 2026-09-09. `chain-whole-lane-timeout` fired **6 times** on `reasoning`, with the anomaly's own text: *\"every reasoning attempt timed out at the 30000ms per-attempt ceiling and nothing answered, which is one shared cause rather than N provider outages — cooldowns were …\"*. `think_deeply` was called twice and failed twice with *\"The reasoning lane did not return an answer.\"* Playbook: **none**. **The operator heard it.** MYTHOS said: *\"my stronger reasoning tool failed unexpectedly, and I don't know why. I can't perform the deep analysis right now.\"* That is honest degradation working as designed, and it is still a dead capability. **Contributing provider states measured in the same window:** ``` mistral:mistral-large-2512 403 \"This model is not available in your subscription tier\" mistral:mistral-small-latest 429 Rate limit exceeded google:gemini-3.5-fla…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-10. The Sept 10 replay found reasoning reduced to nim+nim2 while mistral-medium was cooling on 429 and Cerebras was 402-ejected. Whole-lane exemptions now retain per-pair streaks: calls 1-2 stay exempt, call 3 earns cooldown and breaker failure. Code checks passed; provider recovery timing still needs a live run. `chain-whole-lane-timeout` fired **6 times** on `reasoning`, with the anomaly's own text: *\"every reasoning attempt timed out at the 30000ms per-attempt ceiling and nothing answered, which is one shared cause rather than N provider outages — cooldowns were …\"*. `think_deeply` was called twice and failed twice with *\"The reasoning lane did not return an answer.\"* Playbook: **none**. **The operator heard it.** MYTHOS said: *\"my stronger reasoning tool failed unexpectedly, and I don't know why. I can't perform the deep analysis right now.\"* That is hone…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "chain-whole-lane-timeout x6 on reasoning, every attempt at the 30000ms ceiling, playbook none; think_deeply 0/2 with \"The reasoning lane did not return an answer\", spoken to the operator. mistral-large-2512 403 not-in-subscription-tier, mistral-small 429, google aborted. 403 IS in ACCOUNT_STATUSES so it should have ejected mistral - it did not appear to, and mistral kept serving other lanes. Consumers: think_deeply and the reasoning lane.",
-          "source": "mythos/src/core/brain/chain.js; mythos/src/core/brain/provider-health.js; mythos/src/core/brain/lanes.default.js"
+          "disposition": "blocked",
+          "evidence": "The Sept 10 replay found reasoning reduced to nim+nim2 while mistral-medium was cooling on 429 and Cerebras was 402-ejected. Whole-lane exemptions now retain per-pair streaks: calls 1-2 stay exempt, call 3 earns cooldown and breaker failure. Code checks passed; provider recovery timing still needs a live run. Diagnoses: Sept 9 filing and Sept 10 replay.",
+          "source": "mythos/src/core/brain/chain.js; mythos/test/bug-426-persistent-whole-lane-timeout.test.js"
         }
       },
       {
         "n": 427,
         "shape": "entry",
-        "state": "open",
-        "title": "the vision lane is offline on every provider — six attempts, all timeouts (OPEN, found live 2026-09-09)",
+        "state": "coded",
+        "title": "the vision lane is offline on every provider — six attempts, all timeouts (CODED 2026-09-10; found live 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** OPEN. Reproduced live 2026-09-09. ``` vision.attempt nim meta/llama-3.2-11b-vision-instruct 4430ms ok=false timedOut=true vision.attempt nim2 meta/llama-3.2-11b-vision-instruct 4009ms ok=false timedOut=true vision.attempt google gemini-flash-latest 4005ms ok=false timedOut=true vision.call source=build-refine ms=17313 ok=false offline=true attemptsTried=6 chars=0 ``` Every rung timed out at roughly 4s and the whole call gave up after 17.3s having produced nothing. The consumer here was `build-refine`, so the landing-page build completed **without** its visual refinement pass — see BUG-431's note that the build's lane head was also skipped. Related and previously recorded: [[vision-lane-nim-dead-time]] (8s per look burned on NIM). This session shows the same shape now extending to Google, which suggests a shared cause — a too-short per-attempt ceiling for vision payloads — rat…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-10. build-refine now forwards configured vision budgets, keeps the PNG artifact and sends JPEG quality 80. Byte counts and maximum loop.stalled lag observed during critique expose the payload/stall confound. Code checks passed; whether JPEG quality 80 is sufficient for the real judge remains untested. ``` vision.attempt nim meta/llama-3.2-11b-vision-instruct 4430ms ok=false timedOut=true vision.attempt nim2 meta/llama-3.2-11b-vision-instruct 4009ms ok=false timedOut=true vision.attempt google gemini-flash-latest 4005ms ok=false timedOut=true vision.call source=build-refine ms=17313 ok=false offline=true attemptsTried=6 chars=0 ``` Every rung timed out at roughly 4s and the whole call gave up after 17.3s having produced nothing. The consumer here was `build-refine`, so the landing-page build completed **without** its visual refinement pass — see BUG-431's note…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "nim 4430ms, nim2 4009ms, google 4005ms - all timedOut=true; vision.call ms=17313 ok=false offline=true attemptsTried=6 chars=0. Consumer here was build-refine, so the landing page shipped with no visual refinement. Same shape as the recorded NIM dead-time finding, now extending to Google, which points at a per-attempt ceiling too short for vision payloads rather than three outages. Measure the ceiling against a real image before re-ranking.",
-          "source": "mythos/src/core/brain/lanes.default.js vision table; mythos/src/core/effectors/build-engine.js"
+          "disposition": "blocked",
+          "evidence": "build-refine now forwards configured vision budgets, keeps the PNG artifact and sends JPEG quality 80. Byte counts and maximum loop.stalled lag observed during critique expose the payload/stall confound. Code checks passed; whether JPEG quality 80 is sufficient for the real judge remains untested. Diagnoses: Sept 9 filing and Sept 10 replay.",
+          "source": "mythos/src/core/effectors/build-refine.js; mythos/src/core/effectors/build-runner.js; mythos/src/main.js"
         }
       },
       {
@@ -5651,14 +5651,14 @@
       {
         "n": 430,
         "shape": "entry",
-        "state": "open",
-        "title": "the search chain degrades continuously — 36 provider failures in a 31-minute session (OPEN, found live 2026-09-09)",
+        "state": "coded",
+        "title": "the search chain degrades continuously — 36 provider failures in a 31-minute session (CODED 2026-09-10; found live 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** OPEN. Reproduced live 2026-09-09. This is the measurement decision D4 was waiting for. ``` search-provider-failed x36 playbook search-provider-degrade last: HTTP 401 search-provider-unsuppressed x6 (ddg-lite, ddg-html, local-websearch cycling back) web_fetch 0 ok / 2 fail (\"Could not fetch content from …\") web_search 12 ok / 0 fail — but see below ``` `web_search` reporting 12/12 ok is misleading and is the reason this needs its own ticket. **The model ran eleven separate searches to answer one question** — \"what is the latest song by The Kid LAROI\" — reformulating each time: ``` \"latest song by The Kid LAROI\" → \"what is the latest song by The Kid LAROI\" → \"The Kid LAROI latest song release history September 2026\" → \"what is the absolute newest The Kid LAROI song title as of September 2026\" → \"The Kid LAROI discography single releases August September 2026\" … and six more ```…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-10. The healer now shares the search ladder first cooldown of 60s. Live function responses caution after four searches within 120s without a successful fetch; pending and late rows share one trace. Jina keyless remains deliberate. These changes reduce churn; they do not make blocked scrapers answer. Search procurement D4 remains the operator decision. ``` search-provider-failed x36 playbook search-provider-degrade last: HTTP 401 search-provider-unsuppressed x6 (ddg-lite, ddg-html, local-websearch cycling back) web_fetch 0 ok / 2 fail (\"Could not fetch content from …\") web_search 12 ok / 0 fail — but see below ``` `web_search` reporting 12/12 ok is misleading and is the reason this needs its own ticket. **The model ran eleven separate searches to answer one question** — \"what is the latest song by The Kid LAROI\" — reformulating each time: ``` \"latest song by T…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "search-provider-failed x36 in 31 minutes (last: HTTP 401), search-provider-unsuppressed x6 cycling ddg-lite/ddg-html/local-websearch, web_fetch 0/2. web_search reports 12/12 ok, which measures completion and not answers: eleven reformulated searches for one question (\"latest song by The Kid LAROI\") and it was never answered. Large share of session token spend. Consumers: research, and decision D4 which was waiting for exactly this measurement.",
-          "source": "mythos/src/core/effectors/from-research.js; mythos/.env.example search provider keys"
+          "disposition": "blocked",
+          "evidence": "The healer now shares the search ladder first cooldown of 60s. Live function responses caution after four searches within 120s without a successful fetch; pending and late rows share one trace. Jina keyless remains deliberate. These changes reduce churn; they do not make blocked scrapers answer. Search procurement D4 remains the operator decision. Diagnoses: Sept 9 filing and Sept 10 replay.",
+          "source": "mythos/src/core/immune/healer.js; mythos/src/core/voice/action-evidence-ledger.js; mythos/src/core/voice/live-tool-adapter.js"
         }
       },
       {
@@ -5691,8 +5691,8 @@
     "counts": {
       "verified": 82,
       "fixed": 177,
-      "open": 16,
-      "coded": 3,
+      "open": 12,
+      "coded": 7,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
@@ -5701,16 +5701,12 @@
     "openDeclared": [
       274,
       275,
-      420,
       421,
       422,
       423,
       424,
       425,
-      426,
-      427,
       428,
-      430,
       431,
       432
     ],
