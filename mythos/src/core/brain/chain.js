@@ -332,20 +332,25 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
         if (c.breaker) c.breaker.recordFailure();
       } else { wholeLaneTimeoutStreaks.set(key, streak); names.push(key); }
     });
-    if (!names.length) return;
-    console.warn('[brain chain] whole-lane-timeout: ' + names.length + ' attempt(s) all timed out at the '
+    // Review 2026-09-10: the walk where every pair hits the limit is the one that
+    // matters, and it used to return here before the warn and the anomaly — a
+    // lane benched in lockstep left no line anywhere. Both branches now report.
+    const forcedNote = forcedCooldowns ? '; ' + forcedCooldowns + ' pair(s) at the '
+      + limit + '-walk streak limit were cooled and their breakers tripped (BUG-426)' : '';
+    console.warn('[brain chain] whole-lane-timeout: ' + (names.length + forcedCooldowns) + ' attempt(s) all timed out at the '
       + 'per-attempt ceiling (' + attemptTimeoutMs + 'ms), nothing answered, and no provider failed for a '
-      + 'reason that names it — treating this as a local/network fault and NOT cooling down: '
-      + JSON.stringify(names.slice(0, 8)));
+      + 'reason that names it — ' + (names.length ? 'treating this as a local/network fault and NOT cooling down: '
+      + JSON.stringify(names.slice(0, 8)) : 'streak limit reached') + forcedNote);
     if (bus && typeof bus.emit === 'function') {
       try {
         bus.emit('health.anomaly', {
           kind: 'chain-whole-lane-timeout',
           reason: 'every ' + effectiveKind + ' attempt timed out at the ' + attemptTimeoutMs
             + 'ms per-attempt ceiling and nothing answered, which is one shared cause rather than '
-            + names.length + ' provider outages — cooldowns were not taken',
+            + (names.length + forcedCooldowns) + ' provider outages — '
+            + (names.length ? 'cooldowns were not taken' : 'no pair left exempt') + forcedNote,
           target: effectiveKind,
-          attempts: names.length,
+          attempts: names.length + forcedCooldowns,
           forcedCooldowns: forcedCooldowns,
           attemptTimeoutMs: attemptTimeoutMs,
         });
