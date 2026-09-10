@@ -347,7 +347,11 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
+<<<<<<< HEAD
       "value": 7652,
+=======
+      "value": 7642,
+>>>>>>> fix/bug-434-typing-backs-a-sent-claim
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5707,13 +5711,14 @@
         "n": 434,
         "shape": "entry",
         "state": "open",
-        "title": "a successful typing action was retracted because \"I sent the text to that box\" matched the message-sending claim category (OPEN, filed 2026-09-10)",
+        "title": "a successful typing action was retracted because \"I sent the text to that box\" matched the message-sending claim category (CODED 2026-09-10; filed 2026-09-10)",
         "detail": {
-          "cause": "the `sending` category (`tools: whatsapp_send, gmail_send, phone_sms_send`, first-person \"sent/texted/emailed/messaged\" regex) treats any first-person \"sent\" without a send tool as unbacked. A successful `ui_type` is not a backing tool for it, so a truthful description of typing was punished. The file's own header says a false positive here is worse than a miss (2026-08-14, F1b)."
+          "cause": "the `sending` category (`tools: whatsapp_send, gmail_send, phone_sms_send`, first-person \"sent/texted/emailed/messaged\" regex) treats any first-person \"sent\" without a send tool as unbacked. A successful `ui_type` is not a backing tool for it, so a truthful description of typing was punished. The file's own header says a false positive here is worse than a miss (2026-08-14, F1b).",
+          "verification": "`test/bug-434-typing-backs-a-sent-claim.test.js` 7/7 (red first: (a) and (a2) failed against unfixed source with \"1 claim flagged — the 09:51 false positive is back\"). Three mutations, each grep-verified applied and restored sha256-identical: deleting `backingTools` reddens (a)(a2)(f); replacing `!elliptical` with `true` reddens (e); renaming `send_key` to a non-existent tool reddens the derived guard in `test/claim-check-categories.test.js`, which now iterates `backingTools` as well as `tools`. All 15 test files that touch claim-check: 272/272, 0 skipped, including the BUG-423 Reddit corpus replay."
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODE LEFT: backingTools on the sending claim category (ui_type, send_key) + its test] A successful ui_type was retracted because \"I sent the text to that box\" matched the sending claim category, which has no typing tool among its backers. Replay of the 09:51 sentence is the pending regression.",
+          "evidence": "[CODED 2026-09-10; live verification pending] A successful ui_type was retracted because \"I sent the text to that box\" matched the sending claim category, which has no typing tool among its backers. Fixed with backingTools on that category, gated so the elliptical tier keeps its counter-evidence.",
           "source": "mythos/src/core/voice/claim-check.js"
         }
       },
