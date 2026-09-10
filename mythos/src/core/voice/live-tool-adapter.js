@@ -302,7 +302,7 @@ function createLiveToolAdapter(deps) {
     cua_click: true,
     browser_click: true,
   };
-  const executedSignatures = new Set(); const routeMemory = require('./browser-route-guard').createRouteMemory(); // BUG-435: a route is remembered at the dispatch site, not here — the guard's header says why.
+  const executedSignatures = new Set(); const routeMemory = require('./browser-route-guard').createRouteMemory({ browserOnline: deps.browserOnline }); // BUG-435: a route is remembered at the dispatch site, not here, and the named-browser refusal needs to know whether the debug browser is ALREADY attached — undefined here means the guard reads the real adapter itself. The guard's header says why both matter.
 
   // BUG-272 T2: cross-turn suppression for calls whose LAST outcome was a failure
   // or came back unverified.

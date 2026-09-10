@@ -30,8 +30,16 @@ const turnWith = (events, actions, ackMs) => ({ events, actions, timedOut: false
 
 test('requiring the runner drives nothing', () => {
   assert.equal(typeof gp.verdictForStep, 'function');
-  assert.equal(gp.STEPS.length, 4);
-  assert.deepEqual(gp.STEPS.map((s) => s.id), ['open', 'pause', 'resume', 'next']);
+  // Five since 2026-09-11: a named-browser turn was added after this script
+  // missed BUG-435's regression. Every step said "Open YouTube" with no browser
+  // named, so it would have reported PASS while "open YouTube in Brave" opened
+  // nothing at all. The count is asserted so a step cannot be quietly dropped —
+  // which is exactly how an instrument stops measuring the thing that broke.
+  assert.equal(gp.STEPS.length, 5);
+  const named = gp.STEPS.find((s) => s.nameBrowser);
+  assert.ok(named, 'the named-browser turn must survive: it is the one BUG-435 needed');
+  assert.match(named.text, /\bBrave\b|\bChrome\b|\bEdge\b/, 'and it has to actually name a browser');
+  assert.deepEqual(gp.STEPS.map((s) => s.id), ['open-named', 'open', 'pause', 'resume', 'next']);
 });
 
 test('a proven tool plus a playing oracle is PASS', () => {

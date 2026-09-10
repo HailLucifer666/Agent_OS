@@ -139,20 +139,44 @@ describe('BUG-398 E3 — open_web says which browser it uses, and how to name on
       + 'nothing in the tool said why');
   });
 
-  it('(b) and points at the parameter that CAN target a named browser', () => {
+  // DISPOSITION CHANGED 2026-09-11, and E3's principle is the reason it had to.
+  //
+  // E3 pinned that open_web must tell the model what to do when the operator
+  // names a browser, because "a limit with no route out of it is where the model
+  // improvises". It pinned that by requiring the description to point at
+  // open_web's OWN browserName parameter — correct at the time.
+  //
+  // BUG-435 then moved the route: the operator decided (2026-09-10) that a named
+  // browser means the browser MYTHOS drives, so the spoken path REFUSES
+  // browserName. The 2026-09-10 guard shipped with these sentences left in place,
+  // and the result on 2026-09-10 18:21Z was E3's own failure mode, exactly:
+  // the description advertised a route the guard refused, the model took it four
+  // times, and nothing opened. A limit with no route out of it.
+  //
+  // So the assertions below still pin E3's guarantee — the trigger condition is
+  // stated, and there is a way out — they just no longer pin the destination
+  // open_web itself can serve. What must NOT be lost is the pairing: naming the
+  // limit without naming the exit is the defect both tickets are about.
+  it('(b) states the trigger condition AND a route out of it — E3\'s rule, new destination', () => {
     const { browserParam, browserNameParam, description } = openWebTool();
     assert.match(browserParam + browserNameParam + description, /browserName/,
       'a limit with no route out of it is where the model improvises');
     assert.match(browserNameParam, /chrome, brave or edge/,
       'and the route must say what it accepts');
-    assert.match(browserNameParam, /whenever the operator named a browser/,
+    assert.match(browserNameParam, /a named browser|they named a browser/,
       'the model needs the trigger condition, not just the capability');
+    assert.match(browserNameParam, /REFUSED|BUG-435/,
+      'and since 2026-09-11 the trigger says this route is the wrong one, or the model tries it');
   });
 
   it('the prose says it too, where a reader looks first', () => {
     const { description } = openWebTool();
     assert.match(description, /By default that is the OS DEFAULT browser/);
-    assert.match(description, /if they NAMED a browser/);
+    assert.match(description, /NAMES? a browser/,
+      'the case still has to be addressed in the prose, whatever the answer is');
+    assert.match(description, /refuses it|WRONG/,
+      'and the prose must say the answer is elsewhere — this is the sentence whose absence '
+      + 'cost the 2026-09-10 18:21Z run, when it still said "pass browserName" while the guard refused it');
   });
 
   it('the superseded claims are GONE, not merely outranked by a newer sentence', () => {

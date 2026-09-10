@@ -140,3 +140,48 @@ file adds the invariants specific to this layer.
 - Skill/plan bookkeeping (`skills.recordUse`, `goals.markPlanStepDone`) and
   episodic/audit writes are all best-effort and wrapped so a failure there
   can never mask or override the actual dispatch result.
+
+## Refusals (any guard that blocks a tool call)
+
+A guard that refuses a call has not finished its job by refusing. Three times
+now a refusal here has left the model with no way forward, and each time the
+user got LESS than before the guard existed:
+
+- **BUG-099** — a wrong-browser refusal said "call `browser_launch_debug`". That
+  tool was not in the Live allowlist, so the spoken path could not call it.
+- **BUG-107** — the same refusal's other remedy, `browser_switch`, was withheld
+  too. `live-tools.js` records it as "the same 'a hint naming an unreachable
+  tool is not a remedy' gap BUG-099 fixed".
+- **BUG-435** — 2026-09-10 18:21Z. The named-browser refusal pointed at
+  `browser_launch_debug`, which had already run and connected twenty seconds
+  earlier. Reachable, but already satisfied. The model retried the refused call
+  four times and no page opened at all — worse than the two windows the guard
+  was written to prevent.
+
+So, before a refusal ships:
+
+1. **Name the next tool in the MESSAGE, not only in a structured field.** The
+   message is the channel the model reads. BUG-435 put its tools in `remedy`
+   and an invented `then` field; `then` is read by nothing in this repo and the
+   model ignored both. A structured `remedy()` beside the prose is right — the
+   prose alone is not, and the structure alone is not either.
+2. **The tool you name must be reachable AND not already done.** Reachability is
+   automated in `test/refusal-is-actionable.test.js`. "Already done" depends on
+   runtime state and cannot be: derive the suggestion from that state, and pin
+   it with a test that puts the system in the state where the obvious advice is
+   already satisfied.
+3. **Ship a test that reaches the GOAL, not one that observes the refusal.**
+   Drive the refusal's own remedy through to the thing the operator asked for,
+   and assert the arguments arrived — a sequence that reaches `browser_navigate`
+   with no url is not a page. Before 2026-09-11 this whole suite contained two
+   tests that went past a refusal at all, and neither reached a goal.
+4. **Check what the tool DESCRIPTIONS say.** A guard that refuses what a tool's
+   own description instructs is fighting the prompt, and the prompt wins:
+   BUG-435's root cause was `open_web` still saying "if they NAMED a browser,
+   pass browserName". The mismatch was even filed as a follow-up before the
+   incident. A follow-up that contradicts the change it follows is not a
+   follow-up; it is an unfinished fix.
+5. **For anything on the voice or browser path, record a `golden-path.js` line
+   before and after.** `mythos/scripts/golden-path.js` drives the real workflow
+   and grades on tool evidence plus the media oracle. It exists, and on
+   2026-09-10 seven changes shipped to this path without it being run once.

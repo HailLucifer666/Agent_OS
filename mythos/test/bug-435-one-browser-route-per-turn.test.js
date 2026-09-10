@@ -38,6 +38,31 @@
 // than a correctness property (both pages really did open), so nothing observed
 // it until the memory test was made to assert which url the refusal quotes.
 
+// REPAIR 2026-09-11 — THE FIX ABOVE MADE THE BUG WORSE IN PRODUCTION.
+// Attended run, 2026-09-10 18:21Z. "Open YouTube in Brave": browser_launch_debug
+// ran and CONNECTED over CDP, then open_web was refused four times, and
+// browser_navigate was never called. No page opened at all — worse than the two
+// windows this guard exists to prevent. Three causes, all now covered here:
+//   - open_web's own description still said "if they NAMED a browser, pass
+//     browserName", so the model was doing what it was told. BUGS.md carried the
+//     mismatch as "Flagged, not done". The coupling test in the pure-decision
+//     block is the one that would have caught it, and it did not exist.
+//   - the refusal's remedy was browser_launch_debug — already done, twenty
+//     seconds earlier. (k) is that turn.
+//   - the message named no tool at all, and the `then` field carrying the second
+//     step is read by nothing in this repo. (g) now asserts the prose.
+// (l) is the assertion the whole file was missing: not "was it refused" but "did
+// the operator get their page". Every test here before today stopped at the
+// refusal.
+//
+// MUTATION RUN 2026-09-11, each verified applied and restored sha256-identical:
+//   `const online = false` (the refusal blind to state again) -> 4 red, (k) among them
+//   the message stops naming browser_navigate                 -> (k) red
+//   the offline message stops naming the second step          -> (g) red
+//   from-dashboard's old browserName instruction restored     -> the coupling test red
+// And one that reddened nothing until the test was fixed: repeating the refused
+// call BYTE-IDENTICALLY returns 'duplicate-suppressed', not a refusal — see (m).
+
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
@@ -47,8 +72,12 @@ const { checkBrowserRoute, browserRouteOf, parseSignature, createRouteMemory } =
 // `deny` lets a test refuse ONE tool at the leash, which is the only way to
 // reach the state the route memory used to get wrong: a call seen, recorded and
 // never dispatched.
-function harness({ deny = null } = {}) {
+// `browserOnline` is the fact the 2026-09-10 refusal was blind to. Injected so a
+// test can be in the state the live 18:21Z turn was in — debug browser already
+// attached — without a CDP socket.
+function harness({ deny = null, browserOnline = false } = {}) {
   const dispatched = [];
+  const dispatchedCalls = [];
   const logs = [];
   const session = { isOpen: () => true, sendText: () => {} };
   const adapter = createLiveToolAdapter({
@@ -58,8 +87,13 @@ function harness({ deny = null } = {}) {
         : { allow: true, requireConfirm: false, tier: 2, reason: 'within-autonomous-max' }),
       confirm: { create: () => 'confirm-435' },
     },
+    browserOnline: () => browserOnline,
     dispatchAction: async (decision) => {
+      // The ARGS are recorded, not just the tool name. A sequence that reaches
+      // browser_navigate without the url is not the user's goal reached, and the
+      // first version of this file could not tell the difference.
       dispatched.push(decision.tool);
+      dispatchedCalls.push({ tool: decision.tool, args: decision.args });
       return { ok: true, result: { handedToBrowser: true } };
     },
     bus: { emit() {} },
@@ -71,7 +105,7 @@ function harness({ deny = null } = {}) {
     summarizeActionsForResult,
     getLiveSession: () => session,
   });
-  return { adapter, dispatched, logs };
+  return { adapter, dispatched, dispatchedCalls, logs };
 }
 
 function call(adapter, id, name, args) {
@@ -85,6 +119,9 @@ function call(adapter, id, name, args) {
 // browser means the debug browser (2026-09-10), this exact call is refused on its
 // own — so the cross-route tests below use the UNNAMED operator-route call, which
 // is the one that still legitimately reaches the signed-in browser.
+// The debug-browser state the refusal now reads, as the two answers it can give.
+const ON = { browserOnline: () => true };
+const OFF = { browserOnline: () => false };
 const OPEN_WEB_BRAVE = { browser: true, type: 'web', url: 'https://www.youtube.com', browserName: 'brave' };
 const OPEN_WEB_DEFAULT = { browser: true, type: 'web', url: 'https://www.youtube.com' };
 const LAUNCH_DEBUG_BRAVE = { browser: 'brave' };
@@ -165,16 +202,81 @@ describe('BUG-435 — one real-browser route per turn (adapter)', () => {
     assert.equal(r.status, 'refused');
     assert.equal(r.reason, 'named-browser-is-the-debug-route');
     assert.deepEqual(dispatched, [], 'nothing may reach a real browser');
-    // Structured, not prose: a tool taught in a sentence is the debt the remedy
-    // ratchet exists to stop growing, and remedy() validates the tool name against
-    // TIER_TABLE so a rename cannot leave the model a call that does not exist.
+    // Structured AND spoken. remedy() validates the tool against TIER_TABLE so a
+    // rename cannot leave the model a call that does not exist — but the tools
+    // must ALSO be in the sentence. The first version of this refusal put them
+    // only in structured fields and the model never acted on them; see the
+    // module header for the 18:21Z measurement.
     assert.equal(r.remedy.tool, 'browser_launch_debug');
     assert.deepEqual(r.remedy.args, { browser: 'brave' });
-    assert.equal(r.then.tool, 'browser_navigate');
-    assert.deepEqual(r.then.args, { url: 'https://www.youtube.com' });
-    assert.ok(r.remedy.why && r.then.why, 'a remedy has to say why');
+    assert.ok(r.remedy.why, 'a remedy has to say why');
+    assert.match(r.message, /browser_launch_debug/, 'the message must name the call to make');
+    assert.match(r.message, /browser_navigate/, 'and the one after it, or the page never loads');
+    assert.equal(r.then, undefined, 'the invented `then` field is gone — nothing read it');
     assert.ok(logs.some((l) => l.event === 'live.browser-route-conflict'),
       'the refusal is logged like the other one');
+  });
+
+  test('(k) THE 18:21Z REGRESSION: with the debug browser already attached, the remedy is navigate — never the launch it just did', async () => {
+    // This is the turn that opened nothing at all. browser_launch_debug had run
+    // and CONNECTED; the refusal still answered "call browser_launch_debug", so
+    // the model retried open_web four times and no page ever loaded. A remedy
+    // whose step is already satisfied is as unfollowable as one naming a tool
+    // that does not exist — the class BUG-099 and BUG-107 each fixed once.
+    const { adapter, dispatched } = harness({ browserOnline: true });
+    const r = await call(adapter, 'fc_1', 'open_web', OPEN_WEB_BRAVE);
+    assert.equal(r.status, 'refused');
+    assert.equal(r.remedy.tool, 'browser_navigate', 'the browser is up; the only thing left is to navigate it');
+    assert.deepEqual(r.remedy.args, { url: 'https://www.youtube.com' });
+    assert.match(r.message, /already open and attached/);
+    assert.match(r.message, /browser_navigate/);
+    assert.doesNotMatch(r.message, /Call browser_launch_debug/,
+      'telling the model to redo a finished step is what produced the four-refusal loop');
+    assert.deepEqual(dispatched, []);
+  });
+
+  test('(l) THE GOAL IS REACHED, not merely refused: refusal -> launch -> navigate puts the url in a real browser', async () => {
+    // The assertion this file did not have. Every other test here stops at "was
+    // refused"; a guard is only correct if the thing the operator asked for still
+    // happens. The url is checked at the dispatcher, because a sequence that
+    // reaches browser_navigate with no url is not a page.
+    const { adapter, dispatchedCalls } = harness();
+    const refused = await call(adapter, 'fc_1', 'open_web', OPEN_WEB_BRAVE);
+    assert.equal(refused.status, 'refused');
+    const launched = await call(adapter, 'fc_2', refused.remedy.tool, refused.remedy.args);
+    assert.equal(launched.status, 'ok', launched.message);
+    const navigated = await call(adapter, 'fc_3', 'browser_navigate', { url: 'https://www.youtube.com' });
+    assert.equal(navigated.status, 'ok', navigated.message);
+    assert.deepEqual(dispatchedCalls.map((c) => c.tool), ['browser_launch_debug', 'browser_navigate']);
+    assert.equal(dispatchedCalls[1].args.url, 'https://www.youtube.com',
+      'the page the operator asked for has to be the page that loads');
+  });
+
+  test('(m) pinned: a re-ask gets the SAME actionable answer — refusals are deliberately not remembered', async () => {
+    // Deliberately NOT changing behaviour on the second ask. The four-refusal
+    // loop was caused by dead advice, not by repetition, and an answer that
+    // changes the second time is a new way to be wrong. If a future change adds
+    // refusal memory, this test is the conversation to have first.
+    //
+    // WRITTEN WRONG FIRST, AND THE FAILURE IS WORTH KEEPING. The original version
+    // repeated the call BYTE-IDENTICALLY and asserted 'refused'; it came back
+    // 'duplicate-suppressed', because isDuplicateSignature already catches an
+    // exact repeat within a turn. That is a real protection and is asserted here
+    // rather than assumed. It also settles what the live 18:21Z turn must have
+    // looked like: four calls all reached the guard, so they cannot have been
+    // byte-identical within one turn — the model varied the args or the asks
+    // spanned turns, which is why the guard, not the deduper, had to be the thing
+    // that answered usefully.
+    const { adapter } = harness({ browserOnline: true });
+    const first = await call(adapter, 'fc_1', 'open_web', OPEN_WEB_BRAVE);
+    assert.equal(first.status, 'refused');
+    const identical = await call(adapter, 'fc_2', 'open_web', OPEN_WEB_BRAVE);
+    assert.equal(identical.status, 'duplicate-suppressed', 'an exact repeat never reaches the guard');
+    // The live shape: same intent, different bytes. This one does reach the guard.
+    const varied = await call(adapter, 'fc_3', 'open_web', { ...OPEN_WEB_BRAVE, url: 'https://www.youtube.com/' });
+    assert.equal(varied.status, 'refused');
+    assert.equal(varied.remedy.tool, first.remedy.tool);
+    assert.equal(varied.remedy.tool, 'browser_navigate', 'and it is still the one that works');
   });
 
   test('(h) and the debug launch it asks for is then allowed — the refusal must not have taken the route', async () => {
@@ -267,9 +369,59 @@ describe('browser-route-guard — the pure decision', () => {
     assert.equal(checkBrowserRoute('open_web', { browserName: 'brave', type: 'web' }, new Set()), null);
     assert.equal(checkBrowserRoute('browser_launch_debug', { browser: 'brave' }, new Set()), null);
     // A named call with no url still names the missing argument rather than
-    // inventing one.
-    const noUrl = checkBrowserRoute('open_web', { browser: true, browserName: 'edge' }, new Set());
-    assert.deepEqual(noUrl.response.then.needsInput, ['url']);
+    // inventing one — on the attached branch, which is the one that hands back
+    // browser_navigate and therefore the one that needs a url.
+    const noUrl = checkBrowserRoute('open_web', { browser: true, browserName: 'edge' }, new Set(), ON);
+    assert.deepEqual(noUrl.response.remedy.needsInput, ['url']);
+    // And on the OTHER branch there is nothing missing to name: the launch takes
+    // the browser it was given, and the url is the step after it.
+    assert.equal(checkBrowserRoute('open_web', { browser: true, browserName: 'edge' }, new Set(), OFF)
+      .response.remedy.needsInput, undefined);
+  });
+
+  test('the next call is derived from the browser state, and an unreadable state fails towards launching', () => {
+    // The state read is injected, so this is the whole decision table in one
+    // place. The default reader is the real adapter singleton; when it throws or
+    // is missing it answers "not attached", which routes to browser_launch_debug
+    // — idempotent (it returns alreadyOnline) so the safe direction costs nothing.
+    const args = { browser: true, browserName: 'brave', url: 'https://a' };
+    assert.equal(checkBrowserRoute('open_web', args, new Set(), OFF).response.remedy.tool, 'browser_launch_debug');
+    assert.equal(checkBrowserRoute('open_web', args, new Set(), ON).response.remedy.tool, 'browser_navigate');
+    const throws = { browserOnline: () => { throw new Error('no adapter'); } };
+    assert.throws(() => checkBrowserRoute('open_web', args, new Set(), throws), /no adapter/,
+      'an injected reader that throws is the test\'s fault and must not be swallowed; only the DEFAULT reader is allowed to fail closed');
+    assert.equal(checkBrowserRoute('open_web', args, new Set(), {}).response.remedy.tool, 'browser_launch_debug',
+      'no reader supplied falls through to the real adapter, which is OFFLINE in a test process');
+  });
+
+  test('THE COUPLING THAT WAS MISSING: no tool description may teach the shape this guard refuses', () => {
+    // The root cause of the 18:21Z incident, and the only test here that could
+    // have prevented it. open_web's own model-facing description said "if they
+    // NAMED a browser, pass browserName as well" while the guard refused exactly
+    // that. The model did as it was told and was refused four times. BUGS.md even
+    // carried the mismatch as "Flagged, not done" — a follow-up that contradicts
+    // the thing it follows is an unfinished fix, not a follow-up.
+    //
+    // Derived, not hardcoded: it asks the GUARD what it refuses, then holds the
+    // descriptions to that answer. A future change to the decision moves this
+    // test with it instead of leaving a stale assertion behind.
+    const refused = checkBrowserRoute('open_web', { browser: true, browserName: 'brave', url: 'https://a' }, new Set(), OFF);
+    assert.equal(refused && refused.response.reason, 'named-browser-is-the-debug-route',
+      'if this decision is ever reversed, the assertions below are what must change with it');
+    const { buildTools } = require('../src/core/effectors/from-dashboard');
+    const { TOOLS } = buildTools({
+      goalsEffector: {}, pipeline: {}, kanban: {}, agentActions: {}, buildRunner: {},
+      vault: {}, config: {}, bus: { emit() {} }, probes: { getStatus: async () => ({}) },
+    });
+    const entry = TOOLS.find((t) => t.name === 'open_web');
+    assert.ok(entry, 'open_web must still be registered in from-dashboard.js');
+    const text = entry.description + ' ' + Object.values(entry.params).join(' ');
+    assert.doesNotMatch(text, /NAMED?\s+a\s+browser[^.]{0,80}pass\s+browserName/i,
+      'the description must not instruct the argument the guard refuses');
+    assert.doesNotMatch(text, /Pass it whenever the operator named a browser/i,
+      'nor may the parameter doc, which is the sentence the model actually reads for an argument');
+    assert.match(text, /BUG-435|REFUSED/,
+      'and it has to say that a named browser goes elsewhere, or the model has no reason not to try');
   });
 
   test('checkBrowserRoute: conflict only across routes, never within one, and never from a non-route or unreadable entry', () => {
