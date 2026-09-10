@@ -38,6 +38,66 @@
 // result measured in this repo.
 const EVIDENCE_DIGEST_MAX = 20000;
 
+// BUG-275 H1 — THE MENTION-ONLY SPLIT.
+//
+// H1 is not a fabrication and the absence test above cannot see it. The model
+// spoke a top five where the evidence held a ranking of three, and the two extra
+// names really were in the result — "Gemini CLI" only inside "An in-depth
+// comparison of Claude Opus 5, GPT-5.6 Sol, Gemini CLI, GitHub Copilot", which
+// gives no positions at all. So the reply promoted a name out of unranked prose
+// into rank position five. Absence cannot detect a name that is present.
+//
+// THE QUESTION IS ASKED FROM THE REPLY SIDE, WHICH IS WHY THIS IS SMALL. The
+// obvious design — parse names out of the snippet and classify their context —
+// is a model of a document, and this file's own header records what those do:
+// they drift, and they drift open. Nothing here extracts a name. The digest
+// simply says which of its prose was a comparison-style list, and the detector
+// asks about names it already has from the REPLY. A marker set that misses a
+// phrasing produces a missed detection, never an accusation.
+//
+// THE MARKERS ARE DELIBERATELY FOUR PHRASES, NOT A GRAMMAR. Each one introduces
+// a list of names as members of a set rather than as ranked positions. "versus"
+// and "compared to" were considered and REJECTED: the same measured result
+// contains "(89.5% vs 89.1%)", a comparison of two numbers inside a sentence
+// about two models, and admitting it would have classified a whole ranked-prose
+// snippet as mention-only. Narrow and provable beats broad and arguable here.
+//
+// FAIL CLOSED, AND THE ASYMMETRY IS THE POINT. `mentionOnly` carries ONLY the
+// sentences positively classified; everything else — including every sentence
+// the classifier cannot read — goes to `elsewhere`. The detector requires a name
+// to be in `mentionOnly` AND absent from `elsewhere`, so an unclassifiable
+// sentence that mentions the name silences the finding. That is a miss, which is
+// the direction this whole file family is required to err in.
+const MENTION_MARKERS = [/\bcomparison of\b/i, /\bsuch as\b/i, /\balongside\b/i, /\bincluding\b/i];
+
+// Strings only, and URLs excluded: a slug like /claude-opus-5-convergence/ is not
+// prose and classifying it either way would be inventing evidence.
+function proseStrings(value, out, depth) {
+  if (depth > 6 || out.length > 200) return out;
+  if (typeof value === 'string') { if (!/^https?:\/\//i.test(value.trim())) out.push(value); return out; }
+  if (Array.isArray(value)) { for (const v of value) proseStrings(v, out, depth + 1); return out; }
+  if (value && typeof value === 'object') {
+    for (const [key, v] of Object.entries(value)) { if (key !== 'url') proseStrings(v, out, depth + 1); }
+  }
+  return out;
+}
+
+// Sentence splitting is coarse on purpose. A wrong boundary moves text between
+// the two buckets, and a boundary that puts too much in `elsewhere` silences a
+// finding while one that puts too much in `mentionOnly` is caught by the
+// `elsewhere` requirement on the other side.
+function classifyProse(result) {
+  const mention = [];
+  const elsewhere = [];
+  for (const chunk of proseStrings(result, [], 0)) {
+    for (const sentence of String(chunk).split(/(?<=[.!?])\s+|\n+/)) {
+      if (!sentence.trim()) continue;
+      (MENTION_MARKERS.some((re) => re.test(sentence)) ? mention : elsewhere).push(sentence);
+    }
+  }
+  return { mentionOnly: normalizeForEvidence(mention.join(' ')), elsewhere: normalizeForEvidence(elsewhere.join(' ')) };
+}
+
 function normalizeForEvidence(value) {
   return String(value === null || value === undefined ? '' : value)
     .toLowerCase()
@@ -63,9 +123,15 @@ function buildEvidenceDigest(result) {
   if (raw === undefined) return null;
   const text = normalizeForEvidence(raw);
   if (!text) return null;
+  // BUG-275 H1: the two buckets ride WITH the digest, so the ledger row that
+  // already carries `text` carries them too and no second wiring can be
+  // forgotten. Capped by the same rule as `text` — a truncated digest already
+  // refuses to prove anything, and these are strictly smaller than it.
+  const prose = classifyProse(result);
+  const buckets = { mentionOnly: prose.mentionOnly.slice(0, EVIDENCE_DIGEST_MAX), elsewhere: prose.elsewhere.slice(0, EVIDENCE_DIGEST_MAX) };
   return text.length > EVIDENCE_DIGEST_MAX
-    ? { text: text.slice(0, EVIDENCE_DIGEST_MAX), truncated: true }
-    : { text, truncated: false };
+    ? Object.assign({ text: text.slice(0, EVIDENCE_DIGEST_MAX), truncated: true }, buckets)
+    : Object.assign({ text, truncated: false }, buckets);
 }
 
-module.exports = { normalizeForEvidence, buildEvidenceDigest, EVIDENCE_DIGEST_MAX };
+module.exports = { normalizeForEvidence, buildEvidenceDigest, classifyProse, MENTION_MARKERS, EVIDENCE_DIGEST_MAX };

@@ -80,6 +80,21 @@ const { normalizeForEvidence, buildEvidenceDigest } = require('./evidence-digest
 // that can, on the reply path, which is the one error claim-check.js's header
 // forbids outright. Pinned by test: H1's real utterance against H1's real
 // evidence returns [].
+//
+// 2026-09-10 — H1 IS NOW DETECTED, AND THE PARAGRAPH ABOVE STILL STANDS WORD FOR
+// WORD. Operator decision the same day: a prompt rule plus a SILENT anomaly,
+// never a spoken retraction. `detectPromotedRankedEntities` below is a second,
+// separate detector, and every property that made weakening this one
+// unacceptable is preserved by keeping them apart:
+//   - it never reaches reportTurnAudit, so it cannot inject a correction into a
+//     live turn. It is emitted as health.anomaly telemetry and nothing else.
+//   - the absence test is untouched: H1 against H1's evidence still returns [],
+//     and the test that pins that is unchanged. The two detectors are REQUIRED
+//     to disagree on this input, which is itself pinned.
+//   - the structure classification lives in evidence-digest.js, fails closed,
+//     and extracts no names at all — the question is asked from the reply side
+//     about names rankedEntitiesIn already produced. A marker the classifier
+//     does not know yields a miss.
 // WHAT THIS KILLS: nothing, and that is checked rather than assumed. The
 // obvious candidate is the external-fact category's `top N` shape, added for
 // this same ticket on 2026-08-28 — but the two gates are disjoint by
@@ -157,6 +172,58 @@ function rankedEntitiesIn(sentence) {
     if (name.replace(/[^A-Za-z0-9]/g, '').length >= 3) out.push(name);
   }
   return [...new Set(out)];
+}
+
+// BUG-275 H1 — a name given a rank the evidence never gave it.
+//
+// Fires only when all three hold: the reply enumerates a ranking (the same
+// rankedEntitiesIn the absence test uses, so the two cannot disagree about what
+// a ranking is); the name sits in some usable row's comparison-style prose; and
+// it appears NOWHERE else in the whole usable window. That last clause is what
+// makes this a miss-first detector — one unclassifiable sentence mentioning the
+// name anywhere in the window silences it.
+//
+// TELEMETRY ONLY, BY DECISION. The return shape is deliberately NOT the
+// {category, sentence, ...} shape reportTurnAudit consumes, so wiring it into a
+// spoken correction would be a visible change rather than a one-line mistake.
+// Upgrading it to speech re-opens the fail-closed question and needs its own
+// review: a false positive here would tell MYTHOS to retract a true statement,
+// which is the one error this file family forbids.
+//
+// Returns [] or one entry: { kind, sentence, promoted:[names], sawTools:[tools] }.
+function detectPromotedRankedEntities(assistantText, actionsThisTurn, recentActions) {
+  const text = String(assistantText || '');
+  if (!text) return [];
+  const current = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
+  const recent = Array.isArray(recentActions) ? recentActions : [];
+  const actions = current.concat(recent).filter((a) => a && a.tool);
+  // The same gate as the absence test, for the same reasons, minus the
+  // truncation refusal: a truncated digest cannot prove absence, but the
+  // mention-only buckets here are used to prove PRESENCE in one bucket, and the
+  // `elsewhere` clause is what has to be complete. So truncation is refused too.
+  const usable = actions.filter((a) => EVIDENCE_TOOLS.indexOf(a.tool) !== -1
+    && a.ok === true && a.unverified !== true && a.evidence
+    && a.evidence.truncated !== true && typeof a.evidence.mentionOnly === 'string'
+    && typeof a.evidence.elsewhere === 'string');
+  if (!usable.length) return [];
+  const mentionOnly = usable.map((a) => a.evidence.mentionOnly).join('|');
+  if (!mentionOnly) return [];
+  const elsewhere = usable.map((a) => a.evidence.elsewhere).join('|');
+  const out = [];
+  for (const sentence of splitSentences(text)) {
+    if (FUTURE_RE.test(sentence)) continue;
+    const names = rankedEntitiesIn(sentence);
+    if (!names.length) continue;
+    const promoted = names.filter((n) => {
+      const key = normalizeForEvidence(n);
+      return key.length >= 3 && mentionOnly.indexOf(key) !== -1 && elsewhere.indexOf(key) === -1;
+    });
+    if (!promoted.length) continue;
+    out.push({ kind: 'promoted-ranked-entity', sentence, promoted,
+      sawTools: [...new Set(usable.map((a) => a.tool))] });
+    break; // one per reply, like the other detectors
+  }
+  return out;
 }
 
 // Pure, exported, separately testable — same contract as the two detectors
@@ -316,6 +383,6 @@ function detectDefendedChallenge(assistantText, userText, actionsThisTurn) {
 }
 
 module.exports = {
-  detectUnsourcedRankedEntities, EVIDENCE_TOOLS, rankedEntitiesIn, evidenceFor,
+  detectUnsourcedRankedEntities, detectPromotedRankedEntities, EVIDENCE_TOOLS, rankedEntitiesIn, evidenceFor,
   detectDefendedChallenge,
 };

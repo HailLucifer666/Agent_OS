@@ -1365,7 +1365,7 @@ function createLiveToolAdapter(deps) {
         detectUnsourcedRankedEntities(assistantText, actionsThisTurn, recentActionLedger.forClaims()),
         { claim: 'unsourced-ranked-entity', tool: 'unsourced-ranking',
           site: 'bug275-h3-unsourced-ranking', notice: unsourcedRankingNotice,
-          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) });
+          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) }); require('./promoted-rank-anomaly').reportPromotedRanks({ bus, assistantText, actionsThisTurn, recentActions: recentActionLedger.forClaims() }); // BUG-275 H1, folded onto the line above because this file is AT its size ratchet: a name given a rank its source never gave it. Deliberately NOT through reportTurnAudit — operator decision 2026-09-10; every path through that helper speaks aloud, and why this one must not is in promoted-rank-anomaly.js.
 
       // BUG-275 H2: the operator disputes a claim and the reply EXPLAINS it
       // rather than re-checking — the DIG-IN twin of row 7 above. Its evidence
