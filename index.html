@@ -5678,12 +5678,13 @@
         "n": 432,
         "shape": "entry",
         "state": "open",
-        "title": "back-to-back system notices interrupt each other's turn (OPEN, filed 2026-09-10)",
-        "detail": {},
-        "excerpt": "**Status:** 🔴 OPEN — measured, not fixed. Serializing notices changes live timing and needs its own measured pass. **Evidence:** the 2026-09-09 attended session has 35 `live.interrupted` events; 15 were preceded within 300 ms by MYTHOS's own `live.text-injected`. The 19:30:58 silent-turn fallback followed another system notice by 87 ms, with no audio in the superseded turn. **Scope:** preserve the original events. Do not call every interruption an operator barge-in. BUG-424 can withhold a superseded fallback; that does not serialize the notices or close this ticket. **Attribution:** diagnoses come from the 2026-09-09 filing session and the 2026-09-10 replay. **Measured again 2026-09-10 on the 0.1.12 boots:** the boot greeting's own Live turn was interrupted on 2 of 2 boots by the next system injection — at 00:10:12 a self-heal notice landed 1.05 s after the greeting and killed it with 0…",
+        "title": "back-to-back system notices interrupt each other's turn (CODED 2026-09-10 behind a flag; filed 2026-09-10)",
+        "detail": {
+          "verification": "`test/bug-432-notices-take-turns.test.js` 14/14 — ten against the pure queue with hand-driven timers, four against a real `createLiveSession` on a fake socket, including the flag-off path asserting the old boolean and both frames going out. Six mutations, each grep-verified applied and restored sha256-identical: setting `turnSystemInitiated` at the door again reddens 2; dropping it from `inFlight` reddens 2; draining the whole backlog reddens (4); removing the ceiling reddens (5) and (6); draining on a non-final close reddens (7); removing the operator bypass reddens 2. **MEASURED PASS REQUIRED BEFORE THE FLAG GOES ON, and this is what keeps the ticket open:** replay the 2026-09-09 log's 35 interruptions through the `inFlight` decision and count how many would have been held, then one attended session with the flag on comparing `live.interrupted` counts and checking `live.notice-held` /…"
+        },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODE LEFT: notice serializer behind a flag, then a measured pass] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. Timing changes await a measured pass.",
+          "evidence": "[CODED 2026-09-10 behind VOICE_SERIALIZE_NOTICES, default off; the measured pass is what remains] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. Timing changes await a measured pass.",
           "source": "mythos/src/core/voice/live-session.js"
         }
       },
