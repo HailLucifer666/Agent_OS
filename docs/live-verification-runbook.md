@@ -405,6 +405,332 @@ proves the *voice* path chooses the tools correctly).
 
 ---
 
+## Group D — the 2026-09-10 batch (seven code fixes + four evidence-first tickets)
+
+**Build under test.** The seven fixes ship as seven pull requests (#88–#95) and
+**none of them is merged**, so no branch in the repository contains more than one
+or two of them. Verification runs against the local integration branch
+`verify/live-2026-09-10`, which merges all seven onto `codex/windows-operator`.
+Nothing else carries all seven at once, and the packaged `.exe` carries none of
+them — it is rebuilt by hand and was last measured dozens of commits behind.
+
+**Launch from the repository root with `npm start`** (Electron), not
+`node src/main.js`. The batch entry point runs the server alone: no HUD, no
+global hotkeys, and a different vault root. Three of the checks below are
+unreachable without the Electron shell.
+
+Where the evidence lands:
+
+| What | Path |
+|---|---|
+| Server log | `%APPDATA%\MYTHOS\mythos-server.log` |
+| Electron main log | `%APPDATA%\MYTHOS\logs\main.log` |
+| Episodic vault (anomalies, replies, actions) | `%APPDATA%\MYTHOS\vault\Episodic\<YYYY-MM-DD>.jsonl` |
+
+**Two sittings, deliberately.** Session A is one long normal-use run with
+`LOOP_LAG_TRACE=true`. Session B is a short run with
+`VOICE_SERIALIZE_NOTICES=true`. They are separated because BUG-432 changes live
+timing and BUG-436 is measuring live timing — run both at once and neither
+result can be attributed.
+
+---
+
+## Session A — normal use, `LOOP_LAG_TRACE=true`
+
+Set `LOOP_LAG_TRACE=true` in `mythos/.env` before launching. Leave
+`VOICE_SERIALIZE_NOTICES` unset — its default is off, which is the pre-fix path
+byte for byte. Do the checks in the order below: D1 must be first because it
+depends on an untouched HUD, and D9 must be last because it ends the session.
+
+### D1. BUG-433 — the boot greeting is audible
+
+**What:** `liveForSpeech()` now refuses to open a metered Gemini Live session for
+a client that has announced no way to play it. The greeting therefore falls to
+the TTS chain, which the HUD subscribes to at boot — before the voice bridge
+exists. Previously the greeting was injected into a Live session nobody was
+listening to, and the app started silent until the first wake word.
+
+**Requirements:** speakers on and audible **before** you launch. A cold start —
+no MYTHOS process already running.
+
+**Procedure:**
+1. Turn the speakers up.
+2. `npm start` from the repository root.
+3. **Touch nothing.** Do not click the orb, do not press the talk hotkey, do not
+   say the wake word. Any of those starts the bridge and invalidates the check.
+4. Wait about ten seconds after the HUD window appears. The greeting fires 2.5s
+   after the client connects, plus TTS synthesis time.
+
+**Pass:** you hear the greeting. The log carries
+`proactive.live-skipped-no-listener` and no `live.text-injected` with
+`site:proactive-speak` before it.
+
+**Fail:** silence. Read the log to tell the two causes apart — a
+`live.text-injected` line means the gate did not hold; a TTS chain error means
+the gate held and the fallback failed, which is a different bug.
+
+**Expected, not a defect:** the greeting is in the TTS voice, not Aoede. That is
+the operator decision of 2026-09-10. Press the orb and the session switches to
+the Live voice as usual.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\mythos-server.log" -Pattern 'proactive.live-skipped-no-listener|live.text-injected'
+```
+
+### D2. BUG-268 — Ctrl+Alt+X reads the screen
+
+**What:** not one of the seven — an evidence-first ticket. The global OCR hotkey
+has never been observed being pressed. The keypress goes over the fork IPC to
+the server, which dispatches `screen_read_text` and broadcasts the result back
+to the HUD.
+
+**Requirements:** the Electron shell (the hotkey does not exist under
+`node src/main.js`) and a window with plain readable text on screen.
+
+**Procedure:** put readable text on screen — Notepad, a docs page. Press
+**Ctrl+Alt+X** once. Do not switch focus to MYTHOS first; not having to is the
+point of the hotkey.
+
+**Pass:** the HUD shows an OCR result carrying text that matches the screen.
+
+**Fail, and the two are different problems:**
+- *Nothing at all* — check whether the accelerator registered at boot. Another
+  app may hold it; the fallbacks are Control+Shift+X then Control+Alt+S.
+- *"OCR failed" with no reason* — that is the known second half of BUG-268: the
+  failure formatter discards the effector's own message. Capture the server log
+  line, which still carries what the effector actually said.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\logs\main.log" -Pattern 'OCR-grab hotkey'
+Select-String -Path "$env:APPDATA\MYTHOS\mythos-server.log" -Pattern 'ocr|screen_read_text'
+```
+
+### D3. BUG-435 — a named browser is the debug browser
+
+**What:** naming a browser out loud used to run `open_web browser:true` *and*
+`browser_launch_debug` in one turn, opening two windows. A named browser now
+means the browser MYTHOS drives, so the operator-route call is refused before it
+dispatches and answered with the two calls that do the job.
+
+**Procedure:** in a voice session, say **"Open YouTube in Brave."** Chrome or
+Edge work equally.
+
+**Pass:** exactly **one** browser window opens, and it is the debug browser —
+the one MYTHOS can then read and click. The turn shows `open_web` refused with
+`named-browser-is-the-debug-route`, followed by `browser_launch_debug` and
+`browser_navigate`.
+
+**Fail:** two windows. Or a refusal claiming a browser "already opened" when
+none did — that is the route-memory defect this fix exists to close, and it
+would mean the route is being recorded before dispatch again.
+
+**Adjacent case that must keep working:** "Open YouTube" with **no** browser
+named must still open the signed-in browser. The unnamed route was deliberately
+left alone; if it now refuses, the guard is too wide.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\mythos-server.log" -Pattern 'named-browser-is-the-debug-route'
+```
+
+### D4. BUG-421 — play the sixth video
+
+**What:** the reveal loop used to stop on a single non-growing reading, and its
+refusal named the scroll *budget* rather than the scrolls it actually made. It
+now stops after two consecutive flat readings, and the refusal names the real
+attempt count, the ranked total and how many of those were clickable.
+
+**Requirements:** the debug browser on a real YouTube search results page,
+around 1280x800.
+
+**Procedure:** "Search YouTube for lo-fi beats." then **"Play the sixth video."**
+
+**Pass, either way:** it plays the sixth result; or it refuses with a sentence
+naming the actual number of scrolls and how many cards were reachable.
+
+**Fail:** it plays the wrong video, or the refusal says "4 scrolls" when the log
+shows fewer.
+
+**Capture the `desktop.reveal` rows even on a pass.** They are the measurement
+the ticket was filed for. The filed sequence — 6, 6, 8, 11, 14 cards across four
+scrolls — cannot have come from code that already contained the single-flat
+break, so one of the two records is wrong and only a fresh run settles it.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\mythos-server.log" -Pattern 'desktop.reveal'
+```
+
+### D5. BUG-434 — a successful typing action backs "I sent the text"
+
+**What:** on 2026-09-10 at 09:51 MYTHOS typed into a message box, said so, and
+then retracted itself. "I sent the text to that box" matched the *sending* claim
+category, and that category had no typing tool among the tools allowed to back
+it. `ui_type` and `send_key` are now backers.
+
+**Procedure:** open a message box — WhatsApp Desktop, or any chat window. Say
+**"Type 'running a check' into the message box."** Do not ask it to send.
+
+**Pass:** the text appears, MYTHOS says it did it, and there is **no spoken
+retraction**. No `claimed-action-not-taken` row with `target:sending` for that
+turn.
+
+**Fail:** MYTHOS types the text and then tells you it did not — the exact
+regression.
+
+**Adjacent case that must still be caught, and please run it:** make a real send
+fail. Close WhatsApp, then ask MYTHOS to send a WhatsApp message. It must still
+retract. This fix widened who is allowed to back a claim; the thing worth
+proving is that it did not silence a genuine failure.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\vault\Episodic\$(Get-Date -Format yyyy-MM-dd).jsonl" -Pattern 'claimed-action-not-taken'
+```
+
+### D6. BUG-275 H1 — a name given a rank its source never gave it
+
+**What:** MYTHOS once ranked five models when its evidence ranked three. Both
+extra names were in the source — one appeared only inside "an in-depth
+comparison of A, B, C, D", a sentence that assigns no positions. The model
+promoted a passing mention into rank five. Two pieces shipped: one sentence in
+the prompt rules, and a detector that emits a **silent** anomaly.
+
+**Procedure:** ask a ranking question whose sources will contain comparison
+prose — **"Search the web for the best AI coding models right now and rank the
+top five."**
+
+**Pass, either way:**
+- the ranking contains only names its sources actually ranked (the rule held); or
+- it promotes one and a `promoted-ranked-entity` row appears in the vault while
+  **nothing is said about it**.
+
+**Fail:** MYTHOS speaks a correction about a ranking. Silence is the whole
+disposition. This detector reads a model of a document, which can be wrong in a
+way a tool outcome cannot, so a false positive would retract a true statement.
+
+**One turn is one sample.** The corpus replay already ran — one hit across 171
+replies on 2026-08-19, exactly the known case. This live check asks a different
+question: whether the prompt rule changes what the model says. Expect to need
+several ranking questions before either answer means anything.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\vault\Episodic\$(Get-Date -Format yyyy-MM-dd).jsonl" -Pattern 'promoted-ranked-entity'
+```
+
+### D7. BUG-436 — name the call that blocks the loop (passive)
+
+**What:** eighteen event-loop stalls in 32 minutes, lag from 286 ms to 9.1
+seconds, CPU mostly under 150 ms — blocked in a syscall, not computing, and the
+caller was never identified. `LOOP_LAG_TRACE` times every synchronous `fs` and
+`child_process` call and attaches the one overlapping the stall to the log row.
+
+**Requirements:** `LOOP_LAG_TRACE=true` for the whole of Session A.
+
+**Procedure:** nothing extra. Use MYTHOS normally for thirty minutes or more.
+
+**Pass:** at least one `loop.stalled` row carries a `lastSync` naming a call.
+That name is the target of a *second* fix with its own test — this session only
+produces the name.
+
+**Not a failure, and worth recording:** `loop.stalled` rows with **no**
+`lastSync`. That rules the synchronous-I/O family out, which is a result.
+
+**Confound to state when you record it:** the trace wraps hundreds of functions
+and costs something itself. Read `lastSync` as a pointer to the caller, never as
+a measurement of how big the stall was.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\mythos-server.log" -Pattern 'loop.stalled'
+```
+
+### D8. BUG-422 — the child that dies and is not restarted (passive)
+
+**What:** a child process died and nothing restarted it; the child's own log
+shows no boot marker for over four hours afterwards. The cause is still unknown,
+and the instrumentation exists to name the next one.
+
+**Procedure:** nothing. If a child dies during Session A, it is recorded.
+
+**If no child dies, that is a non-event, not a pass.** The ticket stays open.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\logs\main.log" -Pattern 'child (close|disconnect|exit)'
+```
+
+### D9. BUG-437 — closing the app (run this last)
+
+**What:** closing 0.1.12 left processes in Task Manager and wrote no quit line —
+the quit path never reached its logger.
+
+**Requirements:** Task Manager open on the Details tab, sorted by name, **before**
+you start. Keep `main.log` in view.
+
+**Procedure — three ways, relaunching between each:**
+1. Click the window's X.
+2. Tray icon → Quit, if the tray offers one.
+3. The in-app quit, whichever the HUD offers.
+
+**Pass:** no MYTHOS process survives any of the three, and `main.log` has a quit
+line for each.
+
+**Fail:** leftovers, or a close with no quit line. Record **which of the three**
+did it — the quit path differs per route, so "it leaks" without the route is not
+yet a reproduction.
+
+**Known and separate:** `adb.exe` and the pc-child PowerShell detach on purpose
+and outlive the app, holding the install tree as their working directory. Those
+two surviving is BUG-404, not this ticket.
+
+---
+
+## Session B — BUG-432, one short run with the flag on
+
+**What:** our own system notices interrupt each other. Six can leave
+`onLiveTurnComplete` in one synchronous pass, Gemini treats each text frame as a
+new turn, and notice two cuts notice one mid-sentence — 15 of 35 interruptions
+on 2026-09-09 followed one of our own injections within 300 ms, and the boot
+greeting was cut on both 0.1.12 boots. The queue holds a notice offered while a
+turn is in flight and releases one per turn.
+
+**The flag ships OFF, and this run is the reason.** The ticket requires a
+measured pass before it goes on, because serialising notices changes live timing
+and that is precisely what has to be measured.
+
+**Setup:** `VOICE_SERIALIZE_NOTICES=true` in `mythos/.env`. Leave
+`LOOP_LAG_TRACE` off this time — Session A is the control and its counts are the
+comparison.
+
+**Procedure:** cold boot with the speaker on, then about ten minutes of
+conversation that will actually generate notices. Ask for things that fail — a
+search with the network off, a tool that will refuse — so the turn-audit family
+fires.
+
+**Pass:** the boot greeting finishes without being cut, `live.interrupted` is
+materially below Session A's count for a comparable stretch, and notices arrive
+one per turn, each finishing before the next begins.
+
+**Fail A — a notice never arrives.** Look for `live.notice-undelivered`. A
+notice still held when the session closes is logged rather than spoken. That is
+a known and accepted cost of the flag being on, bounded by the 15-second
+ceiling; with the flag off nothing is held and nothing can be lost.
+
+**Fail B — the greeting is late rather than cut.** Then the hold ceiling is too
+high. That value is one of two decisions this pass exists to settle. The other:
+whether the AD-4 correction notices should bypass the queue the way operator
+text already does.
+
+```powershell
+Select-String -Path "$env:APPDATA\MYTHOS\mythos-server.log" -Pattern 'live.interrupted|live.notice-undelivered|live.text-injected'
+```
+
+---
+
+## Not in this sitting
+
+- **BUG-406** — needs a synchronised microphone and playback recording in a real
+  room. The ticket says in as many words that gate telemetry cannot establish the
+  absence of echo; no amount of log reading substitutes for the recording.
+- **BUG-274 T3** — the wake-word weights licence for the paid product. A
+  lawyer's call, not a session's, and nothing in this repo should carry a
+  confident legal conclusion.
 ## BUG-by-BUG summary table
 
 | BUG | Group | Required hardware | Existing tests | Verify approach |
@@ -420,6 +746,16 @@ proves the *voice* path chooses the tools correctly).
 | BUG-020 noise tuning | C (voice) | Mic in real environment | Config only | Manual session + VAD constant tuning |
 | BUG-222 self-capabilities | C (voice) | Mic | 2 reachability suites | Ask "what can you do / what did you fix", check audit for the call |
 | BUG-221 typing / BUG-223 close | C (voice) | Mic + Windows desktop | 3 suites + verify script | "Open Notepad, type X, close it" — screen is the oracle |
+| BUG-433 boot greeting | D (session A) | Speakers + cold boot | 5 unit | Boot, touch nothing, listen |
+| BUG-268 OCR hotkey | D (session A) | Electron shell + text on screen | Source-shape only | Press Ctrl+Alt+X once |
+| BUG-435 named browser | D (session A) | Mic + debug browser | 5 unit | "Open YouTube in Brave" — count the windows |
+| BUG-421 sixth video | D (session A) | Mic + real YouTube page | 6 unit | "Play the sixth video", read `desktop.reveal` |
+| BUG-434 typing backs a claim | D (session A) | Mic + a message box | 7 unit | Type without sending; then make a send fail |
+| BUG-275 H1 promoted rank | D (session A) | Mic + web search | 10 unit + corpus replay | Ask for a ranked top five; the anomaly must be silent |
+| BUG-436 stall caller | D (session A, passive) | `LOOP_LAG_TRACE=true`, 30+ min | 12 unit | Read `lastSync` on `loop.stalled` |
+| BUG-422 child death | D (session A, passive) | Time | 4 unit | Wait for a death; no death is not a pass |
+| BUG-437 quit path | D (session A, last) | Task Manager | None | Close three ways, name which leaks |
+| BUG-432 notices take turns | D (session B) | `VOICE_SERIALIZE_NOTICES=true` | 14 unit | Compare `live.interrupted` against session A |
 
 ## After verification
 
