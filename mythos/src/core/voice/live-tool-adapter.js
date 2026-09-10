@@ -302,7 +302,7 @@ function createLiveToolAdapter(deps) {
     cua_click: true,
     browser_click: true,
   };
-  const executedSignatures = new Set();
+  const executedSignatures = new Set(); const routeMemory = require('./browser-route-guard').createRouteMemory(); // BUG-435: a route is remembered at the dispatch site, not here — the guard's header says why.
 
   // BUG-272 T2: cross-turn suppression for calls whose LAST outcome was a failure
   // or came back unverified.
@@ -637,7 +637,7 @@ function createLiveToolAdapter(deps) {
         }});
         continue;
       }
-      const routeConflict = require('./browser-route-guard').checkBrowserRoute(call.name, call.args || {}, executedSignatures); if (routeConflict) { logger.info('live.browser-route-conflict', { tool: call.name, priorTool: routeConflict.priorTool, priorRoute: routeConflict.priorRoute }); responses.push({ id: call.id, name: call.name, response: routeConflict.response }); continue; } // BUG-435: one real-browser route per turn — the 2026-09-10 09:37 turn ran open_web browser:true AND browser_launch_debug and opened two Brave windows. One line: this file is at its size-ratchet ceiling; mechanism and bounds in browser-route-guard.js.
+      const routeConflict = routeMemory.check(call.name, call.args || {}); if (routeConflict) { logger.info('live.browser-route-conflict', { tool: call.name, priorTool: routeConflict.priorTool, priorRoute: routeConflict.priorRoute }); responses.push({ id: call.id, name: call.name, response: routeConflict.response }); continue; } // BUG-435: one real-browser route per turn — the 2026-09-10 09:37 turn ran open_web browser:true AND browser_launch_debug and opened two Brave windows. One line: this file is at its size-ratchet ceiling; mechanism and bounds in browser-route-guard.js.
       const decision = { tool: call.name, args: call.args || {} };
       if (suggestedProcedures.matches(skillRef, call.name, decision.args)) decision.skillRef = skillRef;
       let verdict;
@@ -693,7 +693,7 @@ function createLiveToolAdapter(deps) {
       // the same [SYSTEM] sendText channel resolveLiveConfirm already uses.
       // BUG-300: one call site, ahead of both dispatch paths below, so a note can
       // never reach the effector unstamped by going down the slow branch.
-      stampProvenanceIfUnbacked(decision); const startedAt = (deps.now || Date.now)();
+      stampProvenanceIfUnbacked(decision); routeMemory.note(call.name, call.args || {}); const startedAt = (deps.now || Date.now)();
 
       if (SLOW_TOOLS[call.name]) {
         commitAction(pendingAck(call.name, call.id));
@@ -1382,7 +1382,7 @@ function createLiveToolAdapter(deps) {
     // lifetime as liveTurnActions above, so it is cleared right here instead
     // of lazily on next use — a set that only resets when something happens
     // to read it is a set that might never reset at all.
-    executedSignatures.clear();
+    executedSignatures.clear(); routeMemory.clear();
 
     if (userText) historyAppend('user', userText);
     if (assistantText) historyAppend('assistant', assistantText);
