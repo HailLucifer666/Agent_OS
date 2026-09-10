@@ -347,18 +347,18 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7652,
+      "value": 7634,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-10"
+      "measuredAt": "2026-09-09"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-10"
+      "measuredAt": "2026-09-09"
     },
     "withheld": {
       "value": 61,
@@ -5739,12 +5739,13 @@
         "state": "open",
         "title": "MYTHOS goes quiet mid-conversation: the server event loop freezes 2–9 s with zero CPU, and a Live rotation drops the in-flight tool turn (OPEN, filed 2026-09-10)",
         "detail": {
+          "verification": "`test/bug-436-a-stall-names-what-blocked-it.test.js` 9/9, plus `loop-lag`, `config-doc-truth`, `env-example-stall-ms`, `file-size-ratchet` and the real-boot test — 29/29, 0 skipped. Five mutations, each grep-verified applied and restored sha256-identical: dropping `lastSync` from the emit reddens (a); keeping the last overlapping call instead of the largest reddens (b); `DEFAULT_MIN_MS = 0` reddens (d); widening the window back reddens (c); recording only when the call did not throw reddens (f). One earlier attempt at that last mutation only broke the parse, which proves nothing, so it was redone behaviourally — the record now says so.",
           "fix": "`src/core/voice/goaway-gate.js` (pure; live-session.js is at its size-ratchet ceiling — 1204 lines exactly after this change). On goAway, if a turn is in flight (the model owes a toolResponse, or has produced audio/text parts this turn) the non-final close is held until turnComplete or until timeLeft minus 2 s, whichever first; with nothing in flight it closes at once, unchanged. Unparseable timeLeft closes at once (old behaviour, never an unbounded hold). Any close() cancels a pending hold so it cannot fire into the replacement session. Same `close(reason, {final:false})` as before, so the reconnect path stays the single `ws.on('close')` branch. **Evidence (`test/bug-436-goaway-waits-for-the-turn.test.js`, 8 tests):** fake-socket replay of toolCall → audio part → goAway holds the socket OPEN and reconnects only at turnComplete; nothing-in-flight goAway still closes immediately (adjacent…"
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODE LEFT: stall profiler + fix the caller it names. GoAway half CODED in PR #88, unmerged] Stall half still open: 18 loop.stalled rows with near-zero CPU need a profiler run before code. GoAway half CODED 2026-09-10 and its stated cause was wrong: the screen_read_text result returned 836 ms BEFORE the goAway; our own immediate close cut the model's reply turn with 50 s of grace unused. goaway-gate.js now holds the non-final close until turnComplete or timeLeft minus 2 s. Fake-socket replay and gate unit tests; mutation-proven; not verified against Gemini live.",
-          "source": "mythos/src/core/voice/goaway-gate.js"
+          "evidence": "[PROFILER CODED 2026-09-10; one attended run with LOOP_LAG_TRACE=true names the caller, then a second PR fixes it. GoAway half CODED in PR #88, unmerged] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code.",
+          "source": "mythos/src/core/loop-lag.js"
         }
       },
       {
