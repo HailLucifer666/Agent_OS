@@ -4079,7 +4079,7 @@
         "state": "open",
         "title": "Ctrl+Alt+X (screen text capture / OCR) does nothing",
         "detail": {},
-        "excerpt": "**Status:** 🔴 OPEN — blocked on the operator pressing Ctrl+Alt+X once in a build carrying the 2026-08-20 markers. Operator action deferred on 2026-09-10. Narrowed 2026-09-02 from five candidates to two, and a separate real defect was found in its test coverage. No code fix is claimed. > ### 🔍 NARROWED 2026-09-02. Three of the five candidates are eliminated from evidence. > > **The instrumentation shipped on 2026-08-20 has never reported, because the key > has never been pressed in a run that carries it.** Measured against the > operator's own `%APPDATA%\\MYTHOS` logs: > > | marker | boundary | occurrences | > |---|---|---| > | `OCR-grab hotkey registered: Control+Alt+X` | registration | **8** — every boot | > | `OCR-grab hotkey fired` | 1 (the keypress) | **0** | > | `ocr.hotkey.received` | 2 (server entry) | **0** | > | `ocr.hotkey.dispatched` | 2 (server outcome) | **0** | > | `ocr-re…",
+        "excerpt": "**Status:** 🔴 OPEN — blocked on the operator pressing Ctrl+Alt+X once in a build carrying the 2026-08-20 markers. Operator action deferred on 2026-09-10. **2026-09-11 SESSION READ.** **The keypress half is answered, and the answer is not in this ticket's own hypothesis.** Ctrl+Alt+X was pressed twelve times at 18:19:38–56Z. Every layer fired: `OCR-grab hotkey fired` × 12 in main.log, `ocr.hotkey.received` in the server, and `ocr.hotkey.dispatched ok:true` returning **872–929 characters of real screen text on 11 of 12**. The failure formatter this ticket suspects never ran — those are `ok:true`. What actually failed is latency and surface. The first dispatch returned `ok:false ms:32727 \"PC automation command timed out\"`, inside BUG-436's 31,777 ms stall; the server did not receive the first keypress until 20 s after it was sent. First press 18:19:38, first usable text 18:20:38 — **60 sec…",
         "campaign": {
           "disposition": "blocked",
           "evidence": "[EVIDENCE FIRST, operator: press Ctrl+Alt+X once in a running build] Electron global shortcut sends OCR IPC; server dispatches screen_read_text and broadcasts ocr-result. Native boundary telemetry exists. Failure formatter still discards canonical string r.result reason and emits generic OCR failed; reported to root separately from keypress blocker. Consumers: Native Ctrl+Alt+X, fork IPC, dispatcher and HUD OCR result listener.. Regression oracle: electron-ocr-hotkey.test.js is source-shape only; historical mutated channel survived. Actual same-screen direct-tool versus native-keypress is required, no silent IPC observation accepted as proof.. Remaining evidence: Native keypress not observed here. Canonical string failure needs behavioral diagnostic regression/repair; actual OCR output/HUD parity and packaged artifact remain missing.",
@@ -5078,7 +5078,7 @@
         "state": "verified",
         "title": "`doctor` reported the Google grant OK for three weeks while 88 calls failed on it",
         "detail": {},
-        "excerpt": "**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign **Track A**. New `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions, 9 mutations all caught. **LIVE RUN, both halves, 2026-08-28 — and the fix caught a real dead grant.** This ticket shipped its own oracle, so verification needed no voice session and no operator: running the two commands IS the verification. ``` $ node scripts/verify-google-grant.js verify-google-grant: INVALID The Google grant is dead: invalid_grant: Token has been expired or revoked. — this is NOT a network problem and will not recover on its own ... run `node scripts/google-auth.js` and put the new GOOGLE_REFRESH_TOKEN in mythos/.env. If this recurs roughly every 7 days, re-authorising alone will NOT fix it: an OAuth consent screen with external user type and publishing status \"Testing\" is issued refresh tokens that expire in 7 days. Publi…",
+        "excerpt": "**Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign **Track A**. New **2026-09-11 SESSION READ.** **This ticket is marked LIVE-VERIFIED and the grant failed three times tonight.** `gmail_unread` returned `invalid_grant: Bad Request` at three separate points, with the effector's own terminal-class wording: \"this is NOT a network problem and will not recover on its own: the Google refresh token is expired or revoked.\" Three `gmail-reauth-required` anomalies were raised and three `effector-terminal` anomalies beside them. The 2026-08-28 verification is not wrong about what it tested — the token has since expired again — but the row reads as closed while the capability is dead. **Operator action: `node scripts/google-auth.js`.** Whether a re-auth should be prompted rather than discovered three failures later is the open question this raises. `scripts/verify-google-grant.js`, a corrected…",
         "campaign": {
           "disposition": "blocked",
           "evidence": "Doctor labels OAuth triple configured but validity untested. Dedicated verifier uses real adapter.getProfile to refresh and call Gmail; terminal auth, missing config and network/unknown failure return distinct verdicts and exit codes; detail redacts configured secrets centrally. Consumers: Operator diagnostic, shared Google adapter and auth remedy formatter.. Regression oracle: bug-387-verify-google-grant.test.js verdict/network cause/canary paths; actual script is fresh grant oracle.. Remaining evidence: Historical revoked grant cannot establish current validity. Current keyed getProfile run and operator OAuth reauthorization missing; OCR hotkey remains independent.",
@@ -5604,7 +5604,7 @@
         "state": "coded",
         "title": "the reasoning lane times out on every attempt; think_deeply failed 2 of 2 and told the operator so (CODED 2026-09-10; found live 2026-09-09)",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-09-10. The Sept 10 replay found reasoning reduced to nim+nim2 while mistral-medium was cooling on 429 and Cerebras was 402-ejected. Whole-lane exemptions now retain per-pair streaks: calls 1-2 stay exempt, call 3 earns cooldown and breaker failure. Code checks passed; provider recovery timing still needs a live run. `chain-whole-lane-timeout` fired **6 times** on `reasoning`, with the anomaly's own text: *\"every reasoning attempt timed out at the 30000ms per-attempt ceiling and nothing answered, which is one shared cause rather than N provider outages — cooldowns were …\"*. `think_deeply` was called twice and failed twice with *\"The reasoning lane did not return an answer.\"* Playbook: **none**. **The operator heard it.** MYTHOS said: *\"my stronger reasoning tool failed unexpectedly, and I don't know why. I can't perform the deep analysis right now.\"* That is hone…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-10. The Sept 10 replay found reasoning reduced to nim+nim2 while mistral-medium was cooling on 429 and Cerebras was 402-ejected. Whole-lane exemptions now retain per-pair streaks: calls 1-2 stay exempt, call 3 earns cooldown and breaker failure. Code checks passed; provider recovery timing still needs a live run. **2026-09-11 SESSION READ.** **Recurred, and worse than the filed ratio.** `think_deeply` failed **3 of 3** attempts: \"the reasoning model did not answer within 20000ms\" once, and \"The reasoning lane did not return an answer.\" twice. Filed as 2 of 2; now 5 of 5 lifetime. Each failure landed while the operator was asking why something else had failed, so the lane's only observed use this session was explaining other defects, and it could not. Incident `inc-1789073778199-4` is the operator logging the same thing from the other side. `chain-whole-lane-t…",
         "campaign": {
           "disposition": "blocked",
           "evidence": "The Sept 10 replay found reasoning reduced to nim+nim2 while mistral-medium was cooling on 429 and Cerebras was 402-ejected. Whole-lane exemptions now retain per-pair streaks: calls 1-2 stay exempt, call 3 earns cooldown and breaker failure. Code checks passed; provider recovery timing still needs a live run. Diagnoses: Sept 9 filing and Sept 10 replay.",
@@ -5755,24 +5755,37 @@
         "state": "open",
         "title": "closing the app left processes in Task Manager and wrote no quit line (OPEN, filed 2026-09-10)",
         "detail": {},
-        "excerpt": "**Status:** 🔴 OPEN — observed once; the quit path's own instrumentation did not fire, so the cause is unknown. **Evidence (2026-09-10 ~09:52Z):** the operator closed 0.1.12 and reported processes still visible in Task Manager. `logs/main.log` has no `app quit: orderly exit` line for this close, while the 00:09, 00:10 and earlier quits today each wrote one; the last desktop-log line is 09:37:47. The server log ends at 09:51:59 with a normal `wakeword.metrics` row and no shutdown line from the BUG-422 `lifecycle.process-exit` hook. Afterwards only `adb.exe -L tcp:5037 fork-server` (pid 23924, started with the 09:20 boot) survived; `android-child` deliberately never runs `adb kill-server` (BUG-404 records why). **Open questions:** whether MYTHOS.exe itself lingered or only `adb.exe`; whether `window-all-closed` fired at all (`before-quit` would have logged `vault-sync`). Reproduce with the…",
+        "excerpt": "**Status:** 🔴 OPEN — observed once; the quit path's own instrumentation did not fire, so the cause is unknown. **2026-09-11 SESSION READ.** **Did not reproduce on an X-button close.** The 20:18:46Z shutdown logged the quit line this ticket says is missing — `app quit: orderly exit, code=0`, then `mythos child exited (SIGTERM) during shutdown — not restarting` and a clean child close. No MYTHOS, electron or node process survived. One `adb.exe` remained, which is the known detached-adb behaviour (BUG-404), not this ticket. One close of three; the tray and in-app routes are still untested. **Evidence (2026-09-10 ~09:52Z):** the operator closed 0.1.12 and reported processes still visible in Task Manager. `logs/main.log` has no `app quit: orderly exit` line for this close, while the 00:09, 00:10 and earlier quits today each wrote one; the last desktop-log line is 09:37:47. The server log end…",
         "campaign": {
           "disposition": "blocked",
           "evidence": "[EVIDENCE FIRST, operator: close the app 3 ways with Task Manager + main.log open] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open.",
           "source": "electron/main.js"
+        }
+      },
+      {
+        "n": 438,
+        "shape": "entry",
+        "state": "open",
+        "title": "open_web opened a DIFFERENT YouTube video from the one asked for, and reported it as opened (OPEN, filed 2026-09-11)",
+        "detail": {},
+        "excerpt": "**Status:** 🔴 OPEN — measured twice in one session, from the vault's own action rows. **Evidence (2026-09-11, vault/Episodic):** the operator asked for a specific episode. Two `open_web` calls carried `query:\"INDIA'S GOT LATENT S2 EP6 ft. Rakhi Sawant, Ashneer Grover, Kushagra\"` and both returned ``` {\"widgetType\":\"newtab\",\"url\":\"https://www.youtube.com/watch?v=c35fpGWqXnk\", \"title\":\"INDIA'S GOT LATENT S2 EP2 ft. Harssh Limbachiya, Kiku Sharda, Chandan Prabhakar …\"} ``` **EP6 was requested; EP2 was opened.** Different episode, different guests. The resolver picked a video whose title shares a prefix with the query and stopped. **Why this is worse than a miss.** Both rows are `outcome:\"ok\"`. They carry `unverified:true` with the reason \"I cannot confirm whether the new tab opened because the browser did not expose a window handle\" — so the honesty machinery flagged the *tab*, which it co…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "[EVIDENCE FIRST: replay the query through the resolver offline] open_web was asked for \"INDIA'S GOT LATENT S2 EP6\" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The unverified flag fired on the tab handle it could not see, not on the title mismatch it could. Two of the session's three unverified successes are this one call.",
+          "source": "mythos/src/core/effectors/from-dashboard.js"
         }
       }
     ],
     "counts": {
       "verified": 82,
       "fixed": 181,
-      "open": 12,
+      "open": 13,
       "coded": 8,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 286,
+    "total": 287,
     "openDeclared": [
       274,
       275,
@@ -5783,7 +5796,8 @@
       434,
       435,
       436,
-      437
+      437,
+      438
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"

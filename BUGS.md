@@ -597,6 +597,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-435 | coded | blocked | [CODED 2026-09-10, REGRESSED the same day, REPAIRED 2026-09-11; one attended run pending] The 2026-09-10 guard opened NO page for a named browser (18:21Z), worse than the two windows it fixed: the descriptions still taught the refused call, the refusal named no tool in its message, and its remedy was a step already done. Repaired with a state-derived remedy, tools named in the prose, a coupling test on the descriptions, test/refusal-is-actionable.test.js and a named-browser turn in golden-path.js. One real-browser route per turn: the adapter refuses the second of open_web browser:true vs browser_launch_debug/browser_switch/browser_navigate and tells the model what already opened. The named-browser question is now DECIDED (operator, 2026-09-10): a named browser is the debug browser, so open_web browser:true with a browserName is refused before dispatch and answered with structured remedy() calls to browser_launch_debug then browser_navigate. Unnamed open_web browser:true still reaches the default browser (Stage 1 golden path). The route memory was also fixed: it recorded every call the adapter SAW, so a denied or refused open_web poisoned the turn. 16 tests, mutation-proven. Attended voice unverified. | mythos/src/core/voice/browser-route-guard.js |
 | BUG-436 | open | blocked | [PROFILER CODED 2026-09-10; one attended run with LOOP_LAG_TRACE=true names the caller, then a second PR fixes it. GoAway half CODED in PR #88, unmerged] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code. | mythos/src/core/loop-lag.js |
 | BUG-437 | open | blocked | [EVIDENCE FIRST, operator: close the app 3 ways with Task Manager + main.log open] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open. | electron/main.js |
+| BUG-438 | open | currently reproduced | [EVIDENCE FIRST: replay the query through the resolver offline] open_web was asked for "INDIA'S GOT LATENT S2 EP6" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The unverified flag fired on the tab handle it could not see, not on the title mismatch it could. Two of the session's three unverified successes are this one call. | mythos/src/core/effectors/from-dashboard.js |
 | BUG-406 | open | blocked | [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -1485,6 +1486,16 @@ So one of these is true, and this ticket is not closed until it is known which:
 
 **Status:** 🔧 CODED — fixed in `server/index.js`; one cold boot with the speaker on remains.
 
+**2026-09-11 SESSION READ.** **The gate held on all four boots and the greeting was
+still silent — for a different, measurable reason.** Every boot logged
+`proactive.live-skipped-no-listener` and **zero** `live.text-injected site:proactive-speak`,
+which is the fix doing exactly what it claims; the 14:50 boot earlier the same day shows the
+old behaviour (`live.text-injected … chars:146`) for contrast. The greeting then died in the TTS
+chain instead: `gemini-tts` returned **429 quota exceeded** on 5 occasions, failover to
+`kokoro-tts` took 17 s, and `speech.lock-ceiling` (20 s) fired first on three boots. The route
+change is verified; audibility is blocked on the operator's Gemini quota and on BUG-436's stalls,
+not on this fix.
+
 **Symptom (operator, 2026-09-10 09:20Z boot of 0.1.12):** "As soon as the app starts it does not greet. Waits for the wake word." The server log shows the greeting text injected into Live at 09:20:32 (`live.text-injected site:proactive-speak`, 146 chars) and Gemini producing 53 audio parts for it; no `voice.capture-suspend` row appears until the operator's first wake word at 09:23, and `onBroadcast('live-audio-out')` in `ui/public/js/voice/s2s-bridge.js` is registered inside `start()`, which runs only from the orb, the talk hotkey or the wake word (`app.js` toggleVoice callers). Nothing starts the bridge at boot, so every Live utterance before the first wake word has no consumer.
 
 **Mechanism:** `server/index.js` `liveForSpeech()` opens a Live session purely to speak whenever `VOICE_UNIFIED_LIVE_VOICE` (default true), `VOICE_S2S_ENABLED` and `GOOGLE_API_KEY` are present. The Sep 8 packaged boot (13:38Z) spoke the greeting via `tts.spoke path:proactive` because Live was not available at boot; from the Sep 9 boot onward the greeting goes into Live. Same client behaviour on the 2026-09-09 19:21 boot (no capture-suspend row before the first wake word), so this predates the 2026-09-10 PR stack.
@@ -1522,6 +1533,21 @@ So one of these is true, and this ticket is not closed until it is known which:
 ## BUG-435 — "open YouTube on Brave" opened two browsers: the operator's normal Brave and a debug Brave (CODED 2026-09-10; the fix REGRESSED and was REPAIRED 2026-09-11; filed 2026-09-10)
 
 **Status:** 🔧 CODED 2026-09-10, REGRESSED IN PRODUCTION THE SAME DAY, REPAIRED 2026-09-11 — read the repair section before the original one below. The 2026-09-10 guard made this worse: on the 18:21Z attended run "open YouTube in Brave" opened NO page at all, where the bug it fixed opened two. Both halves. The mechanism: a second real-browser route in the same turn is refused before the leash and told what already opened. The product question — which route a NAMED browser request means — was decided by the operator the same day and is now encoded rather than described. Local regression evidence only; no attended voice run.
+
+**2026-09-11 SESSION READ.** **The route works end to end now, measured from the
+vault, and the blocker has moved.** `browser_launch_debug` 5/5 ok, `browser_navigate` 9/9 ok,
+`browser_tabs` 13/13 ok, `browser_snapshot` 5/5 ok — with real return values
+(`url:"https://www.youtube.com/?themeRefresh=1" title:"YouTube"`). Two hours earlier none of
+those tools existed in the session.
+
+What still fails is everything AFTER the page loads. `browser_click` failed on a real YouTube
+result — "it never became visible within 8000 ms and was not in the DOM to click from page
+script either" — and the escalation that followed tried **eleven** tools for one video:
+snapshot → click → think_deeply → see_and_click → screen_read_text → click_at → list_windows →
+cua_bring_to_front → cua_get_window_state → cua_click → open_web ×4. Not one of them verifiably
+played it. Also observed twice: `browser-agent disconnected unexpectedly` mid-task (20:49:39),
+followed by four failed reconnects before recovery — the BUG-431 shape, after that ticket was
+marked fixed.
 
 **Evidence (2026-09-10 09:37Z):** `open_web({browser:true,type:"web",url:"https://www.youtube.com",browserName:"brave"})` at 09:37:47 (`handedToBrowser:true`, the normal profile) followed by `browser_launch_debug({browser:"brave"})` at 09:37:53 (cold, signed-out profile). The operator: "why did you open two YouTube? You opened in debug browser and in a default browser." At 09:46 the operator said "when I ask you to open browser you open the debug browser", and MYTHOS stored that with `remember`.
 
@@ -1586,6 +1612,29 @@ Still genuinely open, and NOT the regression: deleting `browserName` outright on
 
 **Status:** 🔴 OPEN — the goAway half is coded (PR #88, unmerged). The stall half now has an instrument and no diagnosis: one attended run with `LOOP_LAG_TRACE=true` names the caller, and a second PR fixes what it names.
 
+**2026-09-11 SESSION READ.** Four boots (18:18, 19:38, 20:11, 20:46Z) measured
+end to end. **52 `loop.stalled` rows, 450 s of frozen event loop, worst single 31,777 ms,
+1,132 CPU-seconds burned.** The filed premise is now CONTRADICTED and that matters more than
+the count: this ticket says "zero CPU", but **39 of the 52 stalls have `cpuMs` 2–3× `lagMs`**
+(31,777/77,797 · 29,402/59,610 · 26,393/63,859). Compute-bound, not blocked in a syscall. Either
+the cause changed since filing or one symptom hides two mechanisms — and `LOOP_LAG_TRACE`, which
+times synchronous fs/child_process calls, is pointed at the family this profile rules out. It
+would come back empty and that would read as "nothing found".
+
+**It is also the parent of four other tickets' symptoms this session, by timestamp:**
+
+| downstream failure | when | stall at the same second |
+|---|---|---|
+| `pc-child command timeout` × 4 (media_status ×3, `screen_read_text` ×1) | 18:19:18, 18:20:31, 19:39:32, 19:40:25 | yes, all four |
+| `speech.lock-ceiling` × 3 — the greeting's 20 s budget expiring | 18:19:00, 18:19:58, 19:38:54 | yes |
+| `cortex-stall` — no cortex tick for 62 s | 20:12 window | yes |
+| `/health` refusing TCP while the process logged normally | 20:47:16 | 23,976 ms stall |
+
+The operator's report of a dead HUD — "I cannot talk to it, it doesn't click" — is this: the
+window renders, the clock ticks, and nothing responds for up to half a minute at a time. It
+resolves itself once the storm passes, which is why it reads as "slow to start". **On the
+evidence this is the most expensive open defect in the tracker.**
+
 **Evidence (2026-09-10 09:20–09:52Z):** 18 `loop.stalled` rows in 32 minutes, lag 286–9102 ms, `cpuMs` 0–875 (most under 150), so the process was blocked, not computing. 09:46:27 stall 1883 ms tripped `cortex-stall` → `restart-cortex`, spoken as "brief stall in the Cortex". Operator at 09:49:52: "why do you keep getting stuck in between?" Separately, `live.goaway timeLeft:50s` at 09:47:42 closed the session while `screen_read_text` (called 09:47:39) was in flight; the reconnect took about 2 s but the tool result had no session to return to, and MYTHOS said nothing until the operator spoke again at 09:47:59. Three goaways in the session (09:29:32, 09:38:40, 09:47:42). The stalls also appear in the 2026-09-09 session, so they predate the 2026-09-10 PR stack.
 
 **Not the cause:** no test suite or other heavy process from this machine's agent sessions ran during the window (last other-session commit 05:44 local).
@@ -1610,9 +1659,55 @@ Still genuinely open, and NOT the regression: deleting `browserName` outright on
 
 **Attribution:** operator report and the 2026-09-10 log read.
 
+## BUG-438 — open_web opened a DIFFERENT YouTube video from the one asked for, and reported it as opened (OPEN, filed 2026-09-11)
+
+**Status:** 🔴 OPEN — measured twice in one session, from the vault's own action rows.
+
+**Evidence (2026-09-11, vault/Episodic):** the operator asked for a specific episode. Two
+`open_web` calls carried
+`query:"INDIA'S GOT LATENT S2 EP6 ft. Rakhi Sawant, Ashneer Grover, Kushagra"` and both returned
+
+```
+{"widgetType":"newtab","url":"https://www.youtube.com/watch?v=c35fpGWqXnk",
+ "title":"INDIA'S GOT LATENT S2 EP2 ft. Harssh Limbachiya, Kiku Sharda, Chandan Prabhakar …"}
+```
+
+**EP6 was requested; EP2 was opened.** Different episode, different guests. The resolver picked a
+video whose title shares a prefix with the query and stopped.
+
+**Why this is worse than a miss.** Both rows are `outcome:"ok"`. They carry
+`unverified:true` with the reason "I cannot confirm whether the new tab opened because the
+browser did not expose a window handle" — so the honesty machinery flagged the *tab*, which it
+could not see, and said nothing about the *video*, which it could: the title it returned is
+plainly not the title it was asked for. A resolver that has the answer in hand and does not
+compare it is a proxy check (the class GATES.md calls "asking the cheaper question").
+
+**Class:** two of the three unverified successes this session are this one call, repeated. The
+third is `see_and_click`, which is honest in the way this is not — it returned
+`ok` with the reason "clicked … but the screen reads exactly the same afterwards".
+
+**Operator's own report:** incident `inc-1789074012235-5` — "open_web(search) opened without
+request … System claimed to be opening YouTube widget, but automated notice indicates no handle
+exposed. Operator desires actual execution, not unverified claims."
+
+**Not yet established:** whether the wrong pick comes from the search provider's ordering or from
+the resolver taking the first result regardless of title distance. The next step is to replay
+that exact query through the resolver offline and compare the returned title against the query
+before any browser is involved — no live run needed.
+
+**Attribution:** operator report and the 2026-09-11 vault read.
+
+
 ## BUG-437 — closing the app left processes in Task Manager and wrote no quit line (OPEN, filed 2026-09-10)
 
 **Status:** 🔴 OPEN — observed once; the quit path's own instrumentation did not fire, so the cause is unknown.
+
+**2026-09-11 SESSION READ.** **Did not reproduce on an X-button close.** The 20:18:46Z
+shutdown logged the quit line this ticket says is missing —
+`app quit: orderly exit, code=0`, then `mythos child exited (SIGTERM) during shutdown — not
+restarting` and a clean child close. No MYTHOS, electron or node process survived. One
+`adb.exe` remained, which is the known detached-adb behaviour (BUG-404), not this ticket. One
+close of three; the tray and in-app routes are still untested.
 
 **Evidence (2026-09-10 ~09:52Z):** the operator closed 0.1.12 and reported processes still visible in Task Manager. `logs/main.log` has no `app quit: orderly exit` line for this close, while the 00:09, 00:10 and earlier quits today each wrote one; the last desktop-log line is 09:37:47. The server log ends at 09:51:59 with a normal `wakeword.metrics` row and no shutdown line from the BUG-422 `lifecycle.process-exit` hook. Afterwards only `adb.exe -L tcp:5037 fork-server` (pid 23924, started with the 09:20 boot) survived; `android-child` deliberately never runs `adb kill-server` (BUG-404 records why).
 
@@ -1681,6 +1776,13 @@ Outcome `fail`, reason `Invalid URL`. The trailing sentence is a REMEDY string t
 ## BUG-426 — the reasoning lane times out on every attempt; think_deeply failed 2 of 2 and told the operator so (CODED 2026-09-10; found live 2026-09-09)
 
 **Status:** 🔧 CODED 2026-09-10. The Sept 10 replay found reasoning reduced to nim+nim2 while mistral-medium was cooling on 429 and Cerebras was 402-ejected. Whole-lane exemptions now retain per-pair streaks: calls 1-2 stay exempt, call 3 earns cooldown and breaker failure. Code checks passed; provider recovery timing still needs a live run.
+
+**2026-09-11 SESSION READ.** **Recurred, and worse than the filed ratio.**
+`think_deeply` failed **3 of 3** attempts: "the reasoning model did not answer within 20000ms"
+once, and "The reasoning lane did not return an answer." twice. Filed as 2 of 2; now 5 of 5
+lifetime. Each failure landed while the operator was asking why something else had failed, so
+the lane's only observed use this session was explaining other defects, and it could not.
+Incident `inc-1789073778199-4` is the operator logging the same thing from the other side.
 
 `chain-whole-lane-timeout` fired **6 times** on `reasoning`, with the anomaly's own text: *"every reasoning attempt timed out at the 30000ms per-attempt ceiling and nothing answered, which is one shared cause rather than N provider outages — cooldowns were …"*. `think_deeply` was called twice and failed twice with *"The reasoning lane did not return an answer."* Playbook: **none**.
 
@@ -3347,6 +3449,16 @@ inference, so it was corrected rather than worked around.
 ## BUG-387 — `doctor` reported the Google grant OK for three weeks while 88 calls failed on it (✅ LIVE-VERIFIED 2026-08-28)
 
 **Status:** ✅ LIVE-VERIFIED 2026-08-28. Closure-campaign **Track A**. New
+
+**2026-09-11 SESSION READ.** **This ticket is marked LIVE-VERIFIED and the grant
+failed three times tonight.** `gmail_unread` returned `invalid_grant: Bad Request` at three
+separate points, with the effector's own terminal-class wording: "this is NOT a network problem
+and will not recover on its own: the Google refresh token is expired or revoked." Three
+`gmail-reauth-required` anomalies were raised and three `effector-terminal` anomalies beside
+them. The 2026-08-28 verification is not wrong about what it tested — the token has since
+expired again — but the row reads as closed while the capability is dead. **Operator action:
+`node scripts/google-auth.js`.** Whether a re-auth should be prompted rather than discovered
+three failures later is the open question this raises.
 `scripts/verify-google-grant.js`, a corrected `doctor` row, 14 assertions,
 9 mutations all caught.
 
@@ -19350,6 +19462,20 @@ with no skills at all.
 ## BUG-268 — Ctrl+Alt+X (screen text capture / OCR) does nothing
 
 **Status:** 🔴 OPEN — blocked on the operator pressing Ctrl+Alt+X once in a build carrying the 2026-08-20 markers. Operator action deferred on 2026-09-10.
+
+**2026-09-11 SESSION READ.** **The keypress half is answered, and the answer is not
+in this ticket's own hypothesis.** Ctrl+Alt+X was pressed twelve times at 18:19:38–56Z. Every
+layer fired: `OCR-grab hotkey fired` × 12 in main.log, `ocr.hotkey.received` in the server, and
+`ocr.hotkey.dispatched ok:true` returning **872–929 characters of real screen text on 11 of 12**.
+The failure formatter this ticket suspects never ran — those are `ok:true`.
+
+What actually failed is latency and surface. The first dispatch returned
+`ok:false ms:32727 "PC automation command timed out"`, inside BUG-436's 31,777 ms stall; the
+server did not receive the first keypress until 20 s after it was sent. First press 18:19:38,
+first usable text 18:20:38 — **60 seconds**. Then eleven results landed within five seconds,
+each overwriting the last as a caption in a HUD the operator was deliberately not looking at,
+because not having to look at it is the point of the hotkey. Remaining: the result needs a
+surface that survives an unfocused window, and the latency is BUG-436's.
 Narrowed 2026-09-02 from five candidates to two, and a separate real defect was
 found in its test coverage. No code fix is claimed.
 
@@ -21087,6 +21213,15 @@ those records remain owed (this section is the index until then).
   and a Live goaway cut the model's reply turn. **GoAway half CODED 2026-09-10 (goaway-gate.js; the filed cause was wrong — the tool result had already returned). Stall half still needs an instrumented run.**
 - BUG-437 - closing the app left processes in Task Manager and no quit line was written.
   Observed once; reproduce with the process list open.
+- BUG-438 - open_web opened a DIFFERENT YouTube video from the one asked for and
+  reported it as opened. Asked twice for "INDIA'S GOT LATENT S2 EP6 ft. Rakhi Sawant,
+  Ashneer Grover, Kushagra"; both calls returned watch?v=c35fpGWqXnk titled "... S2 EP2
+  ft. Harssh Limbachiya, Kiku Sharda, Chandan Prabhakar". Both rows are outcome:ok with
+  unverified:true — and the unverified flag fired on the tab handle it could NOT see,
+  not on the title mismatch it could: the resolver had the wrong title in hand and never
+  compared it to the query. Two of the session's three unverified successes are this one
+  call. EVIDENCE FIRST: replay that query through the resolver offline and diff the
+  returned title against it — no browser and no live run needed.
 
 - BUG-422 - the server child exits silently mid-session and never restarts.
   CRITICAL: the operator lost the app mid-
