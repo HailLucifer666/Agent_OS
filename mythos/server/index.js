@@ -2100,7 +2100,13 @@ function createServer(deps) {
       // duplicate gmail announcement opening/consuming Live moments earlier and
       // this greeting arriving second. Logged as a warning because with
       // VOICE_UNIFIED_LIVE_VOICE on, a fall-through is a defect, not a mode.
-      if (!(liveSession && liveSession.isOpen()) && config.VOICE_UNIFIED_LIVE_VOICE) {
+      // BUG-433: this fall-through has two causes and they are not one event. No
+      // listener is the designed mode (the greeting speaks in the TTS voice);
+      // anything else with unified voice ON is the defect BUG-149 named.
+      const noListener = typeof targetWs.hasLiveListener === 'function' && !targetWs.hasLiveListener();
+      if (!(liveSession && liveSession.isOpen()) && config.VOICE_UNIFIED_LIVE_VOICE && noListener) {
+        logger.info('proactive.live-skipped-no-listener', { note: 'no client is listening on the Live channel; speaking via the TTS chain' });
+      } else if (!(liveSession && liveSession.isOpen()) && config.VOICE_UNIFIED_LIVE_VOICE) {
         logger.warn('proactive.live-unavailable-voice-will-differ', {
           note: 'unified live voice is ON but no Live session — speaking via the TTS chain instead',
           chain: String(config.VOICE_TTS_CHAIN || process.env.VOICE_TTS_CHAIN || ''),
@@ -2840,6 +2846,12 @@ function createServer(deps) {
     // gate and compatibility with server fixtures that never exercise voice.
     let liveSession = null;
     let liveAdapter = null;
+    // BUG-433: the HUD registers its onBroadcast('live-audio-out') handler inside
+    // s2s-bridge start() (:1031) and only then sends live-open (:1039), so the
+    // message is a faithful proxy for "this client can play Live audio" — and
+    // ws.js drops an unhandled broadcast type in silence (:166-169), which is why
+    // the 0.1.12 boot greeting reached Gemini and was never heard by anyone.
+    let clientLiveRequested = false;
     let liveOutputGeneration = 0, operatorReqId = null, operatorLivePending = false;
     const desktop = config.DESKTOP_OPERATOR_ENABLED && deps.desktopRuntime ? require('./desktop-connection').createDesktopConnection({
       runtime: deps.desktopRuntime, connectionId, leash, dispatch: dispatchAction, send, historyAppend, logger,
@@ -3013,7 +3025,20 @@ function createServer(deps) {
     // now open without the operator having spoken — but live-session.js's
     // MAX_IDLE_ROTATIONS_WITHOUT_SPEECH ceiling still stops an unattended
     // session rotating forever.
-    async function liveForSpeech() {
+    // THREE clients can render live-audio-out, announcing it three different ways,
+    // so one predicate would be wrong for two of them: the HUD bridge sends
+    // live-open; a voice node declares live-audio at identify time and never sends
+    // live-open; and in operator mode operator-playback.js subscribes on its own,
+    // keyed on operatorReqId, while batch STT owns the mic and the bridge never
+    // starts. Naming the renderer at the call site is deliberate — one name with
+    // two predicates is how this repo has broken audit semantics before. An
+    // omitted renderer gets the broadcast rule, the refusing direction.
+    function canRender(renderer) { return renderer === 'operator' ? !!desktop : (clientLiveRequested || ws._nodeLiveAudio === true); }
+    ws.hasLiveListener = () => canRender();
+    async function liveForSpeech(renderer) {
+      // Opening a metered Gemini session for a client that cannot play its audio
+      // spends money to produce silence (BUG-433).
+      if (!canRender(renderer)) return null;
       if (!config.VOICE_UNIFIED_LIVE_VOICE) return null;
       if (!config.VOICE_S2S_ENABLED) return null;
       // No key -> open() would fail anyway; skip the attempt and the log noise.
@@ -3728,7 +3753,7 @@ function createServer(deps) {
       // the native Live session; operator playback retains ownership until drain.
       if (msg.type === 'utterance') {
         if (desktop) {
-          require('./desktop-connection').routeConversation(msg, { router: desktop, getLive: liveForSpeech, send, sanitize: sanitizeErrorForClient, onStart: id => { operatorReqId = id; operatorLivePending = true; } });
+          require('./desktop-connection').routeConversation(msg, { router: desktop, getLive: () => liveForSpeech('operator'), send, sanitize: sanitizeErrorForClient, onStart: id => { operatorReqId = id; operatorLivePending = true; } });
           return;
         }
         // Proof that the mic-hot window that ducked the speakers was a person.
@@ -4034,7 +4059,7 @@ function createServer(deps) {
           send({ type: 'identified', ok: true, nodeId });
         }
       }
-      else if (msg.type === 'live-open') { queueTurn(function () { return liveOpen(); }); }
+      else if (msg.type === 'live-open') { clientLiveRequested = true; queueTurn(function () { return liveOpen(); }); }
       else if (msg.type === 'live-audio') { if (config.DESKTOP_OPERATOR_ENABLED) send({ type: 'live-state', state: 'closed', reason: 'operator-mode-requires-completed-transcription' }); else if (liveSession) liveSession.sendAudio(msg.data); }
       // Slice 3 screen share. Same guard shape as live-audio: a frame arriving
       // before live-open (or after a close) is a silent no-op, never a throw —
@@ -4049,7 +4074,7 @@ function createServer(deps) {
       else if (msg.type === 'live-video') {
         if (liveSession && config.LIVE_SCREEN_SHARE_ENABLED === true) liveSession.sendVideoFrame(msg.data);
       }
-      else if (msg.type === 'live-close') { if (liveSession) liveSession.close('client-request'); }
+      else if (msg.type === 'live-close') { clientLiveRequested = false; if (liveSession) liveSession.close('client-request'); }
       else if (msg.type === 'live-text') {
         if (liveSession) liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
       }
@@ -4059,6 +4084,7 @@ function createServer(deps) {
     // dangling Gemini socket would otherwise keep billing for open-mic time
     // with no client left to hear the reply.
     ws.on('close', () => {
+      clientLiveRequested = false;
       desktop?.close().catch(error => logger.warn('desktop.disconnect-failed', { error: error.message }));
       if (liveSession) liveSession.close('ws-closed');
       liveAdaptersByConnection.delete(connectionId);

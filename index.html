@@ -5693,13 +5693,14 @@
         "n": 433,
         "shape": "entry",
         "state": "open",
-        "title": "the boot greeting is spoken into a Live session the window is not listening to, so the packaged app starts silent (OPEN, filed 2026-09-10)",
+        "title": "the boot greeting is spoken into a Live session the window is not listening to, so the packaged app starts silent (CODED 2026-09-10; filed 2026-09-10)",
         "detail": {
-          "cause": "`server/index.js` `liveForSpeech()` opens a Live session purely to speak whenever `VOICE_UNIFIED_LIVE_VOICE` (default true), `VOICE_S2S_ENABLED` and `GOOGLE_API_KEY` are present. The Sep 8 packaged boot (13:38Z) spoke the greeting via `tts.spoke path:proactive` because Live was not available at boot; from the Sep 9 boot onward the greeting goes into Live. Same client behaviour on the 2026-09-09 19:21 boot (no capture-suspend row before the first wake word), so this predates the 2026-09-10 PR stack."
+          "cause": "`server/index.js` `liveForSpeech()` opens a Live session purely to speak whenever `VOICE_UNIFIED_LIVE_VOICE` (default true), `VOICE_S2S_ENABLED` and `GOOGLE_API_KEY` are present. The Sep 8 packaged boot (13:38Z) spoke the greeting via `tts.spoke path:proactive` because Live was not available at boot; from the Sep 9 boot onward the greeting goes into Live. Same client behaviour on the 2026-09-09 19:21 boot (no capture-suspend row before the first wake word), so this predates the 2026-09-10 PR stack. **FIXED 2026-09-10 in code; one cold boot with the speaker on remains.** `liveForSpeech()` now refuses to open a metered Gemini session for a client that has announced no way to play the audio. Operator decision the same day: the boot greeting is audible in the TTS voice.",
+          "verification": "`test/bug-433-proactive-speech-needs-a-listener.test.js` 5/5; every test file that touches `live-open`, `liveForSpeech`, `proactiveSpeak`, `_nodeLiveAudio` or `routeConversation` — 33 files, 229/229, 0 skipped. Five mutations on `server/index.js`, each grep-verified applied and restored sha256-identical: deleting the gate (the literal pre-fix code) reddens 4 tests; `canRender()` returning true reddens the same 4; dropping the voice-node channel reddens the node test; misspelling the operator renderer reddens 2 tests in `test/desktop-server.test.js`; dropping the `live-close` reset reddens the close test. The operator-renderer mutation SURVIVED its first run against the files I reached for, which is how its real cover was found and why the whole list is written into the test header."
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODE LEFT: gate liveForSpeech on a client that sent live-open; boot greeting falls to TTS] The boot greeting is injected into a Live session the HUD only subscribes to after the bridge starts, so the packaged app starts silent until the first wake word. Diagnosed from two boots; the proposed fix gates liveForSpeech on a client-started bridge.",
+          "evidence": "[CODED 2026-09-10; one cold boot with the speaker on remains] The boot greeting is injected into a Live session the HUD only subscribes to after the bridge starts, so the packaged app starts silent until the first wake word. Diagnosed from two boots; the proposed fix gates liveForSpeech on a client-started bridge.",
           "source": "mythos/server/index.js"
         }
       },
