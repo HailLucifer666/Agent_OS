@@ -592,6 +592,11 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-422 | open | blocked | Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original "the supervisor did not log it" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
 | BUG-429 | fixed | blocked | Unknown settings are announced through repeat backoff and listed by doctor. Voice kill switch and known-key non-change tested; browser-use stays parked. | mythos/scripts/doctor.js |
 | BUG-432 | open | blocked | System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. Timing changes await a measured pass. | mythos/src/core/voice/live-session.js |
+| BUG-433 | open | blocked | The boot greeting is injected into a Live session the HUD only subscribes to after the bridge starts, so the packaged app starts silent until the first wake word. Diagnosed from two boots; the proposed fix gates liveForSpeech on a client-started bridge. | mythos/server/index.js |
+| BUG-434 | open | blocked | A successful ui_type was retracted because "I sent the text to that box" matched the sending claim category, which has no typing tool among its backers. Replay of the 09:51 sentence is the pending regression. | mythos/src/core/voice/claim-check.js |
+| BUG-435 | open | blocked | A named-browser request ran open_web browser:true and browser_launch_debug in one turn, opening two Brave windows. Tool guidance and a same-turn guard are the proposed fix. | mythos/src/core/voice/live-tools.js |
+| BUG-436 | open | blocked | Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code. | mythos/src/core/loop-lag.js |
+| BUG-437 | open | blocked | Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open. | electron/main.js |
 | BUG-406 | open | blocked | Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -1441,6 +1446,66 @@ So one of these is true, and this ticket is not closed until it is known which:
 **Scope:** preserve the original events. Do not call every interruption an operator barge-in. BUG-424 can withhold a superseded fallback; that does not serialize the notices or close this ticket.
 
 **Attribution:** diagnoses come from the 2026-09-09 filing session and the 2026-09-10 replay.
+
+**Measured again 2026-09-10 on the 0.1.12 boots:** the boot greeting's own Live turn was interrupted on 2 of 2 boots by the next system injection — at 00:10:12 a self-heal notice landed 1.05 s after the greeting and killed it with 0 audio parts produced; at 09:20:45 the Gmail and provider notices landed after the 20 s `speech.lock-ceiling` and cut the greeting at 53 audio parts. The greeting is inaudible for a second reason too (BUG-433), but this class alone would have silenced the 00:10 boot.
+
+## BUG-433 — the boot greeting is spoken into a Live session the window is not listening to, so the packaged app starts silent (OPEN, filed 2026-09-10)
+
+**Status:** 🔴 OPEN — diagnosed from logs on two boots; not fixed. Workaround: `VOICE_UNIFIED_LIVE_VOICE=false` routes the greeting back through the TTS channel.
+
+**Symptom (operator, 2026-09-10 09:20Z boot of 0.1.12):** "As soon as the app starts it does not greet. Waits for the wake word." The server log shows the greeting text injected into Live at 09:20:32 (`live.text-injected site:proactive-speak`, 146 chars) and Gemini producing 53 audio parts for it; no `voice.capture-suspend` row appears until the operator's first wake word at 09:23, and `onBroadcast('live-audio-out')` in `ui/public/js/voice/s2s-bridge.js` is registered inside `start()`, which runs only from the orb, the talk hotkey or the wake word (`app.js` toggleVoice callers). Nothing starts the bridge at boot, so every Live utterance before the first wake word has no consumer.
+
+**Mechanism:** `server/index.js` `liveForSpeech()` opens a Live session purely to speak whenever `VOICE_UNIFIED_LIVE_VOICE` (default true), `VOICE_S2S_ENABLED` and `GOOGLE_API_KEY` are present. The Sep 8 packaged boot (13:38Z) spoke the greeting via `tts.spoke path:proactive` because Live was not available at boot; from the Sep 9 boot onward the greeting goes into Live. Same client behaviour on the 2026-09-09 19:21 boot (no capture-suspend row before the first wake word), so this predates the 2026-09-10 PR stack.
+
+**Proposed fix:** the server may only borrow a Live session for speech when the HUD has actually started listening (the client's `live-start` request), otherwise fall through to the TTS chain. One condition plus a test that a proactive speech with no client-started bridge takes the TTS path and one with a started bridge takes Live.
+
+**Attribution:** operator report and the 2026-09-10 log read.
+
+## BUG-434 — a successful typing action was retracted because "I sent the text to that box" matched the message-sending claim category (OPEN, filed 2026-09-10)
+
+**Status:** 🔴 OPEN — cause pinned to `claim-check.js`; not fixed.
+
+**Evidence (2026-09-10 09:51Z):** Audit `ui_type({"text":"Checking in, as requested."})` completed `outcome:ok` at 09:51:13 (mechanism `uia-setvalue`, focused process Slack). MYTHOS said "Consider it typed, Sir. I sent the text 'Checking in, as requested' to that message box." At 09:51:21 `live.text-injected site:ad4-correction-retract` fired and MYTHOS said "the typing didn't actually go through". The operator: "The typing did go through." Audit shows `claimed-action-not-taken target:sending` at 09:51:21.
+
+**Mechanism:** the `sending` category (`tools: whatsapp_send, gmail_send, phone_sms_send`, first-person "sent/texted/emailed/messaged" regex) treats any first-person "sent" without a send tool as unbacked. A successful `ui_type` is not a backing tool for it, so a truthful description of typing was punished. The file's own header says a false positive here is worse than a miss (2026-08-14, F1b).
+
+**Proposed fix:** a successful `ui_type` (and `press_key`) in the evidence window backs a "sent the text" claim; the original 2026-08-14 case ("Message sent to Alex, sir." with `whatsapp_send` FAIL) stays pinned as detected. Replay the real 09:51 sentence as the regression.
+
+**Attribution:** operator report and the 2026-09-10 log read.
+
+## BUG-435 — "open YouTube on Brave" opened two browsers: the operator's normal Brave and a debug Brave (OPEN, filed 2026-09-10)
+
+**Status:** 🔴 OPEN — model behaviour with two tools for one intent; not fixed.
+
+**Evidence (2026-09-10 09:37Z):** `open_web({browser:true,type:"web",url:"https://www.youtube.com",browserName:"brave"})` at 09:37:47 (`handedToBrowser:true`, the normal profile) followed by `browser_launch_debug({browser:"brave"})` at 09:37:53 (cold, signed-out profile). The operator: "why did you open two YouTube? You opened in debug browser and in a default browser." At 09:46 the operator said "when I ask you to open browser you open the debug browser", and MYTHOS stored that with `remember`.
+
+**Class:** two tools, one intent, prose only — nothing but description prose separates "open in your browser" from "open in the browser I control". BUG-407/408 gave the debug browser a name and an identity notice but did not decide which tool a named-browser request means.
+
+**Proposed fix:** when the operator names a browser or says "on the browser", the tool guidance prefers `browser_launch_debug` + `browser_navigate` and never both routes in one turn; `open_web browser:true` stays for an explicit "in my normal browser". Test the description text and the adapter's same-turn guard.
+
+**Attribution:** operator report and the 2026-09-10 log read.
+
+## BUG-436 — MYTHOS goes quiet mid-conversation: the server event loop freezes 2–9 s with zero CPU, and a Live rotation drops the in-flight tool turn (OPEN, filed 2026-09-10)
+
+**Status:** 🔴 OPEN — two measured causes, neither attributed to a call site yet; needs an instrumented live run before code.
+
+**Evidence (2026-09-10 09:20–09:52Z):** 18 `loop.stalled` rows in 32 minutes, lag 286–9102 ms, `cpuMs` 0–875 (most under 150), so the process was blocked, not computing. 09:46:27 stall 1883 ms tripped `cortex-stall` → `restart-cortex`, spoken as "brief stall in the Cortex". Operator at 09:49:52: "why do you keep getting stuck in between?" Separately, `live.goaway timeLeft:50s` at 09:47:42 closed the session while `screen_read_text` (called 09:47:39) was in flight; the reconnect took about 2 s but the tool result had no session to return to, and MYTHOS said nothing until the operator spoke again at 09:47:59. Three goaways in the session (09:29:32, 09:38:40, 09:47:42). The stalls also appear in the 2026-09-09 session, so they predate the 2026-09-10 PR stack.
+
+**Not the cause:** no test suite or other heavy process from this machine's agent sessions ran during the window (last other-session commit 05:44 local).
+
+**Next step:** a stall profiler in the server child (record the last synchronous fs/spawn call before each lag) and a test that a tool result arriving after a non-final close is re-delivered to the next session.
+
+**Attribution:** operator report and the 2026-09-10 log read.
+
+## BUG-437 — closing the app left processes in Task Manager and wrote no quit line (OPEN, filed 2026-09-10)
+
+**Status:** 🔴 OPEN — observed once; the quit path's own instrumentation did not fire, so the cause is unknown.
+
+**Evidence (2026-09-10 ~09:52Z):** the operator closed 0.1.12 and reported processes still visible in Task Manager. `logs/main.log` has no `app quit: orderly exit` line for this close, while the 00:09, 00:10 and earlier quits today each wrote one; the last desktop-log line is 09:37:47. The server log ends at 09:51:59 with a normal `wakeword.metrics` row and no shutdown line from the BUG-422 `lifecycle.process-exit` hook. Afterwards only `adb.exe -L tcp:5037 fork-server` (pid 23924, started with the 09:20 boot) survived; `android-child` deliberately never runs `adb kill-server` (BUG-404 records why).
+
+**Open questions:** whether MYTHOS.exe itself lingered or only `adb.exe`; whether `window-all-closed` fired at all (`before-quit` would have logged `vault-sync`). Reproduce with the process list open and `main.log` tailed before writing code. `stopChild()` hard-kills the child (`TerminateProcess` on Windows), which also explains why the child's exit hook cannot write on a normal quit.
+
+**Attribution:** operator report and the 2026-09-10 log read.
 
 ## BUG-423 — MYTHOS narrated an action it never attempted, four times, and invented a failed attempt when challenged (FIXED IN CODE 2026-09-10; found live 2026-09-09)
 
@@ -20872,6 +20937,16 @@ those records remain owed (this section is the index until then).
 
 - BUG-432 - back-to-back system notices interrupt each other; 15 of 35
   interruptions followed a system injection within 300 ms. Measured; timing work remains open.
+- BUG-433 - the boot greeting goes into a Live session the HUD is not listening to
+  until the first wake word; the packaged app starts silent. Diagnosed 2026-09-10; no code change yet.
+- BUG-434 - a successful ui_type was retracted because "I sent the text to that box"
+  matched the sending claim category. Cause pinned in claim-check.js; no code change yet.
+- BUG-435 - "open YouTube on Brave" ran open_web browser:true AND browser_launch_debug,
+  two browsers for one request. No code change yet.
+- BUG-436 - mid-conversation silences: 18 event-loop stalls with near-zero CPU in 32 minutes,
+  and a Live goaway dropped an in-flight tool turn. Needs an instrumented run.
+- BUG-437 - closing the app left processes in Task Manager and no quit line was written.
+  Observed once; reproduce with the process list open.
 
 - BUG-422 - the server child exits silently mid-session and never restarts.
   CRITICAL: the operator lost the app mid-
