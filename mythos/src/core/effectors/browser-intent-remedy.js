@@ -93,4 +93,40 @@ function webTypeNeedsUrlRemedy(query) {
     + `type:"search" and query:"${s}". If they wanted one specific page, pass its full https URL as url:.`;
 }
 
-module.exports = { browserIntentRemedy, webTypeNeedsUrlRemedy, looksLikeUrlOrDomain };
+// browserOfflineRefusal(status) — what a browser tool answers when nothing is
+// attached to the debug port.
+//
+// THIS PATH BECAME REACHABLE FROM VOICE ON 2026-09-11 AND NAMED NO REMEDY.
+// Until BUG-435 made the browser capability rule selfHealing, every tool that
+// reaches requireOnline() was WITHHELD from the Live model while the adapter was
+// down, so the spoken surface could not arrive here at all. Now it can. Measured
+// before this change, with the adapter stubbed OFFLINE and ensureOnline throwing:
+//
+//   calls  : getStatus, getStatus, ensureOnline, getStatus   (BUG-011 bring-up ran)
+//   ok     : false
+//   result : "Browser automation is OFFLINE. <hint>"
+//
+// Honest about the cause, silent about the way out — and the old fallback told
+// the model to "Run setup-chrome-debug.ps1 first", a PowerShell script it cannot
+// execute. That is the BUG-099 / BUG-107 shape inverted: not an unreachable tool
+// named, but no tool named at all. Widening a surface makes its failure paths
+// part of the change, so it is fixed in the same commit as the widening.
+//
+// Prose AND structure, which is the house shape: the model reads the sentence,
+// remedy() validates the tool against TIER_TABLE so a rename cannot leave a call
+// that does not exist, and live-tool-adapter.js already forwards a `remedy` on a
+// failed dispatch. It lives here rather than in from-browser.js because that file
+// is at its file-size ceiling and this module is the existing home for browser
+// remedies.
+//
+// The caller's hint is kept VERBATIM and first: bug-011-browser-auto-connect.js
+// pins that a hint supplied by the adapter reaches the caller unaltered.
+function browserOfflineRefusal(status) {
+  const state = (status && status.state) || 'OFFLINE';
+  const hint = (status && status.hint) ? ' ' + String(status.hint).trim() : '';
+  const why = 'Nothing is attached to the debug port, so there is no page to drive yet.';
+  return { ok: false,
+    result: 'Browser automation is ' + state + '.' + hint + ' Call browser_launch_debug to start one, then retry.', remedy: remedy('browser_launch_debug', {}, why) };
+}
+
+module.exports = { browserIntentRemedy, webTypeNeedsUrlRemedy, looksLikeUrlOrDomain, browserOfflineRefusal };

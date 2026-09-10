@@ -64,8 +64,10 @@ async function requireOnline() {
     }
   }
   if (status.state !== 'ONLINE') {
-    return fail(`Browser automation is ${status.state}. ${status.hint || 'Run setup-chrome-debug.ps1 first.'}`);
-  }
+    // BUG-435, 2026-09-11: voice can reach this for the first time (the browser
+    // rule is selfHealing now) and it named no way out. Why, and the measurement,
+    // are with the builder in browser-intent-remedy.js.
+    return require('./browser-intent-remedy').browserOfflineRefusal(status); }
   return null;
 }
 

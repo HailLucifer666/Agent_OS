@@ -97,11 +97,23 @@ const RULES = [
     // otherwise reports OFFLINE honestly. So a declared browser tool called with
     // no browser either works or fails with the truth. It never no-ops.
     //
-    // NOT MARKED, deliberately: cua_* and the pc-child family also contain
-    // ensureOnline-shaped calls, but whether those actually bring their adapter
-    // up in-session was NOT measured here, and the operator scoped this change to
-    // the browser. Measure before widening — grep for the bring-up call, then run
-    // the tool with the adapter down and read what comes back.
+    // NOT MARKED, and this is now MEASURED rather than deferred (2026-09-11).
+    // Three files export a function called requireOnline() and only one of them
+    // brings anything up — the shared name is the trap:
+    //   from-browser.js:32  async; calls ensureOnline() -> CDP connect, then
+    //                       launchLocal. Genuinely self-healing. Probed with the
+    //                       adapter stubbed OFFLINE: the call order was
+    //                       getStatus, getStatus, ensureOnline, getStatus, and it
+    //                       returned ok:false with the cause and the remedy.
+    //   from-cua.js:74      `return cuaDriver.getStatus().state === 'ONLINE'`.
+    //                       A pure predicate; callers do `if (!requireOnline())
+    //                       return offlineFail()`. Starts nothing.
+    //   from-pc.js:60       reads pcChild.getStatus() and returns fail(...).
+    //                       Starts nothing.
+    // So cua_* and the pc-child family stay withheld, correctly: no declared tool
+    // and no effector can clear their gate inside a session. If either ever gains
+    // a real bring-up, mark it here — the check is the one run above, not a grep
+    // for the function name, which matches all three.
     selfHealing: true,
     reason: 'no debuggable browser is attached (CDP endpoint unreachable) — browser_launch_debug can start one',
   },

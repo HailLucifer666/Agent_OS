@@ -130,6 +130,37 @@ describe('BUG-276 F1 — the browser recovery tool must survive the outage it re
     assert.ok(DEFAULT_ALLOWLIST.includes('browser_launch_debug'));
   });
 
+  test('the except list is CROSS-CHECKED against the effectors, not merely typed', () => {
+    // GATE D, 2026-09-11. `except` in tool-capability.js is a hand-typed pair, and
+    // a hand-kept list is the omission scheduled for whoever adds the next entry.
+    // It cannot become a derived selector without importing the effector module
+    // into a pure decision file, so it is CROSS-CHECKED instead: the exempt names
+    // must be exactly the browser_* effectors that do not guard on requireOnline(),
+    // because "needs no browser" is what both lists mean.
+    //
+    // Two routes, one answer, and they agreed when this was written: 21 browser_*
+    // functions in from-browser.js, 19 call requireOnline(), and the 2 that do not
+    // are browser_launch_debug and browser_switch. If a third bring-up tool appears
+    // or a guard is deleted, the lists drift and this says so — that drift is what
+    // made BUG-435 reachable.
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const { RULES } = require('../src/core/voice/tool-capability');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'effectors', 'from-browser.js'), 'utf8');
+    const fns = [...src.matchAll(/async function (browser_[a-z_]+)\s*\(([\s\S]*?)\n}/g)];
+    assert.ok(fns.length >= 15, 'only found ' + fns.length + ' browser_* effectors — the scan is not reading the file');
+    const ungated = fns.filter((m) => !/requireOnline/.test(m[2])).map((m) => m[1]).sort();
+
+    const rule = RULES.find((r) => r.id === 'browser');
+    assert.ok(rule && typeof rule.except === 'function', 'the browser rule must still carry an except predicate');
+    const exempt = fns.map((m) => m[1]).filter((n) => rule.except(n)).sort();
+
+    assert.deepEqual(exempt, ungated,
+      'the capability rule exempts ' + JSON.stringify(exempt) + ' but the effectors needing no browser are '
+      + JSON.stringify(ungated) + '. One list is stale: either a new bring-up tool is gated on the thing it '
+      + 'creates (the BUG-276 F1 deadlock), or an exempt tool now needs a browser and will fail without saying why.');
+  });
+
   test('the withheld reason names the remedy, so the outage is self-describing', () => {
     const snap = buildCapabilitySnapshot({ config: {}, adapters: OFFLINE_BROWSER });
     const cap = checkToolCapability('browser_navigate', snap);
