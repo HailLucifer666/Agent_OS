@@ -22,6 +22,17 @@
 // client-side asks for the session: the server opens it by itself, which is
 // the behaviour under test.
 
+// BUG-433 (2026-09-10) CHANGED WHAT THIS FILE PINS, AND THE CHANGE IS THE POINT.
+// These tests used to open a Live session for a client that had never sent
+// live-open. That client has no renderer for live-audio-out: the HUD registers
+// its handler inside s2s-bridge start() (:1031) and operator-playback.js is
+// built only in operator mode, so the reply was inaudible AND uncaptioned
+// (say:''). The session opened, the voice name was right, and nobody heard a
+// word — measured on the 0.1.12 boot greeting. Unified voice is still the goal
+// and is still pinned below; it is now conditional on the client being able to
+// play the audio, and every test here says so by sending the live-open a real
+// HUD sends. The audible fallback is a different voice, which is worse than one
+// voice and much better than silence. Operator decision, 2026-09-10.
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
@@ -146,7 +157,7 @@ function withKey(value, fn) {
 }
 
 describe('VOICE_UNIFIED_LIVE_VOICE: typed chat opens a Live session rather than answering in another voice', () => {
-  test('a typed utterance with NO existing Live session opens one and speaks through it', async () => {
+  test('a typed utterance reopens a Live session for a listening client and speaks through it', async () => {
     const bus = createBus({ historySize: 50 });
     const sockets = [];
     const createLiveSocket = () => { const s = new AutoOpeningGeminiSocket(); sockets.push(s); return s; };
@@ -156,14 +167,23 @@ describe('VOICE_UNIFIED_LIVE_VOICE: typed chat opens a Live session rather than 
         createLiveSocket,
       }),
       async ({ ws, dones }) => {
-        // No 'live-open' from the client, and no wake word — this is the exact
-        // situation the operator hit: open the HUD, type, never speak.
+        // BUG-433 REWROTE THIS SCENARIO, because the old one was unreachable.
+        // It used to type with no live-open at all, which is a client that cannot
+        // play the reply — the session opened and nobody heard it. The reachable
+        // version of "liveForSpeech() must open one on demand" is a listening
+        // client whose session has since gone: an idle rotation, a goAway, a
+        // transport drop. The listener outlives the session, and the next typed
+        // turn must get the Live voice rather than falling to the batch chain.
+        ws.send(JSON.stringify({ type: 'live-open' }));
+        await waitFor(() => sockets.length === 1 && sockets[0].sent.some((f) => f.setup), 5000);
+        sockets[0].close();
+        await waitFor(() => sockets[0].closed, 5000);
+
         ws.send(JSON.stringify({ type: 'utterance', reqId: 'typed-1', text: 'what is on my calendar' }));
+        await waitFor(() => sockets.length === 2, 5000);
+        await waitFor(() => sockets[1].sent.some((f) => f.realtimeInput && f.realtimeInput.text), 5000);
 
-        await waitFor(() => sockets.length === 1, 5000);
-        await waitFor(() => sockets[0].sent.some((f) => f.realtimeInput && f.realtimeInput.text), 5000);
-
-        const textFrames = sockets[0].sent.filter((f) => f.realtimeInput && f.realtimeInput.text);
+        const textFrames = sockets[1].sent.filter((f) => f.realtimeInput && f.realtimeInput.text);
         assert.equal(textFrames.length, 1, 'exactly one text frame for one typed message');
         assert.equal(textFrames[0].realtimeInput.text, 'what is on my calendar');
 
@@ -171,6 +191,30 @@ describe('VOICE_UNIFIED_LIVE_VOICE: typed chat opens a Live session rather than 
         assert.equal(dones[0].reqId, 'typed-1');
         assert.equal(dones[0].routedToLive, true);
         assert.equal(dones[0].say, '', 'the batch/edge-tts path must not also answer this turn');
+      },
+    ));
+  });
+
+  test('a typed utterance from a client that cannot play Live audio is answered by the batch chain, not into silence', async () => {
+    // The other half of BUG-433, and the reason the test above changed. No
+    // live-open means no live-audio-out handler and no operator playback, so a
+    // Live reply would be inaudible AND uncaptioned. Answering in the batch voice
+    // is a worse voice and a real answer. Pinned so nobody restores the silence.
+    const bus = createBus({ historySize: 50 });
+    const sockets = [];
+    const createLiveSocket = () => { const s = new AutoOpeningGeminiSocket(); sockets.push(s); return s; };
+    await withKey('test-key-unified-voice', () => withServer(
+      baseDeps(bus, {
+        config: { VOICE_S2S_ENABLED: true, VOICE_UNIFIED_LIVE_VOICE: true },
+        createLiveSocket,
+      }),
+      async ({ ws, dones }) => {
+        ws.send(JSON.stringify({ type: 'utterance', reqId: 'typed-3', text: 'hello' }));
+        await waitFor(() => dones.length > 0, 8000);
+        assert.equal(dones[0].reqId, 'typed-3');
+        assert.notEqual(dones[0].routedToLive, true,
+          'a client with no renderer must not be answered into a Live session');
+        assert.equal(sockets.length, 0, 'and no metered Gemini session may be opened for it');
       },
     ));
   });
@@ -185,6 +229,8 @@ describe('VOICE_UNIFIED_LIVE_VOICE: typed chat opens a Live session rather than 
         createLiveSocket,
       }),
       async ({ ws }) => {
+        ws.send(JSON.stringify({ type: 'live-open' }));
+        await new Promise((r) => setTimeout(r, 50));
         ws.send(JSON.stringify({ type: 'utterance', reqId: 'typed-2', text: 'hello' }));
         await waitFor(() => sockets.length === 1 && sockets[0].sent.some((f) => f.setup), 5000);
         const setup = sockets[0].sent.find((f) => f.setup).setup;

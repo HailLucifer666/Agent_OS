@@ -170,6 +170,10 @@ describe('Aether audio routing yields to Gemini Live (Live wins always)', () => 
         await new Promise((resolve, reject) => { ws.on('open', resolve); ws.on('error', reject); });
         // Any inbound message makes this the targeted connection (lastActiveWs);
         // proactiveSpeak only tries liveForSpeech() on a live targetWs.
+        // BUG-433: live-open is what tells the server this client can PLAY the
+        // reply. Without it the session below would open and be inaudible, which
+        // is the defect, not the behaviour this test wants to pin.
+        ws.send(JSON.stringify({ type: 'live-open' }));
         ws.send(JSON.stringify({ type: 'subscribe', types: ['tick'] }));
         await new Promise((r) => setTimeout(r, 50));
 
