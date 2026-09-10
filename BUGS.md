@@ -1486,7 +1486,7 @@ So one of these is true, and this ticket is not closed until it is known which:
 
 **Status:** 🔧 CODED — fixed in `server/index.js`; one cold boot with the speaker on remains.
 
-**2026-09-11 SESSION READ.** **The gate held on all four boots and the greeting was
+**Residual:** 2026-09-11 session read. **The gate held on all four boots and the greeting was
 still silent — for a different, measurable reason.** Every boot logged
 `proactive.live-skipped-no-listener` and **zero** `live.text-injected site:proactive-speak`,
 which is the fix doing exactly what it claims; the 14:50 boot earlier the same day shows the
@@ -1534,7 +1534,7 @@ not on this fix.
 
 **Status:** 🔧 CODED 2026-09-10, REGRESSED IN PRODUCTION THE SAME DAY, REPAIRED 2026-09-11 — read the repair section before the original one below. The 2026-09-10 guard made this worse: on the 18:21Z attended run "open YouTube in Brave" opened NO page at all, where the bug it fixed opened two. Both halves. The mechanism: a second real-browser route in the same turn is refused before the leash and told what already opened. The product question — which route a NAMED browser request means — was decided by the operator the same day and is now encoded rather than described. Local regression evidence only; no attended voice run.
 
-**2026-09-11 SESSION READ.** **The route works end to end now, measured from the
+**Symptom:** 2026-09-11 session read. **The route works end to end now, measured from the
 vault, and the blocker has moved.** `browser_launch_debug` 5/5 ok, `browser_navigate` 9/9 ok,
 `browser_tabs` 13/13 ok, `browser_snapshot` 5/5 ok — with real return values
 (`url:"https://www.youtube.com/?themeRefresh=1" title:"YouTube"`). Two hours earlier none of
@@ -1612,7 +1612,7 @@ Still genuinely open, and NOT the regression: deleting `browserName` outright on
 
 **Status:** 🔴 OPEN — the goAway half is coded (PR #88, unmerged). The stall half now has an instrument and no diagnosis: one attended run with `LOOP_LAG_TRACE=true` names the caller, and a second PR fixes what it names.
 
-**2026-09-11 SESSION READ.** Four boots (18:18, 19:38, 20:11, 20:46Z) measured
+**Mechanism:** 2026-09-11 session read. Four boots (18:18, 19:38, 20:11, 20:46Z) measured
 end to end. **52 `loop.stalled` rows, 450 s of frozen event loop, worst single 31,777 ms,
 1,132 CPU-seconds burned.** The filed premise is now CONTRADICTED and that matters more than
 the count: this ticket says "zero CPU", but **39 of the 52 stalls have `cpuMs` 2–3× `lagMs`**
