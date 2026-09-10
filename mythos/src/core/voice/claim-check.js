@@ -79,6 +79,33 @@ const CLAIM_CATEGORIES = [
   {
     name: 'sending',
     tools: ['whatsapp_send', 'gmail_send', 'phone_sms_send'],
+    // BUG-434 (2026-09-10 09:51Z): `ui_type({"text":"Checking in, as requested."})`
+    // completed outcome:ok into Slack's message box, MYTHOS said "I sent the text
+    // 'Checking in, as requested' to that message box", `re` below matched "I
+    // sent", the backed check looked only at the three send tools above, and a
+    // TRUE sentence was retracted aloud ("the typing didn't actually go through").
+    // The operator: "The typing did go through." F1b's class exactly, one
+    // category over: a hand-kept tool list missing the tool that really ran.
+    //
+    // backingTools are tools whose SUCCESS backs this category's claim without
+    // being this category's own tools. The reason is "a tool that put text into,
+    // or submitted, the focused control makes 'I sent the text' true" — ui_type
+    // puts the text, send_key submits it (Enter) — and the set is derived from
+    // that reason, not from the one incident. Three bounds, all test-pinned
+    // (test/bug-434-typing-backs-a-sent-claim.test.js):
+    //   - they do NOT gate the elliptical tier: a failed ui_type is a failed
+    //     typing attempt, not "a send that was attempted and failed", so the
+    //     2026-08-14 "Message sent to Alex, sir." + whatsapp_send FAIL case is
+    //     unchanged and a passive "Message sent" over a failed send is still
+    //     caught even when a ui_type also succeeded nearby;
+    //   - they are NOT candidateTools: the correction names what should have run,
+    //     and "call ui_type" is the wrong remedy for an unbacked "sent" claim;
+    //   - honest limit, per the header's favour-misses rule: a first-person "I
+    //     sent" beside a successful ui_type is backed even if a send tool also
+    //     failed in the window — the model may have typed into the messaging app
+    //     after the API send failed, and guessing which it meant risks the one
+    //     error this file must never make (telling MYTHOS to retract the truth).
+    backingTools: ['ui_type', 'send_key'],
     re: /\b(?:i(?:'ve| have) |i )(sent|texted|emailed|messaged)\b/i,
     // A3 (2026-08-14): the measured false claim was "Message sent to Alex, sir."
     // at 17:29:26, in the same turn as whatsapp_send=FAIL — and the mandatory
@@ -346,9 +373,11 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       const gate = (category.gateTools && category.gateTools.length)
         ? category.gateTools : category.tools;
       let match = category.re ? category.re.exec(sentence) : null;
+      let elliptical = false;
       if (!match && category.ellipticalRe
           && gate.some((tool) => attemptedUnproven.has(tool))) {
         match = category.ellipticalRe.exec(sentence);
+        elliptical = !!match;
       }
       // BUG-398 row 4: the progressive tier, and its gate is the OPPOSITE shape
       // to the elliptical one above. Elliptical needs a tool ATTEMPTED and
@@ -372,7 +401,24 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       // A fact-finding tool that SUCCEEDED backs the claim. This is what stops
       // the detector telling the assistant to retract a statement it had just
       // earned — the F1b lesson recorded in the searching category above.
-      const backed = gate.some((tool) => successfulTools.has(tool));
+      // BUG-434: a category may name backingTools — tools that are not its own
+      // but whose success makes its claim true (see the sending category). They
+      // are read HERE only: not in `gate` (so they never OPEN the elliptical
+      // tier) and not in candidateTools below.
+      //
+      // AND THEY MUST NOT CLOSE THE ELLIPTICAL TIER EITHER. Not obvious, and the
+      // first draft of this fix got it wrong: `backed` is evaluated AFTER any
+      // tier has matched, so an OR here suppressed every tier at once. Measured
+      // 2026-09-10 by running the adjacent-case test before trusting the diff —
+      // "Message sent to Alex, sir." over a FAILED whatsapp_send stopped being
+      // flagged the moment a successful ui_type stood in the same window, which
+      // is the 2026-08-14 false claim walking back in. The elliptical tier only
+      // fires when an OWNED tool of this category was attempted and did not
+      // succeed: that is direct counter-evidence about the very action claimed,
+      // and a backing tool is not entitled to overrule it. The first-person and
+      // progressive tiers carry no such counter-evidence, so they are backed.
+      const backed = gate.some((tool) => successfulTools.has(tool))
+        || (!elliptical && (category.backingTools || []).some((tool) => successfulTools.has(tool)));
       if (backed) continue;
       flaggedCategories.add(category.name);
       claims.push({
