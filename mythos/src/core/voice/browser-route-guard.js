@@ -56,14 +56,16 @@
 // memory holds routes only and has exactly one writer, at the adapter's single
 // pre-dispatch call site, so the bad state cannot be represented rather than
 // merely being detected.
-function createRouteMemory() {
+function createRouteMemory(deps) {
   const routes = new Map(); // route -> the call that took it
   return {
     note(name, args) {
       const route = browserRouteOf(name, args);
       if (route && !routes.has(route)) routes.set(route, { name, args: args || {} });
     },
-    check(name, args) { return checkBrowserRoute(name, args, routes); },
+    // deps is carried, not read here: namedOperatorBrowser needs a browserOnline
+    // reader and a test has to be able to supply one without a live CDP socket.
+    check(name, args) { return checkBrowserRoute(name, args, routes, deps); },
     clear() { routes.clear(); },
     size: () => routes.size,
   };
@@ -94,10 +96,10 @@ function parseSignature(signature) {
 // `taken` is a Map of route -> {name, args} from createRouteMemory. A Set of
 // signature strings is still read, so the adapter-level tests written against
 // the old store keep exercising the same logic.
-function checkBrowserRoute(name, args, taken) {
+function checkBrowserRoute(name, args, taken, deps) {
   const route = browserRouteOf(name, args);
   if (!route) return null;
-  const named = namedOperatorBrowser(name, args);
+  const named = namedOperatorBrowser(name, args, deps);
   if (named) return named;
   for (const entry of (taken && typeof taken.values === 'function' ? taken.values() : taken) || []) {
     const prior = typeof entry === 'string' ? parseSignature(entry) : entry;
@@ -124,27 +126,74 @@ function checkBrowserRoute(name, args, taken) {
 
 // A named browser is the debug route (operator decision 2026-09-10), so the
 // operator-route call that names one is refused before it can hand the URL to a
-// signed-in window. Answered with remedy() objects — validated against
-// TIER_TABLE, so a renamed tool throws here instead of teaching the model a
-// call that does not exist.
-function namedOperatorBrowser(name, args) {
+// signed-in window.
+//
+// THE FIRST VERSION OF THIS REFUSAL MADE THE BUG WORSE, and how it did is the
+// reason for the shape below. Measured 2026-09-10 18:21Z: the operator said
+// "open YouTube in Brave", browser_launch_debug ran and CONNECTED over CDP, and
+// then open_web was refused four times by a remedy telling the model to call
+// browser_launch_debug — the step it had just finished. Nothing navigated. No
+// page opened at all, which is worse than the two windows this guard exists to
+// prevent. Three faults, each fixed here:
+//
+// (1) IT WAS BLIND TO STATE, so its advice could already be satisfied. The next
+//     call is now derived from whether the debug browser is attached: navigate
+//     when it is, launch when it is not. Advice to redo a finished step is as
+//     unfollowable as advice naming a tool that does not exist — the same class
+//     BUG-099 and BUG-107 each fixed once (the reasoning is in live-tools.js's
+//     allowlist comments). This was the third instance.
+// (2) THE MESSAGE NAMED NO TOOL. Every refusal in this repo that actually moves
+//     the model names its tool in the prose — checkBrowserTarget in
+//     from-browser.js, browser-intent-remedy.js, close-window-guard.js. This one
+//     put the tools only in structured fields, and the reason recorded at the
+//     time was "a tool taught in a sentence is the debt the remedy ratchet
+//     exists to stop growing".
+//     THAT REASON WAS FALSE, and checking it is what found this. remedy-prose-
+//     ratchet.test.js scans `src/core/effectors` only (its DIR const); this file
+//     is in src/core/voice and has never been in its inventory. The prose was
+//     withheld to satisfy a rule that does not reach this file — and even where
+//     the rule does reach, it exempts prose sitting beside a `, remedy: remedy(`,
+//     which this call site already had. A test was cited, not consulted.
+//     The messages below still keep each tool-naming literal directly before its
+//     `, remedy: remedy(` — that costs nothing and means the sentences stay
+//     compliant if this module ever moves under the scanner.
+// (3) `then:` WAS A FIELD NOTHING READS. live-session.js serialises the whole
+//     response object, so it did reach the wire — but no consumer exists in this
+//     repo and the model was never taught the key. An invented field that looks
+//     like a contract is worse than no field, because it reads as coverage.
+//     Deleted; the whole sequence is in the sentence now.
+//
+// DELIBERATELY NOT ADDED: memory of refusals, so a repeat gets a different
+// answer. The four-refusal loop was caused by dead advice, not by repetition,
+// and an answer that changes on the second ask is a new way to be wrong. A test
+// pins that a repeat gets the SAME actionable advice.
+function debugBrowserOnline() {
+  // Lazily required, like remedy() below, so this module stays pure to require
+  // and the adapter — which sits on its size ceiling — pays nothing.
+  // Unreadable state answers "not attached": that sends the model to
+  // browser_launch_debug, which returns alreadyOnline instead of opening a
+  // second window, so the fail-safe direction costs nothing.
+  try { return require('../../../adapters/browser-agent').getStatus().state === 'ONLINE'; } catch (_) { return false; }
+}
+
+function namedOperatorBrowser(name, args, deps) {
   const a = args || {};
   if (name !== 'open_web' || a.browser !== true) return null;
   const browserName = typeof a.browserName === 'string' ? a.browserName.trim() : '';
   if (!browserName) return null;
   const { remedy } = require('../effectors/evidence');
+  const online = (deps && typeof deps.browserOnline === 'function' ? deps.browserOnline : debugBrowserOnline)();
   const why = 'A named browser means the one MYTHOS drives, so the page can be read and clicked afterwards.';
   const url = typeof a.url === 'string' ? a.url : '';
-  return {
-    priorTool: null, priorRoute: null, route: OPERATOR_ROUTE,
-    response: {
-      status: 'refused', reason: 'named-browser-is-the-debug-route',
-      message: name + ' was NOT run: a named browser is the browser MYTHOS controls, not the'
-        + " operator's signed-in " + browserName + '.',
-      remedy: remedy('browser_launch_debug', { browser: browserName }, why),
-      then: remedy('browser_navigate', url ? { url } : {}, why, url ? [] : ['url']),
-    },
-  };
+  const head = name + ' was NOT run: a named browser is the one MYTHOS drives, not the'
+    + " operator's signed-in " + browserName + '. ';
+  const seen = { priorTool: null, priorRoute: null, route: OPERATOR_ROUTE, debugBrowserOnline: online };
+  if (online) {
+    return { ...seen, response: { status: 'refused', reason: 'named-browser-is-the-debug-route',
+      message: head + 'That browser is already open and attached, so call browser_navigate with the url.', remedy: remedy('browser_navigate', url ? { url } : {}, why, url ? [] : ['url']) } };
+  }
+  return { ...seen, response: { status: 'refused', reason: 'named-browser-is-the-debug-route',
+    message: head + 'Call browser_launch_debug with that browser, then browser_navigate with the url.', remedy: remedy('browser_launch_debug', { browser: browserName }, why) } };
 }
 
 module.exports = { checkBrowserRoute, browserRouteOf, parseSignature, createRouteMemory, namedOperatorBrowser, OPERATOR_ROUTE, DEBUG_ROUTE };

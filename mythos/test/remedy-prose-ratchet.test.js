@@ -41,9 +41,12 @@ const PROSE_BASELINE = {
     "6d280d04e5a96480",
     "9a5e2c5afe9d4077",
     "d6786399ff45e777",
-    "8d6a3a768e5b668c",
-    "968a83af42c67649"
+    "8d6a3a768e5b668c"
   ],
+  // 2026-09-11, BUG-435. "968a83af42c67649" was browser_launch_debug's
+  // description. Its only trigger verb ("Use when the user asks...") is now
+  // "For when...", so the site leaves the inventory entirely rather than being
+  // re-recorded: 17 sites in this file, now 16. Removals need no waiver.
   "from-calendar.js": [
     "8d2dcf7a97928856",
     "c8d8190cd3986a1b",
@@ -86,7 +89,22 @@ const PROSE_BASELINE = {
     "16840d9d2521158e",
     "4fcfad525cdbccbd",
     "d2d12fb7a10a1b68",
-    "22546be8773c0393"
+    // 2026-09-11, BUG-435: was "22546be8773c0393". A SWAP, not an addition —
+    // from-dashboard.js holds 18 recorded sites before and after; only the
+    // content of this one changed, because open_web's description was edited to
+    // stop telling the model to pass browserName for a named browser (the
+    // instruction the route guard refuses, and the root cause of the 18:21Z
+    // four-refusal loop).
+    // WHAT THIS ENTRY ACTUALLY IS, since the hash hides it: not a string. The
+    // scanner's lexer opens a quote it cannot close and swallows a span covering
+    // most of the file — 23 trigger verbs and 32 tool names, beginning mid-way
+    // through a comment. So ANY edit to from-dashboard.js rehashes it, and it
+    // can never be removed by rewording. That makes it a poor guard on this file
+    // and it should be split or the lexer taught about apostrophes; filed rather
+    // than fixed here, because re-baselining the scanner while repairing a
+    // regression is how a measurement gets adjusted to fit a result.
+    // Net across both files this commit: 35 recorded sites -> 34.
+    "e705dca568dfd4e8"
   ],
   "from-desktop.js": [
     "458175d1e982f809"
