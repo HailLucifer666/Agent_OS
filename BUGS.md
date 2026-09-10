@@ -589,7 +589,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-403 | diagnosed | blocked | Auth priming emits safe state telemetry, awaits server/exchange/cookie readiness and keeps PIN semantics. Consumers: Electron packaged bootstrap, auth-session routes. Regression oracle: Auth matrix real dev/packaged boots; focused safe-telemetry regressions. Remaining evidence: Original historical failure mechanism is not conclusively reconstructed. | electron/main.js |
 | BUG-404 | fixed | blocked | Persistent infrastructure children use writable runtime cwd; relative binaries retain original resolution; ADB cleanup limits ownership. Consumers: pc/cua/android, TTS/search children; both raw browser launch sites. Regression oracle: 243 prior lifecycle regressions, packaged shutdown/rename and owned PID checks;browser family117pass. Remaining evidence: Handset/ADB shared-session live behavior, crash recovery and installed-artifact uninstall locks. | mythos/src/core/util/child-runtime.js |
 | BUG-405 | verified | blocked | Every pid-bearing failed PC command passes shared stale-target recovery; non-pid and non-stale failures avoid extra lookup. Consumers: from-pc delegate, focus/close/ui_elements and other pid tools. Regression oracle: Full helper/consumer tests read; browser family117pass includes recovery. Remaining evidence: Actual stale native pid followed by current live window list. | mythos/src/core/effectors/window-recovery.js |
-| BUG-422 | open | blocked | Child lifecycle instrumentation names the next failure; original cause remains unknown. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
+| BUG-422 | open | blocked | Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original "the supervisor did not log it" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
 | BUG-429 | fixed | blocked | Unknown settings are announced through repeat backoff and listed by doctor. Voice kill switch and known-key non-change tested; browser-use stays parked. | mythos/scripts/doctor.js |
 | BUG-432 | open | blocked | System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. Timing changes await a measured pass. | mythos/src/core/voice/live-session.js |
 | BUG-406 | open | blocked | Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
@@ -1233,7 +1233,9 @@ That is the claim the ticket makes -- identity survives a reconnect, so a task k
 
 **A second thing the run found: the host config advertised the wrong protocol.** `start()` wrote `{ protocol: 1, ... }` into `browser-extension-host.json` while a hello had to carry 2. Nothing reads that field today (the C# host takes only `pipeName` and `allowedExtensionIds`), which is exactly why it would have survived indefinitely and misled the first person to add a reader. It is derived from `PROTOCOL` now, pinned by a test that reads the constant out of the source rather than restating the number.
 
-**STILL NOT COVERED, and it matters for the installed app.** No real Brave with the extension attached. The host registered under `HKCU\Software\BraveSoftware\Brave-Browser\NativeMessagingHosts\com.mythos.browser_operator` points at the INSTALLED app's `resources/mythos-browser-host.exe`, and that binary was built 2026-09-08 18:37 -- a day BEFORE this fix -- so the INSTALLED host still strips `instanceId` and would refuse every hello. Shipping this requires rebuilding and reinstalling that host, and reloading the extension: expect exactly one `browser.extension.protocol-mismatch` on the bus at that point, and no more.
+**STILL NOT COVERED:** no real Brave with the extension attached, and the desktop operator was disabled (`DESKTOP_OPERATOR_ENABLED:"false"`) throughout the 2026-09-09 live session, so this path has still never carried a real browser.
+
+**A claim filed here earlier the same day was WRONG and is withdrawn.** This entry said the installed native host predated the fix and would refuse every hello. Measured 2026-09-10 00:10Z against the running install (`MYTHOS.exe` 0.1.12, rebuilt that morning): the packaged host binary contains the `instanceId` literal, the unpacked extension manifest declares `"storage"`, and the unpacked app source carries `settleExternalOpen`, `planLocalLaunch`, `ACCOUNT_STATUSES`, `BYO_PREMIUM`, the Anthropic provider, the BUG-417 engine change AND the `processesForProfile` pidfile repair committed only an hour before. **The installed app is current.** The prerequisite is therefore not a rebuild — it is switching the desktop operator on. Expect exactly one `browser.extension.protocol-mismatch` when an old extension first reconnects, and none after it reloads.
 
 ## BUG-417 — an ordinal addressed the Nth VISIBLE card while the tool promised result 1 through 20 (FIXED 2026-09-09)
 
@@ -1393,7 +1395,7 @@ Both lane models are dead and the free catalog lists both as alive -- the defect
 
 **Do NOT just raise the number.** The budget exists so a page that never reveals a card stops instead of scrolling forever. Two better directions: stop on "the ranked count stopped growing" rather than on a fixed count of scrolls (the growth curve above shows the signal is right there), or bound the grammar to what the page can actually serve and say so in the refusal. Either wants a measurement pass across several result pages and viewport sizes, because one page at one size is one sample.
 
-## BUG-422 — the server child exits silently mid-session; the supervisor neither logs it nor restarts (OPEN, found live 2026-09-09)
+## BUG-422 — the server child exits silently mid-session and no restart follows (OPEN, found live 2026-09-09)
 
 **Status:** OPEN, CRITICAL. Reproduced live 2026-09-09. Cause not yet identified.
 
@@ -1412,7 +1414,9 @@ port 4478              nothing listening; no restart ever occurred
 process table          the forked child is absent; electron main still Responding=True
 ```
 
-**Why the missing log line is the finding.** `electron/main.js:1065` handles `child.on('exit')` and ALWAYS logs — either "exited during shutdown — not restarting" when `isQuitting`, or "exited (code=… signal=…); restarting in Nms" otherwise — and in the second case it schedules `startChild` on a backoff. Neither string appeared, and no restart happened. The same handler demonstrably works: a deliberately misconfigured boot earlier the same evening produced "mythos child exited (code=1 signal=null); restarting in 1000ms" once per second.
+**CORRECTED 2026-09-10 00:10Z, and the correction narrows this ticket.** The original entry claimed the supervisor "neither logs it nor restarts". Only the second half is established. The stdout capture quoted above stopped receiving at 00:51 local — right after boot — and took no further line through thirty minutes of HEALTHY operation, so its silence at the moment of death is evidence of nothing. What IS proven, from the child's own log rather than from my capture: there is no `--- boot:` marker anywhere between the death and the next one at 2026-09-10T00:09:46.416Z, and that one is a different application (the packaged 0.1.12 install, started by the operator four hours later). **The child never restarted. Whether the exit handler logged is unknown and must be established with a capture that is known to be live at the time.**
+
+**Why the restart is still the finding.** `electron/main.js:1065` handles `child.on('exit')` and ALWAYS logs — either "exited during shutdown — not restarting" when `isQuitting`, or "exited (code=… signal=…); restarting in Nms" otherwise — and in the second case it schedules `startChild` on a backoff. Neither string appeared, and no restart happened. The same handler demonstrably works: a deliberately misconfigured boot earlier the same evening produced "mythos child exited (code=1 signal=null); restarting in 1000ms" once per second.
 
 So one of these is true, and this ticket is not closed until it is known which:
 
@@ -20869,8 +20873,8 @@ those records remain owed (this section is the index until then).
 - BUG-432 - back-to-back system notices interrupt each other; 15 of 35
   interruptions followed a system injection within 300 ms. Measured; timing work remains open.
 
-- BUG-422 - the server child exits silently mid-session and the supervisor
-  neither logs it nor restarts. CRITICAL: the operator lost the app mid-
+- BUG-422 - the server child exits silently mid-session and never restarts.
+  CRITICAL: the operator lost the app mid-
   conversation while Gemini Live kept speaking into a dead microphone path.
   Cause unknown; find out why the exit handler did not fire before adding any
   watchdog.
