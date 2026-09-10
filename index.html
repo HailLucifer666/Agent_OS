@@ -5697,7 +5697,7 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODE IN FLIGHT: another agent, uncommitted in the main checkout] The boot greeting is injected into a Live session the HUD only subscribes to after the bridge starts, so the packaged app starts silent until the first wake word. Diagnosed from two boots; the proposed fix gates liveForSpeech on a client-started bridge.",
+          "evidence": "[CODE LEFT: gate liveForSpeech on a client that sent live-open; boot greeting falls to TTS] The boot greeting is injected into a Live session the HUD only subscribes to after the bridge starts, so the packaged app starts silent until the first wake word. Diagnosed from two boots; the proposed fix gates liveForSpeech on a client-started bridge.",
           "source": "mythos/server/index.js"
         }
       },
@@ -5711,7 +5711,7 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODE IN FLIGHT: another agent, uncommitted in the main checkout] A successful ui_type was retracted because \"I sent the text to that box\" matched the sending claim category, which has no typing tool among its backers. Replay of the 09:51 sentence is the pending regression.",
+          "evidence": "[CODE LEFT: backingTools on the sending claim category (ui_type, send_key) + its test] A successful ui_type was retracted because \"I sent the text to that box\" matched the sending claim category, which has no typing tool among its backers. Replay of the 09:51 sentence is the pending regression.",
           "source": "mythos/src/core/voice/claim-check.js"
         }
       },
