@@ -127,10 +127,15 @@ describe('BUG-375 — a withheld phone tool names the cause it actually measured
     assert.equal(gmail.ok, false, 'no OAuth triple in an empty config');
     assert.equal(typeof gmail.reason, 'string');
     assert.match(gmail.reason, /GOOGLE_CLIENT_ID/);
+    // BUG-375's invariant here is "no rule but phone renders a FUNCTION into the
+    // model-facing text", and it is untouched. Only the field carrying the
+    // browser rule's text moved: since BUG-435 that gate is selfHealing, so the
+    // tool is declared and its text arrives as `needs` rather than `reason`.
+    // Still a string, which is the entire point of this assertion.
     const browser = checkToolCapability('browser_navigate',
       buildCapabilitySnapshot({ config: {}, adapters: { browser: { getStatus: () => ({ state: 'OFFLINE' }) } } }));
-    assert.equal(browser.ok, false);
-    assert.equal(typeof browser.reason, 'string');
+    assert.equal(browser.ok, true, 'declared with a prerequisite, not withheld — see BUG-435');
+    assert.equal(typeof browser.needs, 'string');
   });
 
   test('every reason reaching a caller is a string, never a function', () => {

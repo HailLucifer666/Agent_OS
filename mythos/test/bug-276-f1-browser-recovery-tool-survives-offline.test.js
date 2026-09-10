@@ -72,15 +72,32 @@ describe('BUG-276 F1 — the browser recovery tool must survive the outage it re
       'an adapter reporting OFFLINE must produce browserOnline:false, or nothing here is exercised');
   });
 
-  test('all 13 tools from the incident are withheld, and the 2 recovery tools are not', () => {
+  // F1 SAW THE DEADLOCK AND STOPPED ONE STEP SHORT, and BUG-435 is the cost.
+  // This ticket's insight — "gating the recovery tool on the thing it recovers is
+  // a deadlock" — is right and is now applied to the whole family, because a
+  // recovery tool whose result nothing in the session can use is the same
+  // deadlock with an extra step. Measured 2026-09-10 (boot 19:38:29Z):
+  // browser_launch_debug ran at 19:41:28 and CONNECTED at 19:41:30; the model
+  // then had no navigate tool, because buildSetup() rebuilds declarations once
+  // per socket. It fell back to think_deeply, list_windows and open_web.
+  // The 13 are no longer withheld; they are declared WITH the step named. What
+  // F1 actually protects — the recovery tool is reachable during the outage —
+  // is asserted unchanged below.
+  test('the incident 13 are declared with their prerequisite, and the 2 recovery tools are ungated', () => {
     const snap = buildCapabilitySnapshot({ config: {}, adapters: OFFLINE_BROWSER });
 
     for (const name of WITHHELD_IN_F1) {
-      assert.equal(checkToolCapability(name, snap).ok, false, name + ' must be withheld while offline');
+      const verdict = checkToolCapability(name, snap);
+      assert.equal(verdict.ok, true, name + ' must be callable: launching a browser is pointless if it is not');
+      assert.match(verdict.needs, /browser_launch_debug can start one/,
+        name + ' must still carry the step it needs, or declaring it is a lie');
     }
     for (const name of RECOVERY_TOOLS) {
-      assert.equal(checkToolCapability(name, snap).ok, true,
+      const verdict = checkToolCapability(name, snap);
+      assert.equal(verdict.ok, true,
         name + ' is what makes a browser available — gating it on a browser being available is a deadlock');
+      assert.equal(verdict.needs, undefined,
+        name + ' is exempt outright, not merely declared-with-a-step: it has no prerequisite to state');
     }
   });
 
@@ -89,18 +106,22 @@ describe('BUG-276 F1 — the browser recovery tool must survive the outage it re
     // that is exempt in the rule but dropped while assembling declarations would be just
     // as unreachable.
     const hub = fakeHub(WITHHELD_IN_F1.concat(RECOVERY_TOOLS).map(entry));
-    const { declarations, unavailable } = buildFunctionDeclarations(hub, {
+    const { declarations, unavailable, needsSetup } = buildFunctionDeclarations(hub, {
       allowlist: WITHHELD_IN_F1.concat(RECOVERY_TOOLS),
       capability: buildCapabilitySnapshot({ config: {}, adapters: OFFLINE_BROWSER }),
     });
 
     const declaredNames = declarations.map((d) => d.name);
     assert.ok(declaredNames.includes('browser_launch_debug'),
-      'with every other browser tool withheld this is the only way out of the outage');
-    assert.equal(unavailable.length, WITHHELD_IN_F1.length,
-      'exactly the incident 13 — a count that drifts means the exemption widened or narrowed');
-    assert.ok(!declaredNames.includes('browser_navigate'),
-      'and the tools that genuinely cannot work are still withheld');
+      'this is the way out of the outage and must always be declared');
+    assert.equal(unavailable.length, 0,
+      'nothing in the browser family is WITHHELD any more — the outage is clearable in-session');
+    assert.equal(needsSetup.length, WITHHELD_IN_F1.length,
+      'exactly the incident 13, now carried as declared-with-a-prerequisite — a count that drifts '
+      + 'means the rule widened or narrowed');
+    assert.ok(declaredNames.includes('browser_navigate'),
+      'the tool the recovery exists to enable has to be usable in the same session; withholding it '
+      + 'is what left the 2026-09-10 model holding a launcher and nothing to launch for');
   });
 
   test('browser_launch_debug is reachable from the real Live allowlist, not just a test one', () => {
@@ -113,8 +134,15 @@ describe('BUG-276 F1 — the browser recovery tool must survive the outage it re
     const snap = buildCapabilitySnapshot({ config: {}, adapters: OFFLINE_BROWSER });
     const cap = checkToolCapability('browser_navigate', snap);
 
-    assert.equal(cap.ok, false);
-    assert.match(cap.reason, /browser_launch_debug/,
+    // Same requirement, one field along. The warning in this assertion was
+    // written before the incident that proved it: on 2026-09-10 the model DID
+    // improvise with the nearest reachable tool and narrate the result — and it
+    // did so while this string was perfectly correct, because the tool the
+    // string names was the only browser tool still declared. Naming the remedy
+    // is necessary and was never sufficient; what the remedy unlocks has to be
+    // callable in the same session as well.
+    assert.equal(cap.ok, true, 'declared with a prerequisite since BUG-435, not withheld');
+    assert.match(cap.needs, /browser_launch_debug/,
       'this string is what the log and the model both get; without the remedy in it the '
       + 'model improvises with the nearest reachable tool and narrates the result');
   });

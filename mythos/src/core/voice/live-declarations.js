@@ -29,14 +29,21 @@ function createLiveDeclarations({ config, effectors, logger, desktop, desktopRun
     }),
     log: (m) => logger.info('live-tools', { detail: m }),
   }));
-  const { withheld, unavailable } = rebuildDeclarations();
+  const { withheld, unavailable, needsSetup } = rebuildDeclarations();
   // Only the tool NAMES go to the session; withheld/unavailable are
   // reported here. Re-logging them on every rotation would turn a
   // once-per-session diagnostic into a recurring one. The rebuild also keeps
   // the unavailable set for the immediately following setup instruction.
   let unavailableNow = unavailable || [];
+  // needsSetup are DECLARED tools whose gate a step in this session can clear.
+  // Tracked beside unavailableNow rather than merged into it: the instruction
+  // block must say two different things, and the whole 2026-09-10 browser
+  // failure was these two states being treated as one.
+  let needsSetupNow = needsSetup || [];
   const forSession = () => {
-    const next = rebuildDeclarations(); unavailableNow = next.unavailable || [];
+    const next = rebuildDeclarations();
+    unavailableNow = next.unavailable || [];
+    needsSetupNow = next.needsSetup || [];
     return next.declarations.filter(d => !desktop || conversationToolAllowed(d.name));
   };
   if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
@@ -51,19 +58,42 @@ function createLiveDeclarations({ config, effectors, logger, desktop, desktopRun
     });
   }
 
-  function instructionBlock() {
-    if (config.LIVE_VOICE_HONESTY_ENABLED === false || !unavailableNow.length) return '';
+  function group(items) {
     const reasons = new Map();
-    // Keep the measured missing entry inside the cap even when many OAuth
-    // tools precede it in catalog order. No missing tool is invented here.
-    const capped = [...unavailableNow].sort((a, b) => Number(b.name === 'browser_navigate') - Number(a.name === 'browser_navigate')).slice(0, 12);
-    for (const item of capped) {
+    for (const item of items) {
       if (!reasons.has(item.reason)) reasons.set(item.reason, []);
       reasons.get(item.reason).push(item.name);
     }
-    return '\n\nUNAVAILABLE TOOLS (as of this session setup; do not claim they ran):\n'
-      + [...reasons].map(([reason, names]) => names.join(', ') + ': ' + reason).join('\n')
-      + (unavailableNow.length > 12 ? '\nAdditional unavailable tools omitted from this summary: ' + (unavailableNow.length - 12) + '.' : '');
+    return [...reasons].map(([reason, names]) => names.join(', ') + ': ' + reason).join('\n');
+  }
+
+  function instructionBlock() {
+    if (config.LIVE_VOICE_HONESTY_ENABLED === false) return '';
+    if (!unavailableNow.length && !needsSetupNow.length) return '';
+    let out = '';
+    if (unavailableNow.length) {
+      // The browser_navigate sort key that used to live here is GONE, and saying
+      // so is the point. It existed (BUG-423) to keep that one measured entry
+      // inside the 12-item cap. browser_navigate can no longer reach this list —
+      // its rule is selfHealing, so it lands in needsSetup below — which made the
+      // sort a comparator that could never fire again: dead code reading as live
+      // defence. If the browser rule ever loses selfHealing, this list gets it
+      // back and the cap becomes a real risk again; the test named in
+      // tool-capability.js is what would catch that.
+      const capped = unavailableNow.slice(0, 12);
+      out += '\n\nUNAVAILABLE TOOLS (as of this session setup; do not claim they ran):\n' + group(capped)
+        + (unavailableNow.length > 12 ? '\nAdditional unavailable tools omitted from this summary: ' + (unavailableNow.length - 12) + '.' : '');
+    }
+    if (needsSetupNow.length) {
+      // Declared, callable, and honest about the order. This paragraph is the
+      // half that was missing on 2026-09-10: the model held browser_launch_debug,
+      // used it correctly, and had no idea the navigate tools existed because
+      // they had been withheld rather than described.
+      out += '\n\nTOOLS THAT NEED A STEP FIRST (they ARE available to call — do the step, then call them):\n'
+        + group(needsSetupNow.slice(0, 12))
+        + (needsSetupNow.length > 12 ? '\nAdditional such tools omitted: ' + (needsSetupNow.length - 12) + '.' : '');
+    }
+    return out;
   }
   return { forSession, instructionBlock };
 }

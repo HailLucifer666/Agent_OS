@@ -168,6 +168,74 @@ describe('a refusal must name something the model can actually call', () => {
     assert.deepEqual(bad, [], 'prose naming a withheld tool sends the model somewhere it cannot go');
   });
 
+  // CHANNEL COUNT: 1 OF 3. Tests (a) and (b) ask "is this tool in
+  // DEFAULT_ALLOWLIST" — the CURATION channel. That is a cheaper question than
+  // the one that matters, which is "can the model call it right now", and the
+  // gap between them is not theoretical. Both passed green while the 2026-09-10
+  // attended session died in the second channel.
+  //
+  // A tool can be kept from the model by THREE independent mechanisms:
+  //   1. curation      — DEFAULT_ALLOWLIST / LIVE_TOOL_ALLOWLIST  (a) and (b)
+  //   2. availability  — tool-capability.js's snapshot             (d), below
+  //   3. desktop mode  — conversationToolAllowed() in live-declarations.js
+  // A guard that reads one and reports on all three fails open, which is the
+  // failure mode it was hired to prevent.
+  //
+  // (3) is not asserted here and that is stated rather than hidden: it applies
+  // only when DESKTOP_OPERATOR_ENABLED is on (`!desktop || conversationToolAllowed`),
+  // which is off by default and was off on the machine that produced the
+  // incident, so it has never been the withholding channel in evidence. Closing
+  // it needs the desktop-connection allowlist in scope; filed, not faked.
+  test('(d) a remedy must be DECLARABLE, not merely allowlisted — the second channel', () => {
+    // WHY WORST CASE. buildSetup() rebuilds declarations once per socket, so a
+    // session that opens with an adapter down keeps that tool list until it
+    // rotates. The list a refusal's remedy has to survive is therefore the one
+    // built when NOTHING is up — that is the frozen list, and it is what the
+    // model was holding when it launched a browser it could not then drive.
+    const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
+    const { buildCapabilitySnapshot } = require('../src/core/voice/tool-capability');
+    const offline = { getStatus: () => ({ state: 'OFFLINE' }) };
+    const worstCase = buildCapabilitySnapshot({
+      config: {}, adapters: { browser: offline, cua: offline, pcChild: offline, android: offline },
+    });
+
+    // WHAT IS IN SCOPE HERE, and the first version of this test got it wrong.
+    // It gathered names from BOTH remedy() calls and advice prose, and flagged
+    // cua_click, cua_list_windows and desktop_task_status. Those are tool
+    // DESCRIPTIONS naming sibling tools ("Pass pid or window_id from
+    // cua_list_windows"), and they are not the defect: the advisor and the
+    // advised share a capability rule, so when cua is down BOTH are withheld and
+    // the advice never reaches the model at all. Dead advice needs a LIVE
+    // speaker.
+    //
+    // remedy() calls are different in exactly that way. They live in guard code
+    // in src/core/voice/, which runs whatever the adapters are doing — the route
+    // guard refused open_web and handed back browser_navigate while
+    // browser_navigate was undeclared. Live speaker, dead advice. That is the
+    // set this test selects, derived from the distinction rather than from a
+    // list of files.
+    //
+    // Description-to-description advice comes into scope the moment an advisor
+    // and its advised tool fall under DIFFERENT capability rules. Nothing in the
+    // tree does today; if that changes, extend this to pair each name with its
+    // owning tool and flag only where the owner is declared and the named one is
+    // not.
+    const named = new Set();
+    for (const { text } of sources()) {
+      for (const m of stripComments(text).matchAll(/\bremedy\(\s*'([a-z0-9_]+)'/g)) named.add(m[1]);
+    }
+    assert.ok(named.size >= 3, 'found only ' + named.size + ' remedy tools — the scan is not reaching the sources');
+
+    const hub = { catalog: () => [...named].map((n) => ({ name: n, description: 'x', params: {} })) };
+    const built = buildFunctionDeclarations(hub, { allowlist: DEFAULT_ALLOWLIST, capability: worstCase });
+    const declarable = new Set(built.declarations.map((d) => d.name));
+    const unreachable = [...named].filter((n) => reachable.has(n) && !declarable.has(n));
+    assert.deepEqual(unreachable, [],
+      'these tools are allowlisted but NOT declared when their adapter is down, so a refusal naming '
+      + 'them leaves the model with advice it cannot take for the rest of the session — mark the '
+      + 'capability rule selfHealing if a step in the session can clear it, or stop naming the tool');
+  });
+
   test('(c) the two lists this file depends on are real, so a green run means something', () => {
     // A guard that reads an empty allowlist passes everything. This repo has the
     // lesson on record as "gates can pass on metrics they cannot read".
