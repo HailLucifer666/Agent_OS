@@ -16,6 +16,7 @@
 const WebSocket = require('ws');
 const { createEchoFilter } = require('./echo-filter');
 const { createGoAwayGate } = require('./goaway-gate'); // BUG-436
+const { createNoticeQueueFromEnv, injectionFields } = require('./notice-queue'); // BUG-432 — null unless VOICE_SERIALIZE_NOTICES=true; mechanism, bounds, flags and the log payload live in that file
 
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -299,6 +300,8 @@ function createLiveSession(deps) {
   // BUG-436: see goaway-gate.js — a goAway mid-reply used to close the socket on the same tick and cut the answer.
   let turnToolCallOpen = false;
   const goAwayGate = createGoAwayGate({ closeNow: (reason) => close(reason, { final: false }), isTurnInFlight: () => turnToolCallOpen || turnAudioParts > 0 || turnTextParts > 0, logger });
+  // BUG-432: turnSystemInitiated is a term in inFlight AND used to be set inside sendText, so a queue reading it would have held the first notice against a turn that notice had itself just claimed to start. It moves with the frame now — set in sendNoticeFrame, when one actually goes out.
+  const noticeQueue = createNoticeQueueFromEnv({ inFlight: () => turnSystemInitiated || turnToolCallOpen || turnAudioParts > 0 || turnTextParts > 0, send: (text, meta) => sendNoticeFrame(text, meta), logger, onUndelivered: (text, meta, reason) => logger.warn('live.notice-undelivered', { site: (meta && meta.site) || 'unattributed', reason, chars: String(text).length }) });
   // Audio-chunk starvation, per turn — see the inlineData branch. A chunk holds
   // ~100ms of 24kHz PCM; 250ms is comfortably past "the previous chunk has
   // finished playing and the room is now silent", without firing on ordinary
@@ -910,7 +913,8 @@ function createLiveSession(deps) {
           }
         }
         // Consumed: the next turn is operator-initiated until sendText says otherwise.
-        turnSystemInitiated = false;
+        // BUG-432: and one held notice goes now — AFTER the flag is cleared, or inFlight would still be true and the queue would hold it again.
+        turnSystemInitiated = false; if (noticeQueue) noticeQueue.release();
         if (wasSilent) {
           logger.warn('live.turn-silent', { turnId: turnCounter, chars: shownText.length });
           if (bus && typeof bus.emit === 'function') {
@@ -1125,8 +1129,8 @@ function createLiveSession(deps) {
   // Q2: the text itself is NOT logged. These strings carry tool results, message
   // bodies and whatever the operator typed. A site and a length attribute a turn;
   // the content already lives in the audit vault under its own rules.
-  function sendText(text, meta) {
-    if (state !== 'open') return false;
+  // The frame itself: everything that must happen AT the moment a text frame reaches the wire, so a queued notice carries the same effects as an immediate one and live.text-injected still timestamps "spoken now".
+  function sendNoticeFrame(text, meta) {
     const m = meta || {};
     const fromOperator = m.operator === true;
     // Mark the turn this provokes as ours, so the half-blind transcript check
@@ -1134,16 +1138,11 @@ function createLiveSession(deps) {
     // turnSystemInitiated's declaration). Set before the send, not after: the
     // reply can begin arriving synchronously on a fake socket in tests.
     if (!fromOperator) turnSystemInitiated = true;
-    logger.info('live.text-injected', {
-      site: m.site || 'unattributed',
-      operator: fromOperator,
-      tool: m.tool || null,
-      claim: m.claim || null,
-      chars: String(text).length,
-      turnId: turnCounter,
-    });
+    logger.info('live.text-injected', injectionFields(m, text, turnCounter));
     return sendRaw({ realtimeInput: { text: String(text) } });
   }
+  // One door, still one door (BUG-273 D3). Returns 'sent' | 'queued' | false with the queue on, the old boolean with it off: three outcomes, three values, so sendSystemNotice can tell "held until this turn ends" from "the socket refused it".
+  function sendText(text, meta) { if (state !== 'open') return false; return noticeQueue ? noticeQueue.offer(text, meta) : sendNoticeFrame(text, meta); }
 
   function sendToolResponse(functionResponses) {
     return sendRaw({ toolResponse: { functionResponses } });
@@ -1168,7 +1167,7 @@ function createLiveSession(deps) {
     if (maxTimer) clearTimeout(maxTimer);
     // BUG-131: a closed session owes no reply, so a pending stall timer would
     // only ever fire a false anomaly about a turn nobody is waiting on.
-    disarmTurnStall(); goAwayGate.cancel(); // BUG-436: a pending goAway hold dies with the socket it was holding
+    disarmTurnStall(); goAwayGate.cancel(); if (noticeQueue) noticeQueue.cancel({ final }); // BUG-436: a pending goAway hold dies with the socket it was holding. BUG-432: a FINAL close hands held notices back; a rotation keeps them for the new socket.
     // Null out `ws` BEFORE closing the old socket, not after: a non-final
     // close's own 'close' handler can synchronously call reconnect()->open()
     // (fake sockets emit 'close' synchronously; real ones may coalesce too),

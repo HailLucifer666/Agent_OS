@@ -67,6 +67,30 @@ const VOICE_DIR = path.join(__dirname, '..', 'src', 'core', 'voice');
 const stripComments = (t) => t.replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 const readSrc = (p) => stripComments(fs.readFileSync(p, 'utf8'));
 
+// BUG-432 (2026-09-10) MOVED THE DOOR AND THESE ASSERTIONS FOLLOWED IT, WHICH IS
+// WHY THEY ARE NOW WRITTEN DIFFERENTLY. Serialising notices split the door in
+// two: sendText decides WHETHER a frame goes now, sendNoticeFrame does the
+// sending. The log line and the turnSystemInitiated flag went with the frame,
+// because a queued notice has to carry the same effects as an immediate one and
+// live.text-injected has to keep meaning "spoken now". These three tests read a
+// slice of source, so all three went red on a change that broke none of the
+// invariants they exist to protect — the brittleness of a source-shape window,
+// which this repo has hit before.
+//
+// So the window is the whole injection region, and the one-door property is now
+// asserted DIRECTLY (exactly one live.text-injected line in the file, and
+// sendText reaching the wire only through the frame function) instead of being
+// implied by the log happening to sit inside one particular function. That is
+// stronger than what it replaced: the old slice would have been satisfied by a
+// second injector elsewhere in the file.
+const injectionRegion = (src) => src.slice(src.indexOf('function sendNoticeFrame('), src.indexOf('function sendToolResponse('));
+// The log PAYLOAD moved with the same change, into notice-queue.js, because
+// live-session.js is at its file-size ratchet ceiling. Two of these three tests
+// read the payload rather than the call, so they follow it — and the invariant is
+// tightened on the way: injectionFields must be the ONLY builder, so a second
+// inline payload cannot reintroduce the raw text behind this guard.
+const payloadOwner = () => { const src = readSrc(path.join(VOICE_DIR, 'notice-queue.js')); return src.slice(src.indexOf('function injectionFields('), src.indexOf('function createNoticeQueueFromEnv(')); };
+
 // A slow tool, so the outcome lands through reportLateOutcome after the turn has
 // closed — the production path, driven the way production drives it rather than by
 // reaching for an unexported function.
@@ -162,24 +186,39 @@ describe('BUG-273 D3 — every turn MYTHOS starts itself is attributable', () =>
 });
 
 describe('BUG-273 D3 — one door, and it knows who knocked', () => {
-  test('live-session.sendText is the only injector, and it logs every call', () => {
+  test('live-session has exactly ONE injector, and it logs every call', () => {
     const src = readSrc(path.join(VOICE_DIR, 'live-session.js'));
-    const fn = src.slice(src.indexOf('function sendText('), src.indexOf('function sendToolResponse('));
-    assert.match(fn, /logger\.info\('live\.text-injected'/,
-      'thirteen call sites, one function — the line belongs here or the counts across '
-      + 'sites will not mean the same thing');
-    assert.match(fn, /site:/, 'and it must say WHICH site');
+    // One door, asserted as a count over the whole file rather than inferred from
+    // where the line happens to sit. Two log lines would make every injection
+    // count wrong, and two wire writes would make the log a partial record —
+    // which this file's header says is worse than no record at all.
+    assert.equal((src.match(/logger\.info\('live\.text-injected'/g) || []).length, 1,
+      'exactly one live.text-injected line, or the counts across thirteen sites will not mean the same thing');
+    assert.equal((src.match(/realtimeInput: \{ text:/g) || []).length, 1,
+      'and exactly one place that writes text to the wire');
+    const fn = injectionRegion(src);
+    assert.match(fn, /logger\.info\('live\.text-injected'/, 'the log belongs in the injection region');
+    assert.match(fn, /injectionFields\(/, 'and the payload comes from its single owner');
+    assert.match(payloadOwner(), /site:/, 'which must say WHICH site');
+    // Counted on the field that could carry the payload, not on site: — the queue
+    // also logs live.notice-held and live.notice-undelivered, which legitimately
+    // name a site and carry no text. One chars: field means one payload builder,
+    // so the doesNotMatch guard below cannot be walked around by a second one.
+    assert.equal((readSrc(path.join(VOICE_DIR, 'notice-queue.js')).match(/chars:/g) || []).length, 1,
+      'one payload builder — a second inline object could carry the text past the guard below');
+    // sendText may decide to hold a frame, but it must not reach the wire itself.
+    const door = fn.slice(fn.indexOf('function sendText('));
+    assert.doesNotMatch(door, /realtimeInput/, 'sendText delegates; it does not send');
+    assert.match(door, /sendNoticeFrame\(/, 'and the frame function is how it delegates');
   });
 
   test('the injected TEXT is never logged, only its length', () => {
-    const src = readSrc(path.join(VOICE_DIR, 'live-session.js'));
-    const fn = src.slice(src.indexOf('function sendText('), src.indexOf('function sendToolResponse('));
-    // Scoped to the LOG call, not the whole function: the wire frame itself is
+    const fn = payloadOwner();
+    // Scoped to the payload, not the whole function: the wire frame itself is
     // `realtimeInput: { text: String(text) }`, and a detector that cannot tell the
     // payload from the log line is the false-positive shape this repo keeps hitting
     // (my own comment matched my own detector twice in this ticket alone).
-    const logCall = fn.slice(fn.indexOf("logger.info('live.text-injected'"));
-    const logArgs = logCall.slice(0, logCall.indexOf('});'));
+    const logArgs = fn;
     assert.match(logArgs, /chars:/, 'a length is enough to attribute a turn');
     // The invariant is "no FIELD carries the string", not "the word text does not
     // appear" — `chars: String(text).length` reads the variable and is the whole
@@ -208,8 +247,7 @@ describe('BUG-273 D3 — one door, and it knows who knocked', () => {
     const typed = (src.match(/operator: true/g) || []).length;
     assert.ok(typed >= 3, 'all three HUD text paths must declare themselves operator input');
 
-    const session = readSrc(path.join(VOICE_DIR, 'live-session.js'));
-    const fn = session.slice(session.indexOf('function sendText('), session.indexOf('function sendToolResponse('));
+    const fn = injectionRegion(readSrc(path.join(VOICE_DIR, 'live-session.js')));
     assert.match(fn, /if \(!fromOperator\) turnSystemInitiated = true;/,
       'operator input must not set the flag');
     assert.match(fn, /m\.operator === true/,
