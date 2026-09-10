@@ -1,11 +1,16 @@
 'use strict';
+
+// BUG-417/BUG-421: the scroll-to-reveal cap. Module scope so the export below
+// and the loop that enforces it are the SAME binding — a second literal in the
+// export would be one edit away from disagreeing with the one that runs.
+const REVEAL_SCROLLS = 4;
 const { parseRequest, selectionOrdinal } = require('./intent');
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const youtube = (url) => { try { const h = new URL(url).hostname; return h === 'youtube.com' || h.endsWith('.youtube.com') || h === 'youtu.be'; } catch (_) { return false; } };
 
 // executeTool is supplied by the composition root: every leaf checks the current
 // leash then shared dispatchAction. No browser adapter or hub is reachable here.
-function createDesktopController({ goals, executeTool, now = Date.now, wait = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+function createDesktopController({ goals, executeTool, now = Date.now, wait = (ms) => new Promise((r) => setTimeout(r, ms)), logger = null }) {
   if (!goals || typeof executeTool !== 'function') throw new Error('Desktop controller requires goals and authorized executeTool');
   const running = new Map();
   const latest = new Map(), connections = new Map(), disconnected = new Set();
@@ -97,10 +102,9 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
     //   - at most REVEAL_SCROLLS attempts, so a page that never reveals the card
     //     blocks with a reason instead of scrolling to the end of an infinite
     //     feed;
-    //   - stop EARLY when the list stops growing AND the card is still hidden —
-    //     more scrolling cannot help once the region has stopped producing
-    //     cards, and continuing would just burn the observation budget before
-    //     the caller could report anything useful;
+    //   - stop EARLY when the list has stopped growing TWICE RUNNING and the card
+    //     is still hidden — see the BUG-421 block below for why one flat
+    //     observation is not enough;
     //   - every re-observation is a fresh one through observe(), so the ref that
     //     is finally clicked belongs to the observation it was read from. Reusing
     //     a pre-scroll ref would be the stale-observation bug that actOnNode's
@@ -112,9 +116,29 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
     // with the tool it calls. One step is less than a viewport on purpose: an
     // overshoot would push the card past the TOP edge, and actOnNode refuses a
     // target above the fold just as firmly as one below it.
-    const REVEAL_SCROLLS = 4;
+    // BUG-421 (measured 2026-09-10 on a real YouTube search page at 1280x800):
+    // the ranked count went 6, 6, 8, 11, 14 across four scrolls and result six
+    // only became clickable on the FOURTH. The rule above stopped on the FIRST
+    // flat observation, so on that page it gave up after one scroll and refused a
+    // card that was four scrolls away. One flat reading is not evidence the feed
+    // is exhausted: a lazy loader that has not yet appended, or a count read
+    // before the new cards rendered, looks exactly the same. TWO flat readings in
+    // a row is the cheapest signal that is not fooled by either, and it costs a
+    // genuinely short list exactly one extra scroll — stated here because that is
+    // the price, not a rounding error.
+    //
+    // THE CAP IS NOT RAISED, AND THAT IS A CONSTRAINT, NOT A PREFERENCE. On the
+    // measured page four scrolls was exactly what result six needed, so the
+    // margin is zero and the ticket says so. Raising it is not a one-line change:
+    // every scroll spends two steps of the task budget (leaf() increments on both
+    // the scroll and the re-observation) against a hard ceiling of 16 in check(),
+    // and a fifth or sixth scroll would trade an honest reveal refusal for
+    // "Desktop task budget exhausted", which tells the operator less. Raising
+    // both together is an operator decision; it is recorded in the BUG-421 entry
+    // and deliberately not taken here.
+    const clickableCount = (o) => (o.items || []).filter((i) => i && i.ref).length;
     async function reveal(target, initial, ordinal) {
-      let o = initial;
+      let o = initial, attempts = 0, flat = 0;
       for (let attempt = 0; attempt < REVEAL_SCROLLS; attempt += 1) {
         const item = o.items?.[ordinal - 1];
         if (item?.ref) return o;
@@ -122,16 +146,34 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
         const before = o.items?.length || 0;
         await leaf('browser_scroll', { target: o.target, direction: 'down' });
         o = await observe(target);
+        attempts += 1;
         const after = o.items?.length || 0;
         const revealed = o.items?.[ordinal - 1];
+        // Logged so the next attended run answers the question this fix could
+        // only reason about: whether the flat first reading on that page was a
+        // lazy loader or a count read before the DOM had rendered.
+        if (logger && typeof logger.info === 'function') {
+          logger.info('desktop.reveal', { attempt: attempts, ordinal, before, after,
+            clickable: clickableCount(o), revealed: !!revealed?.ref });
+        }
         if (revealed?.ref) return o;
-        // The list stopped growing and the card is still not in view. Scrolling
-        // again cannot change that.
-        if (after <= before && !revealed?.ref) break;
+        flat = after <= before ? flat + 1 : 0;
+        if (flat >= 2) break;
       }
       if (o.items?.[ordinal - 1]?.ref) return o;
-      throw stopError('Result ' + ordinal + ' is in the list but did not come into view after '
-        + REVEAL_SCROLLS + ' scrolls, so it cannot be clicked');
+      // The refusal names what actually happened. It used to name REVEAL_SCROLLS
+      // whatever the loop did, so the commonest case reported "after 4 scrolls"
+      // having scrolled once, and never said how many cards WERE reachable — the
+      // two facts an operator needs to tell "the page is short" from "the budget
+      // ran out", which are different problems with different answers.
+      const ranked = o.items?.length || 0;
+      const scrolls = attempts === 1 ? '1 scroll' : attempts + ' scrolls';
+      const why = flat >= 2
+        ? 'the list stopped producing new results'
+        : 'the scroll budget ran out while the list was still growing';
+      throw stopError('Result ' + ordinal + ' is ranked ' + ordinal + ' of ' + ranked
+        + ' but did not come into view after ' + scrolls + ' (' + clickableCount(o)
+        + ' of them are clickable) because ' + why + ', so it cannot be clicked');
     }
 
     try {
@@ -277,4 +319,4 @@ function createDesktopController({ goals, executeTool, now = Date.now, wait = (m
   }
   return { start, status, control, disconnect, async settled(taskId) { await running.get(taskId)?.promise; return status({ taskId }, { connectionId: connections.get(taskId) }); } };
 }
-module.exports = { createDesktopController };
+module.exports = { createDesktopController, REVEAL_SCROLLS };
