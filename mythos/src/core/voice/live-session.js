@@ -15,6 +15,7 @@
 
 const WebSocket = require('ws');
 const { createEchoFilter } = require('./echo-filter');
+const { createGoAwayGate } = require('./goaway-gate'); // BUG-436
 
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -295,6 +296,9 @@ function createLiveSession(deps) {
   // second shape was invisible until 2026-08-19 — see the sc.interrupted branch.
   let turnInterrupts = 0;
   let turnStartedAt = 0;
+  // BUG-436: see goaway-gate.js — a goAway mid-reply used to close the socket on the same tick and cut the answer.
+  let turnToolCallOpen = false;
+  const goAwayGate = createGoAwayGate({ closeNow: (reason) => close(reason, { final: false }), isTurnInFlight: () => turnToolCallOpen || turnAudioParts > 0 || turnTextParts > 0, logger });
   // Audio-chunk starvation, per turn — see the inlineData branch. A chunk holds
   // ~100ms of 24kHz PCM; 250ms is comfortably past "the previous chunk has
   // finished playing and the room is now silent", without firing on ordinary
@@ -777,7 +781,7 @@ function createLiveSession(deps) {
         if (bus && typeof bus.emit === 'function') bus.emit('voice.live.interrupted', {});
       }
       if (sc.turnComplete) {
-        disarmTurnStall(); // BUG-131 — the turn landed, stalled or not
+        disarmTurnStall(); turnToolCallOpen = false; goAwayGate.turnComplete(); // BUG-436 releases a held goAway here. BUG-131 — the turn landed, stalled or not
         // BUG-271: the utterance ended, but it stays an echo reference for
         // the rest of its 3s window — speaker bleed arrives after the speech
         // finishes (the batch path's post-playback ECHO_GUARD_MS).
@@ -925,7 +929,7 @@ function createLiveSession(deps) {
     // BUG-131 — calling a tool is a response, just not a spoken one. Disarmed on
     // the FRAME, outside the onToolCall guard: whether this process happens to
     // have a tool handler wired says nothing about whether Gemini answered.
-    if (msg.toolCall) disarmTurnStall();
+    if (msg.toolCall) { disarmTurnStall(); turnToolCallOpen = true; } // BUG-436: waiting on our toolResponse = a turn in flight
     if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls) && onToolCall) {
       Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse, sendText }))
         .catch((err) => logger.warn('live.toolcall-failed', { error: err.message }));
@@ -940,12 +944,9 @@ function createLiveSession(deps) {
         resumeHandle = msg.sessionResumptionUpdate.newHandle;
       }
     }
-    if (msg.goAway) {
-      // Server is about to hang up. Same non-final close as idle/max above —
-      // one reconnect path (the ws.on('close') branch), not a second one.
-      logger.info('live.goaway', { timeLeft: msg.goAway.timeLeft });
-      close('goaway', { final: false });
-    }
+    // Server is about to hang up. BUG-436: the gate decides WHEN — now if idle, at turnComplete if a reply is
+    // in flight — and always through the same non-final close() as idle/max, so the reconnect path stays one.
+    if (msg.goAway) goAwayGate.arrive(msg.goAway.timeLeft);
     if (msg.usageMetadata && spend && typeof spend.recordCall === 'function') {
       // Honest spend: real counts from the API, never estimated (AD-5).
       spend.recordCall({
@@ -1167,7 +1168,7 @@ function createLiveSession(deps) {
     if (maxTimer) clearTimeout(maxTimer);
     // BUG-131: a closed session owes no reply, so a pending stall timer would
     // only ever fire a false anomaly about a turn nobody is waiting on.
-    disarmTurnStall();
+    disarmTurnStall(); goAwayGate.cancel(); // BUG-436: a pending goAway hold dies with the socket it was holding
     // Null out `ws` BEFORE closing the old socket, not after: a non-final
     // close's own 'close' handler can synchronously call reconnect()->open()
     // (fake sockets emit 'close' synchronously; real ones may coalesce too),

@@ -64,7 +64,7 @@ FAIL and counts neither for nor against it.
 - Live/hardware gates from the 261-ticket campaign (mic/playback 027/406,
   Ctrl+Alt+X 268, grounded speech 275) — see the roadmap's 2026-09-07 block.
 - Licensing and release decisions (step 6.5, 274 T3). No release authorized.
-- The seven open tickets are **268, 274, 275, 406, 421, 422, and 432**.
+- Open tickets: **268, 274, 275, 406, 421, 422, 432, 433, 434, 436 (stall half), 437**. BUG-435 and the goAway half of BUG-436 are coded 2026-09-10 on `fix/live-voice-435-436` with local evidence only — no attended run.
   BUG-421 still lacks reveal margin; BUG-422 needs a diagnosed child failure;
   BUG-432 notice collisions need measured scheduling work. BUG-428 is coded,
   with its acoustic proof still owed under BUG-406.

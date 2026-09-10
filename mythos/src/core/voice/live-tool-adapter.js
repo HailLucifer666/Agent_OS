@@ -637,6 +637,7 @@ function createLiveToolAdapter(deps) {
         }});
         continue;
       }
+      const routeConflict = require('./browser-route-guard').checkBrowserRoute(call.name, call.args || {}, executedSignatures); if (routeConflict) { logger.info('live.browser-route-conflict', { tool: call.name, priorTool: routeConflict.priorTool, priorRoute: routeConflict.priorRoute }); responses.push({ id: call.id, name: call.name, response: routeConflict.response }); continue; } // BUG-435: one real-browser route per turn — the 2026-09-10 09:37 turn ran open_web browser:true AND browser_launch_debug and opened two Brave windows. One line: this file is at its size-ratchet ceiling; mechanism and bounds in browser-route-guard.js.
       const decision = { tool: call.name, args: call.args || {} };
       if (suggestedProcedures.matches(skillRef, call.name, decision.args)) decision.skillRef = skillRef;
       let verdict;
