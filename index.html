@@ -466,7 +466,7 @@
         "think_deeply"
       ],
       "ok": 71,
-      "f": 19,
+      "f": 20,
       "note": "Deep reasoning. Both 'failures' are the new rate-limit refusing correctly after it was reached ten times in one conversation.",
       "ev": "\"Deep reasoning was used 8s ago and is rate-limited for another 53s. Nothing is wrong. Answer this yourself now.\"  (BUG-287, shipped 2026-08-20 23:27, observed working in the final session)"
     },
@@ -626,7 +626,7 @@
       ],
       "note": "Logging is perfect. The backlog it produces is not being drained.",
       "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN",
-      "ok": 218,
+      "ok": 222,
       "f": 0
     },
     {
@@ -649,8 +649,8 @@
       "tools": [
         "screen_look"
       ],
-      "ok": 68,
-      "f": 11,
+      "ok": 72,
+      "f": 12,
       "note": "Vision over the screen. GREEN WITH CAVEAT: every recorded failure is historical and 26 consecutive calls have succeeded. The caveat is the free-tier daily cap.",
       "ev": "RE-MEASURED 2026-08-27 (Track D-3) against the live vault: 52 ok / 11 fail, not 49/11 -- and ALL ELEVEN FAILURES FALL BETWEEN 2026-08-06 AND 2026-08-18. Newest failure 2026-08-18T11:38:48; newest success 2026-08-24T20:12:01. Since 2026-08-19 there have been 26 look calls (screen_look + camera_look) across five separate days with 26 ok and 0 fail. Cause of the historical failures and why they stopped: B1 (2026-08-14) fixed two things -- an attempt hitting its own per-attempt timeout now feeds the cooldown decision (it previously matched none of the 429/5xx/network arms), and per-(provider,model) breakers escalate with x2 backoff so an all-day outage is skipped for minutes rather than re-paid every few minutes. The vision lane head is now google/gemini-3.5-flash-lite with NIM demoted to position 3; the 8s-per-look precedent the work order cites was NIM at position 0. Caveat, per the no-spend decision: google free tier caps at 10/day, so a heavy day still falls through to mistral."
     },
@@ -673,7 +673,7 @@
       "tools": [
         "capture_screenshot"
       ],
-      "ok": 22,
+      "ok": 23,
       "f": 0,
       "note": "Never failed.",
       "ev": "18 ok / 0 fail"
@@ -774,7 +774,7 @@
       "tools": [
         "list_windows"
       ],
-      "ok": 125,
+      "ok": 127,
       "f": 1,
       "note": "Window enumeration. The recovery step every other desktop tool points at.",
       "ev": "88 ok / 1 fail"
@@ -956,8 +956,8 @@
       "tools": [
         "open_web"
       ],
-      "ok": 167,
-      "f": 36,
+      "ok": 170,
+      "f": 37,
       "note": "Renders search, weather, flight and YouTube cards. 17 distinct failure strings, now all typed with a machine-readable code. Five YouTube URL shapes were unreadable and now parse.",
       "ev": "RE-MEASURED 2026-08-27 (BUG-381 / Track D-4) against the live vault: 135 ok / 25 fail, not 131/19 -- the map was stale AND under-counted the failures. 17 distinct failure strings, not twelve. Grouped by real cause: 9 correct refusals of a malformed call (no url / no type / no query), 10 where upstream genuinely returned nothing, 3 \"could not extract a YouTube video ID\", 3 provider fetch failures. So D-4's named cause is the SMALLEST of the four, but it was real: the extractor regex knew four YouTube URL shapes and missed five. Measured -- MISS on youtube.com/live/ID (a livestream, and the failing queries included \"CNN live news\", \"CNN news dashboard\" and \"today's news\"), MISS on watch?app=desktop&v=ID and watch?feature=share&v=ID (v had to be the FIRST query param, which a share sheet and a mobile redirect both break), MISS on youtube-nocookie.com/embed/ and on the legacy /v/ path. All five now read, extracted to util/youtube-id.js with a host guard so an unrelated URL containing an 11-char path segment cannot yield a fake id. Second half of D-4 also done: all 22 failure sites in the open_web handler now carry a typed `code` (bad-request / no-results / unplayable-results / provider-error, one per measured cause group) beside the unchanged prose, so a caller can finally branch. STILL WARN, not green: the extractor is unit-verified over the real URL shapes but no live search has been driven through it, and 84% (135/160) is not a green number even when most of the remainder is correct refusal."
     },
@@ -998,7 +998,7 @@
         "browser_launch_debug",
         "browser_switch"
       ],
-      "ok": 215,
+      "ok": 254,
       "f": 35,
       "note": "OPEN after 2026-08-27 triage. browser_launch_debug works (15 ok / 1 fail) but nothing auto-launches it on first need. The wiring is the work, and it is not done.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and said plainly rather than left ambiguous. D-6: \"wire the EXISTING browser_launch_debug (15/1) to auto-launch on first need. Do not build a launcher.\" Measured: browser_launch_debug 15 ok / 1 fail, newest failure 2026-08-05 — the tool itself is sound. What is missing is the wiring, so a browser_* call on a cold machine still reports the debug port unreachable instead of starting Chrome once and retrying. Deliberately not attempted in this pass: the change spawns a real browser process on first use, which is a live-behaviour change to a T3 surface that wants its own verification sitting (a harness cannot prove \"launched once, then the retry succeeded\" without actually launching). Left open with the mechanism named rather than half-wired."
@@ -1036,7 +1036,7 @@
         "gmail_read"
       ],
       "ok": 112,
-      "f": 134,
+      "f": 135,
       "note": "gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
       "ev": "LIVE-VERIFIED 2026-08-28 (Track A, BUG-387) — the first time this node has been checked against the provider rather than against its own history. `node mythos/scripts/verify-google-grant.js` reports INVALID: the refresh token minted no access token and Gmail refused. The real effector agrees, which is the two-routes-one-answer cross-check: calling gmail_unread through the registered tool returns \"invalid_grant: Token has been expired or revoked.\" So this row is correct and stays red. THE CODE AROUND IT IS NOT AT FAULT, measured rather than assumed: from-gmail classifies invalid_grant as TERMINAL and its remedy text names the literal command plus the 7-day Testing-publishing-status trap; hub.js latches the terminal result per tool so the provider is not hammered — the 88 recorded failures fall into 60 bursts, nearly all of size ONE, i.e. one attempt per process rather than a retry storm; gmail-sensor raises health.anomaly with needsOperator:true; and explainer.js speaks the whole remedy aloud, verbatim, including `node scripts/google-auth.js`. Nine test files already cover that chain, two of them asserting the SPOKEN text contains the command. WHAT WAS ACTUALLY BROKEN was the one thing an operator would check: `doctor` reported \"OK Gmail / Calendar sensors — configured\" for three weeks while all of the above was failing, because it tests that three strings are PRESENT in .env and presence is not validity. Fixed under BUG-387: doctor now says validity is unchecked and names the verifier. A CORRECTION worth recording: from the episodic `summary` field it looked as though MYTHOS had announced this nine times over eight days and never said what to do — that was WRONG, `summary` truncates at ~100 characters and `detail.text` carries the full remedy. Only the 2026-08-18 utterance is genuinely deficient and it predates the BUG-273 C2 / BUG-278 fixes that repaired exactly it. NEEDS THE OPERATOR: run `node mythos/scripts/google-auth.js`, put the new GOOGLE_REFRESH_TOKEN in mythos/.env, then confirm with `node mythos/scripts/verify-google-grant.js` — which is the point of the new script, since before it there was no way to tell whether the three minutes had worked."
     },
@@ -1298,7 +1298,7 @@
         "reminder_approve_action",
         "calendar_upcoming"
       ],
-      "ok": 97,
+      "ok": 98,
       "f": 4,
       "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
@@ -1339,8 +1339,8 @@
       ],
       "note": "OPEN after 2026-08-27 triage. Needs >=5 real boots before anything is touched; a harness cannot supply them.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED. D-6 is explicit about why: \"Add a first-line ready handshake with a timestamp; sample >=5 boots before touching the timeout — one run is not a mechanism.\" That instruction is the blocker. The observation is two live boots minutes apart on the same commit, one OFFLINE on a startup handshake that timed out and one fine, which is a sample of two and cannot distinguish a race from a slow machine. Changing the timeout on that evidence would be exactly the \"one run is not a mechanism\" mistake the work order warns against. Needs the operator to boot the driver >=5 times; then the handshake timestamp is worth adding, because it would say WHERE the time went.",
-      "ok": 64,
-      "f": 10
+      "ok": 66,
+      "f": 12
     },
     {
       "c": "dev",
@@ -1413,7 +1413,7 @@
       ],
       "note": "navigate, close_panel. navigate verified 2026-08-28 including its URL refusal; close_panel needs a connected dashboard.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. navigate passes TWO oracles. First, it does not publish — it returns uiActions, which the server relays to the HUD — so the oracle is that the resolved route comes back in a well-formed action, and the mutation that dropped the uiActions was caught. (The first version of the harness waited for a bus event and recorded a FAIL against correct code: the fourth time in this campaign a harness accused the product of its own mistaken model.) Second, a closed set is only closed if it REFUSES: BUG-273 A1 records this router once taking a URL, moving the view and reporting having launched a browser, so the harness asserts that navigate(\"https://example.com/thing\") still fails by name. The mutation that let a URL through was caught. close_panel is n/a — it awaits a real count back from a connected dashboard, and there is none here, which it says plainly.",
-      "ok": 54,
+      "ok": 56,
       "f": 3
     },
     {
@@ -1456,7 +1456,7 @@
       ],
       "note": "kanban_status/add_card/move_card verified 2026-08-28 against the board file on disk. assemble and build_card are dispositions — they drive the build engine.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. The three non-build verbs are verified against the REAL createKanbanEffector({fs, bus}) over a sandbox vault, and the oracle is the board FILE re-read off disk — add_card must put the card in it, move_card must change the stored lane. The mutation that made add_card report success while never persisting the board was caught. Two contract details the harness had to read rather than guess: LANES is a closed set (backlog|building|review|done), and move_card takes {query, lane} rather than an id. kanban_assemble and kanban_build_card are NOT RUN and say why: both drive the build engine (dsh), which is a real install, a real model call and minutes of wall clock, so a harness running them would be measuring the engine rather than the tool — and root CLAUDE.md rules that there is no fallback engine to fake it with.",
-      "ok": 9,
+      "ok": 10,
       "f": 0
     },
     {
@@ -1599,7 +1599,7 @@
       ],
       "note": "Historical get_time/get_weather/get_directions checks passed. Latest weather failure was a timeout; location ambiguity remains a separate content gate.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. This node reached the acceptance contract, so it is the strongest of the four promotions. get_time is not merely \"ok:true\": the answer must carry THIS process's current year, and passing timezone:\"Asia/Tokyo\" must actually change it — a tool returning a plausible date is precisely what a self-report cannot rule out, and the mutation that returned a fixed 1999 date was caught. get_weather and get_directions answered over their free lanes (346 and 143 bytes); their CONTENT is not verified against a second source and the harness says so rather than implying it did. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back. Campaign 2026-09-07: latest recorded weather failure was an upstream timeout, preceded by successful calls. A fresh Bangalore query returned Bangalore Town, Sindh, Pakistan; this is not proof of the intended city. No capability downgrade was inferred from a single failure, and content accuracy remains unverified.",
-      "ok": 186,
+      "ok": 187,
       "f": 10
     },
     {
@@ -1674,7 +1674,7 @@
       "note": "Stage 1 implementation is available for qualification. Command acceptance cannot establish completion. Existing signed-in browser and spoken acceptance gates remain blocked.",
       "ev": "Windows Operator 2026-09-07: current-user named-pipe ACL and anonymous denial exercised on Windows; actual disposable Chrome DOM/CDP fixtures verify ordinal selection and trusted-input takeover. Controller tests require video identity and advancing playback time. These are bounded implementation proofs, not ten attended spoken successes or the 50-command qualification. See BUGS.md Windows Operator evidence.",
       "ok": 4,
-      "f": 6
+      "f": 7
     }
   ],
   "register": {
@@ -5778,18 +5778,58 @@
           "evidence": "[CODED 2026-09-11; needs one attended spoken run] open_web was asked for \"INDIA'S GOT LATENT S2 EP6\" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The resolver used candidates[0] and never compared the title it was about to return against the query. A bounded season/episode guard now refuses with code `no-matching-result` before anything renders; unmarked queries take the same path they always did. Consumers: open_web newtab, the oEmbed embed probe, and the newtab fallback, which now consume ONE eligible list. Regression oracle: bug-438-open-web-opens-the-episode-asked-for.test.js — 18 tests, 9 mutations each reddening a named test, one of which survived first time and produced test (11b). Remaining evidence: no attended spoken run; marker agreement is not proof of playback or of video identity, and the guard is inert for a query carrying no season/episode marker.",
           "source": "mythos/src/core/util/youtube-episode.js; mythos/src/core/effectors/from-dashboard.js"
         }
+      },
+      {
+        "n": 439,
+        "shape": "entry",
+        "state": "open",
+        "title": "cua_click is dispatched before the window-state refresh it depends on returns (EVIDENCE COMPLETE 2026-09-11; filed 2026-09-11)",
+        "detail": {
+          "cause": "`live-tool-adapter.js:595` runs the calls inside one batch sequentially, deliberately, with a comment explaining the keystroke races that prevents. These were two batches. Nothing serialises across batches, and Gemini Live streams a new function call before the previous outcome has been injected, so the model acts on state it has not received. `cua_get_window_state` itself took"
+        },
+        "campaign": {
+          "disposition": "blocked",
+          "evidence": "[EVIDENCE COMPLETE, cause pinned 2026-09-11; no code change yet] cua_click failed twice with \"Element 100 not in cache for hwnd=329782. Call get_window_state first.\" The model DID call it. Timeline: cua_get_window_state dispatched 11:12:12.773, cua_click dispatched 11:12:15.720 in a SEPARATE batch, the state result arrived 11:12:27.108 — the click went out 11.4s before the refresh it depends on returned. live-tool-adapter.js:595 serialises calls WITHIN a batch on purpose; nothing orders them ACROSS batches, and Gemini streams a second call before the first outcome is injected. cua_get_window_state itself took 14.3s, which widens the window. Both cua_click batches carry the same batchHash 4d454baba3f9; BUG-120 dedup missed it because that is scoped to one turn and these were turns 39 and 43. Consumers: live-tool-adapter batch dispatch; from-cua element cache. Remaining evidence: whether cua-driver exposes a refresh cheap enough for cua_click to self-heal on a miss, which is the fix shape that makes the bad state unrepresentable rather than detectable.",
+          "source": "mythos/src/core/voice/live-tool-adapter.js:595; mythos/src/core/effectors/from-cua.js"
+        }
+      },
+      {
+        "n": 440,
+        "shape": "entry",
+        "state": "open",
+        "title": "the vision lane keeps calling a model this account can never use (EVIDENCE COMPLETE 2026-09-11; filed 2026-09-11)",
+        "detail": {},
+        "excerpt": "**Status:** 🔎 EVIDENCE COMPLETE 2026-09-11, no code change yet. **Evidence (2026-09-11, mythos-server.log).** One `screen_look` spent its whole 12,000 ms budget and returned nothing: ``` google/gemini-3.5-flash-lite 7008ms ok:false timedOut:true \"This operation was aborted\" mistral-small-latest 1235ms ok:false \"429 Rate limit exceeded\" mistral-large-2512 1220ms ok:false \"403 This model is not available in your subscription tier\" vision.call ms:12015 ok:false timedOut:true attemptsTried:3 ``` MYTHOS then told the operator it could not see the screen. **The capability was fine**: a sibling `screen_look` on the same screen succeeded through the same Google model in 3,897 ms, and a third succeeded through NIM in 5,536 ms. **The defect is the 403, not the 429.** A rate limit is a spending decision and recovers. A 403 \"not available in your subscription tier\" is permanent for this account: th…",
+        "campaign": {
+          "disposition": "blocked",
+          "evidence": "[EVIDENCE COMPLETE 2026-09-11; no code change yet] The vision lane calls a model this account can NEVER use. screen_look burned its 12000ms budget on google/gemini-3.5-flash-lite (aborted at 7008ms, the per-attempt cap), mistral-small-latest (429 rate limited) and mistral-large-2512 (\"403 This model is not available in your subscription tier\"), then told the operator it could not see the screen — while a sibling screen_look succeeded via google in 3897ms. The 403 is not transient and cannot recover: it will fail on every call and costs ~1.2s of a 12s budget each time, so a three-rung chain is really about one and a half. BUG-420 already benches provider:model for 24h on a real 403, which means that benching does not cover this lane — a guard scoped to where the problem was first seen. Consumers: screen_look, deepthink/think_deeply (same 429 family: mistral-medium-2604). Remaining evidence: whether the vision lane can share provider-health benching or needs its own, and whether removing the 403 rung alone brings screen_look inside budget.",
+          "source": "mythos/src/core/brain/provider-health.js; mythos/src/core/brain/lanes.default.js"
+        }
+      },
+      {
+        "n": 441,
+        "shape": "entry",
+        "state": "open",
+        "title": "a result flagged unverified is spoken as a completed action (EVIDENCE COMPLETE 2026-09-11; filed 2026-09-11)",
+        "detail": {},
+        "excerpt": "**Status:** 🔎 EVIDENCE COMPLETE 2026-09-11, no code change yet. **Evidence (2026-09-11, vault/Audit).** Four calls returned `outcome:\"ok\"` carrying `unverified:true` and an honest reason: ``` open_web x2 \"I cannot confirm whether the new tab opened because the browser did not expose a window handle\" browser_click x2 \"clicked ... from page script because it never became visibly actionable — a script click skips the checks that prove a real user could have\" ``` The effector layer is behaving **correctly** — it knows what it could not confirm and says so. The caveat is then dropped on the way to the spoken turn, and the operator is told the action succeeded. The app's own healer caught one instance and logged `claimed-action-not-taken`. **The underlying confusion.** `ok` on an Audit row means *the tool was dispatched*, not *the thing happened*. One word carries two predicates, and the spok…",
+        "campaign": {
+          "disposition": "blocked",
+          "evidence": "[EVIDENCE COMPLETE 2026-09-11; no code change yet] A result carrying unverified:true is spoken as a completed action. Four calls this session returned outcome:ok WITH an unverified flag and an honest reason — open_web x2 \"I cannot confirm whether the new tab opened because the browser did not expose a window handle\", browser_click x2 \"clicked ... from page script because it never became visibly actionable — a script click skips the checks that prove a real user could have\". The effector layer is correct; the caveat is dropped between the ledger and the spoken turn, so the operator is told it worked. The healer caught one instance itself (claimed-action-not-taken). Operator incident inc-1789074035676-6 asks for exactly this root cause. Distinct from BUG-434 (a TRUE action wrongly retracted) and from BUG-438 (the unverified flag firing on the tab rather than the title): this is the general rule that ok means dispatched, not proven. Consumers: the spoken narration path; narration-claims.js. Remaining evidence: whether suppressing the claim is enough or the turn must say what could not be confirmed.",
+          "source": "mythos/src/core/voice/narration-claims.js; mythos/src/core/voice/live-tool-adapter.js"
+        }
       }
     ],
     "counts": {
       "verified": 82,
       "fixed": 181,
-      "open": 13,
+      "open": 16,
       "coded": 8,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 287,
+    "total": 290,
     "openDeclared": [
       274,
       275,
@@ -5801,7 +5841,10 @@
       435,
       436,
       437,
-      438
+      438,
+      439,
+      440,
+      441
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"

@@ -598,6 +598,9 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-436 | open | blocked | [PROFILER CODED 2026-09-10; one attended run with LOOP_LAG_TRACE=true names the caller, then a second PR fixes it. GoAway half CODED in PR #88, unmerged] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code. | mythos/src/core/loop-lag.js |
 | BUG-437 | open | blocked | [EVIDENCE FIRST, operator: close the app 3 ways with Task Manager + main.log open] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open. | electron/main.js |
 | BUG-438 | coded | blocked | [CODED 2026-09-11; needs one attended spoken run] open_web was asked for "INDIA'S GOT LATENT S2 EP6" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The resolver used candidates[0] and never compared the title it was about to return against the query. A bounded season/episode guard now refuses with code `no-matching-result` before anything renders; unmarked queries take the same path they always did. Consumers: open_web newtab, the oEmbed embed probe, and the newtab fallback, which now consume ONE eligible list. Regression oracle: bug-438-open-web-opens-the-episode-asked-for.test.js — 18 tests, 9 mutations each reddening a named test, one of which survived first time and produced test (11b). Remaining evidence: no attended spoken run; marker agreement is not proof of playback or of video identity, and the guard is inert for a query carrying no season/episode marker. | mythos/src/core/util/youtube-episode.js; mythos/src/core/effectors/from-dashboard.js |
+| BUG-439 | open | blocked | [EVIDENCE COMPLETE, cause pinned 2026-09-11; no code change yet] cua_click failed twice with "Element 100 not in cache for hwnd=329782. Call get_window_state first." The model DID call it. Timeline: cua_get_window_state dispatched 11:12:12.773, cua_click dispatched 11:12:15.720 in a SEPARATE batch, the state result arrived 11:12:27.108 — the click went out 11.4s before the refresh it depends on returned. live-tool-adapter.js:595 serialises calls WITHIN a batch on purpose; nothing orders them ACROSS batches, and Gemini streams a second call before the first outcome is injected. cua_get_window_state itself took 14.3s, which widens the window. Both cua_click batches carry the same batchHash 4d454baba3f9; BUG-120 dedup missed it because that is scoped to one turn and these were turns 39 and 43. Consumers: live-tool-adapter batch dispatch; from-cua element cache. Remaining evidence: whether cua-driver exposes a refresh cheap enough for cua_click to self-heal on a miss, which is the fix shape that makes the bad state unrepresentable rather than detectable. | mythos/src/core/voice/live-tool-adapter.js:595; mythos/src/core/effectors/from-cua.js |
+| BUG-440 | open | blocked | [EVIDENCE COMPLETE 2026-09-11; no code change yet] The vision lane calls a model this account can NEVER use. screen_look burned its 12000ms budget on google/gemini-3.5-flash-lite (aborted at 7008ms, the per-attempt cap), mistral-small-latest (429 rate limited) and mistral-large-2512 ("403 This model is not available in your subscription tier"), then told the operator it could not see the screen — while a sibling screen_look succeeded via google in 3897ms. The 403 is not transient and cannot recover: it will fail on every call and costs ~1.2s of a 12s budget each time, so a three-rung chain is really about one and a half. BUG-420 already benches provider:model for 24h on a real 403, which means that benching does not cover this lane — a guard scoped to where the problem was first seen. Consumers: screen_look, deepthink/think_deeply (same 429 family: mistral-medium-2604). Remaining evidence: whether the vision lane can share provider-health benching or needs its own, and whether removing the 403 rung alone brings screen_look inside budget. | mythos/src/core/brain/provider-health.js; mythos/src/core/brain/lanes.default.js |
+| BUG-441 | open | blocked | [EVIDENCE COMPLETE 2026-09-11; no code change yet] A result carrying unverified:true is spoken as a completed action. Four calls this session returned outcome:ok WITH an unverified flag and an honest reason — open_web x2 "I cannot confirm whether the new tab opened because the browser did not expose a window handle", browser_click x2 "clicked ... from page script because it never became visibly actionable — a script click skips the checks that prove a real user could have". The effector layer is correct; the caveat is dropped between the ledger and the spoken turn, so the operator is told it worked. The healer caught one instance itself (claimed-action-not-taken). Operator incident inc-1789074035676-6 asks for exactly this root cause. Distinct from BUG-434 (a TRUE action wrongly retracted) and from BUG-438 (the unverified flag firing on the tab rather than the title): this is the general rule that ok means dispatched, not proven. Consumers: the spoken narration path; narration-claims.js. Remaining evidence: whether suppressing the claim is enough or the turn must say what could not be confirmed. | mythos/src/core/voice/narration-claims.js; mythos/src/core/voice/live-tool-adapter.js |
 | BUG-406 | open | blocked | [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -1564,6 +1567,29 @@ rotation half from the 2026-09-11 probe read.
 
 **Measured again 2026-09-10 on the 0.1.12 boots:** the boot greeting's own Live turn was interrupted on 2 of 2 boots by the next system injection — at 00:10:12 a self-heal notice landed 1.05 s after the greeting and killed it with 0 audio parts produced; at 09:20:45 the Gmail and provider notices landed after the 20 s `speech.lock-ceiling` and cut the greeting at 53 audio parts. The greeting is inaudible for a second reason too (BUG-433), but this class alone would have silenced the 00:10 boot.
 
+**THE MEASURED PASS, 2026-09-11 — run with the flag OFF, which is what made it visible.** An
+attended session reproduced the interruption this ticket describes, from the operator's side and
+in the log, and confirms the coded fix targets the right door.
+
+Every tool outcome this session arrived as `site:"late-outcome"`. The acknowledgement deadline is
+**1,500 ms**; real times ran **3 to 14 s** (`think_deeply` 14.3 s, `cua_get_window_state` 14.3 s,
+`browser_snapshot` and `screen_look` several seconds each). With `VOICE_SERIALIZE_NOTICES` unset,
+`sendSystemNotice` injects straight through `liveSession.sendText`, Gemini treats each text frame
+as a NEW turn, and the model stops mid-sentence. Turns 66 and 67 both carry
+`scFields:"...interrupted..."` with `interrupts:1` immediately after an injection at 11:18:34.563.
+
+**The operator logged it independently, without seeing the log:** inc-1789125515629-2 "Abrupt
+pausing mid-speech reported by operator. Cause currently unknown." and, from the earlier session,
+inc-1789073445645-1 "lack of continuity, mid-sentence disruption when screen_look results arrived.
+System cut off 'Taking a look...' to deliver the completed description."
+
+So the remaining work on this ticket is no longer *whether* the interruption is real — it is
+measured, twice, with the operator's own report matching the frames. What is still owed is a run
+with `VOICE_SERIALIZE_NOTICES=true` showing the same workload WITHOUT the mid-sentence cuts, which
+is one attended session and needs no code change.
+
+
+
 ## BUG-433 — the boot greeting is spoken into a Live session the window is not listening to, so the packaged app starts silent (CODED 2026-09-10; filed 2026-09-10)
 
 **Status:** 🔧 CODED — fixed in `server/index.js`; one cold boot with the speaker on remains.
@@ -1790,6 +1816,132 @@ evidence this is the most expensive open defect in the tracker.**
 **Evidence (`test/bug-436-goaway-waits-for-the-turn.test.js`, 8 tests):** fake-socket replay of toolCall → audio part → goAway holds the socket OPEN and reconnects only at turnComplete; nothing-in-flight goAway still closes immediately (adjacent, pinned); the hold expires on its own; a final close disarms it. Mutation 2026-09-10: restoring the old one-line close fails (1)/(3)/(4) with "socket must still be OPEN after goAway mid-turn (got 3)"; forcing isTurnInFlight to true fails (2) with "a goAway with nothing in flight must close immediately"; both restored sha256-identical. **Not verified against Gemini live:** whether a held connection is in fact serviced for the full timeLeft, and whether the resumed session continues the cut turn, are one attended goAway away — grep `live.goaway deferred:true` followed by `live.goaway-close why:turn-complete` in the server log.
 
 **Attribution:** operator report and the 2026-09-10 log read.
+
+## BUG-439 — cua_click is dispatched before the window-state refresh it depends on returns (EVIDENCE COMPLETE 2026-09-11; filed 2026-09-11)
+
+**Status:** 🔎 CAUSE PINNED 2026-09-11, no code change yet. The driver is behaving correctly; the ordering is ours.
+
+**Evidence (2026-09-11, attended session, vault/Audit + mythos-server.log).** `cua_click` failed
+twice with the driver's message:
+
+```
+Element 100 not in cache for hwnd=329782. Call get_window_state first.
+```
+
+The model **did** call it. The batch log gives the order and the gap:
+
+```
+11:12:12.773  live.tool-call-batch  tools:["cua_get_window_state"]
+11:12:15.720  live.tool-call-batch  tools:["cua_click"]            <- separate batch, 3s later
+11:12:27.108  live.text-injected    tool:cua_get_window_state claim:ok   <- 11.4s AFTER the click
+11:12:36.987  live.text-injected    tool:cua_click            claim:failed
+```
+
+**Mechanism.** `live-tool-adapter.js:595` runs the calls inside one batch sequentially, deliberately,
+with a comment explaining the keystroke races that prevents. These were two batches. Nothing
+serialises across batches, and Gemini Live streams a new function call before the previous
+outcome has been injected, so the model acts on state it has not received. `cua_get_window_state`
+itself took **14.3 s** to return 4,336 characters, which makes the window very wide.
+
+**Why dedup did not catch it.** Both `cua_click` batches carry the identical
+`batchHash 4d454baba3f9`. BUG-120's duplicate suppression is scoped to one turn; these were turns
+39 and 43.
+
+**Why the driver's advice cannot fix it.** "Call get_window_state first" is unactionable from the
+model's side: it has no way to know when the result landed, and it is not told to wait. Retrying
+the same instruction produced the same failure.
+
+**Fix shape (not yet written).** `cua_click` should refresh the element cache itself on a miss and
+retry once, so a stale index cannot be expressed — rather than failing and instructing the caller.
+This repo's bias is to make the bad state unrepresentable before making it detectable.
+
+**Remaining evidence.** Whether cua-driver exposes a refresh cheap enough to sit inside a click
+without doubling its latency. `cua_get_window_state` at 14.3 s suggests it may not, and if so the
+fix belongs in the adapter (hold dependent cua_ calls behind the outstanding one) rather than in
+the effector. That is a measurement, not a preference, and it has not been taken.
+
+**Attribution:** observed live by the operator ("cua_click failed to produce visible playback on
+YouTube despite reported success", inc-1789074012235-5) and traced in the 2026-09-11 session.
+
+## BUG-440 — the vision lane keeps calling a model this account can never use (EVIDENCE COMPLETE 2026-09-11; filed 2026-09-11)
+
+**Status:** 🔎 EVIDENCE COMPLETE 2026-09-11, no code change yet.
+
+**Evidence (2026-09-11, mythos-server.log).** One `screen_look` spent its whole 12,000 ms budget and
+returned nothing:
+
+```
+google/gemini-3.5-flash-lite   7008ms  ok:false  timedOut:true   "This operation was aborted"
+mistral-small-latest           1235ms  ok:false  "429 Rate limit exceeded"
+mistral-large-2512             1220ms  ok:false  "403 This model is not available in your subscription tier"
+vision.call  ms:12015  ok:false  timedOut:true  attemptsTried:3
+```
+
+MYTHOS then told the operator it could not see the screen. **The capability was fine**: a sibling
+`screen_look` on the same screen succeeded through the same Google model in 3,897 ms, and a third
+succeeded through NIM in 5,536 ms.
+
+**The defect is the 403, not the 429.** A rate limit is a spending decision and recovers. A 403
+"not available in your subscription tier" is permanent for this account: that rung will fail on
+every call for ever, while costing ~1.2 s of a 12 s budget each time. The lane advertises three
+fallbacks and really carries about one and a half.
+
+**Why this is a code defect and not a config preference.** BUG-420 already shipped exactly the right
+mechanism — "Real 403/404 refusals now bench only provider:model for 24h" — in
+`brain/provider-health.js`. The vision lane called the 403 model anyway, so that benching does not
+reach this path. This is the repo's recurring shape of a guard scoped to where the problem was
+first seen (see also the reasoning lane below).
+
+**Same family, different lane.** `think_deeply` failed the same session:
+`deepthink.attempt mistral/mistral-medium-2604 429 Rate limit exceeded`, with
+`chain-whole-lane-timeout` on the reasoning lane recording "repeated 30s timeout per-attempt; no
+provider outage detected". Operator incident inc-1789125535502-3 is this failure seen from the
+outside ("'think_deeply' tool failed during operation. Reason unknown.").
+
+**Remaining evidence.** Whether the vision and reasoning lanes can share `provider-health`'s
+benching or need their own, and whether removing the 403 rung ALONE brings `screen_look` inside its
+budget — 7,008 ms of the 12,000 was the Google timeout, so it may not. Measure before assuming the
+403 removal is sufficient.
+
+**Attribution:** 2026-09-11 attended session log read.
+
+## BUG-441 — a result flagged unverified is spoken as a completed action (EVIDENCE COMPLETE 2026-09-11; filed 2026-09-11)
+
+**Status:** 🔎 EVIDENCE COMPLETE 2026-09-11, no code change yet.
+
+**Evidence (2026-09-11, vault/Audit).** Four calls returned `outcome:"ok"` carrying
+`unverified:true` and an honest reason:
+
+```
+open_web      x2  "I cannot confirm whether the new tab opened because the browser did not
+                   expose a window handle"
+browser_click x2  "clicked ... from page script because it never became visibly actionable —
+                   a script click skips the checks that prove a real user could have"
+```
+
+The effector layer is behaving **correctly** — it knows what it could not confirm and says so. The
+caveat is then dropped on the way to the spoken turn, and the operator is told the action
+succeeded. The app's own healer caught one instance and logged `claimed-action-not-taken`.
+
+**The underlying confusion.** `ok` on an Audit row means *the tool was dispatched*, not *the thing
+happened*. One word carries two predicates, and the spoken layer reads the wrong one.
+
+**Boundaries, so this is not mistaken for two neighbouring tickets.** BUG-434 is the opposite
+failure — a TRUE action wrongly retracted. BUG-438 is narrower — the unverified flag firing on the
+tab handle it could not see while saying nothing about the title mismatch it could. This entry is
+the general rule both of those are instances of.
+
+**Operator's own report:** inc-1789074035676-6 — "requests investigation/logging into erroneous
+system confirmation messages (stating tool calls 'succeeded' when they did not). Needs root cause
+analysis on why unverified success reports are generated." Answered here: they are not fabricated,
+they are a flag that is dropped.
+
+**Remaining evidence.** Whether suppressing the success claim is sufficient, or whether the turn
+must positively say what could not be confirmed. The second is more honest and more annoying; the
+choice is the operator's, and it is not made yet.
+
+**Attribution:** 2026-09-11 attended session; operator incident log.
+
 
 ## BUG-438 — open_web opened a DIFFERENT YouTube video from the one asked for, and reported it as opened (CODED 2026-09-11; filed 2026-09-11)
 
@@ -2069,6 +2221,36 @@ live-tool-outcome-late-for-turn x4   playbook live-tool-outcome-late-known
 The earlier 16 counts each anomaly and its acknowledgement twice: eight distinct missing-user-transcript events remain, three within ±2 seconds of a ceiling release. The broader "24 of 99" filing count therefore is not a verified count of distinct affected turns. `framesZeroed` is a cumulative session counter; its snapshot sums above are **not** distinct lost-frame counts. The 150 non-JSON lines across the input files were ignored and reported. No matched echo occurred in 81 checks, so this replay demonstrates gate exposure and the missing verdict channel, **not** acoustic benefit or causation for all eight anomalies. BUG-406 requires a labelled live room before closure.
 
 **Coded scope:** `live-session.js` emits `{ratio, matched}` on every input transcript; the server forwards it only when enabled. `echo-verdict.js` separately tracks `transcriptSeen` and `echoRatio` for each hold, and only `ceilingDecision` consumes them. `observe()` continues to receive `null`, so this does not activate the barge-in echo veto. The 8000ms idle and 30000ms absolute ceilings are unchanged. The old path remains when no verdict arrives, including switch-off. No hold identifier exists in this protocol, so in-flight cross-hold attribution is a named remaining limit. Tests: `measure-own-voice-ceiling`, `echo-verdict-tracker`, `bug-428-echo-verdict-reaches-ceiling`; eight dated mutation probes all failed and each source was restored by absolute copy with matching SHA256.
+
+**MEASURED AGAIN 2026-09-11, in an attended live session — the strongest evidence yet, and it
+sharpens the ticket rather than repeating it.** Over a 1,077 s conversation the capture gate held
+the microphone shut for **424 s (39% of the session)** across 54 holds, zeroing **150,876 frames**
+of operator audio (framesDropped 0 — the audio was captured and blanked, not lost in transport).
+
+```
+own-voice-ended                        38 holds  241,909 ms  (avg  6,366 ms)
+own-voice-ceiling-no-evidence-of-echo  10 holds  123,158 ms  (avg 12,315 ms)
+own-voice-ceiling-near-field-energy     3 holds   35,188 ms  (avg 11,729 ms)
+suspend-window-elapsed                  2 holds   16,000 ms
+barge-in-confirmed                      1 hold     7,925 ms
+```
+
+**13 holds ended at the CEILING (158 s), and 10 of them (123 s) had `peakRms` measurably BELOW
+`bleedFloor` (0.035)** — values of 0.0088, 0.0106, 0.0145, 0.0226, 0.0337. A ceiling release means
+the gate never decided; it timed out, averaging 12.3 s. In those ten there was nothing to suppress
+and it suppressed the operator anyway.
+
+**This is what the missing-transcript anomaly actually is.** `live-turn-no-user-transcript` fired
+**9 times**, and the app's own playbook explains it as "the operator's speech reaches Gemini but is
+not transcribed". That explanation is wrong in these cases: the speech never reached Gemini, it was
+zeroed at capture. The playbook text should be corrected along with the gate, or the next session
+will chase transcription again.
+
+**What this does NOT establish**, and BUG-406 still owns: whether releasing early would let real
+echo through. `peakRms < bleedFloor` says no echo was present at the moment of measurement, not
+that the gate is safe to shorten in a live room. The acoustic corpus is still the missing piece.
+
+
 
 ## BUG-429 — unknown settings are now announced and listed by doctor (FIXED 2026-09-10)
 
@@ -21527,6 +21709,25 @@ those records remain owed (this section is the index until then).
   compared it to the query. Two of the session's three unverified successes are this one
   call. EVIDENCE FIRST: replay that query through the resolver offline and diff the
   returned title against it — no browser and no live run needed.
+
+- BUG-439 - cua_click is dispatched before the cua_get_window_state it depends on
+  returns. The model followed the driver's advice ("Call get_window_state first") and still
+  failed: the click went out 11.4s BEFORE the refresh returned, in a separate batch.
+  live-tool-adapter.js:595 serialises within a batch on purpose; nothing orders across
+  batches. Fix shape is self-refresh on a miss, not better advice.
+
+- BUG-440 - the vision lane calls mistral-large-2512, which returns
+  "403 This model is not available in your subscription tier" on every call, burning ~1.2s
+  of a 12s budget before screen_look gives up. BUG-420 already benches provider:model on a
+  real 403 — that benching does not reach this lane. Same family: think_deeply on
+  mistral-medium-2604 429.
+
+- BUG-441 - a result carrying unverified:true is spoken as a completed action. The
+  effector says what it could not confirm (open_web "no window handle", browser_click
+  "never became visibly actionable"); the caveat is dropped before the spoken turn. ok means
+  dispatched, not proven. Distinct from BUG-434 (true action wrongly retracted) and BUG-438
+  (flag fired on the wrong field).
+
 
 - BUG-422 - the server child exits silently mid-session and never restarts.
   CRITICAL: the operator lost the app mid-
