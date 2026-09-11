@@ -110,7 +110,7 @@ const SCHEMA = {
   VOICE_TTS_PROVIDER:       { type: 'string', default: 'edge' },
   // Non-streaming TTS model. gemini-2.5-flash-preview-tts measured ~3.9s/sentence;
   // gemini-3.1-flash-tts-preview measured ~17.6s and is NOT a sane default.
-  GEMINI_TTS_MODEL:         { type: 'string', default: 'gemini-2.5-flash-preview-tts' },
+  GEMINI_TTS_MODEL:         { type: 'string', default: 'gemini-3.1-flash-tts-preview' }, // re-measured 2026-09-11; see providers/gemini-tts.js
 
   // ORDERED TTS chain, comma-separated, same convention as the brain's CHAIN_*.
   // Resolved ONCE per session and sticky: the boot greeting, proactive speech and

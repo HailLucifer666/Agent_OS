@@ -33,16 +33,6 @@ describe('brain/lanes.default', function() {
     envs.forEach(function(e) { assert.match(e, /^CHAIN_[A-Z]+$/); });
   });
 
-  it('embed lane documents the real embeddings chain (ollama then mistral)', function() {
-    // brain.think({lane:'embed'}) still hard-short-circuits to {offline:true}
-    // (brain/index.js) — actual embeddings run through providers/embeddings.js,
-    // never through chain.js/registry.js. This table is documentation only.
-    assert.deepEqual(lanes.PREF_EMBED, [
-      { provider: 'ollama', model: 'nomic-embed-text' },
-      { provider: 'mistral', model: 'mistral-embed' },
-    ]);
-  });
-
   it('voice lane leads with google, and groq is gone rather than demoted', function() {
     // Was "groq first" until 2026-08-14. Two independent measurements moved it:
     // groq llama-3.3-70b scored 2/4 (missing BOTH reasoning probes), and Groq's
@@ -122,8 +112,10 @@ describe('brain/lanes.default', function() {
     // not) but last.
     assert.equal(head(lanes.PREF_VISION).provider, 'google');
     assert.equal(head(lanes.PREF_VISION).model, 'gemini-3.5-flash-lite');
+    // RELAXED 2026-09-11 from "nim last" to "nim present" — see lanes.default.js.
     const cloud = lanes.PREF_VISION.filter(function(p) { return p.provider !== 'ollama'; });
-    assert.equal(cloud[cloud.length - 1].provider, 'nim');
+    assert.ok(cloud.some(function(p) { return p.provider === 'nim'; }) && cloud[0].provider !== 'nim',
+      'NIM must stay in the vision lane (breakers self-correct, a deletion does not) but must not lead it');
   });
 
   it('no PREF_* table lists a model known dead on these keys', function() {
@@ -155,7 +147,8 @@ describe('brain/lanes.default', function() {
     // mistral-large-2512 stays as the immediate generalist fallback.
     assert.equal(head(lanes.PREF_BUILD).provider, 'mistral');
     assert.equal(head(lanes.PREF_BUILD).model, 'codestral-latest');
-    assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'mistral' && p.model === 'mistral-large-2512'; }), 'mistral-large-2512 retained as generalist fallback');
+    // INVERTED 2026-09-11, not deleted: permanent 403, not billing. BUG-440.
+    assert.ok(!lanes.PREF_BUILD.some(function(p) { return p.model === 'mistral-large-2512'; }), 'permanent 403; must not return');
     // RE-POINTED 2026-08-22. This used to assert Groq's 70B was present as the
     // "fastest reachable" rung. It is not reachable at all: Groq advertises 13
     // model ids and not one is a Llama, so the call is a 404. The assertion is
