@@ -4,12 +4,22 @@
 //
 // WHY THIS EXISTS, AND WHY IT IS ONLY A MEASUREMENT. The 2026-09-10 attended
 // run of 0.1.12 logged 18 `loop.stalled` rows in 32 minutes, lagMs 286 to 9102,
-// cpuMs mostly under 150. loop-lag.js's own comment says what that pair means:
-// cpuMs far below lagMs is a thread that WAITED, not one that computed. It does
-// not say what it waited for, and this repo has twice mis-diagnosed voice by
-// naming a cause it had not measured. So this file adds no policy, changes no
-// threshold, and heals nothing — it answers one question: which synchronous
-// call was in flight while the loop was blocked.
+// cpuMs mostly under 150.
+//
+// The reasoning that used to sit here — "cpuMs far below lagMs is a thread that
+// WAITED, not one that computed" — was CORRECTED on 2026-09-11 and is kept only
+// as a warning. It is wrong twice over. cpuMs is PROCESS-wide, so it counts the
+// libuv threadpool and every native thread and says nothing about this thread;
+// and it is accumulated over period + lag while lagMs covers only lag, so the
+// two were never directly comparable in the first place. loop-lag.js now emits
+// mainCpuMs and sampleWindowMs, which are the numbers that answer it — see that
+// file's "HOW TO READ A ROW" block for the measurement behind this.
+//
+// This repo has twice mis-diagnosed voice by naming a cause it had not measured,
+// and the sentence above is a third instance, caught in review rather than in
+// production. So this file adds no policy, changes no threshold, and heals
+// nothing — it answers one question: which synchronous call was in flight while
+// the loop was blocked.
 //
 // DERIVED, NOT ENUMERATED. The set of calls to watch comes from the reason
 // ("blocked on synchronous I/O, not computing"), so it is read off the modules
@@ -24,12 +34,22 @@
 // 1ms stats would push the real culprit out before anyone read it. Nothing is
 // allocated per call except the retained entries.
 //
-// NOT THE WHOLE TRUTH, DELIBERATELY. A stall caused by a long CPU loop, a
-// native addon, a blocking DNS resolution inside a library, or an async
-// operation starved behind a microtask queue is invisible here and will show up
-// as a row with no `lastSync`. That absence is itself informative: it rules the
-// synchronous-I/O family out. Do not read a missing `lastSync` as "nothing was
-// happening".
+// NOT THE WHOLE TRUTH, DELIBERATELY, AND LOSSY IN TWO WAYS. A stall caused by a
+// long CPU loop, a native addon, a blocking DNS resolution inside a library, or
+// an async operation starved behind a microtask queue is invisible here and will
+// show up as a row with no `lastSync`.
+//
+// So will a stall made ENTIRELY of synchronous I/O, and that is the correction
+// of 2026-09-11. This trace retains a call only if it ran for at least
+// DEFAULT_MIN_MS (20 ms), and it keeps only the newest DEFAULT_RING (32) of
+// those. Thirty 10 ms stats hold the loop for 300 ms and leave the row
+// completely silent; so does a storm of 33 slow calls, whose first is evicted
+// before anyone reads it. The first case is pinned as test (f) in
+// test/bug-436-stall-cpu-accounting.test.js.
+//
+// A missing `lastSync` therefore means exactly one thing: NO RETAINED
+// INSTRUMENTED CALL OVERLAPPED THIS WINDOW. It does not rule the
+// synchronous-I/O family out, and it does not mean nothing was happening.
 
 const DEFAULT_RING = 32;
 // A synchronous call has to be big enough to matter next to the 250ms stall

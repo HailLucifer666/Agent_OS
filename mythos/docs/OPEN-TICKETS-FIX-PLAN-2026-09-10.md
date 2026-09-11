@@ -72,9 +72,17 @@ why:turn-complete` in the server log.
 ### BUG-436, stall half — the event loop freezes 2–9 s with zero CPU
 
 Not fixed; no code yet, deliberately. 18 `loop.stalled` rows in 32 minutes with
-`cpuMs` mostly under 150 means the process was **blocked, not computing** —
-waiting on a synchronous file read, a child spawn, or a lock. Guessing the call
-site is how this repo has mis-diagnosed voice twice.
+`cpuMs` mostly under 150.
+
+> **SUPERSEDED 2026-09-11 — see the BUG-436 entry in `BUGS.md`, which is now the
+> authority for this ticket's reading.** The next sentence used to conclude that
+> `cpuMs` mostly under 150 "means the process was **blocked, not computing** —
+> waiting on a synchronous file read, a child spawn, or a lock". It does not
+> mean that. `cpuMs` is process-wide (it counts the libuv threadpool and every
+> native thread) and is accumulated over `period + lag` while `lagMs` covers
+> only the lag. The instrument now emits `sampleWindowMs` and `mainCpuMs`; use
+> those. Guessing the call site is how this repo has mis-diagnosed voice twice,
+> and this paragraph was a third attempt at it.
 
 **Plan.** (1) Instrument: extend `src/core/loop-lag.js` so each `loop.stalled`
 row carries the last synchronous fs/spawn call started before the lag (a

@@ -618,9 +618,16 @@ Select-String -Path "$env:APPDATA\MYTHOS\vault\Episodic\$(Get-Date -Format yyyy-
 ### D7. BUG-436 — name the call that blocks the loop (passive)
 
 **What:** eighteen event-loop stalls in 32 minutes, lag from 286 ms to 9.1
-seconds, CPU mostly under 150 ms — blocked in a syscall, not computing, and the
-caller was never identified. `LOOP_LAG_TRACE` times every synchronous `fs` and
-`child_process` call and attaches the one overlapping the stall to the log row.
+seconds, CPU mostly under 150 ms, and the caller was never identified.
+`LOOP_LAG_TRACE` times every synchronous `fs` and `child_process` call and
+attaches the one overlapping the stall to the log row.
+
+This paragraph used to end "— blocked in a syscall, not computing". **That was
+withdrawn on 2026-09-11**: `cpuMs` is process-wide (it counts the libuv
+threadpool and every native thread) and is accumulated over `period + lag` while
+`lagMs` covers only the lag, so the two were never directly comparable. Rows now
+also carry `sampleWindowMs` and `mainCpuMs`, which are the numbers that answer
+it. Do not classify a stall from a `cpuMs`/`lagMs` ratio.
 
 **Requirements:** `LOOP_LAG_TRACE=true` for the whole of Session A.
 
@@ -630,8 +637,26 @@ caller was never identified. `LOOP_LAG_TRACE` times every synchronous `fs` and
 That name is the target of a *second* fix with its own test — this session only
 produces the name.
 
+**Read every row's three CPU numbers together, in this order:**
+
+1. `sampleWindowMs` — how long the window was. It is `period + lag`, so it is
+   always longer than `lagMs`. `cpuMs` is accumulated over ALL of it.
+2. `cpuMs > sampleWindowMs` — **proof the CPU was not the event-loop thread.**
+   One thread cannot spend more CPU than its window is long, so this inequality
+   settles it on sight, with no judgement call. All three of the worst rows on
+   record are this shape.
+3. `mainCpuMs` — the event-loop thread's own CPU over the same window. Close to
+   `sampleWindowMs` means this thread was computing. Near zero with a large
+   `cpuMs` means other threads were busy while this one waited. If the key is
+   **absent**, the runtime has no `process.threadCpuUsage` (Node 23+); a single
+   `loop.lag-main-cpu-unavailable` info row will say so. Absent is not zero.
+
 **Not a failure, and worth recording:** `loop.stalled` rows with **no**
-`lastSync`. That rules the synchronous-I/O family out, which is a result.
+`lastSync`. This used to say that rules the synchronous-I/O family out. **It does
+not** — corrected 2026-09-11. The trace drops any call under 20 ms and keeps only
+the newest 32, so thirty 10 ms `statSync` calls hold the loop for 300 ms and
+produce a completely silent row. A missing `lastSync` means "no retained
+instrumented call overlapped this window", and nothing more.
 
 **Confound to state when you record it:** the trace wraps hundreds of functions
 and costs something itself. Read `lastSync` as a pointer to the caller, never as

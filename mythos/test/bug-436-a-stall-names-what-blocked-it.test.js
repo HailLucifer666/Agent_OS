@@ -45,10 +45,16 @@
 //
 // NOT COVERED, AND THIS IS THE POINT. A stall caused by a CPU loop, a native
 // addon, a blocking resolve inside a library, or starvation behind a microtask
-// queue produces a row with NO lastSync. That absence rules the
-// synchronous-I/O family out; it does not mean nothing happened. The next step
-// on this ticket is one attended session with LOOP_LAG_TRACE=true, and then a
-// separate fix for whatever the rows name.
+// queue produces a row with NO lastSync — and so does a stall built entirely out
+// of synchronous calls that are individually under the 20 ms retention floor, or
+// more than 32 of them. A missing lastSync means "no RETAINED INSTRUMENTED call
+// overlapped this window"; it does NOT rule the synchronous-I/O family out, and
+// the sentence here that used to claim it did was corrected on 2026-09-11. The
+// demonstration is test (f) of the sibling file,
+// test/bug-436-stall-cpu-accounting.test.js, which owns the SAMPLER half of this
+// ticket (sampleWindowMs and mainCpuMs) while this file owns the TRACE half.
+// The next step on this ticket is one attended session with LOOP_LAG_TRACE=true,
+// and then a separate fix for whatever the rows name.
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
@@ -252,7 +258,7 @@ describe('BUG-436 — a loop.stalled row names the synchronous call that blocked
     }
   });
 
-  test('(h) with no trace, the row is exactly what it was before this change', () => {
+  test('(h) with no trace, the row carries the sampler keys and no lastSync', () => {
     const c = clock();
     const rig = probeRig(c, null);
     try {
@@ -260,7 +266,16 @@ describe('BUG-436 — a loop.stalled row names the synchronous call that blocked
       rig.fire();
       const row = rig.rows.find((r) => r.msg === 'loop.stalled');
       assert.ok(row, 'a stall is still reported');
-      assert.deepStrictEqual(Object.keys(row.fields).sort(), ['cpuMs', 'lagMs', 'thresholdMs']);
+      // DELIBERATELY NO LONGER "exactly what it was before this change". BUG-436's
+      // 2026-09-11 read added mainCpuMs and sampleWindowMs to every row, trace or
+      // no trace, because cpuMs on its own could not say whether the CPU it
+      // reported belonged to the event-loop thread — see
+      // test/bug-436-stall-cpu-accounting.test.js for the measurement. What this
+      // test still pins is the part that did NOT change: with the trace off, the
+      // row gains no lastSync and the original three keys are all still present.
+      assert.deepStrictEqual(Object.keys(row.fields).sort(),
+        ['cpuMs', 'lagMs', 'mainCpuMs', 'sampleWindowMs', 'thresholdMs']);
+      assert.equal(row.fields.lastSync, undefined, 'no trace, no lastSync — that half is unchanged');
     } finally { rig.stop(); }
   });
 });

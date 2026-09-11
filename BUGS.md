@@ -1610,16 +1610,54 @@ Still genuinely open, and NOT the regression: deleting `browserName` outright on
 
 ## BUG-436 — MYTHOS goes quiet mid-conversation: the server event loop freezes 2–9 s with zero CPU, and a Live rotation drops the in-flight tool turn (OPEN, filed 2026-09-10)
 
-**Status:** 🔴 OPEN — the goAway half is coded (PR #88, unmerged). The stall half now has an instrument and no diagnosis: one attended run with `LOOP_LAG_TRACE=true` names the caller, and a second PR fixes what it names.
+**Status:** 🔴 OPEN, in three separate strands — keep them apart, because two of them are done and the one that matters is not.
+
+1. **The goAway half — CODED, and on this branch.** `src/core/voice/goaway-gate.js` is tracked at
+   `3f4082d4`, an ancestor of `verify/live-2026-09-10`. The earlier wording here, "coded (PR #88,
+   unmerged)", was true only of `main`: on the branch this entry documents, the code is present.
+   Still unverified against Gemini live — see the goAway paragraph below.
+2. **The diagnostic instrument — CODED, and corrected 2026-09-11.** `loop-lag-trace.js` names the
+   synchronous call; `loop-lag.js` now also reports `sampleWindowMs` and `mainCpuMs`. The
+   correction matters more than the addition: the row's own numbers had been read wrongly, in this
+   entry, twice. See "What the instrument was saying, and what it actually meant" below.
+3. **The stall REPAIR — NOT STARTED, and nothing here changes that.** No cause has been measured,
+   so no fix exists. One attended run with `LOOP_LAG_TRACE=true` names the caller; a second PR
+   fixes what it names. This ticket stays OPEN for strand 3 alone.
 
 **Mechanism:** 2026-09-11 session read. Four boots (18:18, 19:38, 20:11, 20:46Z) measured
 end to end. **52 `loop.stalled` rows, 450 s of frozen event loop, worst single 31,777 ms,
 1,132 CPU-seconds burned.** The filed premise is now CONTRADICTED and that matters more than
 the count: this ticket says "zero CPU", but **39 of the 52 stalls have `cpuMs` 2–3× `lagMs`**
-(31,777/77,797 · 29,402/59,610 · 26,393/63,859). Compute-bound, not blocked in a syscall. Either
-the cause changed since filing or one symptom hides two mechanisms — and `LOOP_LAG_TRACE`, which
-times synchronous fs/child_process calls, is pointed at the family this profile rules out. It
-would come back empty and that would read as "nothing found".
+(31,777/77,797 · 29,402/59,610 · 26,393/63,859). Either
+the cause changed since filing or one symptom hides two mechanisms.
+
+**CORRECTION 2026-09-11 — the sentence that used to end the paragraph above,
+"Compute-bound, not blocked in a syscall", was WRONG, and the instrument could not have supported
+it.** It is quoted here because it was acted on: it is the reason this entry then argued
+`LOOP_LAG_TRACE` was pointed at a ruled-out family and "would come back empty". Two defects in the
+reading, both now fixed in `src/core/loop-lag.js`:
+
+- **`cpuMs` was never comparable to `lagMs`.** The probe re-arms with `expected = now + period`, so
+  the inter-tick interval is `period + lag`: `cpuMs` accumulates over the WHOLE window while
+  `lagMs` covers only the overdue part. Production passes no `intervalMs` (`src/main.js:154`), so
+  every row was out by a full second, and no field on the row let a reader correct for it. Rows now
+  carry `sampleWindowMs`.
+- **`process.cpuUsage()` is PROCESS-wide.** It counts the libuv threadpool and every native thread,
+  so it says nothing about the event-loop thread. Measured here (node v26.1.0, 8 cpus, 2026-09-11):
+  four concurrent async `crypto.pbkdf2` jobs burned **1922 ms of process CPU over a 496 ms wall
+  window with 16 ms on the main thread**, while one `pbkdf2Sync` of the same work burned 328 ms
+  against 331 ms wall with **328 ms on the main thread**. `cpuMs` is identical in kind for both.
+  Rows now carry `mainCpuMs` (`process.threadCpuUsage`, Node 23+); where the runtime lacks it the
+  key is OMITTED, never zeroed, and one notice per probe instance says so.
+
+**The three worst rows settle it arithmetically, with no rerun needed.** No window can exceed
+`1000 + lagMs`, so those rows were measured over at most 32,777 · 30,402 · 27,393 ms while
+reporting 77,797 · 59,610 · 63,859 ms of CPU. **One thread cannot spend more CPU than its window is
+long**, so in all three the CPU was NOT the event-loop thread — the opposite of "compute-bound".
+`cpuMs > sampleWindowMs` is now the check that says this on sight.
+
+This names no cause, and none is claimed. What it changes is that the synchronous-I/O family is
+back to being a live hypothesis rather than one this ticket had wrongly excluded.
 
 **It is also the parent of four other tickets' symptoms this session, by timestamp:**
 
@@ -1649,11 +1687,13 @@ evidence this is the most expensive open defect in the tracker.**
 
 **Verification:** `test/bug-436-a-stall-names-what-blocked-it.test.js` 9/9, plus `loop-lag`, `config-doc-truth`, `env-example-stall-ms`, `file-size-ratchet` and the real-boot test — 29/29, 0 skipped. Five mutations, each grep-verified applied and restored sha256-identical: dropping `lastSync` from the emit reddens (a); keeping the last overlapping call instead of the largest reddens (b); `DEFAULT_MIN_MS = 0` reddens (d); widening the window back reddens (c); recording only when the call did not throw reddens (f). One earlier attempt at that last mutation only broke the parse, which proves nothing, so it was redone behaviourally — the record now says so.
 
-**NOT verified, and this is the open half:** nothing has been measured with the flag on. A stall from a CPU loop, a native addon, a blocking resolve inside a library, or starvation behind a microtask queue produces a row with NO `lastSync`; that absence rules the synchronous-I/O family out rather than meaning nothing happened. Also still open and untouched here: the tool result arriving after a non-final close needs re-delivery to the next session (the goAway half in PR #88 holds the close, which removes the common case but not the race).
+**NOT verified, and this is the open half:** nothing has been measured with the flag on. A stall from a CPU loop, a native addon, a blocking resolve inside a library, or starvation behind a microtask queue produces a row with NO `lastSync`.
+
+**CORRECTED 2026-09-11 — a missing `lastSync` does NOT rule the synchronous-I/O family out.** That claim stood here and in three other places (`loop-lag.js`, `loop-lag-trace.js`, the runbook's D7) and it is false, because the trace is lossy in two ways it never advertised: it retains a call only if it ran at least `DEFAULT_MIN_MS` (20 ms), and it keeps only the newest `DEFAULT_RING` (32) of those. **Thirty 10 ms `statSync` calls hold the loop for 300 ms and leave the row completely silent** — pinned as test (f) of `test/bug-436-stall-cpu-accounting.test.js`, and the mutation that lowers the floor to 0 reddens exactly that test. Read a missing `lastSync` as precisely "no RETAINED INSTRUMENTED call overlapped this window", and nothing more. Also still open and untouched here: the tool result arriving after a non-final close needs re-delivery to the next session (the goAway hold removes the common case but not the race).
 
 **GoAway half CODED 2026-09-10, and Gate A (measure the premise) reclassified it.** The ticket says the goAway "closed the session while screen_read_text was in flight" and "the tool result had no session to return to". `mythos-server.log` says: `live.tool-call-batch screen_read_text` 09:47:39.110 → `pc-child response screen_read_text ok 836 ms` 09:47:39.948 → own-voice hold 09:47:41.183 (the model was already speaking its answer) → `live.goaway timeLeft:"50s"` 09:47:42.508 → **our own `close('goaway', {final:false})` on the same tick** → `live-tools declared` 09:47:44.485 (reconnected) → silence until the operator spoke at 09:47:59, when the model called `screen_read_text` again. The tool result went back 2.5 s before the goAway. What died was the model's reply turn, killed by us, with 50 s of grace unused. Google's reference (read 2026-09-10): GoAway is "a notice that the server will soon disconnect" and timeLeft "lets you take further action before the connection will be terminated as ABORTED"; resumption handles stay valid two hours after termination. The proposed "re-deliver the tool result" would have re-sent a result that had already arrived.
 
-**The fix:** `src/core/voice/goaway-gate.js` (pure; live-session.js is at its size-ratchet ceiling — 1204 lines exactly after this change). On goAway, if a turn is in flight (the model owes a toolResponse, or has produced audio/text parts this turn) the non-final close is held until turnComplete or until timeLeft minus 2 s, whichever first; with nothing in flight it closes at once, unchanged. Unparseable timeLeft closes at once (old behaviour, never an unbounded hold). Any close() cancels a pending hold so it cannot fire into the replacement session. Same `close(reason, {final:false})` as before, so the reconnect path stays the single `ws.on('close')` branch.
+**The fix:** `src/core/voice/goaway-gate.js` (pure; live-session.js is one line under its size-ratchet ceiling — 1203 against a recorded 1204. This sentence used to say "1204 lines exactly after this change", which was wrong by one and is the exact prose a later session reads to decide whether there is headroom; corrected 2026-09-11 from `wc -l`). On goAway, if a turn is in flight (the model owes a toolResponse, or has produced audio/text parts this turn) the non-final close is held until turnComplete or until timeLeft minus 2 s, whichever first; with nothing in flight it closes at once, unchanged. Unparseable timeLeft closes at once (old behaviour, never an unbounded hold). Any close() cancels a pending hold so it cannot fire into the replacement session. Same `close(reason, {final:false})` as before, so the reconnect path stays the single `ws.on('close')` branch.
 
 **Evidence (`test/bug-436-goaway-waits-for-the-turn.test.js`, 8 tests):** fake-socket replay of toolCall → audio part → goAway holds the socket OPEN and reconnects only at turnComplete; nothing-in-flight goAway still closes immediately (adjacent, pinned); the hold expires on its own; a final close disarms it. Mutation 2026-09-10: restoring the old one-line close fails (1)/(3)/(4) with "socket must still be OPEN after goAway mid-turn (got 3)"; forcing isTurnInFlight to true fails (2) with "a goAway with nothing in flight must close immediately"; both restored sha256-identical. **Not verified against Gemini live:** whether a held connection is in fact serviced for the full timeLeft, and whether the resumed session continues the cut turn, are one attended goAway away — grep `live.goaway deferred:true` followed by `live.goaway-close why:turn-complete` in the server log.
 
