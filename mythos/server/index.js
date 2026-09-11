@@ -4626,6 +4626,8 @@ function createServer(deps) {
 
   function stop() {
     stopBrowserOfflineNotice();
+    // BUG-372: no kokoro worker thread may outlive the server. Called on the PROVIDER MODULE, not through a chain object — routes/tts-voices.js builds replacement chains over the same singleton providers, so a chain-scoped shutdown would terminate a worker another chain still holds. The obvious home is stopRunningLoops() in src/main.js beside edgeTtsChild.stop(), but that file is AT its ratchet ceiling (1373), so this must stay one line.
+    try { const k = require('../providers/kokoro-tts').shutdown(); if (k && k.catch) k.catch(() => {}); } catch (_) { /* optional provider; never block shutdown on it */ }
     return new Promise((resolve) => {
       try {
         for (const client of wss.clients) {

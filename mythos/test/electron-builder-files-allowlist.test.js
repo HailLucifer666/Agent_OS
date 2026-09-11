@@ -229,6 +229,32 @@ test('build.files excludes Hugging Face .cache model copies pulled in via node_m
   });
 });
 
+test('build.files ships the Kokoro WORKER but never the downloaded weights (BUG-372)', () => {
+  const { files } = loadBuildConfig();
+  const filterFn = buildRealFilter(files);
+
+  // The worker is CODE and must ship. Kokoro synthesis moved off the event loop
+  // into it (measured: main-thread CPU 23094ms -> 47ms per utterance, max loop
+  // lag 876ms -> 24ms), so a packaged build without it has no kokoro at all.
+  const worker = path.join(REPO_ROOT, 'mythos', 'providers', 'kokoro', 'worker.js');
+  assert.equal(isIncluded(filterFn, worker), true,
+    'mythos/providers/kokoro/worker.js is code, not data, and the provider cannot run without it');
+
+  // The canonical model dir is a DOWNLOADED CACHE and must never ship, exactly
+  // like the legacy node_modules one above. This is a new path as of 2026-09-11
+  // — the weights used to live only under node_modules, which is why the
+  // exclusion above existed alone. Shipping ~92MB of weights would also change
+  // the licence surface of the installer, which is a separate gate's business.
+  const weights = path.join(
+    REPO_ROOT, 'mythos', 'models', 'kokoro',
+    'onnx-community', 'Kokoro-82M-v1.0-ONNX', 'onnx', 'model_quantized.onnx',
+  );
+  withStandInIfAbsent(weights, () => {
+    assert.equal(isIncluded(filterFn, weights), false,
+      'mythos/models/kokoro is a per-machine download cache; the installer must not carry it');
+  });
+});
+
 test('build.files excludes the operator\'s real vault data', () => {
   const { files } = loadBuildConfig();
   const filterFn = buildRealFilter(files);

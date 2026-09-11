@@ -93,23 +93,41 @@ describe('BUG-372 — doctor reports on the kokoro MODEL, not the kokoro voice i
     }
   });
 
-  test('cached weights clear the gap, found through a HuggingFace-shaped nested cache', () => {
-    // @huggingface/transformers does not write into the cache root — it writes
-    // to <cacheDir>/models--<org>--<repo>/... , so a check that only listed the
-    // top level would report MISSING for a fully downloaded model.
-    const dir = tempDir();
-    try {
-      const nested = path.join(dir, 'models--onnx-community--Kokoro-82M-v1.0-ONNX', 'onnx');
-      fs.mkdirSync(nested, { recursive: true });
-      fs.writeFileSync(path.join(nested, 'model_q8f16.onnx'), 'not real weights, but a real .onnx');
-      const row = withEnv(
-        { VOICE_TTS_CHAIN: 'gemini,kokoro,edge,piper', KOKORO_MODEL_DIR: dir },
-        kokoroRow,
-      );
-      assert.equal(row.ok, true, 'weights nested the way HuggingFace nests them must count as present');
-      assert.match(row.detail, /cached in/);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+  test('cached weights clear the gap, in BOTH nested layouts', () => {
+    // @huggingface/transformers does not write into the cache root, so a check
+    // that only listed the top level would report MISSING for a fully
+    // downloaded model. TWO shapes are pinned, deliberately:
+    //
+    //   <cacheDir>/<org>/<repo>/onnx/…            <-- what transformers 3.8.1
+    //                                                 ACTUALLY writes, verified
+    //                                                 on disk 2026-09-11
+    //   <cacheDir>/models--<org>--<repo>/onnx/…   <-- the Hugging Face hub shape
+    //
+    // This test used to assert ONLY the second and to state in a comment that it
+    // was what transformers writes. That was factually wrong (corrected
+    // 2026-09-11): the real on-disk layout under the version in use is the
+    // first, so the walk was passing for the wrong reason — it is depth-limited
+    // rather than shape-aware, and either layout happens to fall inside it.
+    // Both are kept so the depth stays pinned no matter which shape appears.
+    for (const shape of ['onnx-community/Kokoro-82M-v1.0-ONNX', 'models--onnx-community--Kokoro-82M-v1.0-ONNX']) {
+      const dir = tempDir();
+      try {
+        const nested = path.join(dir, ...shape.split('/'), 'onnx');
+        fs.mkdirSync(nested, { recursive: true });
+        fs.writeFileSync(path.join(nested, 'model_q8f16.onnx'), 'not real weights, but a real .onnx');
+        const row = withEnv(
+          { VOICE_TTS_CHAIN: 'gemini,kokoro,edge,piper', KOKORO_MODEL_DIR: dir },
+          kokoroRow,
+        );
+        assert.equal(row.ok, true, 'weights under "' + shape + '" must count as present');
+        assert.match(row.detail, /weights present in/);
+        // BUG-372's whole history is this row reporting one thing and being read
+        // as another, so the row must say which of the three claims it is making.
+        assert.match(row.detail, /asset presence only/,
+          'the row measures ASSET PRESENCE — not that the model loads, and not that it speaks');
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 

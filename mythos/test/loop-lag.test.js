@@ -51,8 +51,21 @@ test('a blocked loop is reported with both lagMs and cpuMs', async () => {
     'the window is period + lag, so it can never be shorter than the lag it contains');
   assert.equal(typeof p.mainCpuMs, 'number',
     'this runtime has process.threadCpuUsage, so the row must say how much of the window was THIS thread');
-  assert.ok(p.mainCpuMs <= p.sampleWindowMs + 2,
-    'one thread cannot spend more CPU than the window is long (2 ms of rounding slack)');
+  // MEASURED 2026-09-11, after this assertion failed under load with 2 ms of
+  // slack. process.threadCpuUsage() on Windows accounts in SCHEDULER QUANTA, not
+  // continuously: over 400 one-millisecond spins the only non-zero deltas it
+  // ever returned were 15 ms and 16 ms. So a 5 ms spin reports 0 ms of CPU and a
+  // 40 ms spin reports 47 ms — 6.97 ms MORE than the wall time it took.
+  //
+  // This test drives the probe at intervalMs 20, which is barely longer than one
+  // quantum, so the over-report is proportionally huge here. One quantum of
+  // slack is the honest bound; anything tighter is asserting a precision the OS
+  // does not provide. See loop-lag.js's "HOW TO READ A ROW" for why this does
+  // NOT weaken the cpuMs > sampleWindowMs check at the production cadence.
+  const CPU_ACCOUNTING_QUANTUM_MS = 16;
+  assert.ok(p.mainCpuMs <= p.sampleWindowMs + CPU_ACCOUNTING_QUANTUM_MS,
+    `one thread cannot spend more CPU than the window is long, within the OS accounting quantum `
+    + `(mainCpuMs ${p.mainCpuMs} vs sampleWindowMs ${p.sampleWindowMs})`);
   assert.ok(probe.worstLagMs() >= 50, 'the worst lag is retained for a caller that wants to report once');
 });
 

@@ -62,6 +62,21 @@
 //     30,402 and 27,393 ms — so the ticket's "Compute-bound, not blocked in a
 //     syscall" was an inference the instrument could not support.
 //
+//     THE BOUND ON THAT INEQUALITY, measured 2026-09-11 rather than assumed.
+//     process.threadCpuUsage() accounts in SCHEDULER QUANTA on Windows, not
+//     continuously: over 400 one-millisecond spins the only non-zero deltas it
+//     returned were 15 ms and 16 ms. A 5 ms spin reports 0 ms; a 40 ms spin
+//     reports 47 ms, i.e. 6.97 ms MORE than the wall time it took. So both
+//     mainCpuMs and cpuMs carry up to about one quantum of error in either
+//     direction.
+//
+//     At the production cadence this changes nothing: a 16 ms quantum against a
+//     1000 ms+ window is under 2% noise, and the three rows above exceed their
+//     windows by 137%, 96% and 133%. But do NOT apply the inequality to a SHORT
+//     window — at the 20 ms cadence the tests use, a single quantum is most of
+//     the window, and a tiny mainCpuMs there is not evidence of an idle thread
+//     either. Judge these numbers over seconds, not milliseconds.
+//
 // DO NOT CLASSIFY THE BLOCKING OPERATION FROM A RATIO. The row reports; the
 // reader judges. Naming a cause from a number that was never measured is how
 // this repo mis-diagnosed voice twice, and a ratio is a number that was never

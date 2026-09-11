@@ -312,6 +312,8 @@ function assetChecks() {
   const kokoroDir = kokoro.modelCacheDir();
   const kokoroInChain = ttsChain().includes('kokoro');
   const kokoroModelPresent = treeHasOnnx(kokoroDir);
+  // DERIVED by the same helper the LOADER uses, never recomputed here: a doctor row that forms its own opinion about where an asset lives is BUG-360 with a different noun, and this row has already been that bug once.
+  const kokoroLegacyDir = require('../providers/kokoro/paths').legacyCacheDirs(process.env).find((d) => treeHasOnnx(d)) || null;
 
   return [
     {
@@ -369,12 +371,26 @@ function assetChecks() {
       label: 'Kokoro model (TTS chain rung)',
       required: false,
       ok: !kokoroInChain || kokoroModelPresent,
+      // BUG-372 (2026-09-11): this row measures ASSET PRESENCE. It does not
+      // prove the model LOADS and it does not prove it SPEAKS — three different
+      // claims, and the whole history of this ticket is this row reporting the
+      // first and being read as the third. The detail string now says so itself
+      // rather than leaving a reader to infer it. `scripts/verify-kokoro-offline.js`
+      // is what proves the other two.
       detail: !kokoroInChain
         ? 'not in VOICE_TTS_CHAIN — nothing to install'
         : (kokoroModelPresent
-          ? 'cached in ' + kokoroDir
-          : 'no .onnx weights under ' + kokoroDir + ' — the first fallback to kokoro '
-            + 'will spend up to ' + kokoro.LOAD_TIMEOUT_MS + 'ms downloading before falling through to edge'),
+          ? 'weights present in ' + kokoroDir + ' (asset presence only — not proof the model loads or speaks; '
+            + 'run scripts/verify-kokoro-offline.js for that)'
+          : (kokoroLegacyDir
+            // Do NOT claim a download is needed when the weights are simply
+            // somewhere else. Until 2026-09-11 they always were: the loader read
+            // a nested node_modules cache this row never looked at, so this row
+            // predicted an ~80MB fetch for a model that was fully downloaded.
+            ? 'no weights under ' + kokoroDir + ' YET, but a legacy cache exists at ' + kokoroLegacyDir
+              + ' — the first load migrates it in place; nothing will be downloaded'
+            : 'no .onnx weights under ' + kokoroDir + ' and no legacy cache to migrate — the first fallback to kokoro '
+              + 'will spend up to ' + kokoro.LOAD_TIMEOUT_MS + 'ms downloading before falling through to edge')),
       why: 'kokoro is a member of VOICE_TTS_CHAIN, so its absence is paid for at '
         + 'runtime rather than reported here',
       // Both options are real, and neither loops. The adb hint's failure was
