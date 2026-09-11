@@ -311,6 +311,31 @@ describe('BUG-372 — the worker supervisor', () => {
   }
   const loadOk = (msg) => (msg.op === 'load' ? { id: msg.id, gen: msg.gen, ok: true, result: { cacheDir: 'x', voices: 28 } } : null);
 
+  // FOUND 2026-09-11 by walking into it while writing
+  // scripts/verify-packaged-kokoro.js. Both deadlines are `now() + timeout`, so
+  // an omitted timeout is NaN — and setTimeout does not reject NaN, it clamps to
+  // 1 ms and fires immediately. The caller was then told "kokoro load timed out",
+  // which reads as a broken worker or a slow disk, when the real fault was a
+  // missing constructor argument. That is the repo's "fallback that makes broken
+  // config look healthy" shape, one layer down.
+  //
+  // Pinned as a THROW rather than a default on purpose: a default would let a
+  // caller that failed to thread the operator's KOKORO_LOAD_TIMEOUT_MS through
+  // look perfectly healthy while silently ignoring it.
+  test('constructing the client without timeouts fails loudly, not as a 1ms timeout', () => {
+    assert.throws(() => createKokoroClient({}), /initTimeoutMs must be a positive finite number/,
+      'an absent initTimeoutMs becomes a NaN deadline; setTimeout clamps that to 1ms and reports a timeout');
+    assert.throws(() => createKokoroClient({ initTimeoutMs: 5000 }), /synthTimeoutMs must be a positive finite number/,
+      'the second deadline needs the same guard — synthesis would report a spurious timeout instead');
+    assert.throws(() => createKokoroClient({ initTimeoutMs: 5000, synthTimeoutMs: Number.NaN }), /synthTimeoutMs/,
+      'an explicit NaN is the exact value the old code produced, so it must be rejected too');
+    assert.throws(() => createKokoroClient({ initTimeoutMs: 0, synthTimeoutMs: 5000 }), /initTimeoutMs/,
+      'zero is not a usable deadline either — it fires before the worker can spawn');
+    // THE ADJACENT CASE THAT MUST KEEP PASSING: a correctly-constructed client
+    // is unaffected, so the guard cannot be the reason the provider stops working.
+    assert.doesNotThrow(() => clientWith(loadOk).c, 'valid timeouts must still construct');
+  });
+
   test('requiring the provider creates NO worker', () => {
     delete require.cache[require.resolve('../providers/kokoro-tts')];
     const provider = require('../providers/kokoro-tts');

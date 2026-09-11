@@ -20,6 +20,26 @@ function createKokoroClient({
   now = Date.now,
   spawn = (file) => new Worker(file),
 } = {}) {
+  // Both deadlines are computed as `now() + <timeout>`. Omit one and that is
+  // NaN, which setTimeout does not reject — it clamps to 1 ms and fires
+  // immediately, so the caller is told "kokoro load timed out" when the real
+  // fault is a missing argument. Found by walking into it while writing
+  // scripts/verify-packaged-kokoro.js: `createKokoroClient({})` reported a load
+  // timeout in 1 ms and looked exactly like a broken worker.
+  //
+  // Deliberately a THROW and not a default. A default would make a caller that
+  // forgot to thread the operator's KOKORO_LOAD_TIMEOUT_MS through look healthy
+  // while silently ignoring it — the shape this repo calls "a fallback that
+  // makes broken config look healthy". The facade always supplies both from
+  // resolveTimeouts(), so nothing in the product reaches this line; it exists so
+  // the next caller fails loudly at construction instead of confusingly at 1 ms.
+  for (const [label, value] of [['initTimeoutMs', initTimeoutMs], ['synthTimeoutMs', synthTimeoutMs]]) {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new TypeError(`createKokoroClient: ${label} must be a positive finite number, got ${String(value)}. `
+        + 'Pass both from providers/kokoro/timeouts.js resolveTimeouts(); an absent one becomes a NaN deadline, '
+        + 'which setTimeout clamps to 1ms and reports as a timeout.');
+    }
+  }
   let worker = null;
   let gen = 0;
   let nextId = 1;
