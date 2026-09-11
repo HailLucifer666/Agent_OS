@@ -69,6 +69,8 @@ History of that split is in the roadmap.
   BUG-421 still lacks reveal margin; BUG-422 needs a diagnosed child failure;
   BUG-432 notice collisions need measured scheduling work. BUG-428 is coded,
   with its acoustic proof still owed under BUG-406.
+- **Browser: unlock, do not adopt (2026-09-11).** `browser-use/browsercode` rejected; we
+  already own its primitive as `browser_evaluate`, unallowlisted. `ADOPTION-MATRIX.md` §12.
 - Phase B of the subtraction plan: one tool-definition object in
   `effectors/hub.js` carrying `tier` and `schema`, so leash, live-tools and the
   capability map read one source. Separate session, after review.

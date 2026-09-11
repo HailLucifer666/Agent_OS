@@ -133,6 +133,72 @@ contradict what a reasonable reading of the repos would predict.
 rungs. They are unreachable from this operator's network, not broken, and other clones
 will reach them.
 
+## 12. Browser automation & browser agents
+
+Appended 2026-09-11 from an operator question ("found this repo, does it help?"), not from a
+trending sweep. Same discipline as section 11: every claim below is measured from **this**
+checkout, and the headline finding is about our own code, not about any of the candidates.
+
+**THE FINDING, BEFORE THE TABLE.** BrowserCode's central primitive is `browser_execute(code)` —
+the model writes JavaScript and CDP runs it in the page. **MYTHOS already has that tool.** It is
+`browser_evaluate` at `mythos/src/core/effectors/from-browser.js:779`, it is `danger: true`, and
+it is **NOT in `DEFAULT_ALLOWLIST`**, so the Live voice model cannot call it. Verified:
+
+```
+$ node -e "const {DEFAULT_ALLOWLIST}=require('./src/core/voice/live-tools'); \
+           console.log(DEFAULT_ALLOWLIST.includes('browser_evaluate'))"
+false
+```
+
+19 of the 21 `browser_*` tools are allowlisted; the escape hatch is the one that is not. On
+2026-09-11 `browser_click` failed on a YouTube result ("it never became visible within 8000 ms
+and was not in the DOM to click from page script either") and the model escalated through
+**eleven** tools — snapshot, click, think_deeply, see_and_click, screen_read_text, click_at,
+list_windows, three `cua_*`, then `open_web` x4 — and played nothing. The one tool that could
+have written a scroll-and-click was locked. **Adopting an external agent to get a capability we
+already built and disabled is the most expensive possible way to fix this.**
+
+**And it fixes one failure out of four.** Of the browser-path defects measured that night:
+
+| Defect | Would an LLM-writes-JS agent fix it? |
+|---|---|
+| `browser_click` cannot reach a lazy/virtualised YouTube result | **Yes** — hand-written JS can scroll, poll, and click the real node |
+| BUG-438 `open_web` opened S2 EP2 when asked for S2 EP6 | No. Search-resolver bug; no browser involved |
+| BUG-436 event loop frozen 450 s / 52 stalls / 1,132 CPU-seconds | No — **worse**; more LLM round trips on a starved loop |
+| BUG-431 shape: `browser-agent disconnected unexpectedly` mid-task | No. CDP transport, not tooling |
+
+| Status | Repo | Link | What to take | Lands in | Notes |
+|---|---|---|---|---|---|
+| ❌ **reject — DECIDED 2026-09-11** | `browser-use/browsercode` | https://github.com/browser-use/browsercode | The `browser_execute(code)` **pattern** only — never the program | Nothing. The pattern lands as an unlock of our own `browser_evaluate` | A fork of **OpenCode**, i.e. an entire second coding agent with its own TUI, LLM key and token budget, sitting beside MYTHOS. Installs by `curl -fsSL https://bcode.sh/install \| bash` — **forbidden by the root `CLAUDE.md`**, same clause that rejected prime-agent. Anonymous telemetry ON by default (`DO_NOT_TRACK=1` to opt out). Wants `BROWSER_USE_API_KEY` for its cloud browsers (free but max 3 concurrent). Claims "outperforms every browser agent we have tested it against" with no published numbers. Reject on cost and install path, not on quality |
+| ❌ reject — parallel stack | `browser-use/browser-harness-js` | https://github.com/browser-use/browser-harness-js | 652 typed CDP wrappers over one persistent WebSocket, 56 domains, regenerated from upstream protocol JSON | Would have to replace `playwright-core` in `adapters/browser-agent/` | MIT, npm, attaches to an existing Chrome on `--remote-debugging-port` — architecturally the same shape we already run. Deliberately has **no** `click()`/`goto()` helpers; the agent calls raw CDP. Adopting it alongside playwright-core is two CDP stacks for one browser, and it carries none of the agent smarts that make the demo look good. Revisit only if playwright-core itself becomes the blocker |
+| ⚪ watch | `browser-use/browser-use-pi` | https://github.com/browser-use/browser-use-pi | Tiny TS web agent — sessions, saved logins, streaming, typed results | — | Same authors' third attempt, hill-climbed on real browser evals. Small enough to read. Watch, do not adopt |
+| ✅ already vendored | `browser-use/browser-use` | https://github.com/browser-use/browser-use | — | MCP stdio server, `THIRD_PARTY_NOTICES.md:414` | Already here. Free tiers cannot carry it (Gemini 20 req/day/model; ~3 tasks/day). A third browser stack on top of this one is duplication |
+
+**THE DECISION, and what it costs.** Take the idea, leave the repo. Unlock `browser_evaluate` for
+the spoken path. Zero new dependencies, zero new keys, zero new install paths.
+
+> **DECISION THE OPERATOR MUST MAKE FIRST.** `browser_evaluate` is `eval()` of arbitrary
+> JavaScript in a browser attached to the debug port. Today that browser can be the operator's
+> **signed-in** profile, so allowlisting it to voice means a mis-heard sentence can run script
+> against live logged-in sessions. Three options:
+> - **(a)** allowlist unconditionally — accept the blast radius;
+> - **(b)** allowlist only while the debug browser is on the isolated fresh profile, refuse on an
+>   attached signed-in one — *recommended*, buys the capability without exposing the sessions;
+> - **(c)** leave it locked and fix `browser_click`'s visibility wait instead — cheapest, and it
+>   does not generalise to the next site that defeats a selector.
+
+**Work owed if (b) is chosen** — none of it is started, and none of it is a one-liner:
+1. Add `browser_evaluate` to `DEFAULT_ALLOWLIST` **behind a profile check**, refusing with a named
+   remedy when the attached browser is the signed-in one (the `refusal-is-actionable` contract).
+2. Fix the return shape. Today it is `String(value)` only, so `await`-ing anything returns
+   `[object Promise]` and the model is writing async page code blind. BrowserCode returns value +
+   console logs + screenshot; that is the actual delta worth copying.
+3. A regression test with a mutation run, per the house rule, including the negative control: a
+   signed-in profile must refuse.
+4. `from-browser.js` is **at its 1610-line size-ratchet ceiling** — this lands by extraction, not
+   by raising the number.
+5. One attended spoken run, and a `golden-path.js` line before and after.
+
 ---
 
 ## Recommended sequence
