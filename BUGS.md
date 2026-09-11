@@ -591,7 +591,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-405 | verified | blocked | Every pid-bearing failed PC command passes shared stale-target recovery; non-pid and non-stale failures avoid extra lookup. Consumers: from-pc delegate, focus/close/ui_elements and other pid tools. Regression oracle: Full helper/consumer tests read; browser family117pass includes recovery. Remaining evidence: Actual stale native pid followed by current live window list. | mythos/src/core/effectors/window-recovery.js |
 | BUG-422 | open | blocked | [EVIDENCE FIRST: run the instrumented build until the next child death] Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original "the supervisor did not log it" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
 | BUG-429 | fixed | blocked | Unknown settings are announced through repeat backoff and listed by doctor. Voice kill switch and known-key non-change tested; browser-use stays parked. | mythos/scripts/doctor.js |
-| BUG-432 | open | blocked | [CODED 2026-09-10 behind VOICE_SERIALIZE_NOTICES, default off; the measured pass is what remains] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. Timing changes await a measured pass. | mythos/src/core/voice/live-session.js |
+| BUG-432 | open | blocked | [CODED 2026-09-10 behind VOICE_SERIALIZE_NOTICES, default off; rotation half CODED 2026-09-11; the measured pass is what remains] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. A held notice was then DESTROYED by two rotation paths — an unsolicited drop never called close() so the ceiling fired into a dead socket, and a deferred goAway released into a socket it had just nulled — with release() shifting before sending so a refusal could not retain the item. Now an explicit READY/SUSPENDED state plus a socket generation, peek-before-send, and per-item deadlines preserved across a rotation. Consumers: live-session setState/flushPendingAudio/turnComplete and sendSystemNotice's delivered check. Regression oracle: bug-432-notices-survive-a-rotation.test.js — 14 tests, 10 mutations each reddening a named test, one of which survived first time and produced test (n). Remaining evidence: FakeSocket only; the real ws library closes asynchronously, no attended rotation observed, and the flag stays OFF until the measured pass. | mythos/src/core/voice/notice-queue.js; mythos/src/core/voice/live-session.js |
 | BUG-433 | coded | blocked | [CODED 2026-09-10; one cold boot with the speaker on remains] The boot greeting is injected into a Live session the HUD only subscribes to after the bridge starts, so the packaged app starts silent until the first wake word. Diagnosed from two boots; the proposed fix gates liveForSpeech on a client-started bridge. | mythos/server/index.js |
 | BUG-434 | coded | blocked | [CODED 2026-09-10; live verification pending] A successful ui_type was retracted because "I sent the text to that box" matched the sending claim category, which has no typing tool among its backers. Fixed with backingTools on that category, gated so the elliptical tier keeps its counter-evidence. | mythos/src/core/voice/claim-check.js |
 | BUG-435 | coded | blocked | [CODED 2026-09-10, REGRESSED the same day, REPAIRED 2026-09-11; one attended run pending] The 2026-09-10 guard opened NO page for a named browser (18:21Z), worse than the two windows it fixed: the descriptions still taught the refused call, the refusal named no tool in its message, and its remedy was a step already done. Repaired with a state-derived remedy, tools named in the prose, a coupling test on the descriptions, test/refusal-is-actionable.test.js and a named-browser turn in golden-path.js. One real-browser route per turn: the adapter refuses the second of open_web browser:true vs browser_launch_debug/browser_switch/browser_navigate and tells the model what already opened. The named-browser question is now DECIDED (operator, 2026-09-10): a named browser is the debug browser, so open_web browser:true with a browserName is refused before dispatch and answered with structured remedy() calls to browser_launch_debug then browser_navigate. Unnamed open_web browser:true still reaches the default browser (Stage 1 golden path). The route memory was also fixed: it recorded every call the adapter SAW, so a denied or refused open_web poisoned the turn. 16 tests, mutation-proven. Attended voice unverified. | mythos/src/core/voice/browser-route-guard.js |
@@ -1478,7 +1478,89 @@ So one of these is true, and this ticket is not closed until it is known which:
 
 **MEASURED PASS REQUIRED BEFORE THE FLAG GOES ON, and this is what keeps the ticket open:** replay the 2026-09-09 log's 35 interruptions through the `inFlight` decision and count how many would have been held, then one attended session with the flag on comparing `live.interrupted` counts and checking `live.notice-held` / `live.notice-undelivered`. Two operator decisions belong to that pass: the ceiling value, and whether the `ad4-correction-*` family should bypass the queue the way operator text does.
 
-**Attribution:** diagnoses come from the 2026-09-09 filing session and the 2026-09-10 replay.
+**2026-09-11 — HOLDING A NOTICE WAS NOT THE SAME AS KEEPING IT. Two paths destroyed the held
+notice silently; both are now closed.** The first half of this ticket (serialise, one per turn)
+worked, and a CLEAN rotation was already fine — probe: notice held, socket dropped, replacement up,
+one `turnComplete`, notice delivered on the new socket. The defect was narrower and nastier.
+
+- **An unsolicited drop never calls `close()`.** `live-session.js`'s `ws.on('close')` goes straight
+  to `setState('reconnecting')` + `reconnect()`, and `close()` was where `cancel()` lived. So on the
+  MOST COMMON rotation trigger the queue was never told the transport had gone: its ceiling timer
+  stayed armed, fired mid-rotation, and `release()` sent into a CONNECTING socket. Probe with
+  `LIVE_NOTICE_HOLD_MAX_MS=25`: `live.text-injected {site:'b'}` written, `live.notice-undelivered
+  {reason:'hold-expired'}` immediately after, and the replacement socket's text wire EMPTY both at
+  once and after a full completed turn.
+- **A deferred goAway released into a socket it had just nulled.** `goAwayGate.turnComplete()` calls
+  `close('goaway',{final:false})`, which nulls `ws`; `release()` then ran in the SAME synchronous
+  frame handler. Probe: two sockets, both wires empty, one injection record, one undelivered record.
+  With the real `ws` library this is worse rather than better — `ws.close()` is asynchronous, so
+  `ws` stays null instead of becoming a CONNECTING replacement.
+
+In both, `release()` had `shift()`ed the item BEFORE calling `send`, so a refusal could not retain
+it. **The notice was gone, and the one log line this ticket's whole measurement is read from said it
+had been injected.**
+
+**The fix is a state machine, not another check.** `notice-queue.js` gains explicit READY/SUSPENDED
+plus a socket GENERATION. `setState` is the single choke point — ANY departure from `'open'`
+suspends delivery, which covers the unsolicited drop, the ws error path and the failed initial open,
+none of which call `close()`. Readiness is restored ONLY after the REPLACEMENT's `setupComplete` and
+after the operator's buffered audio is on the wire. `release()` now PEEKS and removes only after a
+send is locally accepted; a refusal RETAINS the item and suspends, with no re-arm, so there is no
+retry loop against a dead socket. Every held item carries its OWN `deadlineAt`, fixed at enqueue and
+preserved across a rotation — the old code armed one flat `holdMaxMs` and re-armed a full one after
+each release, so three notices held together came out at ~15 s, ~30 s and ~45 s. All seven
+`live-session.js` edits are folded onto existing lines: **1202 lines against the 1204 ceiling**, one
+line FREED rather than spent.
+
+**The phantom, which was not cosmetic.** `sendNoticeFrame` set `turnSystemInitiated` and wrote
+`live.text-injected` BEFORE the send, and restored neither on refusal. Probe, flag ON vs OFF on the
+same frames: ON gave turn parts `[{1,false},{2,true}]` and anomaly
+`live-turn-no-user-transcript#1`; OFF gave `[{1,true},{2,false}]` and `#2`. **The phantom moved the
+half-blind-transcript suppression onto the replacement session's first real turn** — suppressing the
+check exactly where it was most needed. The flag is now captured and restored to its PRIOR value
+(not forced false — a genuinely in-flight system turn may already have set it), and the log moved
+AFTER the send carrying `accepted`.
+
+**WHAT IS DELIBERATELY LOST.** "Sent" means a JSON frame was handed to an OPEN socket without a
+synchronous throw. It does NOT mean Gemini received it and does not mean the operator heard it: the
+Live wire protocol has no per-frame acknowledgement, so there is nothing to wait for. After an
+AMBIGUOUS disconnect — accepted locally by a socket that then died — the notice is **NOT replayed**.
+Replaying risks the operator hearing the same correction twice, and a queue whose purpose is to stop
+notices stepping on each other must not become the thing that duplicates them. That loss is by
+choice, and it is silent.
+
+**Two constants are new and both are decisions, not defaults.** `MIN_RELEASE_GAP_MS` (1000) stops an
+expired backlog draining in one callback — with per-item deadlines three notices enqueued together
+expire together, and a zero-length timer would fire three sends back-to-back, recreating this exact
+defect one tick later. `POST_RESUME_GRACE_MS` (2000) means `resume()` never releases synchronously:
+the turn provoked by the just-flushed operator audio gets first refusal, and an already-expired
+notice still gets out if no turn arrives.
+
+**Evidence (`test/bug-432-notices-survive-a-rotation.test.js`, 14 tests).** Ten mutations, each
+confirmed on disk, `node --check`ed, run under `--test-reporter=tap`, restored sha256-identical:
+removing the setState hook reddens (a); shifting before sending reddens (d)(f); a flat re-armed
+ceiling reddens (e)(f)(g); dropping the gap floor reddens (f)(g); releasing from `resume()` reddens
+(e)(g)(h)(l); dropping the generation check reddens (h); copying instead of draining on a final
+cancel reddens (i); not restoring the phantom flag reddens (m); logging before the send reddens (m);
+`offer()` ignoring suspension reddens (n).
+
+**A mutation SURVIVED, and the fix was to the test.** `offer()` ignoring suspension left everything
+green, because test (k) built its queue with `inFlight: () => true` — the notice was held for the
+OTHER reason and nothing could tell the two conditions apart. Test (n) supplies the distinguishing
+case: model idle, transport down. Worth recording separately: removing the `setState` hook reddens
+test (a) ONLY, because (a) is the one test that shortens the ceiling to 25 ms and so is the only one
+where the un-suspended timer gets to fire during the rotation. One test carries that guard.
+
+**STILL NOT VERIFIED, and the flag stays OFF.** Every test here drives a FakeSocket. The real `ws`
+library closes asynchronously, so live ordering differs, and nothing here is evidence that a real
+Gemini rotation behaves this way. The measured pass below is unchanged and still gates the flag.
+Adjacent set re-run by name: the pure-queue tests, the three `bug-273-d3` source-shape counts,
+`live-session-rotation`, `live-session`, `live-session-transcripts`, `live-session-language-pin`,
+`bug-436-goaway-waits-for-the-turn`, both size guards, `unified-live-voice`, `env-example-stall-ms`
+and `config-doc-truth` — 105 tests, 0 failures.
+
+**Attribution:** diagnoses come from the 2026-09-09 filing session and the 2026-09-10 replay; the
+rotation half from the 2026-09-11 probe read.
 
 **Measured again 2026-09-10 on the 0.1.12 boots:** the boot greeting's own Live turn was interrupted on 2 of 2 boots by the next system injection — at 00:10:12 a self-heal notice landed 1.05 s after the greeting and killed it with 0 audio parts produced; at 09:20:45 the Gmail and provider notices landed after the 20 s `speech.lock-ceiling` and cut the greeting at 53 audio parts. The greeting is inaudible for a second reason too (BUG-433), but this class alone would have silenced the 00:10 boot.
 

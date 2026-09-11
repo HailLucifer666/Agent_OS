@@ -236,7 +236,7 @@ function createLiveSession(deps) {
   let idleTimer = null, maxTimer = null;
   let turnStallTimer = null;     // BUG-131, see TURN_STALL_MS
   let userText = '', assistantText = '';
-  let closedByUs = false;
+  let closedByUs = false; let socketGeneration = 0; let lastFlushedFrames = 0; // BUG-432: generation scopes a release to the socket that earned it; lastFlushedFrames tells resume() whether the operator's buffered speech already owns the floor.
   let idleRotationsWithoutSpeech = 0;
   // Audio captured while the socket is down between rotations — see sendAudio.
   // 512KB of base64 is roughly 12 seconds of 16kHz mono PCM16, comfortably more
@@ -371,7 +371,7 @@ function createLiveSession(deps) {
 
   function setState(next, reason) {
     if (state === next) return;
-    state = next;
+    state = next; if (noticeQueue && next !== 'open') noticeQueue.suspend(next); // BUG-432: ANY departure from open suspends delivery. close() is not the choke point -- an unsolicited drop never calls it.
     if (onState) onState({ state, reason: reason || null });
     if (bus && typeof bus.emit === 'function') bus.emit('voice.live.state', { state, reason: reason || null });
   }
@@ -566,7 +566,7 @@ function createLiveSession(deps) {
     closedByUs = false;
     return new Promise((resolve) => {
       let settled = false;
-      try { ws = openSocket(`${WS_URL}?key=${key}`); }
+      try { socketGeneration += 1; ws = openSocket(`${WS_URL}?key=${key}`); }
       catch (err) { setState('closed', err.message); return resolve(false); }
 
       ws.on('open', () => sendRaw({ setup: buildSetup() }));
@@ -590,7 +590,7 @@ function createLiveSession(deps) {
           if (maxTimer.unref) maxTimer.unref();
           // After setState('open'), so the frames go out on the live socket
           // rather than back into the buffer they came from.
-          flushPendingAudio();
+          flushPendingAudio(); if (noticeQueue) noticeQueue.resume({ generation: socketGeneration, audioFlushed: lastFlushedFrames > 0 }); // BUG-432
           resolve(true);
         }
         handleFrame(msg);
@@ -914,7 +914,7 @@ function createLiveSession(deps) {
         }
         // Consumed: the next turn is operator-initiated until sendText says otherwise.
         // BUG-432: and one held notice goes now — AFTER the flag is cleared, or inFlight would still be true and the queue would hold it again.
-        turnSystemInitiated = false; if (noticeQueue) noticeQueue.release();
+        turnSystemInitiated = false; if (noticeQueue) noticeQueue.release({ generation: socketGeneration });
         if (wasSilent) {
           logger.warn('live.turn-silent', { turnId: turnCounter, chars: shownText.length });
           if (bus && typeof bus.emit === 'function') {
@@ -1010,12 +1010,12 @@ function createLiveSession(deps) {
   // Called once the reconnected session reports setupComplete. Order is
   // preserved: these frames are the operator's speech and arrived in this order.
   function flushPendingAudio() {
-    if (!pendingAudio.length && !pendingAudioDropped) return;
+    if (!pendingAudio.length && !pendingAudioDropped) { lastFlushedFrames = 0; return; }
     const frames = pendingAudio;
     const dropped = pendingAudioDropped;
     pendingAudio = [];
     pendingAudioBytes = 0;
-    pendingAudioDropped = 0;
+    pendingAudioDropped = 0; lastFlushedFrames = frames.length;
     for (const frame of frames) {
       turnAudioIn += 1;
       if (!sendRaw({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: frame } } })) break;
@@ -1129,17 +1129,16 @@ function createLiveSession(deps) {
   // Q2: the text itself is NOT logged. These strings carry tool results, message
   // bodies and whatever the operator typed. A site and a length attribute a turn;
   // the content already lives in the audit vault under its own rules.
-  // The frame itself: everything that must happen AT the moment a text frame reaches the wire, so a queued notice carries the same effects as an immediate one and live.text-injected still timestamps "spoken now".
+  // The frame itself: everything that must happen AT the moment a text frame reaches the wire, so a queued notice carries the same effects as an immediate one and live.text-injected still timestamps "spoken now". Folded hard on purpose — this file sits at its ratchet ceiling, which is the same constraint that folded BUG-432's original wiring.
   function sendNoticeFrame(text, meta) {
     const m = meta || {};
-    const fromOperator = m.operator === true;
-    // Mark the turn this provokes as ours, so the half-blind transcript check
-    // does not accuse the operator of having spoken unheard (see
-    // turnSystemInitiated's declaration). Set before the send, not after: the
-    // reply can begin arriving synchronously on a fake socket in tests.
+    // turnSystemInitiated marks the turn this provokes as ours, so the half-blind transcript check does not accuse the operator of speaking unheard. Set BEFORE the send (a reply can arrive synchronously on a fake socket) and RESTORED to its PRIOR value on refusal — a frame the socket rejected started no turn. Restored rather than forced false because a genuinely in-flight system turn may already have set it. BUG-432 measured that phantom moving the half-blind check onto the replacement session's first real turn.
+    // The log moved to AFTER sendRaw and carries `accepted`: it used to be written first, so every refused frame was recorded as injected — in the very field BUG-432's own measurement is counted from.
+    const fromOperator = m.operator === true; const prior = turnSystemInitiated;
     if (!fromOperator) turnSystemInitiated = true;
-    logger.info('live.text-injected', injectionFields(m, text, turnCounter));
-    return sendRaw({ realtimeInput: { text: String(text) } });
+    const ok = sendRaw({ realtimeInput: { text: String(text) } }); if (ok === false && !fromOperator) turnSystemInitiated = prior;
+    logger.info('live.text-injected', injectionFields(m, text, turnCounter, ok !== false));
+    return ok;
   }
   // One door, still one door (BUG-273 D3). Returns 'sent' | 'queued' | false with the queue on, the old boolean with it off: three outcomes, three values, so sendSystemNotice can tell "held until this turn ends" from "the socket refused it".
   function sendText(text, meta) { if (state !== 'open') return false; return noticeQueue ? noticeQueue.offer(text, meta) : sendNoticeFrame(text, meta); }

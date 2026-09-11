@@ -5686,8 +5686,8 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-10 behind VOICE_SERIALIZE_NOTICES, default off; the measured pass is what remains] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. Timing changes await a measured pass.",
-          "source": "mythos/src/core/voice/live-session.js"
+          "evidence": "[CODED 2026-09-10 behind VOICE_SERIALIZE_NOTICES, default off; rotation half CODED 2026-09-11; the measured pass is what remains] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. A held notice was then DESTROYED by two rotation paths — an unsolicited drop never called close() so the ceiling fired into a dead socket, and a deferred goAway released into a socket it had just nulled — with release() shifting before sending so a refusal could not retain the item. Now an explicit READY/SUSPENDED state plus a socket generation, peek-before-send, and per-item deadlines preserved across a rotation. Consumers: live-session setState/flushPendingAudio/turnComplete and sendSystemNotice's delivered check. Regression oracle: bug-432-notices-survive-a-rotation.test.js — 14 tests, 10 mutations each reddening a named test, one of which survived first time and produced test (n). Remaining evidence: FakeSocket only; the real ws library closes asynchronously, no attended rotation observed, and the flag stays OFF until the measured pass.",
+          "source": "mythos/src/core/voice/notice-queue.js; mythos/src/core/voice/live-session.js"
         }
       },
       {
