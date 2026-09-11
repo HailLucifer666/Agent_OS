@@ -3,68 +3,69 @@
 *Under 100 lines, by rule. The 5,278-line roadmap and its RESUME blocks are the
 archive; this file is the position. Rewrite it in place, never append.*
 
-## Position (2026-09-10)
+## Position (2026-09-11)
 
-**One workflow, until it is boring.** The Windows Operator build is collapsed to
-Stage 1 by operator decision on 2026-09-07. Stages 2-7 are PAUSED, not cancelled,
-and stay paused until the golden path below reads 10 consecutive PASS lines
-across at least two cold boots, sustained for a week.
+**One workflow, until it is boring.** The build is collapsed to Stage 1 by the
+2026-09-07 operator decision; Stages 2-7 stay paused until the golden path holds
+10 consecutive PASS lines across two cold boots for a week. Phase A landed via
+PR #74 (`451ba73`); the Windows Operator implementation continues on
+`codex/windows-operator` and is not on `main`.
 
-Phase A landed via PR #74 (`451ba73`). The Windows Operator implementation
-itself continues on `codex/windows-operator` and is not on `main` yet.
+**A four-contract repair landed on `verify/live-2026-09-10` on 2026-09-11**
+(`ae89f17`, `54942ec`, `ac985d6`, `71206c8` and `66f9e39`). All five are local
+code + tests only. **No attended run of any kind was performed, and the
+golden-path streak is still 0.**
 
-The September 10 ticket campaign is stacked for review in four pull requests:
-[register #83](https://github.com/HailLucifer666/Agent_OS/pull/83),
-[brain #84](https://github.com/HailLucifer666/Agent_OS/pull/84),
-[voice #85](https://github.com/HailLucifer666/Agent_OS/pull/85), and
-[echo #82](https://github.com/HailLucifer666/Agent_OS/pull/82).
-These local fixes and replay checks provide no new attended voice or acoustic
-proof. No pull request was merged, and the golden-path streak remains **0**.
+| commit | what | what is still owed |
+|---|---|---|
+| `ae89f17` | regenerated the capability-map island, stale at 7634 vs 7726 | nothing |
+| `54942ec` | BUG-436 stall rows carry `sampleWindowMs` + `mainCpuMs`; 4 docs corrected | the stall REPAIR — one attended `LOOP_LAG_TRACE=true` session names the caller |
+| `ac985d6` | BUG-438 open_web refuses rather than opening a different episode | one attended spoken "play S2 EP6" |
+| `71206c8` | BUG-432 a held notice survives a rotation; phantom flag fixed | an attended Live rotation; the flag stays OFF |
+| `66f9e39` | BUG-372 Kokoro moved to a worker; the cache bug that made `KOKORO_MODEL_DIR` inert | a PACKAGED boot with kokoro in the chain |
+
+The measurements behind each are in `BUGS.md`, not here.
+
+**Known environment hazard on this machine:** `ollama` holds ~5 GB resident. With
+it running, the full suite at default concurrency fails ONE wandering test per run
+(`boot`, then `verify-lib-attach`) — the documented exhaustion signature, not a
+regression. At `--test-concurrency=3` the suite is **7794/7794, 0 failures,
+0 skipped**. The pre-commit hook uses default concurrency, so a commit may need a
+retry when memory is tight.
 
 ## The golden path
 
 Spoken, in the operator's already-signed-in browser: **open YouTube, play the
-third video, pause, resume, next.**
-
-The instrument is `mythos/scripts/golden-path.js` — run it once a day with
-MYTHOS up (`cd mythos && node scripts/golden-path.js`). It attaches to the
-running server, sends the four turns over the HUD's own WebSocket path, judges
-each on tool evidence plus the media oracle, and appends ONE line to
+third video, pause, resume, next.** Instrument: `cd mythos && node
+scripts/golden-path.js`, once a day with MYTHOS up. It appends ONE line to
 `.cache/windows-operator/golden-path.log` (gitignored):
 
 ```
 <iso-time> PASS|FAIL|UNVERIFIED|PREREQ-MISSING steps=<n>/4 ackP95ms=<n> <notes>
 ```
 
-**The consecutive-PASS streak it prints is the one number that matters. Today:
-0.** PREREQ-MISSING (no provider, no browser, server down) is separate from
-FAIL and counts neither for nor against it.
+**The consecutive-PASS streak it prints is the one number that matters.
+Today: 0.** PREREQ-MISSING counts neither for nor against it.
+
 ## Stages
 
-- [ ] **Stage 1 — ACTIVE.** Spoken YouTube third-video selection, pause, resume,
-  next, in the existing signed-in browser session. Bar: 10 consecutive attended
-  spoken successes across two cold boots; p95 acknowledgement 2 s, local stop
-  250 ms, spoken cancellation 1.5 s. Measure; do not weaken after failures.
-- [ ] **Stages 2-7 — PAUSED** by the 2026-09-07 decision, not cancelled: windows
-  discovery and input takeover; browser navigation and Gmail drafts (Amazon
-  stops at order review); transactional DOCX/XLSX/PDF and OneNote; advanced PDF
-  and OCR with BYO Acrobat; spoken DSH builds; packaged-bytes repeat. They stay
-  paused until the Stage 1 streak above holds.
+- [ ] **Stage 1 — ACTIVE.** Bar: 10 consecutive attended spoken successes
+  across two cold boots; p95 ack 2 s, local stop 250 ms, spoken cancel 1.5 s.
+  Measure; never weaken after a failure.
+- [ ] **Stages 2-7 — PAUSED** by the 2026-09-07 decision, not cancelled. They
+  stay paused until the Stage 1 streak holds. Scope is in the roadmap.
 
-## Gates that changed on 2026-09-07 (Phase A of the subtraction plan)
+## Gates
 
-- The pre-commit hook runs the full suite and blocks on `fail > 0`. Nothing else.
-- The four documentation gates (`sync-test-count`, `lint-bug-registry`,
-  `build-index`, `build-capability-map`) moved to `npm run docs:check` in
-  `mythos/`. Run it before a push; CI still runs `sync-test-count --check`.
-- This file exists. `CLAUDE.md`'s plan-file ceiling names it explicitly.
+Pre-commit runs the full suite and blocks on `fail > 0`, nothing else. The four
+documentation gates are `cd mythos && npm run docs:check` — run before a push.
+History of that split is in the roadmap.
 
 ## Still open
 
-- Live/hardware gates from the 261-ticket campaign (mic/playback 027/406,
-  Ctrl+Alt+X 268, grounded speech 275) — see the roadmap's 2026-09-07 block.
+- Live/hardware gates (mic/playback 027/406, Ctrl+Alt+X 268, grounded speech 275).
 - Licensing and release decisions (step 6.5, 274 T3). No release authorized.
-- Open tickets: **268, 274, 275, 406, 421, 422, 432, 433, 434, 436 (stall half), 437**. BUG-435 and the goAway half of BUG-436 are coded 2026-09-10 on `fix/live-voice-435-436` with local evidence only — no attended run.
+- Open tickets: **268, 274, 275, 406, 421, 422, 432, 433, 434, 436 (stall half), 437, 438**. BUG-435 and the goAway half of BUG-436 ARE on this branch (goaway-gate.js at `3f4082d4`); the earlier note that they were "unmerged" was true only of `main`.
   BUG-421 still lacks reveal margin; BUG-422 needs a diagnosed child failure;
   BUG-432 notice collisions need measured scheduling work. BUG-428 is coded,
   with its acoustic proof still owed under BUG-406.
@@ -74,21 +75,23 @@ FAIL and counts neither for nor against it.
 
 ## NEXT ACTION
 
-Review the four pull requests, then arrange the next attended Stage 1 pass.
-The September 9 component checks for BUG-414..419 remain historical evidence;
-they did not establish one successful golden-path run.
+Review the single integration PR (verify/live-2026-09-10 -> main), then arrange
+the next attended Stage 1 pass. **Nothing in the 2026-09-11 batch has been run
+in front of a human.** In priority order, each is one attended session:
 
-Before that pass, verify the installed native host and extension match the
-BUG-416 code. The September 9 check found the installed host still stripped
-`instanceId`; rebuilding the native host and reloading the extension remain
-operator work. Decide how the runner observes Live injections, then judge the
-spoken golden path through the existing signed-in browser. No operator session,
-native-host rebuild, extension reload, or golden-path run occurred in this campaign.
+1. `node scripts/golden-path.js` with MYTHOS up — the streak is 0 and every
+   change on the voice/browser path owes a line before and after.
+2. Say "play INDIA'S GOT LATENT S2 EP6" and check it opens EP6 (BUG-438).
+3. Boot with `LOOP_LAG_TRACE=true` for 30 minutes; grep `loop.stalled` and read
+   `mainCpuMs` against `sampleWindowMs`. That names BUG-436's caller — the
+   stall itself is still unfixed and this is the input to fixing it.
+4. Build the installer and boot it once with kokoro in `VOICE_TTS_CHAIN`
+   (BUG-372). A green suite cannot tell you the app starts.
 
-**BUG-420 has a local code fix:** retired-model defaults and scoped 403/404
-health handling are covered by replay and deterministic tests. New provider
-calls remain untested. **BUG-421 stays open:** ordinals 1-20 still exceed the
-measured reveal budget. BUG-418 still lacks a real Anthropic/OpenAI provider call.
+Before any of it: verify the installed native host and extension match the
+BUG-416 code — the September 9 check found the installed host still stripped
+`instanceId`, and rebuilding it is operator work.
+
 ## Where the detail lives
 
 - Archive and history: `MYTHOS-IRIS-Synthesis-Plan.md` (roadmap),

@@ -347,18 +347,18 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7726,
+      "value": 7794,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-10"
+      "measuredAt": "2026-09-11"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-10"
+      "measuredAt": "2026-09-11"
     },
     "withheld": {
       "value": 61,
@@ -4859,9 +4859,9 @@
         "state": "fixed",
         "title": "`doctor.js` read the kokoro VOICE ID and called it a model, so a dead TTS rung reported \"No gaps\"",
         "detail": {
+          "fix": "`providers/kokoro/{worker,client,paths,timeouts,migrate-cache}.js`. `providers/kokoro-tts.js` becomes a facade with its public surface unchanged plus `shutdown()`. The worker requires transformers through **kokoro-js's own resolution context** and reports both resolved filenames so a test can assert identity rather than trust a comment. Legacy weights are migrated",
           "symptom": "`node scripts/doctor.js` ended with *\"No gaps. Every tracked key, model and binary is present.\"* on a machine where `mythos/models/` contains only `piper` and `whisper`, while `VOICE_TTS_CHAIN` was `gemini,kokoro,edge,piper`.",
           "cause": "The voice section printed the kokoro",
-          "fix": "A `kokoro` row in `assetChecks()` that is a gap only when kokoro is actually in the chain — a machine that has dropped the rung has nothing wrong with it, and a report that is red for an expected reason is a report people stop reading. Three things about it are deliberate: -",
           "limits": "kokoro still resolves unavailable on this machine, and the first fallback still pays for it. `doctor.js` reports that honestly now; it does not change it. The wider question the plan raised — every capability doctor reports resolving through the same helper the runtime consumer uses — is enforced here for kokoro and for adb, and is",
           "files": "`mythos/scripts/doctor.js` (575 → 658), `mythos/providers/kokoro-tts.js` (114 → 137).",
           "verification": "`mythos/test/bug-372-doctor-kokoro-model.test.js` (6 tests). ---"
