@@ -23,7 +23,7 @@ after the attended pass. **The golden-path streak is still 0.**
 | `54942ec` | BUG-436 stall rows carry `sampleWindowMs` + `mainCpuMs`; 4 docs corrected | the stall REPAIR — one attended `LOOP_LAG_TRACE=true` session names the caller |
 | `ac985d6` | BUG-438 open_web refuses rather than opening a different episode | one attended spoken "play S2 EP6" |
 | `71206c8` | BUG-432 a held notice survives a rotation; phantom flag fixed | an attended Live rotation; the flag stays OFF |
-| `66f9e39` | BUG-372 Kokoro moved to a worker; the cache bug that made `KOKORO_MODEL_DIR` inert | the Electron GUI boot, and a heard run |
+| `66f9e39` | BUG-372 Kokoro moved to a worker; the cache bug that made `KOKORO_MODEL_DIR` inert | a HEARD run — packaged resolution and GUI boot are both now proven |
 | `8d7a33e` | packaged resolution PROVEN (`scripts/verify-packaged-kokoro.js`); client now refuses a NaN deadline | nothing beyond the row above |
 
 **Environment hazard CLEARED 2026-09-11:** `ollama` (~5 GB) made the suite fail
@@ -60,10 +60,10 @@ documentation gates are `cd mythos && npm run docs:check` — run before a push.
 - Live/hardware gates (mic/playback 027/406, Ctrl+Alt+X 268, grounded speech 275).
   Licensing and release decisions (step 6.5, 274 T3). No release authorized.
 - Open tickets: **268, 274, 275, 406, 421, 422, 432, 433, 434, 436 (stall half),
-  437, 438**. BUG-435 and the goAway half of BUG-436 ARE on this branch
+  437, 438**. BUG-435 and BUG-436's goAway half ARE on this branch
   (`goaway-gate.js` at `3f4082d4`); "unmerged" was true only of `main`. BUG-421
-  lacks reveal margin; BUG-422 needs a diagnosed child failure; BUG-428 is coded
-  with its acoustic proof owed under BUG-406.
+  lacks reveal margin; BUG-422 needs a diagnosed child failure; BUG-428's
+  acoustic proof is owed under BUG-406.
 - **Browser: unlock, do not adopt (2026-09-11).** `browser-use/browsercode`
   rejected; we own its primitive as `browser_evaluate`, unallowlisted.
   `ADOPTION-MATRIX.md` §12.
@@ -82,11 +82,12 @@ Review PR #96, then arrange the next attended Stage 1 pass. **Nothing in the
 3. Boot with `LOOP_LAG_TRACE=true` for 30 minutes; grep `loop.stalled` and read
    `mainCpuMs` against `sampleWindowMs`. That names BUG-436's caller — the
    stall itself is still unfixed and this is the input to fixing it.
-4. Boot the packaged app once with kokoro in `VOICE_TTS_CHAIN` (BUG-372) and
-   HEAR it. Resolution under `app.asar.unpacked` is already proven by
+4. Boot the packaged app with kokoro in `VOICE_TTS_CHAIN` (BUG-372) and HEAR it.
+   **Only the audio is left.** Resolution under `app.asar.unpacked` is proven by
    `scripts/verify-packaged-kokoro.js` (28 voices, 211,244 bytes, 0 network
-   calls, worker cache == `modelCacheDir()`); what is left is the GUI starting
-   and the audio being right.
+   calls, worker cache == `modelCacheDir()`), and the packaged GUI starts —
+   `/health` 200 in 3s, "server ready after 10055ms", no module errors (the
+   `app-update.yml` ENOENT is a `--dir` build having no installer metadata).
 
 Before any of it: verify the installed native host and extension match the
 BUG-416 code — the Sept 9 check found the host still stripped `instanceId`.
