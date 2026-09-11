@@ -597,7 +597,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-435 | coded | blocked | [CODED 2026-09-10, REGRESSED the same day, REPAIRED 2026-09-11; one attended run pending] The 2026-09-10 guard opened NO page for a named browser (18:21Z), worse than the two windows it fixed: the descriptions still taught the refused call, the refusal named no tool in its message, and its remedy was a step already done. Repaired with a state-derived remedy, tools named in the prose, a coupling test on the descriptions, test/refusal-is-actionable.test.js and a named-browser turn in golden-path.js. One real-browser route per turn: the adapter refuses the second of open_web browser:true vs browser_launch_debug/browser_switch/browser_navigate and tells the model what already opened. The named-browser question is now DECIDED (operator, 2026-09-10): a named browser is the debug browser, so open_web browser:true with a browserName is refused before dispatch and answered with structured remedy() calls to browser_launch_debug then browser_navigate. Unnamed open_web browser:true still reaches the default browser (Stage 1 golden path). The route memory was also fixed: it recorded every call the adapter SAW, so a denied or refused open_web poisoned the turn. 16 tests, mutation-proven. Attended voice unverified. | mythos/src/core/voice/browser-route-guard.js |
 | BUG-436 | open | blocked | [PROFILER CODED 2026-09-10; one attended run with LOOP_LAG_TRACE=true names the caller, then a second PR fixes it. GoAway half CODED in PR #88, unmerged] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code. | mythos/src/core/loop-lag.js |
 | BUG-437 | open | blocked | [EVIDENCE FIRST, operator: close the app 3 ways with Task Manager + main.log open] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open. | electron/main.js |
-| BUG-438 | open | currently reproduced | [EVIDENCE FIRST: replay the query through the resolver offline] open_web was asked for "INDIA'S GOT LATENT S2 EP6" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The unverified flag fired on the tab handle it could not see, not on the title mismatch it could. Two of the session's three unverified successes are this one call. | mythos/src/core/effectors/from-dashboard.js |
+| BUG-438 | coded | blocked | [CODED 2026-09-11; needs one attended spoken run] open_web was asked for "INDIA'S GOT LATENT S2 EP6" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The resolver used candidates[0] and never compared the title it was about to return against the query. A bounded season/episode guard now refuses with code `no-matching-result` before anything renders; unmarked queries take the same path they always did. Consumers: open_web newtab, the oEmbed embed probe, and the newtab fallback, which now consume ONE eligible list. Regression oracle: bug-438-open-web-opens-the-episode-asked-for.test.js — 18 tests, 9 mutations each reddening a named test, one of which survived first time and produced test (11b). Remaining evidence: no attended spoken run; marker agreement is not proof of playback or of video identity, and the guard is inert for a query carrying no season/episode marker. | mythos/src/core/util/youtube-episode.js; mythos/src/core/effectors/from-dashboard.js |
 | BUG-406 | open | blocked | [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -1699,9 +1699,9 @@ evidence this is the most expensive open defect in the tracker.**
 
 **Attribution:** operator report and the 2026-09-10 log read.
 
-## BUG-438 — open_web opened a DIFFERENT YouTube video from the one asked for, and reported it as opened (OPEN, filed 2026-09-11)
+## BUG-438 — open_web opened a DIFFERENT YouTube video from the one asked for, and reported it as opened (CODED 2026-09-11; filed 2026-09-11)
 
-**Status:** 🔴 OPEN — measured twice in one session, from the vault's own action rows.
+**Status:** 🔧 CODED 2026-09-11 — the resolver now refuses rather than opening a different episode, proven against fixtures and one replayed vault row. **No attended spoken run**, and marker agreement is not proof of playback or of video identity, so this is not closed.
 
 **Evidence (2026-09-11, vault/Episodic):** the operator asked for a specific episode. Two
 `open_web` calls carried
@@ -1730,10 +1730,87 @@ third is `see_and_click`, which is honest in the way this is not — it returned
 request … System claimed to be opening YouTube widget, but automated notice indicates no handle
 exposed. Operator desires actual execution, not unverified claims."
 
-**Not yet established:** whether the wrong pick comes from the search provider's ordering or from
-the resolver taking the first result regardless of title distance. The next step is to replay
-that exact query through the resolver offline and compare the returned title against the query
-before any browser is involved — no live run needed.
+**ANSWERED 2026-09-11 — it was the resolver, and the replay was run.** The question above asked
+whether the wrong pick came from the search provider's ordering or from the resolver taking the
+first result regardless of title distance. It is the resolver, and the code says so without
+needing a live call: `from-dashboard.js` collected `{id, title}` per hit and then used
+`candidates[0]` for the newtab return, `candidates[0]` again for the no-embeddable fallback, and
+the first oEmbed-200 for the embed path. Nothing anywhere compared a title to the query. Because
+`YOUTUBE_MODE` is `newtab` in the operator's config, the EP2 title in the incident payload is the
+search provider's own string, returned verbatim.
+
+**The replay, and what the corpus can actually prove.** Both vault roots were read: 537 Audit
+`open_web` rows and 171 Episodic action rows. Two findings matter beyond this ticket:
+
+- **The obvious join key does not exist.** 270 Audit rows carry `args` and **0 of them carry a
+  `traceId`** (`leash/index.js:290` writes `action.traceId || null` and `check()` is never handed
+  one). No join by trace id is possible on this data. None is needed: `dispatch-action.js:107`
+  writes the arguments and the effector result into the SAME Episodic record, so one row is
+  self-sufficient. A timestamp join was tried and is unsafe — it swapped two near-simultaneous
+  calls, "GTA VI extended look trailer" and "GTA 6 extended look trailer".
+- **The positive class is two rows of one call.** Across all 107 distinct `open_web` queries in
+  the operator's history, scanned with a deliberately broad ordinal regex, **exactly one** carries
+  a season/episode marker: the EP6 query in this ticket. 61 rows are video-intent, 42 carry a
+  title, collapsing to 30 distinct (query, title) pairs — 29 of which are unmarked negative
+  controls. So this guard **cannot be validated by breadth**, and the regression suite says so in
+  its own header: one test is replayed from the vault and the rest are labelled SYNTHETIC.
+
+**The fix:** `src/core/util/youtube-episode.js` (pure, 290 lines). A bounded season/episode
+grammar plus a ranker, returning `{ candidates, closest, missing }`. Newtab, the oEmbed probe loop
+and the newtab fallback now consume that ONE ordered eligible list — the original defect survived
+precisely because newtab and the embed loop used different rules. A refusal returns
+`fail(prose, OPEN_WEB_CODES.NO_MATCH)` — a fifth code, `no-matching-result` — before any renderer
+call or browser dispatch.
+
+**What it does NOT do, stated as narrowly as the guard is built.** It compares season/episode
+MARKERS. It is not a video-identity check. Agreement does not prove the video plays, does not
+prove it is the right upload, and two different rips of the same episode both pass. For a query
+with no marker it returns early and today's ordering, selection and display-title fallback are
+byte-for-byte unchanged — "GTA 6", "GTA VI", "Bleach Thousand-Year Blood War" and
+"The Kid LAROI Down" all take the old path, pinned as test (11).
+
+**The disposition is a failure, deliberately.** `fail()` makes the action `ok:false`, which
+`dispatch-action.js` feeds into `habits.observe`, `goals.markPlanStepDone` and the audit outcome,
+so a refusal records as a FAILED action. That is correct and it is the point: the operator asked
+for an episode and did not get one, which is the same kind of outcome as `no-results` and
+`unplayable-results`, both of which already fail here. The alternative is what shipped — `ok:true`
+for opening the wrong video, which taught `habits.observe` that this resolution WORKED.
+
+**One departure pinned on purpose:** "E3 2026 highlights" parses as episode 3, so such a query is
+REFUSED when no result carries E3. A refusal the operator can see and rephrase beats a confident
+wrong answer, and test (14) locks it in so a later session widening the grammar has to confront it.
+
+**Evidence (`test/bug-438-open-web-opens-the-episode-asked-for.test.js`, 18 tests).** Nine
+mutations, each confirmed on disk, `node --check`ed, run under `--test-reporter=tap`, restored
+sha256-identical: deleting the refusal reddens 5 tests and restores the original bug verbatim;
+inverting set-equality reddens 7 (the check that separates a working guard from one that refuses
+everything); reading the display `title` instead of `rawTitle` reddens (6c); keeping a
+self-contradicting id reddens (7b); skipping the oEmbed re-check reddens (8); treating a 403 as a
+contradiction reddens (9); relaxing the boundary reddens (11b); applying the guard to unmarked
+queries reddens (12); removing the code reddens (13) and both counts in `bug-381`.
+
+**A mutation SURVIVED, and the fix was to the test.** Replacing the Unicode lookbehind with an
+ASCII `\b` left everything green, because the whole vocabulary table was ASCII and the two forms
+agree on every ASCII string. Measured divergence: `"latente6"` is not episode 6 under either, but
+`"ワンピースe6"`, `"日本語e6"`, `"Сезонe6"` and `"cafée6"` are episode 6 under `\b` and not under the
+lookbehind — `\b` is ASCII-only even under `/u`. Under the mutation a Japanese, Korean or Hindi
+title would acquire an episode requirement it never claimed, and this operator searches for
+Hindi-language shows. Test (11b) was written from that measurement and the mutation now reddens it.
+
+**Adjacent behaviour re-run as a named set, not trusted to the full suite:** `bug-006-youtube-mode`
+(all six), `open-web-is-not-a-browser` (the Starboy refusal is still `no-results`, not
+`no-matching-result`), `bug-273-b3-widget-render-ack` (all four render verdicts),
+`open-web-evidence-honesty`, `bug-381`, `bug-114-youtube-embed-stall-fallback`,
+`browser-intent-disambiguation` and `remedy-prose-ratchet` with NO baseline edit — 100 tests, 0 failures.
+
+**A fixture repaired because it was this bug.** `bug-006-youtube-mode.test.js` asked for
+`query: 'blocked embed'` against a stub video titled `'Stub Video Title'` — no shared word — and
+asserted that opening it was a pass. It stayed green under the new guard (the query is unmarked,
+so the guard is a no-op), which is exactly why it was repaired deliberately rather than left for a
+failing run to find. All four of its assertions are kept verbatim.
+
+**NOT VERIFIED:** no attended spoken run. The guard is proven against fixtures and one replayed
+vault row; whether the operator can now say "play S2 EP6" and get EP6 is one attended session away.
 
 **Attribution:** operator report and the 2026-09-11 vault read.
 

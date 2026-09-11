@@ -22,6 +22,7 @@
 const { effectorFromTool } = require('./adapter');
 const { reasonText } = require('../util/reason-text');
 const { youtubeVideoId, OPEN_WEB_CODES } = require('../util/youtube-id');
+const ytEpisode = require('../util/youtube-episode'); // BUG-438
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
 const { vaultRelativePath, vaultUrl, vaultAgeHours } = require('./vault-url');
@@ -344,9 +345,38 @@ function buildTools(ctx) {
         for (var i = 0; i < ytRes.result.results.length; i++) {
           var r = ytRes.result.results[i];
           var vid = youtubeVideoId(r.url);   // BUG-381: five URL shapes were unreadable
-          if (vid) candidates.push({ id: vid, title: r.title || (title || q) });
+          // BUG-438: `title` keeps its display fallback (the query stands in when
+          // the provider gave no title). `rawTitle` is the provider's own words or
+          // null, and it is the ONLY field the episode guard may read — checking
+          // `title` would hand the guard the query back, markers and all, and it
+          // would happily match itself.
+          if (vid) candidates.push({ id: vid, title: r.title || (title || q), rawTitle: (typeof r.title === 'string' && r.title.trim()) ? r.title : null });
         }
         if (!candidates.length) return fail('Found results but could not extract a YouTube video ID — the hits were not watch pages. Try a more specific title, or use spotify_play if the operator wanted to listen rather than watch.', OPEN_WEB_CODES.UNPLAYABLE);
+
+        // BUG-438: the operator asked for S2 EP6 and this resolver opened EP2,
+        // twice, and reported outcome:"ok" both times — it had the title in hand
+        // and never compared it. The guard sits HERE deliberately: after the
+        // no-results and unextractable-id refusals (so those keep their own
+        // codes) and BEFORE the YOUTUBE_MODE read below, so a refusal happens
+        // with nothing rendered and no browser touched.
+        //
+        // For an UNMARKED query this is a no-op that returns the same array in
+        // the same order, so general search behaviour is unchanged.
+        //
+        // A refusal returns fail(), which makes the action ok:false — and that
+        // is a deliberate disposition, not an oversight. dispatch-action.js
+        // feeds ok:false into habits.observe, goals.markPlanStepDone and the
+        // audit outcome, so this records as a FAILED action. It should: the
+        // operator asked for an episode and did not get it, which is the same
+        // kind of outcome as NO_RESULTS and UNPLAYABLE, which already fail here.
+        // The alternative is what shipped before — ok:true for opening the wrong
+        // video, which taught habits.observe that this resolution WORKED.
+        var episodePick = ytEpisode.selectEpisodeCandidates(q, candidates);
+        if (episodePick.missing) return fail(ytEpisode.episodeRefusal(q, episodePick), OPEN_WEB_CODES.NO_MATCH);
+        var requestedEp = ytEpisode.requestedMarkers(q);
+        var episodeAsked = ytEpisode.hasAnyMarker(requestedEp);
+        candidates = episodePick.candidates;
 
         // Check YOUTUBE_MODE config: 'newtab' opens in the external browser
         // (operator's own ad blocker); 'electron' (default) and the legacy
@@ -364,14 +394,30 @@ function buildTools(ctx) {
         // the iframe. Pick the FIRST embeddable candidate. This is the "smart
         // pick" that makes far more videos actually play in-dashboard.
         var chosen = null;
+        var contradicted = [];
         for (var c = 0; c < candidates.length; c++) {
           try {
             var oembedUrl = 'https://www.youtube.com/oembed?url=' +
               encodeURIComponent('https://www.youtube.com/watch?v=' + candidates[c].id) + '&format=json';
             var oeRes = await fetch(oembedUrl, { signal: AbortSignal.timeout(4000) });
             if (oeRes.ok) {
-              chosen = candidates[c];
-              try { var oeData = await oeRes.json(); if (oeData && oeData.title) chosen.title = oeData.title; } catch (_) {}
+              // BUG-438: oEmbed is the one authoritative title we ever get — it
+              // comes from YouTube rather than from a search-result snippet — so
+              // re-check it. Read into a LOCAL first: the old code did
+              // `chosen = candidates[c]` and then `chosen.title = …`, which wrote
+              // straight through into the shared candidates array. Harmless while
+              // it broke immediately after, and exactly the sort of write that
+              // stops being harmless the moment a decision is added between them.
+              var oeTitle = '';
+              try { var oeData = await oeRes.json(); if (oeData && typeof oeData.title === 'string') oeTitle = oeData.title.trim(); } catch (_) {}
+              if (episodeAsked && oeTitle && !ytEpisode.titleMatchesMarkers(oeTitle, requestedEp)) {
+                // The search snippet said one episode and YouTube says another.
+                // Exclude this video from embedding AND from the newtab fallback:
+                // it is not the thing that was asked for, whoever is wrong.
+                contradicted.push(candidates[c].id);
+                continue;
+              }
+              chosen = { id: candidates[c].id, title: oeTitle || candidates[c].title };
               break;
             }
           } catch (_) { /* network/timeout — try next candidate */ }
@@ -380,8 +426,24 @@ function buildTools(ctx) {
         // real YouTube page in a browser tab — it always plays there (no embed
         // restriction applies outside an iframe). This is the guaranteed
         // "alternate way".
+        //
+        // BUG-438: an embedding REJECTION is not an episode mismatch. A 403 says
+        // the uploader disabled embedding; it says nothing about which episode
+        // the video is. So a candidate that merely failed the oEmbed probe stays
+        // available here, and only one CONTRADICTED by its own oEmbed title is
+        // removed.
         if (!chosen) {
-          return openWebResult({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
+          var fallback = [];
+          for (var f = 0; f < candidates.length; f++) {
+            if (contradicted.indexOf(candidates[f].id) === -1) fallback.push(candidates[f]);
+          }
+          if (!fallback.length) {
+            // Every eligible candidate was contradicted by YouTube's own title.
+            // Still before any renderer call, so the refusal ordering holds on
+            // this path too.
+            return fail(ytEpisode.episodeRefusal(q, { missing: { phrase: ytEpisode.describeMarkers(requestedEp) }, closest: null }), OPEN_WEB_CODES.NO_MATCH);
+          }
+          return openWebResult({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + fallback[0].id, title: fallback[0].title });
         }
         // enablejsapi=1 is required for the player to postMessage onReady/
         // infoDelivery — without it, web-panel.js's success detection never

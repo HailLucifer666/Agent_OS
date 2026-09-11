@@ -121,22 +121,31 @@ describe('BUG-381 — and it refuses to invent an id', () => {
 });
 
 describe('BUG-381 — typed reason codes, so a caller can branch on a failure', () => {
-  it('there are exactly four codes, one per measured cause group', () => {
-    assert.equal(ALL_OPEN_WEB_CODES.length, 4,
-      'coarse on purpose: a caller branches on what it can DO, and there are four '
-      + 'different things to do about these 25 failures');
+  it('there are exactly five codes — four measured cause groups, plus one new refusal', () => {
+    // Was four until 2026-09-11. The fifth, NO_MATCH, is NOT a fifth cause group
+    // from the 25-failure vault read — it could not be, because at the time of
+    // that read the case it covers was recorded as `outcome:"ok"` rather than as
+    // a failure at all (BUG-438: EP6 asked, EP2 opened, reported as success).
+    // It is a new refusal for a case that used to succeed wrongly. Said plainly
+    // here so nobody re-derives "five measured causes" from a number that has
+    // four measurements behind it.
+    assert.equal(ALL_OPEN_WEB_CODES.length, 5,
+      'coarse on purpose: a caller branches on what it can DO, and there are five '
+      + 'different things to do — four from these 25 failures, plus "none of the results '
+      + 'is the thing that was asked for"');
     for (const c of ALL_OPEN_WEB_CODES) {
       assert.equal(typeof c, 'string');
       assert.match(c, /^[a-z][a-z-]+$/, 'kebab-case, machine-readable: ' + c);
     }
-    assert.equal(new Set(ALL_OPEN_WEB_CODES).size, 4, 'and they are distinct');
+    assert.equal(new Set(ALL_OPEN_WEB_CODES).size, 5, 'and they are distinct');
   });
 
-  it('the codes name the four causes the vault actually recorded', () => {
+  it('the codes name the four causes the vault actually recorded, and the one refusal added since', () => {
     assert.equal(OPEN_WEB_CODES.BAD_REQUEST, 'bad-request');
     assert.equal(OPEN_WEB_CODES.NO_RESULTS, 'no-results');
     assert.equal(OPEN_WEB_CODES.UNPLAYABLE, 'unplayable-results');
     assert.equal(OPEN_WEB_CODES.PROVIDER_ERROR, 'provider-error');
+    assert.equal(OPEN_WEB_CODES.NO_MATCH, 'no-matching-result'); // BUG-438
   });
 
   it('open_web attaches a code to every failure it returns', () => {

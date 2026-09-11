@@ -90,6 +90,18 @@ const OPEN_WEB_CODES = {
   // A provider failed — network, fetch, upstream error. Transient; a retry is
   // reasonable. 3 of 25.
   PROVIDER_ERROR: 'provider-error',
+  // Upstream returned playable videos and NONE of them claims to be the thing
+  // that was asked for. BUG-438, added 2026-09-11.
+  //
+  // This is the odd one out and the header above says four codes for a reason:
+  // the other four were derived from the 25 logged failures of the 2026-08-27
+  // vault read. This fifth one is NOT a fifth cause group in that data — it
+  // could not be, because at the time this refusal did not exist and the call
+  // that needed it was recorded as `outcome:"ok"`. It is a NEW refusal for a
+  // case that used to succeed wrongly, which is a different reason for the
+  // count to change, and worth saying out loud so nobody re-derives "five
+  // measured causes" from a number that only has four behind it.
+  NO_MATCH: 'no-matching-result',
 };
 
 const ALL_OPEN_WEB_CODES = Object.freeze(Object.values(OPEN_WEB_CODES));

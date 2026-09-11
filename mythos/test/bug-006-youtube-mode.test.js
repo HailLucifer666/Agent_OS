@@ -148,7 +148,23 @@ describe('BUG-006: YouTube embed mode configuration', () => {
       }
       return fallback(url);
     };
-    const result = await toolFn(buildTools(ctx), 'open_web')({ type: 'youtube', query: 'blocked embed' });
+    // FIXTURE REPAIRED 2026-09-11 (BUG-438). This used to ask for
+    // `query: 'blocked embed'` against a stub whose only video is titled
+    // 'Stub Video Title' — a query and a title sharing not one word — and then
+    // assert that opening it was a PASS. That fixture encoded the very defect
+    // BUG-438 is about: "the resolver returned a video unrelated to the request,
+    // and that is correct".
+    //
+    // It did NOT go red under the new episode guard, because the query carries no
+    // season/episode marker and the guard is a deliberate no-op for unmarked
+    // queries. That is exactly why it is repaired ON PURPOSE here rather than
+    // left for a failing run to find: a fixture that is wrong but green teaches
+    // the next reader that the wrong thing is intended.
+    //
+    // The query now matches the stub's own title. All four original assertions
+    // are kept verbatim — this file is about YOUTUBE_MODE branching, and that is
+    // still what it tests.
+    const result = await toolFn(buildTools(ctx), 'open_web')({ type: 'youtube', query: STUB_TITLE });
     assert.deepEqual(probes, [`https://www.youtube.com/watch?v=${STUB_VIDEO_ID}`]);
     assert.equal(result.result.widgetType, 'newtab');
     assert.equal(result.result.url, probes[0]);

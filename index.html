@@ -5769,13 +5769,14 @@
         "n": 438,
         "shape": "entry",
         "state": "open",
-        "title": "open_web opened a DIFFERENT YouTube video from the one asked for, and reported it as opened (OPEN, filed 2026-09-11)",
-        "detail": {},
-        "excerpt": "**Status:** 🔴 OPEN — measured twice in one session, from the vault's own action rows. **Evidence (2026-09-11, vault/Episodic):** the operator asked for a specific episode. Two `open_web` calls carried `query:\"INDIA'S GOT LATENT S2 EP6 ft. Rakhi Sawant, Ashneer Grover, Kushagra\"` and both returned ``` {\"widgetType\":\"newtab\",\"url\":\"https://www.youtube.com/watch?v=c35fpGWqXnk\", \"title\":\"INDIA'S GOT LATENT S2 EP2 ft. Harssh Limbachiya, Kiku Sharda, Chandan Prabhakar …\"} ``` **EP6 was requested; EP2 was opened.** Different episode, different guests. The resolver picked a video whose title shares a prefix with the query and stopped. **Why this is worse than a miss.** Both rows are `outcome:\"ok\"`. They carry `unverified:true` with the reason \"I cannot confirm whether the new tab opened because the browser did not expose a window handle\" — so the honesty machinery flagged the *tab*, which it co…",
+        "title": "open_web opened a DIFFERENT YouTube video from the one asked for, and reported it as opened (CODED 2026-09-11; filed 2026-09-11)",
+        "detail": {
+          "fix": "`src/core/util/youtube-episode.js` (pure, 290 lines). A bounded season/episode grammar plus a ranker, returning `{ candidates, closest, missing }`. Newtab, the oEmbed probe loop and the newtab fallback now consume that ONE ordered eligible list — the original defect survived precisely because newtab and the embed loop used different rules. A refusal returns `fail(prose, OPEN_WEB_CODES.NO_MATCH)` — a fifth code, `no-matching-result` — before any renderer call or browser dispatch. **What it does NOT do, stated as narrowly as the guard is built.** It compares season/episode MARKERS. It is not a video-identity check. Agreement does not prove the video plays, does not prove it is the right upload, and two different rips of the same episode both pass. For a query with no marker it returns early and today's ordering, selection and display-title fallback are byte-for-byte unchanged — \"GTA 6\", \"G…"
+        },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[EVIDENCE FIRST: replay the query through the resolver offline] open_web was asked for \"INDIA'S GOT LATENT S2 EP6\" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The unverified flag fired on the tab handle it could not see, not on the title mismatch it could. Two of the session's three unverified successes are this one call.",
-          "source": "mythos/src/core/effectors/from-dashboard.js"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-11; needs one attended spoken run] open_web was asked for \"INDIA'S GOT LATENT S2 EP6\" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The resolver used candidates[0] and never compared the title it was about to return against the query. A bounded season/episode guard now refuses with code `no-matching-result` before anything renders; unmarked queries take the same path they always did. Consumers: open_web newtab, the oEmbed embed probe, and the newtab fallback, which now consume ONE eligible list. Regression oracle: bug-438-open-web-opens-the-episode-asked-for.test.js — 18 tests, 9 mutations each reddening a named test, one of which survived first time and produced test (11b). Remaining evidence: no attended spoken run; marker agreement is not proof of playback or of video identity, and the guard is inert for a query carrying no season/episode marker.",
+          "source": "mythos/src/core/util/youtube-episode.js; mythos/src/core/effectors/from-dashboard.js"
         }
       }
     ],
