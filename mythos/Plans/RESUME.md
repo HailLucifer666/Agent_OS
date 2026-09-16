@@ -3,34 +3,39 @@
 *Under 100 lines, by rule. The roadmap is the archive; this file is the position.
 Rewrite in place, never append.*
 
-## Position (2026-09-16)
+## Position (2026-09-16, after the attended run)
 
-**One workflow, until it is boring.** The build is collapsed to Stage 1 by the
-2026-09-07 operator decision; Stages 2-7 stay paused until the golden path holds
-10 consecutive PASS lines across two cold boots for a week. **The golden-path
-streak is still 0.**
+**One workflow, until it is boring.** Stage 1 only; Stages 2-7 paused until the
+golden path holds 10 consecutive PASS lines across two cold boots for a week.
+**Streak: 0** (today's line: `PREREQ-MISSING` — no debuggable browser on 9222
+before the session started).
 
-**The 16-bug fix plan (2026-09-16) has shipped its headless half on
-`verify/live-2026-09-10` (PR #96 -> `main`): five hook-gated fix commits plus
-three cleanup commits, suite green at every commit, 0 skipped.** Every fix
-carries its failing-first test and a mutation run recorded in the test file.
-None of it has been heard or seen by a human:
+**The 16-bug plan has now run both halves.** Headless half: five fix commits and
+three cleanup commits on `verify/live-2026-09-10` (PR #96 -> `main`), suite
+green at each. Attended half (Track A): one 35-minute spoken session, 64 turns,
+66 tool calls, 8 honest failures, run from source with the HUD PIN-locked at boot.
+**Result: 3 closed, 2 new filed, the rest evidenced and still open.** Register
+went open 14 · coded 10 -> **open 13 · coded 10** (verified 82 -> 85).
 
-| commit | ticket | what changed | what is still owed |
-|---|---|---|---|
-| `fd345b0a` | BUG-441 | `clicking` claim category; legacy path REPLACES the false sentence (D3); OUTCOME_CLAIMED_TOOLS completed to every click tool. Filed cause corrected: the caveat was never dropped, the table had a hole | attended "play the sixth video" (Track A step 4) |
-| `e309b055` | BUG-439 | stale `element_index` -> refresh once, fail with the fresh label + structured remedy; NO auto-retry | attended cua click (step 4/5); latency of the 14 s refresh |
-| `a2720b74` | BUG-437 | shell sends `mythos:shutdown`, waits 7 s, tree-kills; lifecycle answers the IPC like SIGTERM; dsh tasks tree-killed in stop-loops | the live symptom is UNREPRODUCED — quit 3 ways with Task Manager + main.log open (step 12) |
-| `a84ca1df` | BUG-268 | native toast + clipboard from the main process (D4); the HUD write could never work unfocused | one Ctrl+Alt+X press (step 9) |
-| `a86d57ae` | BUG-435/440 | prose ratchet widened to `src/core/voice`; D5 verified by grep; 440 register corrected (coded in `96fb0e5a`, bench reaches the lane) | steps 3 and 11 |
+| ticket | attended result (evidence is quoted in BUGS.md) |
+|---|---|
+| 435, 438, 440 | **LIVE-VERIFIED, closed.** One Brave window with `browser_navigate` url; open_web refused EP6 honestly then EP6 opened (window title); 5x screen_look all 1 attempt, 2.3-4.3 s |
+| 433 | NOT heard. Sharper cause: greeting fires 2.5 s after the FIRST HUD connection, which was PIN-locked; the HUD drops proactive speech behind the lock and it never replays. Still open |
+| 437 | Quit 1 of 3 (X): zero survivors, BUT the shell exits 0.47 s after sending `mythos:shutdown` — nothing awaits the graceful stop, so the 7 s wait never runs, the child log pipe dies at step 1, and the checkpoint was not rewritten. Sub-defect in the 09-16 fix |
+| 268 | Two presses: dispatched 303 / 539 ms, `copied:true toastShown:true`; first toast reached the shell 10 s late. Operator "seen it" not collected |
+| 275 | H1 sample: round 1 names+order matched the snippet; round 2 promoted "DeepSeek V4.1 … edging out others" — present in no result |
+| 432 | Two rotations, held notice delivered after each, no loss row; 10 interrupts / 64 turns (all beside operator speech). One notice per rotation, plan wanted two. Flag back to default OFF |
+| 434 | Not exercised: the model chose `app_reply`, which failed as `[object Object]` (-> BUG-443) |
+| 421 | Not testable here: `desktop_task_start` withheld (DESKTOP_OPERATOR_ENABLED off) |
+| 436 | 3 loop stalls, none with `lastSync`; 2 turn-stalls; 1 cortex self-restart. Suspects narrowed, not named |
+| 439, 441 | Not exercised (no cua_click, no unverified click). A say-before-act sample recorded under 441 |
+| **442 new** | HUD demanded the ACCESS TOKEN mid-conversation: PIN cookie has a hard 30-min Max-Age while the server session slides; net-guard shows the token prompt for a lapsed PIN |
+| **443 new** | `app_reply` stringifies an object failure to `[object Object]` (from-app-reply.js:141) |
 
-Harness lessons from the pass, so the next session does not repay them:
-regenerate `index.html` BEFORE the suite run that feeds `sync-test-count --write`
-(the register tests read it); `docs:check` re-runs the suite unless fed TAP on
-stdin, and a shell without the long-form TEMP gives `fail=1 skipped=1`; a
-`| tail` after a gate swallows its exit code; four file-size ratchets and the
-BUG-425 prose ratchet fired during the pass and each moved code rather than a
-number.
+Session tooling worth keeping: a merged timeline (server log + Audit + Episodic
+actions) is the only readable view of a live run; `log_incident` rows the operator
+asked for are in `vault/Incidents/2026-09-16.jsonl` (stutter/cut-offs; Tier-3
+disclaimer too long; the token popup).
 
 ## The golden path
 
@@ -38,7 +43,9 @@ Spoken, in the operator's already-signed-in browser: **open YouTube, play the
 third video, pause, resume, next.** Instrument: `cd mythos && node
 scripts/golden-path.js`, once a day with MYTHOS up; it appends one
 `PASS|FAIL|UNVERIFIED|PREREQ-MISSING` line to
-`.cache/windows-operator/golden-path.log` (gitignored). **Today: 0.**
+`.cache/windows-operator/golden-path.log` (gitignored). **Today: PREREQ-MISSING.**
+Note from the run: the debug browser MYTHOS launches is a fresh profile, so the
+"signed-in" premise is only met when the operator's own browser carries the port.
 
 ## Stages
 
@@ -48,51 +55,45 @@ scripts/golden-path.js`, once a day with MYTHOS up; it appends one
 
 ## Gates
 
-Pre-commit runs the full suite and blocks on `fail > 0`, nothing else. The four
+Pre-commit runs the full suite and blocks on `fail > 0`, nothing else. The five
 documentation gates are `cd mythos && npm run docs:check` — run before a push,
-with the suite's TAP piped in or a long-form TEMP.
+with the suite's TAP piped in or a long-form TEMP. Regenerate `index.html` BEFORE
+the counting run; read each gate's exit directly, never through `| tail`.
 
 ## Still open
 
-- Open tickets: **268, 274, 275, 406, 421, 422, 432, 433, 434, 435, 436 (stall
-  half), 437 (live symptom), 438, 439, 440, 441** — twelve of them owe only the
-  attended session below; 436/422 are diagnosis-gated (trace first, no third
-  confident cause); 274 T3 and 406 are decisions (D1, D2) nobody has made.
-- Track E cleanup of the 2026-09-16 plan shipped as commits on this branch
-  (the plan said "own PRs"; stacking PRs on the unmerged #96 was rejected as a
-  deeper stack): `6c9f0f1e` E2 two orphan HUD modules deleted; `dcecbab9`
-  E5/E6/E9 — 20 flags documented, `AGENT_REACH_BIN` deleted, and
-  `scripts/lint-env-flags.js` in `docs:check` (product reads must be
-  documented, documented names must be read — both directions at zero);
-  `7d81c64c` E1 — one `escapeHtml`/`escapeAttr` home in `url.js`, 17 copies
-  gone, the four attribute-position calls moved to `escapeAttr` (no `"`-bearing
-  id was reproduced; consolidation, not a security fix). Measured and NOT
-  changed: E3 four tree-kill bodies differ on purpose; E4 the two `reasonText`s
-  differ in behaviour; E8 `sleep()` in tests stays. NOT done: E7 (34 unused
-  exports, mostly `scripts/`) — needs a test-reachability pass first.
+- Open: **274, 275, 406, 421, 422, 432, 433, 434, 436, 437, 439, 442, 443**;
+  coded and owing one human confirmation: **268, 441**.
+- 274 T3 and 406 are decisions (D1, D2) nobody has made. 436/422 stay
+  diagnosis-gated. 421 needs desktop operator mode on this machine (decision D6:
+  enable it for one retry, or leave 421 parked).
+- Track E: E1/E2/E5/E6/E9 shipped (`6c9f0f1e`, `dcecbab9`, `7d81c64c`); E3/E4/E8
+  measured and left; E7 (34 unused exports) not done.
 - Licensing and release decisions (step 6.5, 274 T3). No release authorized.
 
 ## NEXT ACTION
 
-**One attended evidence session — Track A of the 2026-09-16 plan, twelve steps,
-in `~/.claude/plans/` (copy it into the repo if it is load-bearing).** It
-gathers evidence; it promises no closures. Prerequisites first, recorded in the
-session log: installed `app.asar` hash and main.log version line; effective
-flags from the boot log (`LOOP_LAG_TRACE=true`, `VOICE_ECHO_VERDICT_TO_CLIENT=true`,
-`VOICE_SERIALIZE_NOTICES=true` — restore all three after); process baseline;
-a controlled Slack DM. Then, in order: cold boot + greeting HEARD (433);
-`golden-path.js` line read as-is; "Open YouTube in Brave" ONE window (435);
-"play the sixth video" (421/441/439); S2 EP6 (438); Slack `ui_type` (434);
-"top 5 on LiveBench" names AND ranks (275-H1); two notices across a Live
-rotation (432); Ctrl+Alt+X toast + clipboard (268); 30 min for `loop.stalled`
-rows (436, narrows suspects only); 3x `screen_look` (440); quit via X, tray,
-in-app — restart between — process diff after each (437).
+Four small fixes, each its own commit with a failing-first test and a recorded
+mutation, in this order:
 
-After: quote each log line into BUGS.md, rewrite this file, `docs:check`,
-commit, push, then dispatch `ci.yml` once on the final SHA (2,000-min cap).
+1. **437 sub-defect** — `before-quit` must `preventDefault()`, await
+   `stopChildGracefully()` (or its 7 s deadline), then `app.exit()`; test that a
+   child ignoring the request is still tree-killed before the shell exits. Then
+   quit three ways attended with Task Manager open.
+2. **442** — re-issue the PIN cookie on each valid check (or drop its Max-Age);
+   HUD shows the PIN screen, not the token prompt, when the 401 hint names the PIN
+   session. Fix the pin-session header comment in the same commit.
+3. **443** — route the failure through `util/reason-text.js`; test that
+   `[object Object]` never appears.
+4. **433** — arm the greeting on the first UNLOCKED connection.
+
+Then a short attended redo: 434 (operator's caret in the DM box first, so the
+model reaches `ui_type`), 268 (toast seen + paste), 437 (three quits). After:
+quote the lines into BUGS.md, `docs:check`, commit, push, dispatch `ci.yml` once.
 
 ## Where the detail lives
 
 Archive: `MYTHOS-IRIS-Synthesis-Plan.md` (roadmap), `-V2-spine.md` (source-level),
 `MYTHOS-Post-Parity-Plan.md` (post-step-7). Defect evidence: `BUGS.md`. Raw run
-artifacts: `.cache/windows-operator/`.
+artifacts: `.cache/windows-operator/`; today's run: `%APPDATA%\MYTHOS\mythos-server.log`
+from `--- boot: MYTHOS 0.1.12-dev pid=15388`, `vault/Audit/2026-09-16.jsonl`.
