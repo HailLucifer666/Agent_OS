@@ -11,9 +11,10 @@ Rewrite in place, never append.*
 streak is still 0.**
 
 **The 16-bug fix plan (2026-09-16) has shipped its headless half on
-`verify/live-2026-09-10` (PR #96 -> `main`), five hook-gated commits, suite
-7849/7849, 0 skipped.** Every fix carries its failing-first test and a mutation
-run recorded in the test file. None of it has been heard or seen by a human:
+`verify/live-2026-09-10` (PR #96 -> `main`): five hook-gated fix commits plus
+three cleanup commits, suite green at every commit, 0 skipped.** Every fix
+carries its failing-first test and a mutation run recorded in the test file.
+None of it has been heard or seen by a human:
 
 | commit | ticket | what changed | what is still owed |
 |---|---|---|---|
@@ -57,17 +58,18 @@ with the suite's TAP piped in or a long-form TEMP.
   half), 437 (live symptom), 438, 439, 440, 441** — twelve of them owe only the
   attended session below; 436/422 are diagnosis-gated (trace first, no third
   confident cause); 274 T3 and 406 are decisions (D1, D2) nobody has made.
-- Track E cleanup of the 2026-09-16 plan is NEXT after the attended session if
-  nobody is at the keyboard: E2 delete `ui/public/js/voice/mic-indicator.js` and
-  `widgets/kinds/cores.js` (no importers); E5 delete `AGENT_REACH_BIN` from
-  `.env.example` (no reader in any file type); E6 document `MYTHOS_ADBLOCK`,
-  `MYTHOS_AUTO_UPDATE`, `MYTHOS_HOTKEY_OCR`, `MYTHOS_UPDATE_URL`,
-  `PROVIDER_HEALTH_TTL_MS`, `WEB_SEARCH_LOCAL_AUTOSTART`, `WEB_SEARCH_LOCAL_ENTRY`;
-  E9 `scripts/lint-env-flags.js` in `docs:check`; E1 one `escapeHtml` (17 copies,
-  3 bodies; the DOM-based ones do not escape `"` and sit in 3 `data-id`
-  attributes — consolidation unless a `"`-bearing id is reproduced). Measured
-  and NOT changed: E3 four tree-kill bodies differ on purpose; E4 the two
-  `reasonText`s differ in behaviour; E8 `sleep()` in tests stays.
+- Track E cleanup of the 2026-09-16 plan shipped as commits on this branch
+  (the plan said "own PRs"; stacking PRs on the unmerged #96 was rejected as a
+  deeper stack): `6c9f0f1e` E2 two orphan HUD modules deleted; `dcecbab9`
+  E5/E6/E9 — 20 flags documented, `AGENT_REACH_BIN` deleted, and
+  `scripts/lint-env-flags.js` in `docs:check` (product reads must be
+  documented, documented names must be read — both directions at zero);
+  `7d81c64c` E1 — one `escapeHtml`/`escapeAttr` home in `url.js`, 17 copies
+  gone, the four attribute-position calls moved to `escapeAttr` (no `"`-bearing
+  id was reproduced; consolidation, not a security fix). Measured and NOT
+  changed: E3 four tree-kill bodies differ on purpose; E4 the two `reasonText`s
+  differ in behaviour; E8 `sleep()` in tests stays. NOT done: E7 (34 unused
+  exports, mostly `scripts/`) — needs a test-reachability pass first.
 - Licensing and release decisions (step 6.5, 274 T3). No release authorized.
 
 ## NEXT ACTION
