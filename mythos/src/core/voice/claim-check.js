@@ -167,6 +167,40 @@ const CLAIM_CATEGORIES = [
     progressiveRe: /\b(?:closing|dismissing|opening|spawning)\b[^.]{0,40}\b(widget|panel|window|card)\b|\b(?:is|am|'m)\s+(?:now\s+)?(?:closing|dismissing)\b/i,
   },
   {
+    // BUG-441 (2026-09-11 session; fixed 2026-09-16). `browser_click` x2 came
+    // back ok + unverified:true ("clicked ... from page script because it never
+    // became visibly actionable") and MYTHOS said "I clicked the play button".
+    // The filed cause was "the unverified caveat is dropped on the way to the
+    // spoken turn". It is not: evaluateOutcome folds unverified into ok:false,
+    // the ledger stores that, and `a.ok === true` is the backing test — the same
+    // session's unverified open_web WAS caught (3 claimed-action-not-taken
+    // target:opening events in Episodic/2026-09-11.jsonl). No category owned
+    // the verb "clicked", so the sentence had no shape to fail against. Same
+    // class as window-control above: the gap was the table, not the regexes.
+    //
+    // Tools: every `*click*` name in leash/tiers.js's TIER_TABLE — the test in
+    // claim-check-categories.test.js derives that set and fails if this list
+    // and TIER_TABLE disagree in either direction. see_and_click is OWNED, not
+    // backing: it ends in a real click.
+    //
+    // "pressed" is deliberately absent. A successful browser_press_key/send_key
+    // is not a click, and flagging "I pressed Enter" would retract a true
+    // statement (BUG-434's failure). A keys category is a separate decision.
+    //
+    // WHAT THIS CANNOT DO, on purpose. On Gemini Live the audio is already
+    // heard when the detector runs (live-session.js: "It cannot un-speak the
+    // audio"); the ad4-correction-retract notice is the earliest correction
+    // that path allows. And the detector backs by TOOL NAME: a real
+    // browser_click earlier in the evidence window backs a later false "I
+    // clicked the pause button" (pinned as test (f) in
+    // bug-441-clicks-are-a-claim-shape.test.js, recorded as a residual in
+    // BUGS.md). Matching the claimed target to the action's args is the next
+    // step if that residual is measured to matter.
+    name: 'clicking',
+    tools: ['browser_click', 'ui_click', 'click_at', 'right_click_at', 'see_and_click', 'cua_click'],
+    re: /\b(?:i(?:'ve| have) |i )(clicked|tapped)\b/i,
+  },
+  {
     name: 'reminders',
     tools: ['reminder_add', 'timer_add'],
     // "set" is its own past tense (irregular, unchanged), so it is ambiguous
@@ -432,6 +466,48 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
   return claims;
 }
 
+// BUG-441 D3 (operator decision 2026-09-16, "also suppress-before") — the legacy
+// text->TTS path's correction. Given the reply, the claims detectUnbackedClaims
+// found in it, and the turn's failed/unverified actions, REPLACE each flagged
+// sentence whose category tool really did not succeed with "<tool> did not
+// succeed — <why>." Until this change voice-agent.js appended that clause AFTER
+// the false sentence, so the operator heard the lie and then the correction.
+//
+// Only a claim that names a failed tool is removed. voice-agent.js passes the
+// failed actions ALONE to the detector, so a true sentence about a tool that
+// succeeded ("I sent the email" over a real gmail_send) is flagged too — and it
+// must stay. Lives here rather than in voice-agent.js because that file sits at
+// its file-size-ratchet ceiling and because this is pure text over pure data.
+// ponytail: a sentence mixing a true and a false clause ("I sent it and opened
+// the page") loses its true half; the corrective brain pass upstream already
+// tends to split them. Split by clause if that is measured to bite.
+function replaceUnbackedClaims(say, claims, unprovenActions) {
+  let text = String(say || '');
+  const byTool = new Map();
+  (unprovenActions || []).forEach((a) => { if (a && a.tool && !byTool.has(a.tool)) byTool.set(a.tool, a); });
+  const said = new Set();
+  const clauses = [];
+  const retracted = [];
+  (claims || []).forEach((claim) => {
+    let named = false;
+    (claim.candidateTools || []).forEach((tool) => {
+      const a = byTool.get(tool);
+      if (!a || said.has(tool)) return;
+      said.add(tool);
+      named = true;
+      const why = a.unverified
+        ? ((a.raw && a.raw.reason) || a.summary || 'could not be confirmed')
+        : (a.summary || 'failed');
+      clauses.push(tool + ' did not succeed — ' + why + '.');
+    });
+    if (named && claim.sentence) retracted.push(claim.sentence);
+  });
+  if (!clauses.length) return text;
+  retracted.forEach((sentence) => { text = text.replace(sentence, ''); });
+  text = text.replace(/\s{2,}/g, ' ').trim();
+  return (text ? text + ' ' : '') + clauses.join(' ');
+}
+
 // BUG-357 — the affirmative twin of the spoken-no cancellation. "Yeah. Yeah. Go
 // ahead." arrived over two pending whatsapp_send confirms, nothing dispatched,
 // and NOTHING told the model so — it filled the silence with "'Hi' has been
@@ -655,7 +731,7 @@ function detectFalseRetractions(assistantText, actionsThisTurn, recentActions) {
 }
 
 module.exports = {
-  detectUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice,
+  detectUnbackedClaims, replaceUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice,
   detectUnscheduledCommitments, SCHEDULE_WRITE_TOOLS, SCHEDULE_READ_TOOLS,
   detectFalseRetractions,
   // Exported for ranked-claim-check.js, which is a second detector over the

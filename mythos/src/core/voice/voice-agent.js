@@ -3,7 +3,7 @@
 // F3: Import tierOf to compute danger flags dynamically from the tier table.
 const { tierOf } = require('../leash/tiers');
 const { truncateAtSentenceBoundary } = require('../effectors/voice');
-const { detectUnbackedClaims } = require('./claim-check');
+const { detectUnbackedClaims, replaceUnbackedClaims } = require('./claim-check');
 
 // voice-agent.js — the voice tool-calling brain. CA of NOVA
 // app/lib/voice/voice-agent.js: persona + tool catalog + history ->
@@ -573,9 +573,14 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // extra brain call on every Ctrl+N — real cost for no honesty gained, since
   // nobody hears "I pressed ctrl+n" as a claim about the world. These are the ones
   // where an unproven result gets spoken as an accomplishment.
+  // BUG-441 (2026-09-16): only ui_click was here, so an unverified browser_click
+  // could not trigger re-derivation at all. The reason above covers every
+  // *click* tool in TIER_TABLE, so the set is completed, not patched by one name.
   const OUTCOME_CLAIMED_TOOLS = {
     ui_type: true, app_reply: true, whatsapp_send: true, gmail_send: true,
-    spotify_play: true, launch_app: true, ui_click: true,
+    spotify_play: true, launch_app: true,
+    ui_click: true, browser_click: true, click_at: true, right_click_at: true,
+    see_and_click: true, cua_click: true,
   };
 
   // Channels that represent the operator talking, right now. An explicit
@@ -858,29 +863,13 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
       // exactly which tool didn't succeed instead of leaving the false claim
       // standing.
       try {
-        const unbacked = allFailedActions.concat(allUnverifiedActions)
-          .map((a) => ({ tool: a.tool, ok: false })); // unverified never backs a claim (module contract)
+        const unproven = allFailedActions.concat(allUnverifiedActions);
+        const unbacked = unproven.map((a) => ({ tool: a.tool, ok: false })); // unverified never backs a claim (module contract)
         const claims = detectUnbackedClaims(finalSay, unbacked, [], { voiceHonesty: false }); // BUG-423: legacy progressive patterns stay unchanged.
-        if (claims.length) {
-          const byTool = new Map();
-          allFailedActions.concat(allUnverifiedActions).forEach((a) => {
-            if (!byTool.has(a.tool)) byTool.set(a.tool, a);
-          });
-          const said = new Set();
-          const clauses = [];
-          claims.forEach((claim) => {
-            claim.candidateTools.forEach((tool) => {
-              const a = byTool.get(tool);
-              if (!a || said.has(tool)) return;
-              said.add(tool);
-              const why = a.unverified
-                ? ((a.raw && a.raw.reason) || a.summary || 'could not be confirmed')
-                : (a.summary || 'failed');
-              clauses.push(tool + ' did not succeed — ' + why + '.');
-            });
-          });
-          if (clauses.length) finalSay = (finalSay ? finalSay + ' ' : '') + clauses.join(' ');
-        }
+        // BUG-441 D3 (2026-09-16): the false sentence is REPLACED by the
+        // correction, not spoken and then corrected. The text logic is in
+        // claim-check.js (pure, tested there); this file is at its size ceiling.
+        finalSay = replaceUnbackedClaims(finalSay, claims, unproven);
       } catch (_) { /* claim-check is best-effort — never block the reply */ }
     }
 

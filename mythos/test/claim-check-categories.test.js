@@ -67,6 +67,19 @@ test('the searching category covers the web tools, not only code search', () => 
   }
 });
 
+test('BUG-441: every *click* tool in TIER_TABLE is owned by the clicking category, and nothing else is', () => {
+  // 2026-09-16: an unverified browser_click was spoken as "I clicked the play
+  // button" and no category owned the verb. The set is DERIVED here — a new
+  // click tool added to TIER_TABLE without joining the category fails this
+  // test instead of silently backing nothing (gate D: no hand-kept list).
+  const clicking = CLAIM_CATEGORIES.find((c) => c.name === 'clicking');
+  assert.ok(clicking, 'clicking category must exist');
+  const derived = Object.keys(TIER_TABLE).filter((name) => name.includes('click')).sort();
+  assert.ok(derived.length >= 6, 'TIER_TABLE lost click tools? ' + derived.join(', '));
+  assert.deepStrictEqual([...clicking.tools].sort(), derived,
+    'clicking.tools must equal every *click* name in TIER_TABLE');
+});
+
 test('a successful web_search backs an "I searched" claim', () => {
   const claims = detectUnbackedClaims(
     'I searched the web for the latest release notes.',
