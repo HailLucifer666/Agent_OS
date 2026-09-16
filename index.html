@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7837,
+      "value": 7848,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -4076,13 +4076,15 @@
       {
         "n": 268,
         "shape": "entry",
-        "state": "open",
-        "title": "Ctrl+Alt+X (screen text capture / OCR) does nothing",
-        "detail": {},
-        "excerpt": "**Status:** 🔴 OPEN — blocked on the operator pressing Ctrl+Alt+X once in a build carrying the 2026-08-20 markers. Operator action deferred on 2026-09-10. **2026-09-11 SESSION READ.** **The keypress half is answered, and the answer is not in this ticket's own hypothesis.** Ctrl+Alt+X was pressed twelve times at 18:19:38–56Z. Every layer fired: `OCR-grab hotkey fired` × 12 in main.log, `ocr.hotkey.received` in the server, and `ocr.hotkey.dispatched ok:true` returning **872–929 characters of real screen text on 11 of 12**. The failure formatter this ticket suspects never ran — those are `ok:true`. What actually failed is latency and surface. The first dispatch returned `ok:false ms:32727 \"PC automation command timed out\"`, inside BUG-436's 31,777 ms stall; the server did not receive the first keypress until 20 s after it was sent. First press 18:19:38, first usable text 18:20:38 — **60 sec…",
+        "state": "coded",
+        "title": "Ctrl+Alt+X (screen text capture / OCR) does nothing (CODED 2026-09-16; attended press pending)",
+        "detail": {
+          "fix": "`server/index.js` `mythos:ocr-grab` handler: both exits (the normal broadcast and the `catch`) now also `sendOcrResultToShell()` — `process.send({channel:'mythos:ocr-result', payload})`, guarded on `typeof process.send === 'function'` because `npm start` has no parent. New pure `electron/ocr-result.js` `handleOcrResult(payload, {clipboard, Notification, log})`: copy first, toast second, each failure caught on its own — a toast that throws does not erase a successful copy; a clipboard that throws still produces a toast naming the copy failure; empty text says \"No text found on screen.\"; a null payload is a failure toast, not a main-process crash. `electron/main.js` routes the channel in its existing child `message` listener with the real `clipboard`/`Notification` (required lazily at the use site, per the app.ready rule). The HUD's renderer clipboard write is deleted; the caption stays.",
+          "verification": "`test/electron-ocr-result.test.js`: (a) full text to clipboard, first line + char count in the toast; (b) `ok:false` → error toast, clipboard untouched; (c) empty text → \"no text found\", clipboard untouched; (d) Notification throws → copy kept, failure logged; (e) clipboard throws → toast names the failure; (e2) notifications unsupported; (e3) null payload; (f)(g) server forwards on both exits (source shape — `server/index.js` is a closure node --test cannot enter); (h) main.js wiring; (i) the HUD write is gone. `test/electron-ocr-hotkey.test.js`'s \"copies to the clipboard best-effort\" pin changed by D4, dated. Mutation run recorded in the test file."
+        },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[EVIDENCE FIRST, operator: press Ctrl+Alt+X once in a running build] Electron global shortcut sends OCR IPC; server dispatches screen_read_text and broadcasts ocr-result. Native boundary telemetry exists. Failure formatter still discards canonical string r.result reason and emits generic OCR failed; reported to root separately from keypress blocker. Consumers: Native Ctrl+Alt+X, fork IPC, dispatcher and HUD OCR result listener.. Regression oracle: electron-ocr-hotkey.test.js is source-shape only; historical mutated channel survived. Actual same-screen direct-tool versus native-keypress is required, no silent IPC observation accepted as proof.. Remaining evidence: Native keypress not observed here. Canonical string failure needs behavioral diagnostic regression/repair; actual OCR output/HUD parity and packaged artifact remain missing.",
+          "evidence": "[CODED 2026-09-16 (D4: native toast + clipboard from the main process; the HUD clipboard write could never work unfocused); operator: press Ctrl+Alt+X once in a running build] Electron global shortcut sends OCR IPC; server dispatches screen_read_text and broadcasts ocr-result. Native boundary telemetry exists. Failure formatter still discards canonical string r.result reason and emits generic OCR failed; reported to root separately from keypress blocker. Consumers: Native Ctrl+Alt+X, fork IPC, dispatcher and HUD OCR result listener.. Regression oracle: electron-ocr-hotkey.test.js is source-shape only; historical mutated channel survived. Actual same-screen direct-tool versus native-keypress is required, no silent IPC observation accepted as proof.. Remaining evidence: Native keypress not observed here. Canonical string failure needs behavioral diagnostic regression/repair; actual OCR output/HUD parity and packaged artifact remain missing.",
           "source": "electron/main.js:2527-2532; server/index.js:4316-4348"
         }
       },
@@ -5828,8 +5830,8 @@
     "counts": {
       "verified": 82,
       "fixed": 181,
-      "open": 15,
-      "coded": 9,
+      "open": 14,
+      "coded": 10,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0

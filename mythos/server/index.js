@@ -4311,6 +4311,10 @@ function createServer(deps) {
       // Fire-and-forget: a globalShortcut callback can't await, and a failure
       // must surface as an honest ocr-result, never crash the server.
       if (msg && msg.channel === 'mythos:ocr-grab') {
+        // BUG-268 D4 (2026-09-16): also up the fork IPC channel, for the main-process toast + clipboard (electron/ocr-result.js — the HUD is unfocused when the hotkey fires). `npm start` has no parent: guard.
+        const sendOcrResultToShell = (payload) => { if (typeof process.send !== 'function') return;
+          try { process.send({ channel: 'mythos:ocr-result', payload }); }
+          catch (err) { try { logger.warn('ocr.hotkey.shell-send-failed', { error: err && err.message }); } catch { /* never break the handler to log */ } } };
         (async () => {
           // BUG-268 boundary 2 (Electron callback owns boundary 1): entry without
           // outcome means dispatch hung; ok:true with empty text implicates capture/OCR.
@@ -4330,17 +4334,14 @@ function createServer(deps) {
                 error: error,
               });
             } catch { /* never break the handler to log */ }
-            broadcastAll({
-              type: 'ocr-result',
-              payload: {
-                ok: ok,
-                text: ok ? String((r.result && r.result.text) || '') : '',
-                error: error,
-              },
-            });
+            const payload = { ok: ok, text: ok ? String((r.result && r.result.text) || '') : '', error: error };
+            sendOcrResultToShell(payload);
+            broadcastAll({ type: 'ocr-result', payload });
           } catch (err) {
+            const payload = { ok: false, text: '', error: String((err && err.message) || err || 'OCR failed') };
+            sendOcrResultToShell(payload);
             try {
-              broadcastAll({ type: 'ocr-result', payload: { ok: false, text: '', error: String((err && err.message) || err || 'OCR failed') } });
+              broadcastAll({ type: 'ocr-result', payload });
             } catch { /* no clients connected — nothing to report to */ }
           }
         })();

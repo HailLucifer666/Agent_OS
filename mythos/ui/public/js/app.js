@@ -1034,10 +1034,11 @@ subscribe(['navigate'], (msg) => {
 });
 
 // OCR-result — Slice 2 (Electron shell): Ctrl+Alt+X pressed anywhere → server
-// ran screen_read_text → text arrives here. Caption the first line and copy
-// the full text to the clipboard (best-effort: clipboard write needs a focused
-// document, and the whole point of the hotkey is that the HUD is NOT focused —
-// a rejected promise just means the caption is the only surface this time).
+// ran screen_read_text → text arrives here. Caption the first line. The
+// clipboard copy and the native toast happen in the Electron main process
+// (electron/ocr-result.js, BUG-268 D4): a renderer clipboard write needs a
+// focused document, and the whole point of the hotkey is that the HUD is NOT
+// focused, so for a year this surface was a caption nobody was looking at.
 subscribe(['ocr-result'], (msg) => {
   // BUG-268 instrumentation, boundary 3 of 3 (see electron/main.js's OCR-grab
   // callback for the read-in-order guide). Logged BEFORE the gate check and
@@ -1062,9 +1063,9 @@ subscribe(['ocr-result'], (msg) => {
   const text = String(p.text || '');
   const firstLine = text.split('\n').map((l) => l.trim()).filter(Boolean)[0] || '(no text found)';
   mic.setCaption('📋 ' + firstLine, 'info');
-  if (text && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-    Promise.resolve(navigator.clipboard.writeText(text)).catch(() => { /* unfocused doc — caption only */ });
-  }
+  // BUG-268 D4 (2026-09-16): no clipboard write here any more. It rejected on
+  // an unfocused document — the state the hotkey is always used in — so the
+  // Electron main process owns the clipboard and the toast (electron/ocr-result.js).
 });
 
 // Close-panel — server-initiated request from the close_panel effector

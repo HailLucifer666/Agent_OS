@@ -981,7 +981,16 @@ function startChild() {
   // closes it and acks back so close_panel can report what really happened.
   child.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return;
-    if (msg.channel === 'mythos:ui.open-web') {
+    if (msg.channel === 'mythos:ocr-result') {
+      // BUG-268 D4 (2026-09-16): the OCR hotkey's result, toasted and copied
+      // from HERE because the HUD is unfocused when the hotkey fires and the
+      // renderer clipboard API rejects on an unfocused document. clipboard and
+      // Notification are ready-gated exports — required at the use site, never
+      // destructured at module scope (the 2026-08-04 boot failure).
+      const { clipboard, Notification } = require('electron');
+      const outcome = handleOcrResult(msg.payload, { clipboard, Notification, log });
+      log('ocr-result ->', JSON.stringify({ copied: outcome.copied, toastShown: outcome.toastShown, title: outcome.title }));
+    } else if (msg.channel === 'mythos:ui.open-web') {
       const res = mediaWindowController.handleOpenWeb(msg.payload);
       log('media-window: open-web ->', JSON.stringify(res));
       // BUG-272 T2: the verdict used to be logged and DROPPED here. When it says
@@ -1753,6 +1762,7 @@ function pointInstallerTempAtInstallVolume() {
 // source-shape assertions did NOT catch this function resolving instantly when
 // it read the module-level `child` that stopChild() had just nulled.
 const { awaitChildExit, stopChildGracefully, killTree } = require('./child-exit');
+const { handleOcrResult } = require('./ocr-result'); // BUG-268 D4: pure, behaviour-tested there
 
 // THE HANDOVER, in order. Order is the whole correctness of this function.
 //

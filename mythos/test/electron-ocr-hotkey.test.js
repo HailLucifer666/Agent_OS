@@ -97,12 +97,17 @@ describe('HUD ocr-result handling (Slice 2)', () => {
       'the gate verdict must return early, not merely be computed');
   });
 
-  it('captions the result and copies to the clipboard best-effort', () => {
+  it('captions the result; the clipboard is the main process\'s job now (BUG-268 D4)', () => {
+    // 2026-09-16: this pin used to demand navigator.clipboard.writeText with a
+    // .catch — "best-effort" because it rejects on an unfocused document, which
+    // is the ONLY state the hotkey is used in. Operator decision D4 moved the
+    // clipboard and a native toast to electron/ocr-result.js (behaviour-tested in
+    // electron-ocr-result.test.js); the renderer write is gone by design.
     const block = APP_JS.slice(APP_JS.indexOf("subscribe(['ocr-result']"));
-    assert.match(block, /mic\.setCaption\(/, 'the caption is the always-available surface');
-    assert.match(block, /navigator\.clipboard\.writeText/, 'full text should reach the clipboard when possible');
-    assert.match(block, /\.catch\(/,
-      'clipboard write rejects on an unfocused document — the whole point of the hotkey — so it must be best-effort');
+    const body = block.slice(0, block.indexOf('\n});'));
+    assert.match(body, /mic\.setCaption\(/, 'the caption is the always-available in-HUD surface');
+    assert.doesNotMatch(body, /navigator\.clipboard\.writeText/,
+      'a renderer clipboard write on an unfocused HUD is a no-op dressed as a feature');
   });
 
   it('surfaces failure as an error caption, not a silent drop', () => {
