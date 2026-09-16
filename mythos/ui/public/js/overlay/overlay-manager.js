@@ -6,6 +6,7 @@
 
 import { getPanel } from './panel-registry.js';
 import { emitRefresh } from '../stats-bus.js';
+import { escapeHtml, escapeAttr } from '../url.js';
 
 // Elements to shut out of the tab order (and pointer/click) while any panel
 // is open. Panels themselves are NOT modal — the HUD stays interactive
@@ -15,13 +16,6 @@ import { emitRefresh } from '../stats-bus.js';
 // event-handling of its own. Missing elements (e.g. in a DOM-free test
 // harness) are silently skipped.
 const INERT_WHILE_OPEN_IDS = ['widget-root', 'hud-canvas', 'core-orb'];
-
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function escapeAttr(s) {
-  return escapeHtml(s).replace(/"/g, '&quot;');
-}
 
 function setBackgroundInert(isInert) {
   for (const id of INERT_WHILE_OPEN_IDS) {

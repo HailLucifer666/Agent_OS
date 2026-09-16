@@ -1,3 +1,4 @@
+import { escapeHtml, escapeAttr } from '../url.js';
 // views/web-panel.js — overlay panel for embedding web content (YouTube, URLs).
 // First iframe in the dashboard. render(body, payload) receives the resolved
 // content payload from the open_web tool. Cleanup removes the iframe to stop
@@ -9,12 +10,6 @@
 // file renders the same payload shape into the floating widget); safeUrl() gates
 // the scheme so a javascript:/data: URL can never become a live src or href.
 
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function escapeAttr(s) {
-  return escapeHtml(s).replace(/"/g, '&quot;');
-}
 // Returns the URL if it is http(s), else null — callers render inert text instead.
 function safeUrl(url) {
   if (typeof url !== 'string') return null;

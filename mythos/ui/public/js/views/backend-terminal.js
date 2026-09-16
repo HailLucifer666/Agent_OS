@@ -4,6 +4,7 @@
 // Subscribes to WS 'log', 'action', 'brain-spend', 'health' — real-time, read-only.
 
 import { subscribe } from '/js/ws.js';
+import { escapeHtml } from '../url.js';
 
 var MAX_LINES = 300;
 
@@ -154,10 +155,6 @@ export async function render(mount) {
     }
     // xss-safe: content assembled from escaped parts above
     apiScroll.innerHTML = html;
-  }
-
-  function escapeHtml(s) {
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   // Subscribe to all backend activity streams

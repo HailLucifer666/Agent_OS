@@ -3,10 +3,7 @@
 // WS-only (anti-drift #6); payload shape: { breakers, providers, quotas, anomalies }
 // (server/index.js broadcastHealth unwraps probes.getStatus()).
 import { subscribe } from '/js/ws.js';
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { escapeHtml } from '../url.js';
 
 function prettyName(name) {
   return escapeHtml(String(name).replace(/[_-]+/g, ' '));

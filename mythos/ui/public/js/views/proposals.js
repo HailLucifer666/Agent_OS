@@ -1,3 +1,4 @@
+import { escapeHtml, escapeAttr } from '../url.js';
 // proposals.js — V5 (Phase 4): MYTHOS goal-proposal queue.
 //
 // The cortex's mull() loop sometimes proposes goals via the propose_goal
@@ -13,18 +14,12 @@ const API = {
 
 let state = { proposals: [], busy: false };
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str ?? '';
-  return div.innerHTML;
-}
-
 function proposalRow(p) {
   const when = p.createdAt ? new Date(p.createdAt).toLocaleString() : '';
   const driveChip = p.drive ? `<span class="goals-pill mono">${escapeHtml(p.drive)}</span>` : '';
   const catChip = p.category ? `<span class="goals-pill mono">${escapeHtml(p.category)}</span>` : '';
   return `
-    <div class="goals-row fade-in" data-id="${escapeHtml(p.id)}">
+    <div class="goals-row fade-in" data-id="${escapeAttr(p.id)}">
       <div class="goals-row-text">
         ${escapeHtml(p.text)}
         ${p.reason ? `<div class="muted small">${escapeHtml(p.reason)}</div>` : ''}

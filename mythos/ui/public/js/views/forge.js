@@ -4,13 +4,7 @@
 // instruction), and an <iframe> preview once a build is awaiting review or done.
 // WS-driven (subscribe ['forge','checkpoint']), no polling.
 import { subscribe, checkpointReply } from '/js/ws.js';
-import { safeSameOriginUrl, escapeAttr } from '/js/url.js';
-
-function escapeHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s == null ? '' : String(s);
-  return d.innerHTML;
-}
+import { safeSameOriginUrl, escapeAttr, escapeHtml } from '/js/url.js';
 
 const FILE_ICON = { done: '&#10003;', failed: '&#10007;', generating: '&#9881;', pending: '&#8230;' };
 
@@ -49,7 +43,7 @@ export async function render(mount) {
     const gate = pending.get(p.id);
     if (!gate) return '';
     const isFinal = gate.kind === 'final-review';
-    return `<div class="forge-gate" data-cid="${escapeHtml(gate.id)}">
+    return `<div class="forge-gate" data-cid="${escapeAttr(gate.id)}">
       <div class="forge-gate-title">${escapeHtml(gate.title || 'Approval needed')}</div>
       ${isFinal ? '<textarea class="forge-feedback" placeholder="To deny: describe the change you want (used as the revision instruction)"></textarea>' : ''}
       <div class="forge-gate-actions">
@@ -61,7 +55,7 @@ export async function render(mount) {
 
   function projectCard(p) {
     const files = (p.files || []).map(fileRow).join('');
-    return `<div class="forge-project" data-id="${escapeHtml(p.id)}">
+    return `<div class="forge-project" data-id="${escapeAttr(p.id)}">
       <div class="forge-project-head">
         <span class="forge-project-name">${escapeHtml(p.name || 'project')}</span>
         ${stageBadge(p)}

@@ -12,12 +12,9 @@ import { packColumns, measureCards } from './auto-layout.js';
 import { mountWebResult } from './kinds/web-result.js';
 import { mountDynamicWidget } from './kinds/dynamic.js';
 import { h } from '../dom.js';
+import { escapeHtml } from '../url.js';
 
 const STORE_KEY = 'mythos.widgets.v1';
-
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 // Mount failures render through h() rather than innerHTML: err.message can carry
 // arbitrary text (including a URL or response body from a widget's own fetch),

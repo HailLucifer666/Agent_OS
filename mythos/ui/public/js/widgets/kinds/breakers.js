@@ -1,12 +1,10 @@
+import { escapeHtml } from '../../url.js';
 // breakers.js — circuit-breaker chips from the synthesized WS 'health' broadcast.
 // Only non-closed breakers get a chip; all-closed shows a single calm line.
 
 // Breaker names/states come off the WS health broadcast. They are provider and
 // lane ids today, but `state` also lands in a class attribute — escape both
 // rather than trust the shape of a server payload.
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 export function mountBreakers(el, ctx) {
   // xss-safe: static template, no interpolation

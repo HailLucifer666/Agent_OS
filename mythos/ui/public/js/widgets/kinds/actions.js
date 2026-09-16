@@ -1,3 +1,4 @@
+import { escapeHtml } from '../../url.js';
 // actions.js — live agent-action feed: WS 'action' broadcasts into a small ring
 // buffer. WS-only (anti-drift #6) — no polling.
 //
@@ -43,12 +44,6 @@ export function rowClock(ts) {
   const d = new Date(ts);
   const p = (n) => String(n).padStart(2, '0');
   return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
-}
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str ?? '';
-  return div.innerHTML;
 }
 
 // state + ok + unverified -> which of the four glyphs. Kept in one place so

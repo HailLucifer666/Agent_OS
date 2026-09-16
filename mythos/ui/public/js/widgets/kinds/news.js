@@ -1,11 +1,8 @@
+import { escapeHtml, escapeAttr } from '../../url.js';
 // news.js — top headlines via the server's /api/news (Google News RSS fetched
 // server-side; the browser can't reach it directly — CORS, and news sites send
 // X-Frame-Options so an iframe would show "refused to connect"). Same
 // honest-offline posture as weather.js: failure says "news offline", never fakes.
-
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
 
 // Deliberately not a regex: this is a two-prefix test, and a literal regex for
 // it is exactly the kind of escape-heavy line that gets silently mangled in
@@ -52,7 +49,7 @@ export function mountNews(el) {
         const body = `<span class="news-item-title">${escapeHtml(it.title)}</span>`
           + (it.ago ? `<span class="news-item-ago mono">${escapeHtml(it.ago)}</span>` : '');
         return href
-          ? `<a class="news-item" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${body}</a>`
+          ? `<a class="news-item" href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">${body}</a>`
           : `<div class="news-item">${body}</div>`;
       }).join('');
       const at = new Date();

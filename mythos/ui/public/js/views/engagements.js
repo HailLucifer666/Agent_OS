@@ -3,6 +3,7 @@
 
 import { subscribe } from '../ws.js';
 import { safeHref } from '../url.js';   // relative, not /js/…: this file stays node-importable
+import { escapeHtml, escapeAttr } from '../url.js';
 
 // Engagement states for filtering
 const ACTIVE_STATES = ['DRAFT', 'INTERVIEWING', 'SPEC_READY', 'PLAN_READY', 'AWAITING_APPROVAL', 'AWAITING_STAGE_APPROVAL', 'EXECUTING', 'VERIFYING', 'REPAIRING'];
@@ -27,12 +28,6 @@ let state = {
 // Helper functions
 // ============================================ */
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str ?? '';
-  return div.innerHTML;
-}
-
 // escapeHtml() above does NOT escape `"` — textContent/innerHTML round-tripping
 // never needs to, because it is encoding for TEXT position. Interpolating its
 // output into an ATTRIBUTE is therefore a break-out: one double quote in the
@@ -40,10 +35,6 @@ function escapeHtml(str) {
 // repo has shipped that bug before (the HUD's markdown link renderer, fixed with
 // safeHref on 2026-08-02), and this file was doing it again at three
 // interpolations of engagement.id/status. Mirrors overlay-manager.js's escapeAttr.
-function escapeAttr(str) {
-  return escapeHtml(str).replace(/"/g, '&quot;');
-}
-
 
 function relativeTime(ts) {
   if (!ts) return '—';
