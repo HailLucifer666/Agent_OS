@@ -122,6 +122,12 @@ describe('brain/lanes.default', function() {
     // KNOWN_DEAD is data rather than prose precisely because prose is what let
     // inclusionai/ling-3.0-flash:free sit in two lanes for three weeks after it
     // began 404ing. Every table, every entry, every run.
+    //
+    // Mutation 2026-09-16 (BUG-440 close-out): `{ provider: 'mistral', model:
+    // 'mistral-large-2512' }` re-added to PREF_VISION -> this test red with
+    // "PREF_VISION lists mistral:mistral-large-2512 — known dead (...)"; the
+    // other 82 stayed green; lanes.default.js restored sha256-identical
+    // (70d17580...). The guard can see the dead vision model walk back in.
     const tables = ['PREF_VOICE','PREF_BUILD','PREF_SIMPLE','PREF_REASONING','PREF_MEMORY','PREF_TEXT','PREF_VISION','PREF_EMBED'];
     tables.forEach(function(name) {
       lanes[name].forEach(function(entry) {

@@ -12,8 +12,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { TIER_TABLE } = require('../src/core/leash/tiers');
-const DIR = path.join(__dirname, '../src/core/effectors');
+// BUG-435 follow-up (2026-09-16): src/core/voice joined the scan. Its guards
+// refuse calls and name tools in prose too (browser-route-guard.js is the one
+// BUG-435's repair note flagged as "outside the ratchet, held to it by hand").
+// Measured before widening: 11 sites, recorded below by content hash like the
+// rest. Keys stay bare filenames; the guard test below proves no name is shared
+// between the two directories, so the flat map cannot be ambiguous.
+const DIRS = [path.join(__dirname, '../src/core/effectors'), path.join(__dirname, '../src/core/voice')];
 const PROSE_BASELINE = {
+  "browser-route-guard.js": ["8b98d7bb25a915f2"],
+  "claim-check.js": ["331fa7dc114f198f"],
+  "narration-claims.js": ["d98c73994603d126"],
+  "turn-audit-notices.js": ["2516cec7e56c2064"],
+  "voice-agent.js": ["0389baa340c47aa1", "a769c4ee72490ffc", "8266b6bf213bc2b9", "37bb0d112fd86208", "829d84f969b61a66", "e498939cf2a8d0b0", "57ac9c3a016ac87a"],
   "browser-intent-remedy.js": [
     "49a97d7d71bc722c",
     "50518bdca0531d56"
@@ -177,14 +188,27 @@ function adviceStrings(source) {
 }
 function inventory() {
   const out = {};
-  for (const file of fs.readdirSync(DIR).filter(f => f.endsWith('.js'))) {
-    // Review 2026-09-10: two Android literals span lines, so the raw hash carried the
-    // checkout's line ending — recorded from a CRLF worktree, red on an LF clone and CI.
-    const entries = adviceStrings(fs.readFileSync(path.join(DIR, file), 'utf8').replace(/\r\n/g, '\n'));
-    if (entries.length) out[file] = entries;
+  for (const dir of DIRS) {
+    for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.js'))) {
+      // Review 2026-09-10: two Android literals span lines, so the raw hash carried the
+      // checkout's line ending — recorded from a CRLF worktree, red on an LF clone and CI.
+      const entries = adviceStrings(fs.readFileSync(path.join(dir, file), 'utf8').replace(/\r\n/g, '\n'));
+      if (entries.length) out[file] = (out[file] || []).concat(entries);
+    }
   }
   return out;
 }
+test('the scanned directories share no filename, so the flat baseline keys are unambiguous', () => {
+  const seen = new Map();
+  for (const dir of DIRS) for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.js'))) {
+    assert.ok(!seen.has(f), f + ' exists in both ' + seen.get(f) + ' and ' + dir + ' — key the baseline by relative path before adding it');
+    seen.set(f, dir);
+  }
+});
+// Mutation 2026-09-16: `const PROBE = 'Call browser_navigate to fix it.';` added to
+// src/core/voice/claim-check.js -> "tool-call prose debt never grows" red with
+// claim-check.js:<hash>; restored sha256-identical. Before the widening the same
+// probe was invisible to this file.
 test('only a sibling remedy exempts refusal prose', () => {
   assert.equal(adviceStrings("return { result: 'Call browser_navigate.', remedy: remedy('browser_navigate', {}, 'why') };").length, 0);
   assert.equal(adviceStrings("return { result: 'Call browser_navigate.' }; const other = { remedy: remedy('browser_navigate', {}, 'why') };").length, 1);
