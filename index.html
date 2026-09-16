@@ -347,18 +347,18 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7801,
+      "value": 7823,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-11"
+      "measuredAt": "2026-09-16"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-11"
+      "measuredAt": "2026-09-16"
     },
     "withheld": {
       "value": 61,
@@ -5783,13 +5783,14 @@
         "n": 439,
         "shape": "entry",
         "state": "open",
-        "title": "cua_click is dispatched before the window-state refresh it depends on returns (EVIDENCE COMPLETE 2026-09-11; filed 2026-09-11)",
+        "title": "cua_click is dispatched before the window-state refresh it depends on returns (CODED 2026-09-16; filed 2026-09-11)",
         "detail": {
+          "verification": "`test/bug-439-stale-index-refreshes-then-fails.test.js`: (a) the recorded case — one refresh, no second click, message names the fresh label and the next step; (b) a moved control is visible; (c) the index is gone from the fresh tree; (d)(e) the refresh is refused / times out — fail with both texts, no click; (f) a non-cache failure still takes the foreground escalation and never refreshes; (g) a timed-out first click does nothing further (BUG-354 stays); (h) a stale index reported only by the foreground retry still refreshes. Mutation run recorded in the test file.",
           "cause": "`live-tool-adapter.js:595` runs the calls inside one batch sequentially, deliberately, with a comment explaining the keystroke races that prevents. These were two batches. Nothing serialises across batches, and Gemini Live streams a new function call before the previous outcome has been injected, so the model acts on state it has not received. `cua_get_window_state` itself took"
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[EVIDENCE COMPLETE, cause pinned 2026-09-11; no code change yet] cua_click failed twice with \"Element 100 not in cache for hwnd=329782. Call get_window_state first.\" The model DID call it. Timeline: cua_get_window_state dispatched 11:12:12.773, cua_click dispatched 11:12:15.720 in a SEPARATE batch, the state result arrived 11:12:27.108 — the click went out 11.4s before the refresh it depends on returned. live-tool-adapter.js:595 serialises calls WITHIN a batch on purpose; nothing orders them ACROSS batches, and Gemini streams a second call before the first outcome is injected. cua_get_window_state itself took 14.3s, which widens the window. Both cua_click batches carry the same batchHash 4d454baba3f9; BUG-120 dedup missed it because that is scoped to one turn and these were turns 39 and 43. Consumers: live-tool-adapter batch dispatch; from-cua element cache. Remaining evidence: whether cua-driver exposes a refresh cheap enough for cua_click to self-heal on a miss, which is the fix shape that makes the bad state unrepresentable rather than detectable.",
+          "evidence": "[CODED 2026-09-16; refresh once then fail with the fresh label, no auto-retry; attended run pending] cua_click failed twice with \"Element 100 not in cache for hwnd=329782. Call get_window_state first.\" The model DID call it. Timeline: cua_get_window_state dispatched 11:12:12.773, cua_click dispatched 11:12:15.720 in a SEPARATE batch, the state result arrived 11:12:27.108 — the click went out 11.4s before the refresh it depends on returned. live-tool-adapter.js:595 serialises calls WITHIN a batch on purpose; nothing orders them ACROSS batches, and Gemini streams a second call before the first outcome is injected. cua_get_window_state itself took 14.3s, which widens the window. Both cua_click batches carry the same batchHash 4d454baba3f9; BUG-120 dedup missed it because that is scoped to one turn and these were turns 39 and 43. Consumers: live-tool-adapter batch dispatch; from-cua element cache. Remaining evidence: whether cua-driver exposes a refresh cheap enough for cua_click to self-heal on a miss, which is the fix shape that makes the bad state unrepresentable rather than detectable.",
           "source": "mythos/src/core/voice/live-tool-adapter.js:595; mythos/src/core/effectors/from-cua.js"
         }
       },

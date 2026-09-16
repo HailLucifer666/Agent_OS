@@ -84,6 +84,46 @@ function stripComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
 }
 
+// BUG-439 (2026-09-16): the remedy() calls in ONE source file that (d) below
+// must judge — those with a LIVE speaker and possibly dead advice.
+//
+// (d)'s own doctrine, written before this helper existed: "the advisor and the
+// advised share a capability rule, so when cua is down BOTH are withheld and the
+// advice never reaches the model at all. Dead advice needs a LIVE speaker." The
+// first selector applied that only to description prose and took EVERY remedy()
+// as a live speaker, because every remedy() then lived in src/core/voice/ guard
+// code that runs whatever the adapters are doing. cua_click's stale-index
+// refusal (from-cua.js) broke that assumption: its remedy() names cua_click /
+// cua_get_window_state from code that can only run while the cua adapter is
+// ONLINE (requireOnline() at the top of the effector). Same gate, so not the
+// defect — and the alternative, prose with no structured remedy, is exactly what
+// the BUG-425 ratchet refuses.
+//
+// So the exemption is DERIVED, not listed: a remedy tool is exempt in a file only
+// if that file itself registers a tool under the SAME capability rule. A remedy
+// naming cua_click from a file with no cua tool of its own (a voice/ guard, a
+// browser effector) is still flagged — fixture-tested in (e).
+function liveSpeakerRemedies(code) {
+  const { RULES } = require('../src/core/voice/tool-capability');
+  const ruleOf = (name) => {
+    const r = RULES.find((rule) => rule.match(name) && !(rule.except && rule.except(name)));
+    return r ? r.id : null;
+  };
+  const ownRules = new Set(
+    [...code.matchAll(/\bname:\s*'([a-z0-9_]+)'/g)].map((m) => m[1])
+      .filter((n) => Object.prototype.hasOwnProperty.call(TIER_TABLE, n))
+      .map(ruleOf).filter(Boolean),
+  );
+  const out = [];
+  for (const m of code.matchAll(/\bremedy\(\s*'([a-z0-9_]+)'/g)) {
+    const tool = m[1];
+    const rule = ruleOf(tool);
+    if (rule && ownRules.has(rule)) continue; // withheld together with its speaker
+    out.push(tool);
+  }
+  return out;
+}
+
 // The model-facing prose in this repo is always the value of one of four keys.
 // Scanning only those, rather than every quoted run in the file, is deliberate:
 // a whole-file string scan cannot tell a literal from an apostrophe in code, and
@@ -222,7 +262,7 @@ describe('a refusal must name something the model can actually call', () => {
     // not.
     const named = new Set();
     for (const { text } of sources()) {
-      for (const m of stripComments(text).matchAll(/\bremedy\(\s*'([a-z0-9_]+)'/g)) named.add(m[1]);
+      for (const tool of liveSpeakerRemedies(stripComments(text))) named.add(tool);
     }
     assert.ok(named.size >= 3, 'found only ' + named.size + ' remedy tools — the scan is not reaching the sources');
 
@@ -234,6 +274,19 @@ describe('a refusal must name something the model can actually call', () => {
       'these tools are allowlisted but NOT declared when their adapter is down, so a refusal naming '
       + 'them leaves the model with advice it cannot take for the rest of the session — mark the '
       + 'capability rule selfHealing if a step in the session can clear it, or stop naming the tool');
+  });
+
+  test('(e) the same-gate exemption in (d) is narrow: a cua remedy from a non-cua speaker is still flagged', () => {
+    // BUG-439 (2026-09-16). Guard attacked on the day it was written.
+    const cuaFile = "const TOOLS = [{ name: 'cua_list_windows', fn: x }]; return { ok: false, result: 'r', remedy: remedy('cua_click', {}, 'why') };";
+    assert.deepEqual(liveSpeakerRemedies(cuaFile), [],
+      'from-cua.js advising cua_click is withheld together with its speaker — not dead advice');
+    const guardFile = "function guard() { return { ok: false, result: 'r', remedy: remedy('cua_click', {}, 'why') }; }";
+    assert.deepEqual(liveSpeakerRemedies(guardFile), ['cua_click'],
+      'a voice/ guard naming cua_click has a live speaker and dead advice — the defect (d) exists for');
+    const browserFile = "const TOOLS = [{ name: 'browser_click', fn: x }]; return { remedy: remedy('cua_click', {}, 'why') };";
+    assert.deepEqual(liveSpeakerRemedies(browserFile), ['cua_click'],
+      'a DIFFERENT rule is not the same gate — the browser effector can be declared while cua is down');
   });
 
   test('(c) the two lists this file depends on are real, so a green run means something', () => {
