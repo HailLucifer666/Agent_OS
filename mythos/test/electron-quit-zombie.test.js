@@ -95,15 +95,19 @@ test('BUG-225 / the main window closed handler releases the media window and the
 
 // ---- 3. the kill ladder on the ordinary path -----------------------------------
 
-test('BUG-225 / stopChild returns the awaitChildExit ladder, not a bare kill()', () => {
+test('BUG-225 + BUG-437 / stopChild requests shutdown and waits, never a bare kill()', () => {
+  // BUG-437 (2026-09-16): this pin used to demand `dying.kill()` followed by
+  // awaitChildExit(dying, 3000). On Windows that kill() is TerminateProcess, so
+  // the server's shutdown steps never ran from a GUI quit. The path is now
+  // stopChildGracefully(): send mythos:shutdown -> wait 7 s -> tree-kill
+  // (behaviour in test/bug-437-graceful-quit-then-tree-kill.test.js).
   const body = handlerBlock('function stopChild(', 'function armQuitWatchdog(');
   const captureAt = body.indexOf('const dying = child');
-  const killAt = body.indexOf('dying.kill()');
-  const ladderAt = body.indexOf('awaitChildExit(dying');
-  assert.ok(captureAt !== -1 && killAt !== -1 && captureAt < killAt,
+  const gracefulAt = body.indexOf('stopChildGracefully(dying');
+  assert.ok(captureAt !== -1 && gracefulAt !== -1 && captureAt < gracefulAt,
     'the dying child must be captured BEFORE `child = null` — the ladder takes it explicitly, the same lesson electron-child-exit.test.js pins for beginInstall');
-  assert.ok(ladderAt !== -1,
-    'the ordinary close path must use the SAME escalation (SIGKILL at the 3s deadline) the update handover already had');
+  assert.doesNotMatch(body, /dying\.kill\(\)/,
+    'BUG-437: a kill() before the request is TerminateProcess on Windows — the steps never run');
   assert.match(body, /child = null/, 'the module-level reference is still cleared synchronously — sync callers depend on that');
 });
 
@@ -128,8 +132,13 @@ test('BUG-225 / the watchdog tree-kills and force-exits, with a REF’d 10s time
     '10s, mirroring the child’s own SHUTDOWN_MS design (schema default 10000) — graceful shutdown gets a real budget');
   assert.doesNotMatch(body, /\.unref\(\)/,
     'an unref’d deadline never fires in a drained process — the BUG-259 lesson, applied to this timer too');
-  assert.match(body, /taskkill/, 'win32 must tree-kill: the forked server leaves piper and pc-child grandchildren a bare kill() never reaches');
-  assert.match(body, /\/T/, 'and /T is what makes taskkill a TREE kill');
+  // BUG-437 (2026-09-16): the inline taskkill moved to child-exit.js's killTree,
+  // which stopChild()'s deadline escalation shares; its /T /F shape is asserted
+  // behaviourally in bug-437-graceful-quit-then-tree-kill.test.js (d) and (f).
+  assert.match(body, /killTree\(\{ pid: childPid \}/, 'win32 must tree-kill: the forked server leaves piper and pc-child grandchildren a bare kill() never reaches');
+  const childExit = fs.readFileSync(path.join(__dirname, '..', '..', 'electron', 'child-exit.js'), 'utf8');
+  assert.match(childExit, /taskkill/, 'the shared body is the tree kill');
+  assert.match(childExit, /'\/T'/, 'and /T is what makes taskkill a TREE kill');
   assert.match(body, /app\.exit\(0\)/,
     'the backstop must exit the process — this is the ONE place app.exit is correct, because before-quit has already run by the time it fires');
 });

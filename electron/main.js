@@ -1089,14 +1089,15 @@ function startChild() {
 function stopChild() {
   if (!child) return;
   const dying = child;
-  try { dying.kill(); } catch (err) { log('failed to kill child:', err.message); }
   child = null;
-  // BUG-225: the normal close path gets the same kill ladder the update
-  // handover already had — awaitChildExit escalates to SIGKILL at the 3s
-  // deadline instead of trusting one bare kill(). Returns a promise sync
-  // callers may ignore: the kill above already fired, and the ladder's
-  // escalation is timer-driven, so it needs no awaiter to make progress.
-  return awaitChildExit(dying, 3000, log);
+  // BUG-437 (2026-09-16): this used to be `dying.kill()` and then the
+  // awaitChildExit ladder (BUG-225). On Windows kill() is TerminateProcess — no
+  // signal, no handler — so the server's shutdown steps never ran from a GUI
+  // quit. stopChildGracefully() sends mythos:shutdown over the fork IPC
+  // channel, waits up to CHILD_EXIT_DEADLINE_MS (7 s; the request carries a 6 s
+  // budget; the watchdog below stays at 10 s), and only then tree-kills.
+  // Returns a promise sync callers may ignore: the escalation is timer-driven.
+  return stopChildGracefully(dying, log);
 }
 
 // BUG-225: the quit-path backstop. before-quit can wedge — syncVault('--push')
@@ -1117,15 +1118,9 @@ function stopChild() {
 function armQuitWatchdog(childPid) {
   setTimeout(() => {
     log('quit watchdog: graceful quit did not complete in 10s — tree-killing the child and exiting');
-    if (childPid) {
-      try {
-        if (process.platform === 'win32') {
-          child_process.spawn('taskkill', ['/PID', String(childPid), '/T', '/F'], { windowsHide: true });
-        } else {
-          process.kill(childPid, 'SIGKILL');
-        }
-      } catch (err) { log('quit watchdog: tree-kill failed:', err && err.message); }
-    }
+    // BUG-437 (2026-09-16): one tree-kill body, in child-exit.js (taskkill /T /F
+    // on win32), shared with stopChild()'s deadline escalation and tested there.
+    if (childPid) killTree({ pid: childPid }, log);
     app.exit(0);
   }, 10000);
 }
@@ -1757,7 +1752,7 @@ function pointInstallerTempAtInstallVolume() {
 // requires `electron` and can therefore only ever be source-shape asserted, and
 // source-shape assertions did NOT catch this function resolving instantly when
 // it read the module-level `child` that stopChild() had just nulled.
-const { awaitChildExit } = require('./child-exit');
+const { awaitChildExit, stopChildGracefully, killTree } = require('./child-exit');
 
 // THE HANDOVER, in order. Order is the whole correctness of this function.
 //

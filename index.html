@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7823,
+      "value": 7837,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5756,12 +5756,14 @@
         "n": 437,
         "shape": "entry",
         "state": "open",
-        "title": "closing the app left processes in Task Manager and wrote no quit line (OPEN, filed 2026-09-10)",
-        "detail": {},
-        "excerpt": "**Status:** 🔴 OPEN — observed once; the quit path's own instrumentation did not fire, so the cause is unknown. **2026-09-11 SESSION READ.** **Did not reproduce on an X-button close.** The 20:18:46Z shutdown logged the quit line this ticket says is missing — `app quit: orderly exit, code=0`, then `mythos child exited (SIGTERM) during shutdown — not restarting` and a clean child close. No MYTHOS, electron or node process survived. One `adb.exe` remained, which is the known detached-adb behaviour (BUG-404), not this ticket. One close of three; the tray and in-app routes are still untested. **Evidence (2026-09-10 ~09:52Z):** the operator closed 0.1.12 and reported processes still visible in Task Manager. `logs/main.log` has no `app quit: orderly exit` line for this close, while the 00:09, 00:10 and earlier quits today each wrote one; the last desktop-log line is 09:37:47. The server log end…",
+        "title": "closing the app left processes in Task Manager and wrote no quit line (FRAGILITY CODED 2026-09-16; live symptom OPEN; filed 2026-09-10)",
+        "detail": {
+          "fix": "(1) `electron/child-exit.js`: `stopChildGracefully(child)` sends `{channel:'mythos:shutdown', timeoutMs: 6000}` (falls back to `kill()` only if the IPC channel is already closed), waits up to `CHILD_EXIT_DEADLINE_MS = 7000`, then `killTree()` — `taskkill /PID \u003cpid> /T /F` on win32. Sending and killing in the same tick would still terminate abruptly (2026-09-16 review). Deadlines reconciled and test-pinned: request 6000 (lifecycle's hard-exit(1) budget) \u003c shell escalation 7000 \u003c quit watchdog 10000, 3 s margin each. The watchdog reuses `killTree`. (2) `src/core/lifecycle/index.js` `registerShutdown()`: when `process.send` exists, a `message` listener for `mythos:shutdown` runs the SAME body as the signals — `shutdown(timeoutMs)` then `exit(0)` — so `lifecycle.shutdown.complete` is logged on a GUI quit. `proc` is injectable for the test; production passes nothing. (3) `adapters/dsh-agent`…",
+          "verification": "`test/bug-437-graceful-quit-then-tree-kill.test.js`: (a) the request is sent and a child still exiting is not killed; (b) a closed channel falls back to `kill()`; (c)(d)(e) the escalation is one `taskkill /T /F`, never for a prompt exit, logged when taskkill cannot spawn; (f)"
+        },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[EVIDENCE FIRST, operator: close the app 3 ways with Task Manager + main.log open] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open.",
+          "evidence": "[FRAGILITY CODED 2026-09-16 — graceful shutdown request, wait, then tree-kill; live symptom still owes the 3-way quit with Task Manager + main.log open] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open.",
           "source": "electron/main.js"
         }
       },

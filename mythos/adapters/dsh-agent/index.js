@@ -503,6 +503,15 @@ function fatalStderrSignature(text) {
   return null;
 }
 
+// BUG-437 (2026-09-16): in-flight task children. A dsh task is a grandchild of
+// the Electron shell; the shell's kill of the server never reached it, and
+// stopRunningLoops() had no hook to stop it. Idempotent: an empty set is a no-op.
+var activeChildren = new Set();
+function shutdown() {
+  activeChildren.forEach(function (c) { try { treeKill(c, c.pid); } catch (_) { /* already gone */ } });
+  activeChildren.clear();
+}
+
 function spawnDsh(args, spawnOpts) {
   return new Promise(function (resolve) {
     var child;
@@ -536,6 +545,12 @@ function spawnDsh(args, spawnOpts) {
     } catch (err) {
       return resolve({ kind: 'spawn-error', error: String((err && err.message) || err) });
     }
+    // BUG-437 (2026-09-16): tracked so shutdown() can tree-kill a task that is
+    // still running when MYTHOS stops. 'close' fires after every exit shape
+    // (normal, killed by the timeout, killed by shutdown), so one hook covers
+    // removal.
+    activeChildren.add(child);
+    child.on('close', function () { activeChildren.delete(child); });
     var out = '';
     var errOut = '';
     var settled = false;
@@ -878,6 +893,7 @@ module.exports = {
   probe: probe,
   runTask: runTask,
   getStatus: getStatus,
+  shutdown: shutdown,
   scrubbedEnv: scrubbedEnv,
   // Exported for unit tests, and for the failure messages that name them:
   selectModel: selectModel,

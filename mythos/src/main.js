@@ -1299,7 +1299,7 @@ async function main() {
     if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
     if (actionReflectTimer) clearInterval(actionReflectTimer);
     pcChild.shutdownPcChild();
-    cuaDriver.shutdownCuaDriver();
+    cuaDriver.shutdownCuaDriver(); require('../adapters/dsh-agent').shutdown(); // BUG-437: in-flight dsh task children (see dsh-agent shutdown())
     androidChild.shutdownAndroidChild();
     browserAgent.stopAutoConnect();  // stop the poller before disconnect so it can't re-attach mid-shutdown
     browserAgent.disconnect();
