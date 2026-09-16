@@ -3,35 +3,33 @@
 *Under 100 lines, by rule. The roadmap is the archive; this file is the position.
 Rewrite in place, never append.*
 
-## Position (2026-09-11)
+## Position (2026-09-16)
 
 **One workflow, until it is boring.** The build is collapsed to Stage 1 by the
 2026-09-07 operator decision; Stages 2-7 stay paused until the golden path holds
-10 consecutive PASS lines across two cold boots for a week. Phase A landed via
-PR #74 (`451ba73`); the Windows Operator implementation continues on
-`codex/windows-operator` and is not on `main`.
+10 consecutive PASS lines across two cold boots for a week. **The golden-path
+streak is still 0.**
 
-**A four-contract repair landed on `verify/live-2026-09-10` on 2026-09-11**
-(`ae89f17`, `54942ec`, `ac985d6`, `71206c8`, `66f9e39`, `f41fa57`, `8d7a33e`),
-pushed, opened as the single integration **PR #96 -> `main`**. **CI has NOT run
-on it**: one dispatch was cancelled to protect the 2,000-minute allowance (`e2e`
-passed in 2m42s first; `test` is outstanding). Run it once, on the final SHA,
-after the attended pass. **The golden-path streak is still 0.**
+**The 16-bug fix plan (2026-09-16) has shipped its headless half on
+`verify/live-2026-09-10` (PR #96 -> `main`), five hook-gated commits, suite
+7849/7849, 0 skipped.** Every fix carries its failing-first test and a mutation
+run recorded in the test file. None of it has been heard or seen by a human:
 
-| commit | what | what is still owed |
-|---|---|---|
-| `54942ec` | BUG-436 stall rows carry `sampleWindowMs` + `mainCpuMs`; 4 docs corrected | the stall REPAIR — one attended `LOOP_LAG_TRACE=true` session names the caller |
-| `ac985d6` | BUG-438 open_web refuses rather than opening a different episode | one attended spoken "play S2 EP6" |
-| `71206c8` | BUG-432 a held notice survives a rotation; phantom flag fixed | an attended Live rotation; the flag stays OFF |
-| `66f9e39` | BUG-372 Kokoro moved to a worker; the cache bug that made `KOKORO_MODEL_DIR` inert | a HEARD run — packaged resolution and GUI boot are both now proven |
-| `8d7a33e` | packaged resolution PROVEN (`scripts/verify-packaged-kokoro.js`); client now refuses a NaN deadline | nothing beyond the row above |
+| commit | ticket | what changed | what is still owed |
+|---|---|---|---|
+| `fd345b0a` | BUG-441 | `clicking` claim category; legacy path REPLACES the false sentence (D3); OUTCOME_CLAIMED_TOOLS completed to every click tool. Filed cause corrected: the caveat was never dropped, the table had a hole | attended "play the sixth video" (Track A step 4) |
+| `e309b055` | BUG-439 | stale `element_index` -> refresh once, fail with the fresh label + structured remedy; NO auto-retry | attended cua click (step 4/5); latency of the 14 s refresh |
+| `a2720b74` | BUG-437 | shell sends `mythos:shutdown`, waits 7 s, tree-kills; lifecycle answers the IPC like SIGTERM; dsh tasks tree-killed in stop-loops | the live symptom is UNREPRODUCED — quit 3 ways with Task Manager + main.log open (step 12) |
+| `a84ca1df` | BUG-268 | native toast + clipboard from the main process (D4); the HUD write could never work unfocused | one Ctrl+Alt+X press (step 9) |
+| `a86d57ae` | BUG-435/440 | prose ratchet widened to `src/core/voice`; D5 verified by grep; 440 register corrected (coded in `96fb0e5a`, bench reaches the lane) | steps 3 and 11 |
 
-**Environment hazard CLEARED 2026-09-11:** `ollama` (~5 GB) made the suite fail
-one wandering test per run — the exhaustion signature, not a regression. It was
-uninstalled; the suite is **7795/7795, 0 fail, 0 skipped at DEFAULT concurrency**.
-A shell exporting the 8.3 short `TEMP` still gives `fail=1 skipped=1`
-(deploy-config "real boot", `ECONNRESET`) — set `TEMP`/`TMP` long before
-believing any red.
+Harness lessons from the pass, so the next session does not repay them:
+regenerate `index.html` BEFORE the suite run that feeds `sync-test-count --write`
+(the register tests read it); `docs:check` re-runs the suite unless fed TAP on
+stdin, and a shell without the long-form TEMP gives `fail=1 skipped=1`; a
+`| tail` after a gate swallows its exit code; four file-size ratchets and the
+BUG-425 prose ratchet fired during the pass and each moved code rather than a
+number.
 
 ## The golden path
 
@@ -39,58 +37,57 @@ Spoken, in the operator's already-signed-in browser: **open YouTube, play the
 third video, pause, resume, next.** Instrument: `cd mythos && node
 scripts/golden-path.js`, once a day with MYTHOS up; it appends one
 `PASS|FAIL|UNVERIFIED|PREREQ-MISSING` line to
-`.cache/windows-operator/golden-path.log` (gitignored). **The consecutive-PASS
-streak it prints is the one number that matters. Today: 0.**
+`.cache/windows-operator/golden-path.log` (gitignored). **Today: 0.**
 
 ## Stages
 
 - [ ] **Stage 1 — ACTIVE.** Bar: 10 consecutive attended spoken successes across
-  two cold boots; p95 ack 2 s, local stop 250 ms, spoken cancel 1.5 s. Measure;
-  never weaken after a failure.
-- [ ] **Stages 2-7 — PAUSED** by the 2026-09-07 decision, not cancelled, until
-  the Stage 1 streak holds. Scope is in the roadmap.
+  two cold boots; p95 ack 2 s, local stop 250 ms, spoken cancel 1.5 s.
+- [ ] **Stages 2-7 — PAUSED** by the 2026-09-07 decision until the streak holds.
 
 ## Gates
 
 Pre-commit runs the full suite and blocks on `fail > 0`, nothing else. The four
-documentation gates are `cd mythos && npm run docs:check` — run before a push.
+documentation gates are `cd mythos && npm run docs:check` — run before a push,
+with the suite's TAP piped in or a long-form TEMP.
 
 ## Still open
 
-- Live/hardware gates (mic/playback 027/406, Ctrl+Alt+X 268, grounded speech 275).
-  Licensing and release decisions (step 6.5, 274 T3). No release authorized.
-- Open tickets: **268, 274, 275, 406, 421, 422, 432, 433, 434, 436 (stall half),
-  437, 438**. BUG-435 and BUG-436's goAway half ARE on this branch
-  (`goaway-gate.js` at `3f4082d4`); "unmerged" was true only of `main`. BUG-421
-  lacks reveal margin; BUG-422 needs a diagnosed child failure; BUG-428's
-  acoustic proof is owed under BUG-406.
-- **Browser: unlock, do not adopt (2026-09-11).** `browser-use/browsercode`
-  rejected; we own its primitive as `browser_evaluate`, unallowlisted.
-  `ADOPTION-MATRIX.md` §12.
-- Phase B of the subtraction plan: one tool-definition object in
-  `effectors/hub.js` carrying `tier` and `schema`, so leash, live-tools and the
-  map read one source.
+- Open tickets: **268, 274, 275, 406, 421, 422, 432, 433, 434, 435, 436 (stall
+  half), 437 (live symptom), 438, 439, 440, 441** — twelve of them owe only the
+  attended session below; 436/422 are diagnosis-gated (trace first, no third
+  confident cause); 274 T3 and 406 are decisions (D1, D2) nobody has made.
+- Track E cleanup of the 2026-09-16 plan is NEXT after the attended session if
+  nobody is at the keyboard: E2 delete `ui/public/js/voice/mic-indicator.js` and
+  `widgets/kinds/cores.js` (no importers); E5 delete `AGENT_REACH_BIN` from
+  `.env.example` (no reader in any file type); E6 document `MYTHOS_ADBLOCK`,
+  `MYTHOS_AUTO_UPDATE`, `MYTHOS_HOTKEY_OCR`, `MYTHOS_UPDATE_URL`,
+  `PROVIDER_HEALTH_TTL_MS`, `WEB_SEARCH_LOCAL_AUTOSTART`, `WEB_SEARCH_LOCAL_ENTRY`;
+  E9 `scripts/lint-env-flags.js` in `docs:check`; E1 one `escapeHtml` (17 copies,
+  3 bodies; the DOM-based ones do not escape `"` and sit in 3 `data-id`
+  attributes — consolidation unless a `"`-bearing id is reproduced). Measured
+  and NOT changed: E3 four tree-kill bodies differ on purpose; E4 the two
+  `reasonText`s differ in behaviour; E8 `sleep()` in tests stays.
+- Licensing and release decisions (step 6.5, 274 T3). No release authorized.
 
 ## NEXT ACTION
 
-Review PR #96, then arrange the next attended Stage 1 pass. **Nothing in the
-2026-09-11 batch has been heard by a human.** Each is one attended session:
+**One attended evidence session — Track A of the 2026-09-16 plan, twelve steps,
+in `~/.claude/plans/` (copy it into the repo if it is load-bearing).** It
+gathers evidence; it promises no closures. Prerequisites first, recorded in the
+session log: installed `app.asar` hash and main.log version line; effective
+flags from the boot log (`LOOP_LAG_TRACE=true`, `VOICE_ECHO_VERDICT_TO_CLIENT=true`,
+`VOICE_SERIALIZE_NOTICES=true` — restore all three after); process baseline;
+a controlled Slack DM. Then, in order: cold boot + greeting HEARD (433);
+`golden-path.js` line read as-is; "Open YouTube in Brave" ONE window (435);
+"play the sixth video" (421/441/439); S2 EP6 (438); Slack `ui_type` (434);
+"top 5 on LiveBench" names AND ranks (275-H1); two notices across a Live
+rotation (432); Ctrl+Alt+X toast + clipboard (268); 30 min for `loop.stalled`
+rows (436, narrows suspects only); 3x `screen_look` (440); quit via X, tray,
+in-app — restart between — process diff after each (437).
 
-1. `node scripts/golden-path.js` with MYTHOS up — the streak is 0 and every
-   change on the voice/browser path owes a line before and after.
-2. Say "play INDIA'S GOT LATENT S2 EP6" and check it opens EP6 (BUG-438).
-3. Boot with `LOOP_LAG_TRACE=true` for 30 minutes; grep `loop.stalled` and read
-   `mainCpuMs` against `sampleWindowMs`. That names BUG-436's caller — the
-   stall itself is still unfixed and this is the input to fixing it.
-4. Boot the packaged app with kokoro in `VOICE_TTS_CHAIN` (BUG-372) and HEAR it.
-   **Only the audio is left.** Resolution under `app.asar.unpacked` is proven by
-   `scripts/verify-packaged-kokoro.js` (28 voices, 211,244 bytes, 0 network
-   calls, worker cache == `modelCacheDir()`), and the packaged GUI starts —
-   `/health` 200 in 3s, "server ready after 10055ms", no module errors (the
-   `app-update.yml` ENOENT is a `--dir` build having no installer metadata).
-
-Before any of it: verify the installed native host and extension match the
-BUG-416 code — the Sept 9 check found the host still stripped `instanceId`.
+After: quote each log line into BUGS.md, rewrite this file, `docs:check`,
+commit, push, then dispatch `ci.yml` once on the final SHA (2,000-min cap).
 
 ## Where the detail lives
 
