@@ -57,6 +57,10 @@ it('startup diagnosis survives boot, joins one greeting, and obeys both switches
       const ws = new WebSocket('ws://127.0.0.1:' + server.httpServer.address().port + '/ws');
       try {
         await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+        // RE-POINTED 2026-09-18 (BUG-433): connecting no longer arms the boot
+        // greeting — a client must first say it can PLAY one. This fixture
+        // stands in for the dashboard, so it says what the dashboard says.
+        ws.send(JSON.stringify({ type: 'hud-ready', greetable: true }));
         if (!greeting) assert.equal(server._internal.isBootGreetingDelivered(), true, 'warning-only startup never claims to cover the inbox');
         if (greeting || warnings) {
           await new Promise((resolve, reject) => {
@@ -108,9 +112,18 @@ it('a dashboard closing during greeting generation cannot consume settings warni
       server.wss.on('connection', (ws) => {
         ws.getLiveSession = () => ({ isOpen: () => ws.readyState === 1, sendText(text) { assert.equal(ws.readyState, 1); inputs.push(text); return true; } });
       });
-      const connect = async () => {
+      // RE-POINTED 2026-09-18 (BUG-433). Readiness is announced PER CALL SITE, and
+      // the first version of this re-point put it in the helper, where it was
+      // wrong in a way that only showed up under load: this test drives
+      // deliverBootGreeting() directly, so a socket that ALSO announces itself
+      // arms the scheduler as well, and the warning is then spoken twice. It
+      // passed alone and on three full runs, and failed in the pre-commit hook.
+      // Only the socket that must be greeted by the ordinary path announces.
+      const connect = async (announceReady) => {
         const ws = new WebSocket('ws://127.0.0.1:' + server.httpServer.address().port + '/ws');
-        sockets.push(ws); await once(ws, 'open'); return ws;
+        sockets.push(ws); await once(ws, 'open');
+        if (announceReady) ws.send(JSON.stringify({ type: 'hud-ready', greetable: true }));
+        return ws;
       };
       try {
         const first = await connect();
@@ -122,7 +135,10 @@ it('a dashboard closing during greeting generation cannot consume settings warni
         release(); await delivery;
         if (!replacementAlreadyConnected) {
           assert.equal(bus.history((e) => e.type === 'conversation.announced').length, 0, 'no socket, no consumed warning');
-          await connect();
+          // The ONLY announcing socket in this test. Delivery found nobody and
+          // handed the shot back, so this dashboard is greeted by the ordinary
+          // scheduler path — which is exactly what "hands the shot back" means.
+          await connect(true);
         }
         await new Promise((resolve, reject) => {
           const deadline = Date.now() + 3000;

@@ -9,6 +9,7 @@
 // of the null every call site already swallows.
 import './net-guard.js';
 import { subscribe, visionQuery, registerReplyHandler, sendMessage, utterance, reconnectAfterUnlock } from './ws.js';
+import { createHudReadyReporter } from './hud-ready.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
 import { mountCoreOrb } from './neural-map/core-orb.js';
@@ -95,7 +96,15 @@ mountComponentBanner(document.getElementById('status-banner-root'), {
 const pinLockScreen = mountPinLockScreen(document.getElementById('pin-root'), { onUnlock: () => {
   reconnectAfterUnlock();
   refreshVoiceConfiguration().then(() => { if (!isGateClosed(pinLockScreen.lockState())) ensureWakeWord(); });
-} });
+}, onLockState: () => publishHudReady() });
+
+// BUG-433: tell the server whether this HUD can actually PLAY proactive speech.
+// Rule and report both live in hud-ready.js (pure, therefore testable). A
+// playback hint, never an authentication claim — the server decides what the socket IS.
+const publishHudReady = createHudReadyReporter({
+  send: sendMessage,
+  readState: () => ({ voiceConfigLoaded, lockState: pinLockScreen.lockState() }),
+});
 
 // D5: Track brain availability from entity-state broadcasts.
 // When entity reports offline/degraded, voice loop skips transcription to save API calls.
@@ -127,10 +136,14 @@ voiceConfiguration.subscribe(({ vad, wakeword, s2s }) => {
   _screenShareCfg = s2s.value?.screenShare?.enabled ? s2s.value.screenShare : null;
   if (_operatorEnabled && !disposeDesktopTask) disposeDesktopTask = mountDesktopTask();
   if (!_operatorEnabled && disposeDesktopTask) { disposeDesktopTask.close(); disposeDesktopTask = null; }
+  publishHudReady(); // BUG-433: readiness just went UP.
 });
 function refreshVoiceConfiguration() {
   // Refresh all authenticated facts after PIN success, not just the caption.
   voiceConfigLoaded = false;
+  // BUG-433: and here it goes DOWN. A refresh starting inside the greeting's
+  // delay window would otherwise leave it armed for a client that cannot play.
+  publishHudReady();
   voiceConfigReady = _wakewordCfgReady = voiceConfiguration.refresh();
   return voiceConfigReady;
 }
@@ -997,15 +1010,23 @@ subscribe(['job'], (msg) => {
 // chunk-queue/barge-in path as voice replies and vision answers. The orb
 // flashes so the user knows MYTHOS is speaking on its own initiative.
 subscribe(['proactive-speech'], (msg) => {
+  // BUG-433 (2026-09-18): both drops below were bare `return`s, which is why the
+  // 2026-09-16 investigation had to reason from two hypotheses about which one
+  // fired — a path that discards audio and records nothing destroys the only
+  // evidence of itself. They now name the branch and re-publish readiness.
+  const drop = (why) => {
+    console.warn('[proactive-drop]', why, msg.reqId || '');
+    publishHudReady();
+  };
   // Do not construct a permanently mistuned loop while auth facts are pending.
-  if (!voiceConfigLoaded) return;
+  if (!voiceConfigLoaded) return drop('voice-config-not-loaded');
   // Cortex keeps ticking while locked — do not read build results, goal
   // titles, or error text aloud over a locked HUD (pin.css's "nothing may be
   // ... read over the top of a locked HUD" claim). Dropped here, before a
   // reply handler is even registered, so the matching speech-chunk/done
   // broadcasts land with no handler and are silently ignored (see ws.js's
   // registerReplyHandler comment) rather than played later.
-  if (isGateClosed(pinLockScreen.lockState())) return;
+  if (isGateClosed(pinLockScreen.lockState())) return drop('pin-' + pinLockScreen.lockState());
   const v = ensureVoice();
   const session = v.beginTurn(msg.reqId); // reqId known upfront — barge-in can cancel this turn's TTS synthesis too (Item B)
   mic.setCaption(msg.text || msg.speak || '', 'reply');

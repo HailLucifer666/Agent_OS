@@ -1598,7 +1598,65 @@ is one attended session and needs no code change.
 
 ## BUG-433 — the boot greeting is spoken into a Live session the window is not listening to, so the packaged app starts silent (CODED 2026-09-10; filed 2026-09-10)
 
-**Status:** 🔧 CODED — fixed in `server/index.js`; one cold boot with the speaker on remains.
+**Status:** 🔧 CODED — the 2026-09-16 cause is fixed in `server/boot-greeting.js`, `ui/public/js/hud-ready.js` and `server/index.js`; one cold boot with the speaker on remains.
+
+**FIXED 2026-09-18 — the greeting now waits for a HUD that can play it.** The run
+below named the cause: the server armed the single shot 2.5 s after the FIRST
+dashboard connection and marked it fired at ARMING time, and that connection was
+a PIN-locked HUD. "Has something connected?" is not "is there a client that can
+play this?", and only the client can answer the second — it depends on the PIN
+state and on whether the voice configuration has landed. Three pieces.
+`server/boot-greeting.js` is a pure state machine (`pending` → `scheduled` →
+`in-flight` → `dispatched`) with the transition the old code could not express: a
+target that stops being eligible during the delay hands the greeting BACK to
+`pending`, so the next eligible HUD still gets one. `ui/public/js/hud-ready.js`
+holds the readiness rule and the reporter that publishes it. `server/index.js`
+replaces the ~45-line arming block with a `hud-ready` handler that offers the
+connection to the scheduler, and its companion flag `bootGreetingFired` is gone —
+it meant "a timer is running", which was the only record of the single shot while
+arming happened on connection.
+
+**The rule is a tri-state, and that is the whole reason it is a module.**
+`lockState !== 'locked'` admits `'unknown'`, the window before
+`GET /api/pin/status` answers, and a greeting armed there is armed on a guess
+about a PIN that may well be set. The rule is `lockState === 'unlocked'`, and it
+lives in a file `node --test` can import, because a readiness rule that can only
+be checked by READING it is how the original mismatch survived review.
+
+**Two defects found while fixing it, both introduced by this change, both caught
+by mutation probes rather than by reading.** (1) The server kept a single
+`greetableWs` beside the scheduler's own target id: a second tab announcing
+itself was correctly refused the greeting and still overwrote the socket, so
+delivery would have gone to a tab the scheduler never chose. The socket is now
+derived from the target id, so the two cannot disagree. (2) `pin-lock-screen.js`
+resolved `'unknown' → 'unlocked'` silently on the ordinary no-PIN boot — no
+`onUnlock`, no notification. Readiness published before that probe answered would
+have said `pin-unknown` and nothing would ever have corrected it: **no greeting on
+any no-PIN machine**, which is worse than the bug being fixed. Every `lockState`
+write now leaves through one door that announces the transition.
+
+**Verification.** `test/bug-433-greeting-waits-for-a-hud-that-can-hear-it.test.js`
+26/26 — the scheduler behaviourally, the readiness rule and reporter against the
+real module, the lock screen's transitions through the existing data-URL harness,
+and source-shape pins for the wiring neither file can execute. Full recursive
+suite 7949/7949, 0 failures, 0 cancelled, 0 skipped, process exit 0. Seven
+mutation probes, each diffed against a full-path backup before its result was
+believed; q6 (remove the lock-screen idempotence check) PASSED on its first run,
+because the test meant to cover that guard drove a path whose own early return
+did all the work — the test was rewritten to produce the stale-401-before-status
+order that actually reaches it, and only then did the probe bite. Six existing
+tests were re-pointed, each with a dated comment: four in
+`test/bug-178-boot-greeting-node-race.test.js` and two in
+`test/bug-429-startup-settings-speech.test.js`, all of them fixtures standing in
+for a dashboard that now send the `hud-ready` a dashboard sends. No assertion was
+weakened.
+
+**NOT verified, and this is the whole remaining gap: one attended cold boot with
+the speaker on.** Everything above is offline. Audibility also still depends on
+BUG-432's notice interruptions and on the operator's Gemini TTS quota (see the
+2026-09-11 residual below), neither of which this change touches. An old HUD that
+never sends `hud-ready` is never greeted — the documented compatibility limit,
+logged as such.
 
 **Attended run 2026-09-16 — greeting NOT heard; the cause is sharper than filed.** Cold boot 10:26:42Z from source, HUD PIN-locked. Log: `proactive.live-skipped-no-listener` ×2, zero `live.text-injected site:proactive-speak`, `tts.spoke path:proactive chunks:3 synthesized:3` (gemini-tts 429 → kokoro). The audio WAS synthesized and sent to the one connected client — the locked HUD — whose proactive-speech handler returns early behind the PIN gate (`app.js`: "nothing may be read over a locked HUD"), so the chunks landed with no registered handler and were discarded. The greeting fires once per boot, 2.5 s after the FIRST dashboard connection, and never replays after unlock; the server marked it delivered. Text it tried to say: "Ah, *fantastic*—still leaving YouTube tabs open like a distracted intern. Good afternoon, Sir…". The fall-through this ticket was filed for did not occur; the listener check simply has no notion of the lock. Fix sketch: arm the greeting on the first UNLOCKED connection (or on unlock), with a test that a locked first connection does not consume the single shot. Stays open.
 

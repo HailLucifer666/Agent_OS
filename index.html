@@ -343,50 +343,50 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-16",
+  "generated": "2026-09-18",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7859,
+      "value": 7949,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-16"
+      "measuredAt": "2026-09-18"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-16"
+      "measuredAt": "2026-09-18"
     },
     "withheld": {
       "value": 61,
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-16"
+      "measuredAt": "2026-09-18"
     },
     "registered": {
       "value": 186,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-16"
+      "measuredAt": "2026-09-18"
     },
     "voiceReachable": {
       "value": 125,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-16"
+      "measuredAt": "2026-09-18"
     },
     "untriaged": {
       "value": 1,
       "label": "untriaged incidents",
       "tone": "fail",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-09-16",
+      "measuredAt": "2026-09-18",
       "stale": false
     }
   },
@@ -5698,9 +5698,9 @@
         "state": "open",
         "title": "the boot greeting is spoken into a Live session the window is not listening to, so the packaged app starts silent (CODED 2026-09-10; filed 2026-09-10)",
         "detail": {
+          "verification": "`test/bug-433-greeting-waits-for-a-hud-that-can-hear-it.test.js` 26/26 — the scheduler behaviourally, the readiness rule and reporter against the real module, the lock screen's transitions through the existing data-URL harness, and source-shape pins for the wiring neither file can execute. Full recursive suite 7949/7949, 0 failures, 0 cancelled, 0 skipped, process exit 0. Seven mutation probes, each diffed against a full-path backup before its result was believed; q6 (remove the lock-screen idempotence check) PASSED on its first run, because the test meant to cover that guard drove a path whose own early return did all the work — the test was rewritten to produce the stale-401-before-status order that actually reaches it, and only then did the probe bite. Six existing tests were re-pointed, each with a dated comment: four in `test/bug-178-boot-greeting-node-race.test.js` and two in `test…",
           "limits": "2026-09-11 session read. **The gate held on all four boots and the greeting was still silent — for a different, measurable reason.** Every boot logged `proactive.live-skipped-no-listener` and",
-          "cause": "`server/index.js` `liveForSpeech()` opens a Live session purely to speak whenever `VOICE_UNIFIED_LIVE_VOICE` (default true), `VOICE_S2S_ENABLED` and `GOOGLE_API_KEY` are present. The Sep 8 packaged boot (13:38Z) spoke the greeting via `tts.spoke path:proactive` because Live was not available at boot; from the Sep 9 boot onward the greeting goes into Live. Same client behaviour on the 2026-09-09 19:21 boot (no capture-suspend row before the first wake word), so this predates the 2026-09-10 PR stack. **FIXED 2026-09-10 in code; one cold boot with the speaker on remains.** `liveForSpeech()` now refuses to open a metered Gemini session for a client that has announced no way to play the audio. Operator decision the same day: the boot greeting is audible in the TTS voice.",
-          "verification": "`test/bug-433-proactive-speech-needs-a-listener.test.js` 5/5; every test file that touches `live-open`, `liveForSpeech`, `proactiveSpeak`, `_nodeLiveAudio` or `routeConversation` — 33 files, 229/229, 0 skipped. Five mutations on `server/index.js`, each grep-verified applied and restored sha256-identical: deleting the gate (the literal pre-fix code) reddens 4 tests; `canRender()` returning true reddens the same 4; dropping the voice-node channel reddens the node test; misspelling the operator renderer reddens 2 tests in `test/desktop-server.test.js`; dropping the `live-close` reset reddens the close test. The operator-renderer mutation SURVIVED its first run against the files I reached for, which is how its real cover was found and why the whole list is written into the test header."
+          "cause": "`server/index.js` `liveForSpeech()` opens a Live session purely to speak whenever `VOICE_UNIFIED_LIVE_VOICE` (default true), `VOICE_S2S_ENABLED` and `GOOGLE_API_KEY` are present. The Sep 8 packaged boot (13:38Z) spoke the greeting via `tts.spoke path:proactive` because Live was not available at boot; from the Sep 9 boot onward the greeting goes into Live. Same client behaviour on the 2026-09-09 19:21 boot (no capture-suspend row before the first wake word), so this predates the 2026-09-10 PR stack. **FIXED 2026-09-10 in code; one cold boot with the speaker on remains.** `liveForSpeech()` now refuses to open a metered Gemini session for a client that has announced no way to play the audio. Operator decision the same day: the boot greeting is audible in the TTS voice."
         },
         "campaign": {
           "disposition": "blocked",

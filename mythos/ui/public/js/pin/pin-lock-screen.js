@@ -85,6 +85,11 @@ export function mountPinLockScreen(root, opts) {
   const onUnlock = (opts && opts.onUnlock) || (() => {});
   // BUG-442 seam: tests drive the relock subscription without a real store.
   const subscribeSessionLost = (opts && opts.onPinSessionLostImpl) || onPinSessionLost;
+  // BUG-433: lockState is an INPUT to the HUD's proactive-playback readiness,
+  // and three of its four writes happen with no onUnlock — notably the ordinary
+  // no-PIN boot, which resolves 'unknown' -> 'unlocked' below in silence. A
+  // caller cannot poll for that, so every transition leaves through one door.
+  const onLockState = (opts && opts.onLockState) || (() => {});
   // Test/injection seam, mirroring live-session.js's createSocket convention:
   // defaults to the real fetch.
   const doFetch = (opts && opts.fetchImpl) || ((...args) => fetch(...args));
@@ -98,6 +103,14 @@ export function mountPinLockScreen(root, opts) {
   // has answered) must NOT be treated as open by callers guarding a real
   // capability (mic arming, wake word, proactive speech).
   let lockState = 'unknown';
+  // Idempotent by design: the relock subscriber and the status probe race each
+  // other, and a repeated 'locked' must not re-announce a change that did not
+  // happen. A throwing subscriber never takes the lock screen down with it.
+  function setLockState(next) {
+    if (lockState === next) return;
+    lockState = next;
+    try { onLockState(next); } catch (_) {}
+  }
 
   function setInert(on) {
     if (on) {
@@ -164,7 +177,7 @@ export function mountPinLockScreen(root, opts) {
       if (disposed) return;
       submit.disabled = false;
       if (state.unlocked) {
-        lockState = 'unlocked';
+        setLockState('unlocked');
         // BUG-442: a credential has actually been re-established, so every 401
         // still in flight from before this moment is stale news about a solved
         // problem. Advancing the generation is what stops those late arrivals
@@ -199,7 +212,7 @@ export function mountPinLockScreen(root, opts) {
       gate = derivePinGate(undefined);
     }
     if (disposed) return;
-    if (gate.locked) { lockState = 'locked'; lock(); return; }
+    if (gate.locked) { setLockState('locked'); lock(); return; }
     // not-configured / unavailable / indeterminate all resolve the 'unknown'
     // window to 'unlocked' — only an explicit configured:true ever locks.
     //
@@ -211,7 +224,7 @@ export function mountPinLockScreen(root, opts) {
     // lockState() reported unlocked, so mic arming, wake word and proactive
     // speech would all re-enable behind it.
     if (lockState !== 'unknown') return;
-    lockState = 'unlocked';
+    setLockState('unlocked');
     if (gate.reason === 'indeterminate') {
       // Loud enough to diagnose, quiet enough not to block the HUD. See
       // pin-gate.js's scope note for why this fails open.
@@ -229,7 +242,7 @@ export function mountPinLockScreen(root, opts) {
   // lock() itself is about to resolve.
   const releaseSessionLost = subscribeSessionLost(() => {
     if (disposed || lockState === 'locked') return;
-    lockState = 'locked';
+    setLockState('locked');
     lock();
   });
 

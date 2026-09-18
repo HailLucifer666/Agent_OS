@@ -2361,12 +2361,19 @@ function createServer(deps) {
   // Identity/last-boot.json (written at construction, so the diff survives
   // even if the brain is offline when the client connects).
   // BOOT_GREETING=false disables greetings; NODE_TEST_CONTEXT also avoids delayed test fetches.
-  let bootGreetingFired = !!process.env.NODE_TEST_CONTEXT || (process.env.BOOT_GREETING === 'false' && !conversationAnnouncer?.hasSettingsWarnings(deps.settingsDiagnostics));
-  // BUG-148: bootGreetingFired means "scheduled", not "spoken" — it is set the
-  // moment the timer is armed. The gmail-batch subscriber needs to know whether
-  // the greeting has actually been DELIVERED, which is a different question and
-  // ~2.5s later. See that subscriber for why.
-  let bootGreetingDelivered = bootGreetingFired || process.env.BOOT_GREETING === 'false'; // warning-only speech does not cover the inbox
+  // BUG-148: the gmail-batch subscriber needs to know whether the greeting has
+  // actually been DELIVERED, so this is set after proactiveSpeak, never at
+  // arming time. It starts true wherever no greeting will be spoken at all.
+  //
+  // BUG-433 (2026-09-18) deleted its companion `bootGreetingFired`. That flag
+  // meant "a timer is running", which was the only record of the single shot
+  // while arming happened on connection; the scheduler owns that state now, and
+  // a second variable saying the same thing is what let the 09-16 greeting be
+  // marked spent before anything had been spoken.
+  // The old two-line form ORed in `BOOT_GREETING==='false' && !hasSettingsWarnings`
+  // on top of a plain `BOOT_GREETING==='false'`, so the warnings term could never
+  // change the result. Same value, arithmetic no longer hiding that.
+  let bootGreetingDelivered = !!process.env.NODE_TEST_CONTEXT || process.env.BOOT_GREETING === 'false';
   const serverBootAt = Date.now();
   // How long after boot the greeting is still considered "about to happen". Only
   // used to bound the gmail suppression below, so a sensor batch arriving hours
@@ -2377,6 +2384,28 @@ function createServer(deps) {
   // it — the real 2.5s outlives a test file, and BUG-178's race is unobservable
   // from outside without arming the actual timer.
   let bootGreetingDelayMs = 2500;
+  // BUG-433 (2026-09-18). The greeting used to arm on the FIRST connection and
+  // mark the single shot fired at that moment. On 2026-09-16 that connection
+  // was a PIN-locked HUD, which drops proactive speech before registering a
+  // handler — so the audio was synthesized, sent, discarded, and logged as
+  // delivered. "Something connected" is not "something can play this", and only
+  // the client knows the second one. It says so in a `hud-ready` message; this
+  // scheduler waits for one that can. States and rationale: ./boot-greeting.js.
+  // Keyed by connection id, NOT one mutable "the greetable socket": the scheduler already
+  // owns which connection the shot belongs to, and a second variable tracking
+  // the same fact can disagree with it. A first draft here did — a second tab
+  // announcing itself while tab one was scheduled was refused by the scheduler
+  // and still overwrote the socket, so the greeting would have gone to a tab the
+  // scheduler had never chosen. The socket is now DERIVED from the target id.
+  const greetableSockets = new Map();
+  const greetingScheduler = require('./boot-greeting').createGreetingScheduler({
+    get delayMs() { return bootGreetingDelayMs; },
+    log: (event, data) => logger.info(event, data),
+    // Re-asked when the timer fires: the operator can relock, or the tab can
+    // close, inside the delay — which is precisely where 09-16's greeting died.
+    stillEligible: (id) => { const s = greetableSockets.get(id); return !!s && s.readyState === 1 && !s._mythosNodeId; },
+    deliver: (id) => deliverBootGreeting(greetableSockets.get(id)),
+  });
   const LAST_BOOT_PATH = 'Identity/last-boot.json';
   const bootUpgrade = { upgraded: false, changes: [] };
   // Genuine "since this entity was last alive" instant for the self-healing
@@ -2464,7 +2493,7 @@ function createServer(deps) {
   const GREETING_DEDUP_KEY = 'greeting:session';
 
   async function deliverBootGreeting(targetWs) {
-    if (targetWs && (targetWs.readyState !== 1 || targetWs._mythosNodeId)) { bootGreetingFired = false; return; }
+    if (targetWs && (targetWs.readyState !== 1 || targetWs._mythosNodeId)) return false; // BUG-433: hand the shot back
     if (process.env.BOOT_GREETING === 'false') {
       await proactiveSpeak(conversationAnnouncer?.appendSettingsWarnings('', deps.settingsDiagnostics), targetWs);
       return;
@@ -2548,7 +2577,7 @@ function createServer(deps) {
     // Recheck after generation; a replacement dashboard may already be waiting.
     if (targetWs && (targetWs.readyState !== 1 || targetWs._mythosNodeId)) {
       targetWs = [...wss.clients].find((ws) => ws.readyState === 1 && !ws._mythosNodeId);
-      if (!targetWs) { bootGreetingFired = false; return; }
+      if (!targetWs) return false; // BUG-433: nothing was spoken, so the scheduler re-arms
     }
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
@@ -3063,51 +3092,6 @@ function createServer(deps) {
     // client connecting AFTER boot would otherwise sit on 'booting' forever.
     send({ type: 'entity-state', payload: { name: config.MYTHOS_NAME, status: entityStatus, tick: memory.working.tick } });
 
-    // First dashboard connection this boot → spoken greeting + status brief.
-    // Small delay so the client finishes wiring its WS handlers and voice
-    // machinery before the proactive-speech broadcast lands.
-    if (!bootGreetingFired) {
-      bootGreetingFired = true;
-      const greetTimer = setTimeout(() => {
-        // BUG-178: a voice node must not consume the greeting. Nodes share this
-        // /ws path and only reveal themselves via {type:'identify',role:'node'}
-        // AFTER the upgrade, so "the first connection this boot" is not the same
-        // question as "the dashboard" — and the answer is only available here, at
-        // fire time, not at the arming site above. A phone reconnecting at boot
-        // (the normal case per NodeLink.kt) won that race: the whole greeting
-        // went to the phone while the HUD connecting a second later got nothing,
-        // silently. Speaking through a phone IS a feature, but an election-gated
-        // one (nodeSpeechTarget: AETHER_NODE_AUDIO + an elected aetherOwner);
-        // picking a socket bypassed that gate entirely.
-        //
-        // Re-arming alone is NOT enough, and the first cut of this fix got that
-        // wrong — live-probed 2026-08-10. A dashboard that connected during the
-        // node's 2.5s window already saw bootGreetingFired === true and so never
-        // armed a timer of its own; re-arming at fire time is then too late for
-        // it and the greeting is lost by both devices. So look for a dashboard
-        // that is already connected and hand it over directly, and only re-arm
-        // when there is genuinely nobody to greet yet.
-        //
-        // Either way this stays one greeting per boot, never one per tab (the
-        // BUG-112 shape): the handover keeps the gate closed, and a re-armed gate
-        // is closed again by whichever dashboard connects next.
-        if (ws._mythosNodeId) {
-          const dashboard = [...wss.clients].find((c) => c.readyState === 1 && !c._mythosNodeId);
-          if (dashboard) {
-            logger.info('boot-greeting.rerouted-from-node', { nodeId: ws._mythosNodeId });
-            deliverBootGreeting(dashboard).catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
-            return;
-          }
-          bootGreetingFired = false;
-          logger.info('boot-greeting.deferred-node-connection', { nodeId: ws._mythosNodeId });
-          return;
-        }
-        // Deliver to THIS connection only — with two dashboard tabs open, a
-        // broadcast greeting plays twice in overlap ("two voices").
-        deliverBootGreeting(ws).catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
-      }, bootGreetingDelayMs);
-      if (greetTimer.unref) greetTimer.unref();
-    }
 
     // CONSISTENCY FIX (spec vs shipped brain, documented in ROADMAP.md P9): the
     // spec's handleUtterance calls brain.interpret(), which no shipped phase ever
@@ -4000,6 +3984,18 @@ function createServer(deps) {
           resolveLocalWake([]);
         }
       }
+      // BUG-433: the client tells us whether it can actually PLAY proactive
+      // speech — socket up, PIN explicitly unlocked, voice config loaded,
+      // playback wired. A playback hint, never an authentication claim: the
+      // server decides what this socket IS (`isNode` below), the message does
+      // not get to say. An old HUD never sends this and is therefore never
+      // greeted; that is the documented compatibility limit.
+      else if (msg.type === 'hud-ready') {
+        const greetable = msg.greetable === true;
+        if (greetable) greetableSockets.set(connectionId, ws);
+        else { greetableSockets.delete(connectionId); greetingScheduler.withdraw(connectionId, msg.why || 'not-greetable'); }
+        greetingScheduler.offer({ id: connectionId, greetable, why: msg.why || null, isNode: !!ws._mythosNodeId });
+      }
       // A node claims its identity, so speech can be routed back to it. Last
       // writer wins (a reconnecting phone must be able to replace its own stale
       // socket), but a duplicate claim is reported as an anomaly because the
@@ -4083,6 +4079,11 @@ function createServer(deps) {
     // dangling Gemini socket would otherwise keep billing for open-mic time
     // with no client left to hear the reply.
     ws.on('close', () => {
+      // BUG-433: a socket that goes away hands the greeting back, so the next
+      // eligible HUD still gets one. The old code had already spent the single
+      // shot at arming time and could not.
+      greetableSockets.delete(connectionId);
+      greetingScheduler.withdraw(connectionId, 'socket-closed');
       clientLiveRequested = false;
       desktop?.close().catch(error => logger.warn('desktop.disconnect-failed', { error: error.message }));
       if (liveSession) liveSession.close('ws-closed');
@@ -4659,7 +4660,7 @@ function createServer(deps) {
       // NODE_TEST_CONTEXT pre-fires the gate, so the connection race that bug is
       // about cannot be reached from outside without re-arming it, and the real
       // 2.5s delay outlives a test file.
-      rearmBootGreeting: () => { bootGreetingFired = false; bootGreetingDelivered = false; },
+      rearmBootGreeting: () => { bootGreetingDelivered = false; }, // BUG-433: the scheduler owns the shot now
       setBootGreetingDelayMs: (ms) => { bootGreetingDelayMs = Number(ms) || 0; },
       // Voice Nodes: proactive speech targets lastActiveWs, and a phone pushing
       // proximity telemetry several times a second must never become that
