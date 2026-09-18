@@ -13,7 +13,9 @@ the session started). Not re-run on 09-18: that pass was headless.
 **The four fixes the 09-16 attended run asked for are coded, in order.** Four
 commits on `verify/live-2026-09-10`, each with a failing-first test, mutation
 probes diffed against a full-path backup, and the full suite green at commit.
-**Nothing is pushed** — the branch is 85 commits ahead of `origin/main`.
+**Pushed 2026-09-18 to `b0553793`; PR #96 carries the whole branch, 87 commits
+ahead of `main`, and is NOT for merge until the attended pass below.** CI still
+wants one dispatch on the final SHA.
 
 | commit | ticket | what changed |
 |---|---|---|
@@ -77,16 +79,16 @@ agent shell exports the 8.3 short `TEMP`, under which the suite honestly reports
 **Nothing here is attended-verified. Four fixes sit on evidence that is entirely
 offline, and three of them are about what the running app does.**
 
-1. **Push the branch and open the PR** to `main`; dispatch `ci.yml` once for the
-   reviewed revision. After 442 lands the operator is asked for the access token
-   once more (30-day cookie, `routes/auth.js`) — say so in the PR.
-2. **One attended session, cold boot from source, speaker on, Task Manager open.**
+1. **One attended session, cold boot from source, speaker on, Task Manager open.**
    433: was the greeting heard? 437: quit three ways (X, tray, in-app) and check
    `lifecycle.shutdown.complete`, the checkpoint and the process inventory. 442:
    a full conversation with a PIN configured, watching for the token prompt.
    434: the operator's caret in the DM box first, so the model reaches `ui_type`.
    268: toast seen plus paste.
-3. Quote the lines into `BUGS.md`, rerun `docs:check`, commit, push.
+2. Quote the lines into `BUGS.md`, rerun `docs:check`, commit, push.
+3. Then dispatch `ci.yml` once on the final SHA and decide PR #96's fate. After
+   442 lands the operator is asked for the access token once more (30-day cookie,
+   `routes/auth.js`) — already said in the PR.
 
 ## Where the detail lives
 
