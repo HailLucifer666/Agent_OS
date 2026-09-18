@@ -603,6 +603,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-441 | coded | blocked | [CODED 2026-09-16; cause corrected — a missing `clicking` claim category, not a dropped caveat; attended run pending] A result carrying unverified:true is spoken as a completed action. Four calls this session returned outcome:ok WITH an unverified flag and an honest reason — open_web x2 "I cannot confirm whether the new tab opened because the browser did not expose a window handle", browser_click x2 "clicked ... from page script because it never became visibly actionable — a script click skips the checks that prove a real user could have". The effector layer is correct; the caveat is dropped between the ledger and the spoken turn, so the operator is told it worked. The healer caught one instance itself (claimed-action-not-taken). Operator incident inc-1789074035676-6 asks for exactly this root cause. Distinct from BUG-434 (a TRUE action wrongly retracted) and from BUG-438 (the unverified flag firing on the tab rather than the title): this is the general rule that ok means dispatched, not proven. Consumers: the spoken narration path; narration-claims.js. Remaining evidence: whether suppressing the claim is enough or the turn must say what could not be confirmed. | mythos/src/core/voice/narration-claims.js; mythos/src/core/voice/live-tool-adapter.js |
 | BUG-442 | open | currently reproduced | [FILED 2026-09-16 from the attended run] The PIN session cookie is issued with maxAge = PIN_SESSION_TTL_MS (30 min, hard) while pin-session.js slides its own expiry on every valid check; the browser dropped the cookie at unlock+30 min (10:29Z -> ~11:00Z), every /api fetch turned 401 in combined mode, and net-guard rendered the ACCESS TOKEN prompt for a lapsed PIN session. Live WS kept working (authenticated at upgrade). Consumers: routes/pin.js cookie issue, tokenOk() combined branch, ui/public/js/net-guard.js. Remaining evidence: none needed to start — the mechanism is read from the code and the timing matches the default TTL. | mythos/server/routes/pin.js; mythos/src/core/security/pin-session.js; mythos/ui/public/js/net-guard.js; candidate test: pin-session-cookie-slides.test.js |
 | BUG-443 | open | currently reproduced | [FILED 2026-09-16 from the attended run] app_reply failed with "Could not type the reply into slack: [object Object] Nothing was sent." (Audit 10:41:31Z) because from-app-reply.js:141 does String(typed.result) on an object result. The spoken turn inherited the noise ("I am not sure why it failed"). Consumers: app_reply spoken failure text; the claim-check ledger reason. Remaining evidence: none — one-line fix owed with its test. | mythos/src/core/effectors/from-app-reply.js; candidate test: bug-443-app-reply-keeps-the-typing-reason.test.js |
+| BUG-444 | open | currently reproduced | [FILED 2026-09-18 from the BUG-442 security review] POST /api/auth/session puts the raw MYTHOS_AUTH_TOKEN into the browser cookie for 30 days rather than minting a session identifier (`res.cookie(AUTH_COOKIE, authToken, …)`, routes/auth.js). The secret itself is then at rest in the cookie jar of every browser the operator has ever logged in from, and it cannot be revoked for one browser without rotating the token for the phone node and every other caller. Out of BUG-442's scope by decision, not by oversight: 442 separated the PIN session from the bearer and did not change what the bearer cookie carries. Consumers: browser navigation, the WS upgrade (a browser cannot attach headers), trusted-node auth. Remaining evidence: none — the shape is read directly from source. A fix mints an opaque per-browser session with its own store and revocation, and stops the raw secret ever reaching a cookie. | mythos/server/routes/auth.js; mythos/server/credentials.js |
 | BUG-406 | open | blocked | [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -2099,6 +2100,50 @@ Both now route through `util/reason-text.js`, the helper extracted for this clas
 **Mechanism.** `src/core/effectors/from-app-reply.js:141`: `String(typed.result || typed.error || 'typing failed')`. `fromPc.ui_type` fails with an object in `result` (the evidence-contract shape), so `String(object)` yields `[object Object]`. Error-hiding class: the failure path flattened a specific cause into noise, and the spoken turn inherited the noise.
 
 **Fix sketch.** Render the failure through the shared reason text helper (`util/reason-text.js`) instead of `String(...)`. Test: a `ui_type` failure carrying `{result:{error:'the foreground window is X, not Slack'}}` produces that sentence in app_reply's message and the string `[object Object]` never appears.
+
+## BUG-444 — `/api/auth/session` puts the raw bearer token in a 30-day browser cookie instead of minting a session (filed 2026-09-18)
+
+**Status:** 🐞 OPEN — filed from the BUG-442 security review, not yet worked.
+
+**Mechanism, read from source at `0502b51d`.** `server/routes/auth.js` exchanges a
+correct `MYTHOS_AUTH_TOKEN` for a cookie whose VALUE is that same token:
+`res.cookie(AUTH_COOKIE, authToken, { httpOnly: true, sameSite: 'strict', secure:
+req.secure, maxAge: cookieTtlMs })`, with `cookieTtlMs` defaulting to 30 days. The
+file's own header states the intent plainly — "the cookie carries
+MYTHOS_AUTH_TOKEN itself … no new secret, no new session type, nothing to keep in
+sync" — so this is a recorded design choice rather than an accident, and the
+simplicity it bought is real. The cost is the part that was never written down.
+
+**Why it is worth a ticket.** The shared secret ends up at rest in the cookie jar
+of every browser the operator has ever logged in from, and on any machine they
+logged in from once. It cannot be revoked for one browser: the only lever is
+rotating `MYTHOS_AUTH_TOKEN`, which simultaneously logs out the phone node and
+every other caller. `httpOnly` keeps script from reading it, which is the attack
+this shape does defend against; it does nothing about the disk. Rated MEDIUM by
+the review — the deployment that needs a token at all is the non-loopback bind
+the phone node requires, which is exactly the deployment where a stolen profile
+is worth something.
+
+**Explicitly out of BUG-442's scope, by decision.** That ticket separated the PIN
+session from the bearer so the two stopped destroying each other; it did not
+change what the bearer cookie contains, and widening it mid-repair would have put
+an unreviewed credential store inside an auth change that already touched the
+HTTP gate, the WS upgrade, signed artifacts and trusted-node auth.
+
+**Fix sketch.** Mint an opaque per-browser session id with its own store, map it
+to the bearer identity server-side, and let `credentials.js` resolve it — so the
+raw secret never reaches a cookie and a single browser can be revoked. `pin-
+session.js` already demonstrates the shape (issue / validate / renew, an absolute
+ceiling) and is the obvious thing to generalise rather than duplicate. Needs a
+migration note: existing cookies carry the token and must be rejected, not
+reinterpreted. Consumers to update together: `extractCookieToken` and
+`tokenOk()` in `server/index.js`, the WS `verifyClient` path, signed artifact
+access, and the trusted-node bearer-only exception.
+
+**Remaining evidence: none.** The shape is read directly from source; nothing
+here depends on a live run.
+
+**Attribution:** found by the `security-reviewer` pass on BUG-442, 2026-09-18.
 
 ## BUG-441 — a result flagged unverified is spoken as a completed action (CODED 2026-09-16; filed 2026-09-11)
 
@@ -21997,6 +22042,12 @@ those records remain owed (this section is the index until then).
 
 - BUG-443 - app_reply reports "[object Object]" when ui_type fails — the typing failure's
   reason is stringified away (from-app-reply.js:141). Filed 2026-09-16. Full entry above.
+
+- BUG-444 - POST /api/auth/session puts the RAW MYTHOS_AUTH_TOKEN into the browser cookie
+  for 30 days instead of minting a session identifier, so the shared secret is at rest in
+  every browser the operator has logged in from and cannot be revoked for one of them
+  without rotating it for the phone node too. Filed 2026-09-18 from the BUG-442 security
+  review; deliberately outside that ticket's scope. Full entry above.
 
 
 - BUG-422 - the server child exits silently mid-session and never restarts.

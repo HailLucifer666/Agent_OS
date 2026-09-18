@@ -20,7 +20,7 @@ probes diffed against a full-path backup, and the full suite green at commit.
 | `b2d52872` | **437** | `electron/quit-sequence.js` + `process-tree.js` + `vault-push.js`. `before-quit` now `preventDefault()`s and awaits the shutdown it already asked for; `will-quit` deleted; process identity is `(ProcessId, CreationDate)`, so a reaped pid is never tree-killed |
 | `8041b595` | **442** | `server/credentials.js`. The PIN session and the bearer token stop sharing the cookie name `mythos_token`; `isValidNoSlide()`/`renew()`; a 12 h absolute ceiling replaces the hard Max-Age that was the only cap; net-guard routes a 401 by which credential is missing |
 | `2e707594` | **443** | Every failure site in `from-app-reply`/`from-pc`/`from-cua` goes through `reasonText()`; a derived guard fails on any NEW `String(x.error)` site rather than counting known ones |
-| `9bf0926d` | **433** | `server/boot-greeting.js` + `ui/public/js/hud-ready.js`. The greeting waits for a client that says it can PLAY one, instead of arming on the first connection and spending the shot there |
+| `0502b51d` | **433** | `server/boot-greeting.js` + `ui/public/js/hud-ready.js`. The greeting waits for a client that says it can PLAY one, instead of arming on the first connection and spending the shot there |
 
 Suite 7859 -> **7949, 0 fail, 0 cancelled, 0 skipped, exit 0** (long-form TEMP,
 `MYTHOS_PORT=4999 EDGE_TTS_PORT=5099`). All five documentation gates green.
@@ -58,7 +58,7 @@ agent shell exports the 8.3 short `TEMP`, under which the suite honestly reports
 
 ## Still open
 
-- Open: **274, 275, 406, 421, 422, 432, 434, 436, 439**; coded and owing one human
+- Open: **274, 275, 406, 421, 422, 432, 434, 436, 439, 444**; coded and owing one human
   confirmation: **268, 433, 437, 441, 442, 443**.
 - 274 T3 and 406 are decisions (D1, D2) nobody has made. 436/422 stay
   diagnosis-gated. 421 needs desktop operator mode (decision D6).
@@ -66,9 +66,9 @@ agent shell exports the 8.3 short `TEMP`, under which the suite honestly reports
   PIN-session activity. The 12 h ceiling bounds a session's life; it does not
   establish a person is there. Making renewal depend on real input is a product
   call and it touches the voice path.
-- **New ticket owed:** `/api/auth/session` echoes the raw `MYTHOS_AUTH_TOKEN`
-  into a 30-day browser cookie rather than minting a session id. Flagged MEDIUM,
-  out of 442's scope, not yet filed.
+- **BUG-444, filed 2026-09-18 and not worked:** `/api/auth/session` puts the raw
+  `MYTHOS_AUTH_TOKEN` into a 30-day browser cookie rather than minting a session
+  id, so it cannot be revoked per browser. MEDIUM; out of 442's scope by choice.
 - Track E: E1/E2/E5/E6/E9 shipped; E3/E4/E8 measured and left; E7 not done.
 - Licensing and release decisions (step 6.5, 274 T3). No release authorized.
 

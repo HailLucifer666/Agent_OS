@@ -5855,18 +5855,31 @@
           "evidence": "[FILED 2026-09-16 from the attended run] app_reply failed with \"Could not type the reply into slack: [object Object] Nothing was sent.\" (Audit 10:41:31Z) because from-app-reply.js:141 does String(typed.result) on an object result. The spoken turn inherited the noise (\"I am not sure why it failed\"). Consumers: app_reply spoken failure text; the claim-check ledger reason. Remaining evidence: none — one-line fix owed with its test.",
           "source": "mythos/src/core/effectors/from-app-reply.js; candidate test: bug-443-app-reply-keeps-the-typing-reason.test.js"
         }
+      },
+      {
+        "n": 444,
+        "shape": "entry",
+        "state": "open",
+        "title": "`/api/auth/session` puts the raw bearer token in a 30-day browser cookie instead of minting a session (filed 2026-09-18)",
+        "detail": {},
+        "excerpt": "**Status:** 🐞 OPEN — filed from the BUG-442 security review, not yet worked. **Mechanism, read from source at `0502b51d`.** `server/routes/auth.js` exchanges a correct `MYTHOS_AUTH_TOKEN` for a cookie whose VALUE is that same token: `res.cookie(AUTH_COOKIE, authToken, { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: cookieTtlMs })`, with `cookieTtlMs` defaulting to 30 days. The file's own header states the intent plainly — \"the cookie carries MYTHOS_AUTH_TOKEN itself … no new secret, no new session type, nothing to keep in sync\" — so this is a recorded design choice rather than an accident, and the simplicity it bought is real. The cost is the part that was never written down. **Why it is worth a ticket.** The shared secret ends up at rest in the cookie jar of every browser the operator has ever logged in from, and on any machine they logged in from once. It cannot be r…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "[FILED 2026-09-18 from the BUG-442 security review] POST /api/auth/session puts the raw MYTHOS_AUTH_TOKEN into the browser cookie for 30 days rather than minting a session identifier (`res.cookie(AUTH_COOKIE, authToken, …)`, routes/auth.js). The secret itself is then at rest in the cookie jar of every browser the operator has ever logged in from, and it cannot be revoked for one browser without rotating the token for the phone node and every other caller. Out of BUG-442's scope by decision, not by oversight: 442 separated the PIN session from the bearer and did not change what the bearer cookie carries. Consumers: browser navigation, the WS upgrade (a browser cannot attach headers), trusted-node auth. Remaining evidence: none — the shape is read directly from source. A fix mints an opaque per-browser session with its own store and revocation, and stops the raw secret ever reaching a cookie.",
+          "source": "mythos/server/routes/auth.js; mythos/server/credentials.js"
+        }
       }
     ],
     "counts": {
       "verified": 85,
       "fixed": 181,
-      "open": 13,
+      "open": 14,
       "coded": 10,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 292,
+    "total": 293,
     "openDeclared": [
       274,
       275,
@@ -5879,7 +5892,8 @@
       437,
       439,
       442,
-      443
+      443,
+      444
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
