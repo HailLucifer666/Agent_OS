@@ -2007,9 +2007,34 @@ Pre-fix failures, verbatim: *the PIN session must have its OWN cookie* · *THE F
 
 **Fix sketch.** Re-issue the cookie (same value, fresh `maxAge`) on each successful validation, or drop `maxAge` so the server-side slide is the only clock; and make the HUD read the 401 body (`unauthorizedHint` already names the missing credential) so a lapsed PIN session shows the PIN screen. Tests to write: (a) a request at ttl+1 after a validation at ttl/2 is still accepted end to end, cookie included; (b) a 401 whose hint names the PIN session opens the PIN lock, not the token prompt; (c) the pin-session header comment corrected in the same commit.
 
-## BUG-443 — `app_reply` says "[object Object]" when typing fails, so the reason is lost (filed 2026-09-16)
+## BUG-443 — `app_reply` says "[object Object]" when typing fails, so the reason is lost (FIXED 2026-09-18; filed 2026-09-16)
 
-**Status:** 🔴 OPEN — one-line fix owed with its test.
+**Status:** ✅ FIXED 2026-09-18. It was not a one-line fix, and the ticket named the second defect rather than the first.
+
+**Two defects, not one.** The reason was destroyed twice, in two files, and either one alone would have produced the Audit row.
+
+1. **`from-pc.js` `delegate()` read `resp.error` raw.** pc-child can answer a failed command with a STRUCTURED error, and two lines later `window-recovery.js` does `String(text || '')` — so the object became `[object Object]` **at that boundary**, and every caller downstream faithfully carried the literal on. That is where the 2026-09-16 row was actually made. It had a quieter second cost: `isStaleWindowTarget()` matches a regex, and a regex never matches an object, so BUG-405's dead-pid recovery could not fire on a structured failure at all.
+2. **`from-app-reply.js` rendered its own failures with `String(...)`.** Its local `pc()` helper calls pc-child directly, bypassing `from-pc` entirely, so three of its four sites — `list_windows`, `focus_window`, `focus_message_box` — see raw adapter values and needed the fix independently. Neither fix subsumes the other; the two mutation probes demonstrate that separately.
+
+Both now route through `util/reason-text.js`, the helper extracted for this class in 2026-07 and simply never reached from here.
+
+**The sweep found two more, and they are the reason this is a class and not a bug.** A derived scan of every effector for whole-failure-value stringification turned up two further private normalizers with the identical flaw: `from-pc.js`'s `reasonOf()` and `from-cua.js`'s error describer, each reimplementing two of the shared helper's four branches and each able to emit the literal. Fixed in the same change. The full history, which is the argument for the guard below: BUG-101 · `dispatch-action.js` 2026-07-29 · `scripts/google-auth.js` 2026-08 · `from-pc.js delegate()` and `from-app-reply.js` ×4 (this ticket) · `reasonOf()` and `from-cua.js` (this sweep). **Seven instances, four of them fixed one call site at a time.**
+
+**So the fix ships a guard, and the guard is derived rather than counted.** `test/bug-443-no-unclassified-reason-stringify.test.js` extracts every `String(x.error|reason|result)` in `src/core/effectors/` — the whole failure value, never a named scalar field — and requires each to carry a written classification. A new one fails by name. A count-only assertion was rejected deliberately: it goes green the moment one defect replaces another. The waiver map is non-empty, each entry says why it is safe, and a second test fails any waiver whose site no longer exists. A third proves the detector actually matches the pre-fix line, does NOT match a scalar read, and does not match the prose describing the defect — several of these files document it in comments.
+
+**It caught one immediately:** a fifth site in `from-app-reply.js` itself, the unverified read-back reason, which the manual pass had missed.
+
+**Tests.** `test/bug-443-app-reply-keeps-the-reason.test.js` (7): five observed failing first, two green-before as the adjacent cases that must keep passing — a plain-string reason passes through unchanged, and a successful compose still stops before sending. Plus the 3 guard tests.
+
+**A fixture that was more generous than the wire, worth recording.** The first draft stubbed the typing failure as `{ok:false, result:{…}}`. `delegate()` reads `resp.error`, so that shape never reached the code under test and the message came back as the generic "PC automation command failed." — the test failed for a reason unrelated to the bug. The real wire shape is `{ok:false, error:<string|object>}`. A fixture the producer never sends proves nothing about the producer.
+
+**And a mutation that silently did not apply.** The first probe used a `sed` whose delimiter collided with a `||` in the pattern. The suite came back green — which is exactly what a working guard looks like. It was caught only by diffing the file before trusting the result.
+
+**Mutation probes, run 2026-09-18, each diffed:** (p1) revert `from-pc`'s `reasonText(resp.error || …)` to the raw value → fails two tests, reproducing the Audit row; (p2) revert `from-app-reply`'s `focus_window` site → fails one that p1 does not touch.
+
+**Suite:** `node --test --test-reporter=tap` under `mythos/`, exit 0, **7923 tests, 7923 pass, 0 fail, 0 cancelled, 0 skipped**.
+
+**Live verification not required to close this one**, and that is a deliberate call rather than an omission: the defect is a pure string transformation with no device, timing or platform dependence, the original failing input is reconstructed from the Audit row verbatim, and the spoken path renders the same string the test asserts. What a live run would add is confirmation that a real pc-child failure carries a structured `error` at all — evidenced by the 2026-09-16 row existing, since nothing else produces that literal.
 
 **Evidence (2026-09-16 10:41:31Z, Audit).** `app_reply {"app":"slack","text":"checking in"}` → `outcome:fail` "Could not type the reply into slack: [object Object] Nothing was sent." MYTHOS then told the operator "I'm not sure why it failed" — true, because the reason had been destroyed one line earlier.
 

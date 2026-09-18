@@ -21,6 +21,7 @@
 
 const { effectorFromTool } = require('./adapter');
 const cuaDriver = require('../../../adapters/cua-driver');
+const { reasonText } = require('../util/reason-text');
 
 function ok(result) { return { ok: true, result: result }; }
 function fail(result) { return { ok: false, result: result }; }
@@ -39,8 +40,12 @@ function cuaErrText(result, fallback) {
       .map(function (c) { return c.text; });
     if (texts.length) return texts.join(' ').slice(0, 300);
   }
-  if (result.error) return String(result.error);
-  if (result.message) return String(result.message);
+  // BUG-443 (2026-09-18): both were String(), so a structured error or message
+  // rendered as the literal "[object Object]" — the same defect the ticket was
+  // filed for, in a second private normalizer. reasonText() handles the object
+  // case and the empty-object case that would otherwise trail off mid-sentence.
+  if (result.error) return reasonText(result.error);
+  if (result.message) return reasonText(result.message);
   try {
     var s = JSON.stringify(result);
     return s ? s.slice(0, 300) : (fallback || 'unknown cua-driver error');

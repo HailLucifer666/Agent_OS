@@ -73,7 +73,18 @@ async function delegate(cmdObj) {
   try {
     const resp = await pcChild.sendCommand(cmdObj);
     if (resp.ok) return ok(resp.result);
-    const why = resp.error || 'PC automation command failed.';
+    // BUG-443 (2026-09-18). This read `resp.error` raw, and pc-child can answer
+    // with a STRUCTURED error — an object. Two lines later withWindowList() does
+    // `String(text || '')`, so the object became the literal "[object Object]"
+    // here, at the boundary, and every caller downstream faithfully carried that
+    // string to the operator. The 2026-09-16 Audit row blaming app_reply was
+    // this: "Could not type the reply into whatsapp: [object Object]".
+    //
+    // Normalising at the boundary rather than at each caller also fixes the
+    // quieter half — isStaleWindowTarget() below matches a regex, and a regex
+    // never matches an object, so BUG-405's dead-pid recovery could not fire on
+    // a structured failure at all.
+    const why = reasonText(resp.error || 'PC automation command failed.');
     // BUG-405: every pid-taking tool passes through here; see ./window-recovery.js.
     // Skips list_windows itself so the recovery cannot recurse.
     return fail(cmdObj && cmdObj.pid && cmdObj.cmd !== 'list_windows'
@@ -1240,7 +1251,12 @@ const { click_at, clickAtRaw } = makeClickAt({
 
 function reasonOf(res) {
   const r = res && res.result;
-  if (r && typeof r === 'object' && r.error) return String(r.error);
+  // BUG-443 (2026-09-18): `String(r.error)` here had the same flaw the ticket
+  // was filed for — an `error` that is itself an object renders as
+  // "[object Object]", and this string is spoken. A private normalizer that
+  // reimplements two of the shared one's four branches is how the class keeps
+  // coming back; use the shared one.
+  if (r && typeof r === 'object' && r.error) return reasonText(r.error);
   return typeof r === 'string' ? r : 'screen OCR failed';
 }
 

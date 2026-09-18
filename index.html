@@ -5830,8 +5830,9 @@
         "n": 442,
         "shape": "entry",
         "state": "open",
-        "title": "the HUD demands the access token mid-conversation: the PIN cookie carries a hard 30-minute Max-Age while the server-side session slides (filed 2026-09-16)",
+        "title": "the HUD demands the access token mid-conversation: the PIN cookie carries a hard 30-minute Max-Age while the server-side session slides (CODED 2026-09-18; attended proof OPEN; filed 2026-09-16)",
         "detail": {
+          "verification": "`test/bug-442-credential-separation.test.js` (7, against a real server): six were observed FAILING before the fix and are quoted below; the seventh is green-before by design, being the adjacent case that must keep passing. `test/bug-442-client-401-routing.test.js` (12). Mutation probes run 2026-09-18, each diffed to confirm it applied: dropping the generation fence, dropping the authentication-endpoint exclusion, and dropping the same-origin check each fail exactly the test named for them. Pre-fix failures, verbatim: *the PIN session must have its OWN cookie* · *THE FILED DEFECT: the server slides its own expiry on every successful check, so it must re-issue the cookie in the same step* · *tokenOk() accepted a PIN session INSTEAD OF the bearer* · *the 409 existed only because the two credentials shared a cookie name* · *precondition: both credentials were issued* · *the client cannot cho…",
           "cause": "`server/routes/pin.js` issues the PIN session token as the `mythos_token` cookie with `maxAge: pinSession.ttlMs` — a HARD browser-side expiry counted from unlock. `src/core/security/pin-session.js` slides its server-side `expiresAt` forward on every valid check, and its header says \"The cookie's own Max-Age does not need to slide in step — this store is the authority\". That sentence is wrong in the direction that matters: once the browser deletes the cookie at Max-Age, every `/api/*` fetch arrives with no cookie, `tokenOk()` (combined mode: bearer channel AND PIN cookie) returns false, the route answers 401, and `ui/public/js/net-guard.js` treats any 401 on `/api/` as a missing ACCESS TOKEN and opens the token prompt — the wrong prompt for the credential that actually lapsed. Two expiries for one session that nothing compared, plus a confident comment about the browser's behaviour that w…"
         },
         "campaign": {
@@ -5844,8 +5845,9 @@
         "n": 443,
         "shape": "entry",
         "state": "open",
-        "title": "`app_reply` says \"[object Object]\" when typing fails, so the reason is lost (filed 2026-09-16)",
+        "title": "`app_reply` says \"[object Object]\" when typing fails, so the reason is lost (FIXED 2026-09-18; filed 2026-09-16)",
         "detail": {
+          "verification": "`test/bug-443-app-reply-keeps-the-reason.test.js` (7): five observed failing first, two green-before as the adjacent cases that must keep passing — a plain-string reason passes through unchanged, and a successful compose still stops before sending. Plus the 3 guard tests. **A fixture that was more generous than the wire, worth recording.** The first draft stubbed the typing failure as `{ok:false, result:{…}}`. `delegate()` reads `resp.error`, so that shape never reached the code under test and the message came back as the generic \"PC automation command failed.\" — the test failed for a reason unrelated to the bug. The real wire shape is `{ok:false, error:\u003cstring|object>}`. A fixture the producer never sends proves nothing about the producer.",
           "cause": "`src/core/effectors/from-app-reply.js:141`: `String(typed.result || typed.error || 'typing failed')`. `fromPc.ui_type` fails with an object in `result` (the evidence-contract shape), so `String(object)` yields `[object Object]`. Error-hiding class: the failure path flattened a specific cause into noise, and the spoken turn inherited the noise."
         },
         "campaign": {
