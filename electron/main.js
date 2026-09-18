@@ -1104,35 +1104,13 @@ function stopChild() {
   // signal, no handler — so the server's shutdown steps never ran from a GUI
   // quit. stopChildGracefully() sends mythos:shutdown over the fork IPC
   // channel, waits up to CHILD_EXIT_DEADLINE_MS (7 s; the request carries a 6 s
-  // budget; the watchdog below stays at 10 s), and only then tree-kills.
-  // Returns a promise sync callers may ignore: the escalation is timer-driven.
+  // budget; the quit watchdog in quit-sequence.js stays at 10 s), then tree-kills.
+  // BUG-437 (2026-09-18): the returned promise is no longer optional on the quit
+  // path — quitSequence awaits it. Nothing awaiting it was the whole defect.
   return stopChildGracefully(dying, log);
 }
 
-// BUG-225: the quit-path backstop. before-quit can wedge — syncVault('--push')
-// is a BLOCKING spawnSync with a 15s timeout on vault-git machines — and a
-// wedged quit IS the zombie report: window gone, process alive, single-
-// instance lock held, double-click does nothing. 10s mirrors the child's own
-// SHUTDOWN_MS design (schema default 10000): graceful shutdown gets a real
-// budget, and only a quit still going nowhere after it gets cut short. When
-// it fires: tree-kill the child (taskkill /T on win32 — the forked server
-// leaves piper and pc-child grandchildren a bare kill() never reaches) and
-// app.exit(0). That app.exit does NOT violate the relaunch-no-window "quit,
-// never exit" ruling: this fires only AFTER before-quit has already run and
-// failed to finish — exactly the case that ruling's reason ("it skips
-// before-quit") no longer describes. The timer is deliberately REF'd (the
-// BUG-259 lesson: an unref'd deadline never fires in a drained process), and
-// deliberately never cleared — a graceful quit exits the process, which kills
-// the timer; only a wedged one is still around to hear it.
-function armQuitWatchdog(childPid) {
-  setTimeout(() => {
-    log('quit watchdog: graceful quit did not complete in 10s — tree-killing the child and exiting');
-    // BUG-437 (2026-09-16): one tree-kill body, in child-exit.js (taskkill /T /F
-    // on win32), shared with stopChild()'s deadline escalation and tested there.
-    if (childPid) killTree({ pid: childPid }, log);
-    app.exit(0);
-  }, 10000);
-}
+// The BUG-225 quit watchdog moved into electron/quit-sequence.js (BUG-437).
 
 // ---- B6: update check (electron-updater) --------------------------------------
 // The update host is GitHub Releases for this repo — build.publish in
@@ -1178,7 +1156,9 @@ function armQuitWatchdog(childPid) {
 // The 15s cap is the deliberate compromise: git against an unreachable host can
 // sit in DNS for far longer than its own network timeout, and a boot that hangs
 // is worse than a session whose memory arrives one launch late.
-function syncVault(flag) {
+// `timeBox` is BUG-437's addition and ONLY the quit path passes it. The boot
+// pull and the installer handover keep the blocking call, which suits them.
+function syncVault(flag, timeBox) {
   try {
     // MYTHOS_DIR, not a raw path.join(__dirname, '..', 'mythos'): in a packaged
     // build the raw path lands inside app.asar, and a spawned child process can
@@ -1201,6 +1181,16 @@ function syncVault(flag) {
       siblingUserDataNames: ['agent-os', 'Electron'], // same list startChild passes
       log,
     });
+    // BUG-437 (2026-09-18): the quit path takes this branch. A blocking
+    // spawnSync there is the one thing the 10 s quit watchdog provably CANNOT
+    // cut short — a JavaScript timer does not fire while spawnSync holds the
+    // loop — so a wedged git turned the backstop into part of the wedge.
+    if (timeBox && timeBox.timeoutMs > 0) {
+      return require('./vault-push').spawnVaultPush({
+        script, flag, cwd: MYTHOS_DIR, timeoutMs: timeBox.timeoutMs, log,
+        env: { ...process.env, MYTHOS_VAULT_ROOT: vaultRoot, ELECTRON_RUN_AS_NODE: '1' },
+      });
+    }
     const res = require('child_process').spawnSync(process.execPath, [script, flag], {
       cwd: MYTHOS_DIR,
       encoding: 'utf8',
@@ -1762,6 +1752,34 @@ function pointInstallerTempAtInstallVolume() {
 // source-shape assertions did NOT catch this function resolving instantly when
 // it read the module-level `child` that stopChild() had just nulled.
 const { awaitChildExit, stopChildGracefully, killTree } = require('./child-exit');
+const { createQuitSequence } = require('./quit-sequence');
+const { snapshotTree, verifyGone } = require('./process-tree');
+
+// BUG-225 + BUG-437: the quit is ONE sequence, and it is AWAITED. Backstop and
+// shutdown share one set of states in electron/quit-sequence.js — pure, and so
+// behaviour-testable, because this file cannot be require()d under node --test.
+// That is not tidiness: it is how a ladder with five behavioural tests ended up
+// never running. That file's header carries the incident and the arithmetic.
+const quitSequence = createQuitSequence({
+  log,
+  // Read, not cleared: stopChild() clears it, and the sequence needs the same object after.
+  captureChild: () => child,
+  stopChild: () => stopChild(),
+  snapshotTree: (pid) => snapshotTree(pid),
+  verifyGone: (snap) => verifyGone(snap),
+  pushVault: ({ timeoutMs }) => syncVault('--push', { timeoutMs }),
+  isInstallerHandover: () => installerHandover,
+  setIsQuitting: () => { isQuitting = true; },
+  closeSecondaryWindows: () => {
+    mediaWindowController.closeMediaWindow();
+    // null when the overlay is disabled (the default) or failed to construct.
+    if (cursorOverlayController) cursorOverlayController.destroy();
+  },
+  killTree,
+  cleanup: () => globalShortcut.unregisterAll(),
+  exit: (code) => app.exit(code),
+});
+
 const { handleOcrResult } = require('./ocr-result'); // BUG-268 D4: pure, behaviour-tested there
 
 // THE HANDOVER, in order. Order is the whole correctness of this function.
@@ -2340,54 +2358,36 @@ if (!gotLock) {
 
   // Clean shutdown: stop the child before quitting so we never orphan the server.
   app.on('window-all-closed', () => {
-    // BUG-225 re-fork race: isQuitting must be set BEFORE stopChild(). before-
-    // quit only runs after the app.quit() below, so without this the child's
-    // exit handler sees isQuitting === false during the gap between the kill
-    // and the quit, and schedules a re-fork — a fresh MYTHOS.exe born inside
-    // the quit window: the zombie. Non-darwin only: there window-all-closed
-    // does not quit, and suppressing restarts would strand a live macOS app
-    // with a dead server.
-    if (process.platform !== 'darwin') isQuitting = true;
-    stopChild();
-    if (process.platform !== 'darwin') app.quit();
-  });
-
-  app.on('before-quit', () => {
-    const handedOverToInstaller = installerHandover; // beginInstall() already did all of this
+    // macOS keeps the app alive without windows, so this is NOT a quit there:
+    // the child stops and is deliberately left to restart (isQuitting stays
+    // false), or a live macOS app would be stranded with a dead server.
+    // Preserved verbatim — BUG-437 changed the quit path, not this one.
+    if (process.platform === 'darwin') { stopChild(); return; }
+    // BUG-225 re-fork race: isQuitting must be set before the child is stopped,
+    // or its exit handler sees it false and schedules a re-fork — a fresh
+    // MYTHOS.exe born inside the quit window: the zombie. BUG-437: the stop
+    // itself belongs to the quit sequence, which app.quit() reaches through
+    // before-quit, so exactly one place ever starts a shutdown.
     isQuitting = true;
-    // Captured BEFORE stopChild(), which nulls the reference — the quit
-    // watchdog below needs the pid once `child` is gone.
-    const dyingPid = child && child.pid;
-    stopChild();
-    mediaWindowController.closeMediaWindow();
-    // null when the overlay is disabled (the default) or failed to construct.
-    if (cursorOverlayController) cursorOverlayController.destroy();
-    // BUG-225: armed BEFORE anything that can block below (syncVault's push is
-    // a blocking spawnSync with a 15s budget) — a backstop armed after the
-    // wedge can never fire.
-    armQuitWatchdog(dyingPid);
-    // AFTER stopChild(), so the vault is not being written while it is committed.
-    // A half-written episodic line committed as "synced" is worse than a late push,
-    // and the push is idempotent: whatever misses this window goes next time.
-    //
-    // SKIPPED during an update handover, and that is the point: this is a
-    // BLOCKING spawnSync with a 15s timeout (see syncVault), while the NSIS
-    // uninstaller that is already running gives the whole app ~5s to let go of
-    // its files. Running it here is what made every 0.1.7 update fail. On that
-    // path beginInstall() has already pushed, with the clock still ours.
-    if (handedOverToInstaller) {
-      log('auto-update: skipping the before-quit vault push — beginInstall already pushed.');
-      return;
-    }
-    syncVault('--push');
+    app.quit();
   });
 
-  // globalShortcut registrations are process-wide OS claims; releasing them on
-  // quit keeps the accelerator usable by other apps (and by the next run) rather
-  // than relying on process teardown.
-  app.on('will-quit', () => {
-    try { globalShortcut.unregisterAll(); } catch { /* nothing registered */ }
+  // BUG-437: hold the quit open until the shutdown has actually finished.
+  // Returning without preventDefault is what let Electron terminate 0.47 s
+  // after the shutdown request on 2026-09-16. One line on purpose: every
+  // decision this handler used to make now lives where node --test can reach it.
+  app.on('before-quit', (event) => {
+    if (quitSequence.request()) event.preventDefault();
   });
+
+  // The will-quit handler that released the global shortcuts was DELETED here
+  // by BUG-437 (2026-09-18), deliberately, because this change made it
+  // unreachable: every quit now ends in the sequence's app.exit(), and
+  // app.exit() does not emit will-quit. Leaving it would read as live defence
+  // while never running — so the release moved into the sequence's `cleanup`
+  // step above, where a test can and does reach it. The only path that never
+  // registers this handler at all is the second-instance bail-out, which quits
+  // before the else-branch runs and has no shortcuts registered to release.
 }
 
 // ---- Push-to-talk hotkey ------------------------------------------------------

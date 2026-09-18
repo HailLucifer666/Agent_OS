@@ -38,6 +38,14 @@ function codeOnly(text) {
   return text.replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
+// One locator, shared. Five tests below used to carry their own copy of
+// `/function syncVault\(flag\) \{.../`, and on 2026-09-18 all five broke at once
+// when BUG-437 added syncVault's second parameter — five identical failures
+// saying "syncVault must exist as a named function" about a function that was
+// right there. The parameter list is deliberately loose: what these tests guard
+// is the body, and a signature change is not the thing they exist to catch.
+const SYNC_VAULT = /function syncVault\([^)]*\) \{[\s\S]*?\n\}/;
+
 test('the vault is pulled BEFORE the server child starts', () => {
   const text = readMainJs();
   const ready = /app\.whenReady\(\)\.then\(async \(\) => \{([\s\S]*?)\n {4}\/\/ ---/.exec(text)
@@ -53,21 +61,29 @@ test('the vault is pulled BEFORE the server child starts', () => {
     'so a later pull is only read on the NEXT launch — the exact "the other machine\'s work is not here" bug');
 });
 
+// RE-POINTED 2026-09-18 (BUG-437). The quit-time push moved out of before-quit
+// and into electron/quit-sequence.js, because a blocking spawnSync on the quit
+// path is the one thing the 10 s quit watchdog provably cannot cut short. Both
+// things this test guards are unchanged and are asserted at the new location:
+// quitting still pushes, and the push still happens only after the child has
+// stopped. The third clause is new and is what the move bought — the push is
+// now bounded, so it can no longer BE the wedge.
 test('the vault is pushed on quit, AFTER the child is stopped', () => {
   const text = readMainJs();
-  const block = /app\.on\('before-quit', \(\) => \{([\s\S]*?)\n {2}\}\);/.exec(text);
-  assert.ok(block, 'could not locate the before-quit handler');
-  const quitCode = codeOnly(block[1]);
-  const stopAt = quitCode.indexOf('stopChild()');
-  const pushAt = quitCode.indexOf("syncVault('--push')");
-  assert.notEqual(pushAt, -1, 'quitting must push the vault, or a session\'s memory never leaves the machine');
-  assert.ok(stopAt !== -1 && stopAt < pushAt,
-    'the push must follow stopChild(), so the vault is not being written while it is committed');
+  assert.match(text, /pushVault: \(\{ timeoutMs \}\) => syncVault\('--push', \{ timeoutMs \}\)/,
+    "quitting must push the vault, or a session's memory never leaves the machine");
+  const seq = codeOnly(fs.readFileSync(path.join(REPO_ROOT, 'electron', 'quit-sequence.js'), 'utf8'));
+  const stopAt = seq.indexOf("callAsync('stopChild'");
+  const pushAt = seq.indexOf('pushVault(deadline');
+  assert.ok(stopAt !== -1 && pushAt !== -1 && stopAt < pushAt,
+    'the push must follow the child stop, so the vault is not being written while it is committed');
+  assert.match(seq, /const budget = deadline - now\(\) - cleanupReserveMs/,
+    'and it must be bounded by what is left of the quit budget — an unbounded push on the quit path is the wedge itself');
 });
 
 test('syncVault is time-boxed and cannot fail a boot', () => {
   const text = readMainJs();
-  const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text);
+  const fn = SYNC_VAULT.exec(text);
   assert.ok(fn, 'syncVault must exist as a named function');
   assert.match(fn[0], /timeout:\s*\d+/,
     'git against an unreachable host can sit in DNS well past its own timeout — a boot that hangs is worse ' +
@@ -80,7 +96,7 @@ test('syncVault is time-boxed and cannot fail a boot', () => {
 
 test('the sync child runs as NODE, not as a second Electron app', () => {
   const text = readMainJs();
-  const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text)[0];
+  const fn = SYNC_VAULT.exec(text)[0];
   // Found by booting the app, not by any unit test: process.execPath is
   // electron.exe in Electron, so spawning it without ELECTRON_RUN_AS_NODE starts
   // a whole second instance of MYTHOS instead of running the script. It then
@@ -92,7 +108,7 @@ test('the sync child runs as NODE, not as a second Electron app', () => {
 
 test('syncVault resolves the vault root exactly as startChild does', () => {
   const text = readMainJs();
-  const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text)[0];
+  const fn = SYNC_VAULT.exec(text)[0];
   // The bug this pins: called with only explicitEnv, resolveVaultRoot path.joins
   // an undefined userDataDir and throws — and syncVault's own catch would swallow
   // it, so sync would silently never run on a default install, which is everyone.
@@ -104,7 +120,7 @@ test('syncVault resolves the vault root exactly as startChild does', () => {
 
 test('syncVault uses real unpacked paths, never a raw path inside app.asar', () => {
   const text = readMainJs();
-  const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text)[0];
+  const fn = SYNC_VAULT.exec(text)[0];
   const code = codeOnly(fn);
   // Confirmed at source, from a packaged install whose --pull AND --push both
   // failed spawnSync ENOENT: this function built its script path and its cwd with
@@ -122,7 +138,7 @@ test('syncVault uses real unpacked paths, never a raw path inside app.asar', () 
 
 test('the sync script it calls actually exists at the path main.js uses', () => {
   const text = readMainJs();
-  const fn = /function syncVault\(flag\) \{[\s\S]*?\n\}/.exec(text)[0];
+  const fn = SYNC_VAULT.exec(text)[0];
   assert.match(fn, /path\.join\(MYTHOS_DIR,\s*'scripts',\s*'vault-sync\.js'\)/,
     'the path is asserted here so a moved/renamed script fails a test rather than silently disabling sync');
   assert.equal(

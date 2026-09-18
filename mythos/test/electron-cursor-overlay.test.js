@@ -262,12 +262,19 @@ test('Slice 5 / electron: registered alongside the other hotkeys, and torn down 
   for (const fn of ['registerTalkHotkey()', 'registerOcrGrabHotkey()', 'registerCursorOverlayHotkey()']) {
     assert.ok(readyBlock.includes(fn), `${fn} must be called inside app.whenReady()`);
   }
-  // The full before-quit body, not a fixed 400-char window: BUG-225's quit
-  // watchdog + pid capture legitimately grow the handler head, and the pin's
-  // point is the destroy call exists and is guarded, not where it sits.
-  const quitBlock = MAIN.slice(MAIN.indexOf("app.on('before-quit'"), MAIN.indexOf("app.on('will-quit'"));
-  assert.match(quitBlock, /cursorOverlayController\) cursorOverlayController\.destroy\(\)/,
+  // RE-POINTED 2026-09-18 (BUG-437). The teardown moved out of the before-quit
+  // handler and into the quit sequence's closeSecondaryWindows step, which runs
+  // at the same point in the shutdown — early, before the child stop — so the
+  // window does not sit on screen for the length of the quit. The pin's point
+  // was never WHERE it sits: it is that the destroy call exists and is guarded,
+  // because cursorOverlayController is null whenever the overlay is disabled,
+  // which is the default. Both are still asserted, at the new location.
+  const teardown = MAIN.slice(MAIN.indexOf('closeSecondaryWindows:'), MAIN.indexOf('killTree,'));
+  assert.ok(teardown.length > 0, 'the quit sequence must have a closeSecondaryWindows step');
+  assert.match(teardown, /cursorOverlayController\) cursorOverlayController\.destroy\(\)/,
     'the overlay must be released on quit, and guarded — it is null when disabled');
+  assert.match(teardown, /mediaWindowController\.closeMediaWindow\(\)/,
+    'and the media window goes with it — a secondary window left open pins the app past the quit');
 });
 
 // BOOT-ORDERING REGRESSION GUARD (the crash that took the shell down, commit

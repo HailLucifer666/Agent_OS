@@ -56,20 +56,31 @@ function handlerBlock(name, until) {
 
 // ---- 1. the re-fork race -------------------------------------------------------
 
-test('BUG-225 / window-all-closed sets isQuitting BEFORE stopChild()', () => {
+// RE-POINTED 2026-09-18 (BUG-437). window-all-closed no longer stops the child
+// itself: it sets the flag and calls app.quit(), and the stop happens once,
+// inside the quit sequence that before-quit starts. The INVARIANT is unchanged
+// and is what these two still assert — isQuitting is set before anything can
+// reach the child's exit handler, and darwin is exempt from both.
+test('BUG-225 / window-all-closed sets isQuitting BEFORE it can reach the child stop', () => {
   const body = handlerBlock("app.on('window-all-closed'", "app.on('before-quit'");
   const flagAt = body.indexOf('isQuitting = true');
-  const stopAt = body.indexOf('stopChild()');
+  const quitAt = body.indexOf('app.quit()');
   assert.ok(flagAt !== -1, 'window-all-closed must set isQuitting itself — before-quit runs only after app.quit(), i.e. AFTER this handler');
-  assert.ok(stopAt !== -1 && flagAt < stopAt,
-    'the flag must precede the kill: in the other order the exit handler sees isQuitting === false during the gap and re-forks inside the quit window');
+  assert.ok(quitAt !== -1 && flagAt < quitAt,
+    'the flag must precede the quit: app.quit() is what reaches before-quit, the sequence and the stop. In the other '
+    + 'order the exit handler sees isQuitting === false during the gap and re-forks inside the quit window');
+  assert.doesNotMatch(body.slice(body.indexOf("'darwin'") === -1 ? 0 : body.indexOf('isQuitting')), /stopChild\(/,
+    'BUG-437: the non-darwin path must NOT start its own stop — two entry points starting two shutdowns is what the sequence exists to prevent');
 });
 
 test('BUG-225 / window-all-closed does not quit on darwin, and does not set isQuitting there either', () => {
   const body = handlerBlock("app.on('window-all-closed'", "app.on('before-quit'");
-  const guard = body.match(/if \(process\.platform !== 'darwin'\) isQuitting = true/);
-  assert.ok(guard,
+  const guardAt = body.indexOf("if (process.platform === 'darwin')");
+  const flagAt = body.indexOf('isQuitting = true');
+  assert.ok(guardAt !== -1 && flagAt !== -1 && guardAt < flagAt,
     'on darwin window-all-closed does not quit, so setting isQuitting there would strand a live app whose exit handler refuses to restart the server');
+  assert.match(body.slice(guardAt, flagAt), /stopChild\(\);\s*return;/,
+    'and darwin keeps its original behaviour verbatim: stop the child, leave it free to restart, never quit');
 });
 
 test('BUG-225 / startChild refuses to run once quitting has begun (destination-side guard)', () => {
@@ -101,7 +112,8 @@ test('BUG-225 + BUG-437 / stopChild requests shutdown and waits, never a bare ki
   // the server's shutdown steps never ran from a GUI quit. The path is now
   // stopChildGracefully(): send mythos:shutdown -> wait 7 s -> tree-kill
   // (behaviour in test/bug-437-graceful-quit-then-tree-kill.test.js).
-  const body = handlerBlock('function stopChild(', 'function armQuitWatchdog(');
+  // Terminator re-pointed 2026-09-18: armQuitWatchdog moved to quit-sequence.js.
+  const body = handlerBlock('function stopChild(', '\nfunction syncVault(');
   const captureAt = body.indexOf('const dying = child');
   const gracefulAt = body.indexOf('stopChildGracefully(dying');
   assert.ok(captureAt !== -1 && gracefulAt !== -1 && captureAt < gracefulAt,
@@ -113,42 +125,62 @@ test('BUG-225 + BUG-437 / stopChild requests shutdown and waits, never a bare ki
 
 // ---- 4. the hard-exit backstop -------------------------------------------------
 
-test('BUG-225 / before-quit arms a quit watchdog BEFORE anything that can block', () => {
-  const body = handlerBlock("app.on('before-quit'", "app.on('will-quit'");
-  const pidAt = body.indexOf('const dyingPid = child');
-  const armAt = body.indexOf('armQuitWatchdog(dyingPid)');
-  const pushAt = body.lastIndexOf("syncVault('--push')");
-  assert.ok(pidAt !== -1 && armAt !== -1,
-    'before-quit must capture the child pid before stopChild() nulls it and arm the watchdog with it');
-  assert.ok(pushAt === -1 || armAt < pushAt,
-    'the vault push is a BLOCKING spawnSync with a 15s budget — a backstop armed after the wedge can never fire');
+// RE-POINTED 2026-09-18 (BUG-437). The watchdog moved out of main.js into
+// electron/quit-sequence.js, together with the shutdown it backs up, so that
+// both share one set of states — and so that the backstop is finally reachable
+// by node --test rather than only by reading source. What it guards is
+// unchanged: armed before anything that can block, 10 s, ref'd, tree-kills,
+// force-exits. The timing of the arming is now a BEHAVIOUR test
+// (bug-437-quit-sequence.test.js, 'the watchdog fires at the budget and exits');
+// what stays here is that main.js still delegates and no longer blocks.
+test('BUG-225 + BUG-437 / before-quit does nothing that can block, and delegates the quit', () => {
+  const body = handlerBlock("app.on('before-quit'");
+  assert.match(body, /quitSequence\.request\(\)/,
+    'the ordinary quit is started in exactly one place, and it is the place that also arms the backstop');
+  assert.match(body, /event\.preventDefault\(\)/,
+    'BUG-437: without this Electron terminates as soon as the handler returns — 0.47 s after the shutdown request on 2026-09-16');
+  assert.doesNotMatch(body, /syncVault\(/,
+    'the vault push is a BLOCKING spawnSync with a 15s budget, and a JavaScript watchdog cannot fire while it holds the loop — '
+    + 'a backstop that the wedge itself disables is not a backstop');
+  assert.doesNotMatch(body, /spawnSync/, 'nothing synchronous and unbounded may sit on the quit path at all');
 });
 
-test('BUG-225 / the watchdog tree-kills and force-exits, with a REF’d 10s timer', () => {
-  const body = handlerBlock('function armQuitWatchdog(', '\nfunction ');
-  const timerAt = body.indexOf('setTimeout(');
-  assert.ok(timerAt !== -1, 'the watchdog is timer-driven');
-  assert.match(body.slice(timerAt), /,\s*10000\s*\)/,
+test('BUG-225 + BUG-437 / the watchdog still tree-kills and force-exits, on a REF’d 10s timer', () => {
+  const seq = fs.readFileSync(path.join(__dirname, '..', '..', 'electron', 'quit-sequence.js'), 'utf8');
+  const body = codeOnly(seq);
+  assert.match(body, /DEFAULT_TOTAL_BUDGET_MS = 10000/,
     '10s, mirroring the child’s own SHUTDOWN_MS design (schema default 10000) — graceful shutdown gets a real budget');
+  assert.match(body, /setTimer\(/, 'the watchdog is timer-driven');
   assert.doesNotMatch(body, /\.unref\(\)/,
     'an unref’d deadline never fires in a drained process — the BUG-259 lesson, applied to this timer too');
-  // BUG-437 (2026-09-16): the inline taskkill moved to child-exit.js's killTree,
-  // which stopChild()'s deadline escalation shares; its /T /F shape is asserted
-  // behaviourally in bug-437-graceful-quit-then-tree-kill.test.js (d) and (f).
-  assert.match(body, /killTree\(\{ pid: childPid \}/, 'win32 must tree-kill: the forked server leaves piper and pc-child grandchildren a bare kill() never reaches');
+  assert.match(body, /killTree/,
+    'win32 must tree-kill: the forked server leaves piper and pc-child grandchildren a bare kill() never reaches');
+  assert.match(body, /d\.exit/,
+    'the backstop must exit the process — correct here because the shutdown has already had its full budget by the time it fires');
+  // The tree-kill body itself is still child-exit.js's, shared with stopChild()'s
+  // deadline escalation; its /T /F shape is asserted behaviourally in
+  // bug-437-graceful-quit-then-tree-kill.test.js (d) and (f).
   const childExit = fs.readFileSync(path.join(__dirname, '..', '..', 'electron', 'child-exit.js'), 'utf8');
   assert.match(childExit, /taskkill/, 'the shared body is the tree kill');
   assert.match(childExit, /'\/T'/, 'and /T is what makes taskkill a TREE kill');
-  assert.match(body, /app\.exit\(0\)/,
-    'the backstop must exit the process — this is the ONE place app.exit is correct, because before-quit has already run by the time it fires');
+  // main.js must still hand it the pid — a sequence with no killTree wired in
+  // would pass every assertion above and tree-kill nothing.
+  assert.match(CODE, /killTree,/, 'main.js wires the shared tree-kill into the sequence');
 });
 
 // ---- the flag separation the re-fork fix forced --------------------------------
 
 test('BUG-225 / the vault-push skip keys off installerHandover, not isQuitting', () => {
-  const before = handlerBlock("app.on('before-quit'", "app.on('will-quit'");
-  assert.match(before, /const handedOverToInstaller = installerHandover/,
-    'before-quit used to infer "the installer handover already pushed" from isQuitting being pre-set; window-all-closed now pre-sets isQuitting on every ordinary quit, which would skip the vault push EVERY time');
+  // RE-POINTED 2026-09-18 (BUG-437): the push and its skip moved into the quit
+  // sequence. The distinction this guards is the one that matters and is
+  // unchanged — window-all-closed pre-sets isQuitting on EVERY ordinary quit,
+  // so a skip keyed on isQuitting would skip the vault push every single time.
+  assert.match(CODE, /isInstallerHandover: \(\) => installerHandover/,
+    'main.js must hand the sequence the handover flag itself, not isQuitting');
+  const seq = codeOnly(fs.readFileSync(path.join(__dirname, '..', '..', 'electron', 'quit-sequence.js'), 'utf8'));
+  assert.match(seq, /isInstallerHandover/, 'and the sequence must be the thing that reads it');
+  assert.doesNotMatch(seq, /isQuitting/,
+    'the sequence must never key the push skip off the quitting flag — that is the bug this test was written for');
 
   const begin = handlerBlock('function beginInstall(', 'function promptInstall(');
   const quitAt = begin.indexOf('isQuitting = true');
