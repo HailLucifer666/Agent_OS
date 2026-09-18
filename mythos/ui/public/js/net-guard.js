@@ -13,24 +13,76 @@
 // and (re)opens the token prompt. Wrapping fetch once also means a fetch site
 // added later is covered without anyone remembering to wire it.
 
-import { markUnauthorized } from './auth/auth-state.js';
+import { markUnauthorized, markCredentialsMissing, currentRecoveryGeneration } from './auth/auth-state.js';
 
 let installed = false;
 
-export function installNetGuard() {
+// BUG-442: the authentication endpoints own their own failures.
+//
+// POST /api/pin/verify answers a wrong PIN with a plain 401 { error } from
+// routes/pin.js, and POST /api/auth/session answers a wrong token the same way.
+// Those are not the authorization gate refusing a request — they are a form
+// telling the operator they mistyped. Announcing them here would mean a
+// mistyped PIN opens the ACCESS TOKEN prompt, which is the original bug
+// arriving through a second door.
+const OWN_FAILURE_PATHS = new Set(['/api/pin/verify', '/api/auth/session']);
+
+// Relative URLs are same-origin by construction. An absolute one is only ours
+// if its origin matches: some other host answering 401 is not this server's
+// credential problem, and must never touch HUD state.
+function sameOriginApiPath(url) {
+  try {
+    if (!url) return null;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+      const parsed = new URL(url);
+      if (typeof location === 'undefined' || parsed.origin !== location.origin) return null;
+      return parsed.pathname;
+    }
+    const path = url.split('?')[0].split('#')[0];
+    return path.startsWith('/') ? path : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// `deps` is a test seam, mirroring pin-lock-screen.js's fetchImpl and
+// live-session.js's createSocket. It exists because auth-state.js holds
+// process-wide mutable state, so a test that imports its own copy would watch a
+// store this module never notifies — and every assertion would pass vacuously,
+// which is the false-green class this repository keeps finding. Production
+// passes nothing.
+export function installNetGuard(deps) {
+  const notifyMissing = (deps && deps.markCredentialsMissing) || markCredentialsMissing;
+  const notifyToken = (deps && deps.markUnauthorized) || markUnauthorized;
+  const readGeneration = (deps && deps.currentRecoveryGeneration) || currentRecoveryGeneration;
   if (installed || typeof window === 'undefined' || typeof window.fetch !== 'function') return;
   installed = true;
   const originalFetch = window.fetch.bind(window);
 
   window.fetch = async function guardedFetch(input, init) {
+    // Captured BEFORE the request leaves, so a failure that lands after the
+    // operator has re-authenticated can be recognised as stale news.
+    const generation = readGeneration();
     const res = await originalFetch(input, init);
     try {
       if (res.status === 401) {
         const url = typeof input === 'string' ? input : (input && input.url) || '';
-        // Path-only check: an absolute URL to some other origin that happens
-        // to 401 is not this server's credential problem.
-        const pathname = url.startsWith('http') ? new URL(url).pathname : url;
-        if (pathname.startsWith('/api/')) markUnauthorized();
+        const pathname = sameOriginApiPath(url);
+        if (pathname && pathname.startsWith('/api/') && !OWN_FAILURE_PATHS.has(pathname)) {
+          // Read a CLONE. The original body must reach the caller untouched —
+          // this guard's whole contract is that it observes and changes nothing.
+          let missing = null;
+          try {
+            const body = await res.clone().json();
+            if (body && Array.isArray(body.missing)) missing = body.missing;
+          } catch (_) { /* not JSON, or already consumed — fall through */ }
+          if (missing) notifyMissing(missing, generation);
+          // An unstructured 401 from some other same-origin /api route keeps the
+          // pre-BUG-442 behaviour. No parsing of error prose: if the server did
+          // not say which credential is missing, the only honest default is the
+          // one that was there before, guarded by BUG-400's tokenRequired check.
+          else notifyToken();
+        }
       }
     } catch (_) { /* never let the guard break the request it is observing */ }
     return res;

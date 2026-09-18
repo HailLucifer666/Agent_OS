@@ -544,7 +544,17 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
   // cookie for the PIN session there, so writing the bearer token into that
   // same cookie would clobber a live PIN session with a value pinSession
   // rejects — locking the operator out of the surface they just unlocked.
-  test('combined mode (token + enforced PIN) returns 409 and leaves /api/pin/verify working', async () => {
+  // REWRITTEN 2026-09-18 (BUG-442). This asserted a 409: in combined mode the
+  // exchange REFUSED, because writing the bearer cookie would have destroyed a
+  // live PIN session — the two shared the name `mythos_token`. The refusal was
+  // correct for that shape and it left combined deployments with no way to log
+  // a browser in at all, which is a real hole rather than a rough edge.
+  //
+  // The collision is gone (the PIN session lives on `mythos_pin` now), so the
+  // reason for the 409 is gone with it. What this test guards is unchanged and
+  // is now stated as the positive: the exchange works, the PIN unlock works,
+  // and NEITHER overwrites the other's cookie.
+  test('combined mode (token + enforced PIN) issues both cookies without either clobbering the other', async () => {
     const { createPinLock } = require('../src/core/security/pin-lock');
     const bus = createBus({ historySize: 50 });
     // This file's shared fakeFs() is vaultPath-only; pin-lock needs a real
@@ -571,12 +581,15 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
     const { port } = server.httpServer.address();
     try {
       const res = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
-      assert.equal(res.status, 409, 'the exchange must decline rather than clobber the PIN-session cookie');
-      assert.equal(setCookieFor(res, 'mythos_token'), null);
+      assert.equal(res.status, 200, 'a combined deployment must be able to log a browser in');
+      assert.ok(setCookieFor(res, 'mythos_token'), 'the bearer keeps its own cookie');
+      assert.equal(setCookieFor(res, 'mythos_pin'), null, 'and never writes the PIN session cookie');
 
       const verify = await httpPostJson(port, '/api/pin/verify', { pin: '4242' });
       assert.equal(verify.status, 200, 'the PIN unlock path must be untouched by this change');
-      assert.ok(setCookieFor(verify, 'mythos_token'), 'the PIN session still owns that cookie in combined mode');
+      assert.ok(setCookieFor(verify, 'mythos_pin'), 'the PIN session owns its own cookie now');
+      assert.equal(setCookieFor(verify, 'mythos_token'), null,
+        'and must not write the bearer cookie — clobbering a working token was the other half of the collision');
     } finally {
       await server.stop();
     }

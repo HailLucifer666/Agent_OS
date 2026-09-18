@@ -65,6 +65,9 @@ const version = require('../src/core/identity/version');
 const { getUpdateReport } = require('../src/core/identity/update-report');
 const { isProviderDown } = require('../src/core/immune/probes');
 const { createPinSessionStore } = require('../src/core/security/pin-session');
+// BUG-442: one owner for both cookie names, the channel rules and the policy.
+const credentials = require('./credentials');
+const { pinCookieOptions } = require('./routes/pin');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -680,20 +683,25 @@ function createServer(deps) {
   // exact "one subsuming the other" the old comment here disclaimed while
   // the code below it did precisely that.
   //
-  // The fix cannot mean "one presented string satisfies both" — extractToken()
-  // resolves to a single credential per request. Instead the two layers are
-  // pinned to DISTINCT channels for the combined case:
-  //   - the bearer secret must arrive via Authorization header or ?token=
-  //     query (extractBearerChannel) — the channels a non-browser/API client
-  //     can always set;
-  //   - the PIN session must arrive via the mythos_token cookie
-  //     (extractCookieToken) — the only channel routes/pin.js ever issues it
-  //     on.
-  // This is forced by a real naming collision: routes/pin.js's session
-  // cookie and the plain back-compat bearer-via-cookie path (see the
-  // 'mythos_token cookie' test in server-auth.test.js) share the literal
-  // cookie name mythos_token. Splitting the bearer check to header/query-only
-  // for the combined case avoids that collision instead of relying on it —
+  // The fix cannot mean "one presented string satisfies both" — a single
+  // merged extractor resolves to one credential per request. The two layers are
+  // therefore pinned to DISTINCT channels, and since BUG-442 (2026-09-18) those
+  // channels are distinct COOKIES rather than a header/cookie split:
+  //   - the bearer secret arrives via Authorization header, ?token= query, or
+  //     the `mythos_token` cookie;
+  //   - the PIN session arrives via its own `mythos_pin` cookie, and on a
+  //     deployment with no bearer configured also via header/query.
+  // Both names and both channel rules live in server/credentials.js.
+  //
+  // THE ORIGINAL SPLIT WAS FORCED BY A NAMING COLLISION, AND THAT COLLISION WAS
+  // ITSELF THE BUG. routes/pin.js's session cookie and the back-compat
+  // bearer-via-cookie path shared the literal name `mythos_token`, so the
+  // combined case had to bar the bearer from the cookie channel to avoid one
+  // credential overwriting the other. Giving the PIN its own name removes the
+  // collision at the root instead of routing around it — which also let the
+  // combined-mode 409 in routes/auth.js go, since a browser on a combined
+  // deployment can now hold both cookies at once. Historical note, kept because
+  // the reasoning still applies to any future second credential:
   // a browser can send both a query/header bearer token AND its session
   // cookie on the same request (including a WS upgrade, which sends normal
   // headers/cookies even though it can't be scripted to set arbitrary ones
@@ -726,61 +734,52 @@ function createServer(deps) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
+  // BUG-442 (2026-09-18): the four extractors and the policy moved to
+  // server/credentials.js, which owns both cookie names so they cannot silently
+  // become one again. Every path here uses isValidNoSlide() — asking whether a
+  // session is valid must not be what keeps it alive. requireToken() is the
+  // ONLY renewer, and re-issues the cookie from the same expiry it slides.
+  function credentialCheck(req) {
+    return credentials.evaluate(req, {
+      authToken: AUTH_TOKEN,
+      authTokenMatches,
+      pinRequired: pinSessionRequired(),
+      pinValid: (presented) => pinSession.isValidNoSlide(presented),
+    });
+  }
+
   function tokenOk(req) {
-    if (AUTH_TOKEN && pinSessionRequired()) {
-      // Both layers active: distinct channels, both required. See the block
-      // comment above for why neither may be satisfied from the other's
-      // channel or from a single merged credential.
-      return authTokenMatches(extractBearerChannel(req)) && pinSession.isValid(extractCookieToken(req));
-    }
-    const presented = extractToken(req);
-    if (pinSession.isValid(presented)) return true;
-    if (!AUTH_TOKEN) return !pinSessionRequired();
-    const a = Buffer.from(String(presented || ''));
-    const b = Buffer.from(AUTH_TOKEN);
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
+    return credentialCheck(req).ok;
   }
 
-  // extractBearerChannel/extractCookieToken are the two channels extractToken
-  // (below) merges in priority order; split out so tokenOk()'s combined-layer
-  // branch above can pin each credential to its own channel instead of the
-  // single merged value every other branch still uses.
-  function extractBearerChannel(req) {
-    const auth = req.headers && req.headers.authorization;
-    if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, '').trim();
-    try {
-      const fromQuery = new URL(req.url, 'http://internal').searchParams.get('token');
-      if (fromQuery) return fromQuery;
-    } catch (_) { /* malformed url */ }
-    return null;
-  }
-
-  function extractCookieToken(req) {
-    const cookieHeader = req.headers && req.headers.cookie;
-    if (cookieHeader) {
-      const parts = cookieHeader.split(';');
-      for (let i = 0; i < parts.length; i++) {
-        const kv = parts[i].trim().split('=');
-        if (kv[0] === 'mythos_token') return decodeURIComponent(kv.slice(1).join('=') || '');
-      }
-    }
-    return null;
-  }
-
-  // Shared by the /api|/vault/builds HTTP gate and the WS verifyClient below.
-  // Order: Authorization: Bearer header (any client) -> ?token= query (the
-  // §18.2 fix — a browser WebSocket cannot set headers, so this is how a
-  // remote HUD tab authenticates the WS upgrade) -> mythos_token cookie (set
-  // by the HUD once the operator enters the token, reused on plain HTTP nav).
+  // Kept as a named export of this closure because verifyClient's node-trust
+  // branch wants the bearer specifically, not "whatever credential arrived".
   function extractToken(req) {
-    return extractBearerChannel(req) || extractCookieToken(req);
+    return credentials.extractBearer(req);
   }
 
   function requireToken(req, res, next) {
-    if (!tokenOk(req)) {
-      // BUG-400: three deployments, three missing credentials. See ./auth-hint.js.
+    const verdict = credentialCheck(req);
+    if (!verdict.ok) {
+      // BUG-400 gave this a human hint; BUG-442 adds the machine-readable half.
+      // The client has to choose between relocking the PIN screen and opening
+      // the token prompt, and it was previously guessing from the URL alone.
       const hint = unauthorizedHint({ hasToken: !!AUTH_TOKEN, pinRequired: pinSessionRequired() });
-      return res.status(401).json({ error: hint });
+      return res.status(401).json({ error: hint, missing: verdict.missing });
+    }
+    // Authorized, and a PIN session carried part of that authorization: slide
+    // the server window and re-issue the browser's cookie from the SAME expiry.
+    // Two clocks derived from one number cannot drift apart, which is the whole
+    // of BUG-442's live symptom.
+    if (pinSessionRequired() && verdict.pinPresented) {
+      const renewed = pinSession.renew();
+      if (renewed) {
+        // no-store is load-bearing: the PIN credential now rides ordinary GET
+        // /api responses that carry no freshness headers, and a caching proxy
+        // would serve one client's session cookie to another (review 2026-09-18).
+        res.setHeader('Cache-Control', 'no-store');
+        res.cookie(credentials.PIN_COOKIE, verdict.pinPresented, pinCookieOptions(req, renewed.maxAgeMs));
+      }
     }
     next();
   }
@@ -981,7 +980,7 @@ function createServer(deps) {
     if (PIN_UNLOCK_EXEMPT_PATHS.has(req.path)) return next();
     return requireToken(req, res, next);
   });
-  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken, pinSessionRequired, pinSessionValid: (r) => pinSession.isValid(extractCookieToken(r)) })); // BUG-317: a signed artifact link substitutes for the bearer token, never for the PIN session
+  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken, pinSessionRequired, pinSessionValid: (r) => pinSession.isValidNoSlide(credentials.extractPin(r, { allowHeaderQuery: !AUTH_TOKEN })) })); // BUG-317: a signed artifact link substitutes for the bearer token, never for the PIN session. BUG-442: reads the PIN's own cookie. NOTE (security review 2026-09-18): the no-slide applies to the SIGNED-LINK branch only — an unsigned request falls through to requireToken(), which renews like any other, so an <img src="/vault/builds/…"> from a same-site page does slide the session. Stated rather than claimed otherwise; narrowing it belongs with the open question of whether a background request should count as presence at all
 
   // ---- static asset delivery: compression + caching -----------------------
   //
@@ -1302,7 +1301,7 @@ function createServer(deps) {
   require('./routes/pin').mountPinRoutes(app, { pinLock, pinSession });
 
   // ---- /api/auth/session — exchange MYTHOS_AUTH_TOKEN for the mythos_token
-  // cookie extractCookieToken() above already reads. Without this the HUD
+  // cookie server/credentials.js already reads. Without this the HUD
   // (a plain browser tab, which cannot set an Authorization header on its own
   // navigation and cannot set headers on a WebSocket upgrade at all) had no
   // way to authenticate on a token-configured deployment. See routes/auth.js. ----

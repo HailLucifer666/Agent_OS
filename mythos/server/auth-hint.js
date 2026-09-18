@@ -44,12 +44,14 @@ function unauthorizedHint(state) {
   const pinRequired = !!s.pinRequired;
 
   if (hasToken && pinRequired) {
-    // Combined mode. The H1 fix (2026-08-08) pins the two credentials to
-    // distinct channels, so say both and say which channel each takes —
-    // a browser cannot set an Authorization header on a WS upgrade.
+    // Combined mode. The H1 fix (2026-08-08) pinned the two credentials to
+    // distinct CHANNELS; BUG-442 (2026-09-18) gave them distinct COOKIES
+    // instead, which is why this no longer says the bearer cannot use a cookie.
+    // Naming the wrong cookie here would send an operator to look for a
+    // credential under a name nothing issues any more.
     return 'Unauthorized — this deployment requires BOTH the MYTHOS_AUTH_TOKEN bearer token '
-      + '(Authorization: Bearer <token> or ?token=) AND an unlocked PIN session (the '
-      + 'mythos_token cookie from POST /api/pin/verify).';
+      + '(Authorization: Bearer <token>, ?token=, or the mythos_token cookie) AND an unlocked '
+      + 'PIN session (the mythos_pin cookie from POST /api/pin/verify).';
   }
   if (pinRequired) {
     // PIN-only. Name the route that mints the credential, and say plainly that

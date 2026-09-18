@@ -121,7 +121,7 @@ function httpPostJson(port, pathName, body) {
 function cookiePairFrom(res) {
   const raw = res.headers['set-cookie'];
   if (!raw) return null;
-  const line = Array.isArray(raw) ? raw.find((c) => /^mythos_token=/.test(c)) : raw;
+  const line = Array.isArray(raw) ? raw.find((c) => /^mythos_pin=/.test(c)) : raw;
   return line ? String(line).split(';')[0] : null;
 }
 
@@ -156,7 +156,7 @@ describe('BUG-400 defect 3b — the PIN unlock is what reconnects the HUD socket
       const verify = await httpPostJson(port, '/api/pin/verify', { pin: '4242' });
       assert.equal(verify.status, 200, 'the PIN unlock route must work in PIN-only mode');
       const pair = cookiePairFrom(verify);
-      assert.ok(pair, '/api/pin/verify must mint the mythos_token PIN-session cookie');
+      assert.ok(pair, '/api/pin/verify must mint the mythos_pin PIN-session cookie');
 
       assert.equal(await wsOpens(port, { Cookie: pair }), true,
         "entering the PIN must reconnect the HUD socket — this is the operator's daily path "
@@ -215,6 +215,6 @@ describe('BUG-400 defect 3b — the PIN unlock is what reconnects the HUD socket
 //       while both BOUND cases stay green. That is the contrast that proves the
 //       accept assertion watches the PIN-session channel specifically.
 //   (c) In routes/pin.js, drop the `res.cookie(PIN_SESSION_COOKIE, …)` call ->
-//       reds "/api/pin/verify must mint the mythos_token PIN-session cookie"
+//       reds "/api/pin/verify must mint the mythos_pin PIN-session cookie"
 //       before the socket assertion is ever reached, naming the real cause
 //       rather than a downstream connection failure.

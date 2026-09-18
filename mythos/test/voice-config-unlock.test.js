@@ -89,7 +89,12 @@ test('PIN component invokes refresh only after successful verification, not a wr
   // dependency out of this component lifecycle fixture; execute real PIN logic.
   const source = readFileSync(new URL(ui('pin/pin-lock-screen.js')), 'utf8')
     .replace("import { trapFocus } from '../a11y/focus-trap.js';", 'const trapFocus = () => () => {};')
-    .replace("'./pin-gate.js'", JSON.stringify(ui('pin/pin-gate.js')));
+    .replace("'./pin-gate.js'", JSON.stringify(ui('pin/pin-gate.js')))
+    // BUG-442 (2026-09-18): pin-lock-screen.js gained an auth-state import for
+    // the relock-on-lost-session subscription. A data: URL has no base to
+    // resolve '../auth/auth-state.js' against, so every relative specifier this
+    // harness does not absolutize is a load failure rather than a test failure.
+    .replace("'../auth/auth-state.js'", JSON.stringify(ui('auth/auth-state.js')));
   const { mountPinLockScreen } = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
   t.after(() => previous ? Object.defineProperty(globalThis, 'document', previous) : delete globalThis.document);
