@@ -61,7 +61,8 @@ agent shell exports the 8.3 short `TEMP`, under which the suite honestly reports
 ## Still open
 
 - Open: **274, 275, 406, 421, 422, 432, 434, 436, 439, 444**; coded and owing one human
-  confirmation: **268, 433, 437, 441, 442, 443**.
+  confirmation: **268, 433, 437, 441, 442**.
+- **443 closed 2026-09-21**, the only one of the four closable offline. Count 14 -> 13.
 - 274 T3 and 406 are decisions (D1, D2) nobody has made. 436/422 stay
   diagnosis-gated. 421 needs desktop operator mode (decision D6).
 - **New decision, from 442's security review:** a background poll still counts as

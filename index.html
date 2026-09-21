@@ -343,7 +343,7 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-18",
+  "generated": "2026-09-21",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
@@ -365,28 +365,28 @@
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-18"
+      "measuredAt": "2026-09-21"
     },
     "registered": {
       "value": 186,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-18"
+      "measuredAt": "2026-09-21"
     },
     "voiceReachable": {
       "value": 125,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-18"
+      "measuredAt": "2026-09-21"
     },
     "untriaged": {
       "value": 1,
       "label": "untriaged incidents",
       "tone": "fail",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-09-18",
+      "measuredAt": "2026-09-21",
       "stale": false
     }
   },
@@ -5844,16 +5844,16 @@
       {
         "n": 443,
         "shape": "entry",
-        "state": "open",
+        "state": "fixed",
         "title": "`app_reply` says \"[object Object]\" when typing fails, so the reason is lost (FIXED 2026-09-18; filed 2026-09-16)",
         "detail": {
           "verification": "`test/bug-443-app-reply-keeps-the-reason.test.js` (7): five observed failing first, two green-before as the adjacent cases that must keep passing — a plain-string reason passes through unchanged, and a successful compose still stops before sending. Plus the 3 guard tests. **A fixture that was more generous than the wire, worth recording.** The first draft stubbed the typing failure as `{ok:false, result:{…}}`. `delegate()` reads `resp.error`, so that shape never reached the code under test and the message came back as the generic \"PC automation command failed.\" — the test failed for a reason unrelated to the bug. The real wire shape is `{ok:false, error:\u003cstring|object>}`. A fixture the producer never sends proves nothing about the producer.",
           "cause": "`src/core/effectors/from-app-reply.js:141`: `String(typed.result || typed.error || 'typing failed')`. `fromPc.ui_type` fails with an object in `result` (the evidence-contract shape), so `String(object)` yields `[object Object]`. Error-hiding class: the failure path flattened a specific cause into noise, and the spoken turn inherited the noise."
         },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-16 from the attended run] app_reply failed with \"Could not type the reply into slack: [object Object] Nothing was sent.\" (Audit 10:41:31Z) because from-app-reply.js:141 does String(typed.result) on an object result. The spoken turn inherited the noise (\"I am not sure why it failed\"). Consumers: app_reply spoken failure text; the claim-check ledger reason. Remaining evidence: none — one-line fix owed with its test.",
-          "source": "mythos/src/core/effectors/from-app-reply.js; candidate test: bug-443-app-reply-keeps-the-typing-reason.test.js"
+          "disposition": "currently verified",
+          "evidence": "[FIXED 2026-09-18 `2e707594`] app_reply failed with \"Could not type the reply into slack: [object Object] Nothing was sent.\" (Audit 10:41:31Z). TWO origins, not the one this row named: from-pc.js delegate() read resp.error raw and window-recovery.js stringified it a line later (where the row was actually made), and from-app-reply.js rendered its own failures with String() because its local pc() helper bypasses from-pc. A sweep found two more private normalizers (reasonOf, from-cua) — seven recorded instances of this class. All route through util/reason-text.js; a derived guard fails on any NEW whole-failure-value stringification rather than counting known ones. Consumers: app_reply spoken failure text; the claim-check ledger reason. Remaining evidence: none, and no live run required — a pure string transformation with no device, timing or platform dependence.",
+          "source": "mythos/src/core/effectors/from-app-reply.js; mythos/src/core/effectors/from-pc.js; mythos/src/core/effectors/from-cua.js; tests: bug-443-app-reply-keeps-the-reason.test.js, bug-443-no-unclassified-reason-stringify.test.js"
         }
       },
       {
@@ -5872,8 +5872,8 @@
     ],
     "counts": {
       "verified": 85,
-      "fixed": 181,
-      "open": 14,
+      "fixed": 182,
+      "open": 13,
       "coded": 10,
       "diagnosed": 1,
       "duplicate": 2,
@@ -5892,7 +5892,6 @@
       437,
       439,
       442,
-      443,
       444
     ],
     "pointerOnly": 11,
