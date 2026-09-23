@@ -111,11 +111,12 @@ describe('BUG-273 A3 — app.js suppresses a score whose evidence window contain
     const start = s.indexOf('const suppressed =');
     assert.notEqual(start, -1, 'the suppression chain must still exist');
     const chain = s.slice(start, s.indexOf(': null;', start));
+    // Four since 2026-09-23: 'pin-gate-closed' went with the PIN.
     for (const existing of [
-      /pin-gate-closed/, /voice-turn-already-active/, /s2s-session-already-active/,
+      /voice-turn-already-active/, /s2s-session-already-active/,
       /mythos-is-speaking/, /voice-state-speaking/,
     ]) {
-      assert.match(chain, existing, 'the five existing guards must all survive');
+      assert.match(chain, existing, 'the existing guards must all survive');
     }
     assert.match(chain, /own-audio-within-detector-window/, 'and the sixth must be present');
     // Last on purpose: the five before it are cheaper and more specific, and a

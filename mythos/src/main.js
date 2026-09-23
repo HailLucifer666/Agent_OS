@@ -84,7 +84,6 @@ const { registerFromDocs } = require('./core/effectors/from-docs');
 const { registerFromImageGen } = require('./core/effectors/from-image-gen');
 const { registerFromDocuments } = require('./core/effectors/from-documents');
 const { registerFromCodeSearch } = require('./core/effectors/from-code-search');
-const { createPinLock } = require('./core/security/pin-lock');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
@@ -189,6 +188,10 @@ async function main() {
       dropped: configResult.settingsDropped,
     });
   }
+  // A retired setting left in .env does nothing; name it rather than ignore it (schema.js).
+  const { RETIRED_SETTINGS } = require('./core/config/schema');
+  const retiredSet = Object.keys(RETIRED_SETTINGS).filter((k) => process.env[k] !== undefined);
+  if (retiredSet.length) logger.warn('config.retired-settings', { keys: retiredSet, why: retiredSet.map((k) => RETIRED_SETTINGS[k]) });
   logger.info('config.settings.loaded', {
     file: configResult.settingsFile,
     // Which layer won, counted. A packaged install reporting "config.json: 0"
@@ -808,11 +811,6 @@ async function main() {
         });
       }
 
-      // §7.3 (step 5) — local PIN lock gate, separate from Task 6's
-      // MYTHOS_AUTH_TOKEN (that gates network/remote access; this gates
-      // local physical presence).
-      var pinLock = createPinLock({ fs: memory.fs });
-
       // Voice Nodes (Stage 1) — stood up BEFORE createServer because the server
       // destructures deps once, and a phone can connect the moment /ws is open.
       // Deliberately boot-fatal on a bad id list rather than silently off: the
@@ -863,7 +861,8 @@ async function main() {
         // and scripts/parity-check.js. See src/core/config/settings-store.js.
         configOrigins: configResult.origins,
         settingsFile: configResult.settingsFile, settingsDiagnostics: configResult,
-        pinLock: pinLock,
+        // BUG-444: sign-in sessions live beside config.json, never in the vault.
+        authSessionsFile: path.join(path.dirname(configResult.settingsFile), 'auth-sessions.json'),
         goalsEffector: goalsEffector,
         kanbanEffector: kanbanEffector,
         pipelineEffector: pipelineEffector,

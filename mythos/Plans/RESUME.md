@@ -3,29 +3,35 @@
 *Under 100 lines, by rule. The roadmap is the archive; this file is the position.
 Rewrite in place, never append.*
 
-## Position (2026-09-23, after the attended run)
+## Position (2026-09-23, evening)
 
 **One workflow, until it is boring.** Stage 1 only; Stages 2-7 paused until the
 golden path holds 10 consecutive PASS lines across two cold boots for a week.
-**Streak: 0.** The golden path cannot pass today: "play the third video" is
-structurally impossible (BUG-445, below).
+**Streak: 0.** "Play the third video" is still structurally impossible (BUG-445).
 
-**The attended run happened** (2026-09-23, 13:37-14:14, from source via
-`npm start`, combined auth mode, 51 voice turns, flags `LOOP_LAG_TRACE`,
-`VOICE_SERIALIZE_NOTICES`, `PIN_SESSION_TTL_MS=120000` — all three removed after).
-Register: **open 13 -> 17, verified 85 -> 89.** Four closed, seven filed. The bugs
-were already there; the run wrote them down.
+**Working plan:** rev 5 of the 17-bug plan, approved 2026-09-23. It lives outside
+the repo at `~/.claude/plans/file-d-agen-20os-agent-os-main-agent-os-linked-hoare.md`
+(plan mode's own file). Waves: 0 baseline · 1 access + browser targets + autonomy ·
+2 shutdown, TTS, native crash · 3 speech · 4 qualification and memory.
 
-| result | tickets |
+**Done today.**
+- **PR #96 merged** (`ca477ad9`) after CI ran green on its final commit `0cc336f5`.
+  The first CI run was red on two tests that only held on this machine (a real
+  timer Node 22 does not keep alive; an SDDL alias for a RID-500 account); both
+  fixed test-side. Eleven superseded PRs (#95 … #82) stay OPEN: they target
+  stacked side branches, so GitHub did not auto-close them. Their commits are all
+  in main — the operator decides whether to close them.
+- **The PIN is gone** (operator decision: "I open the app, it straight puts me in
+  the HUD"). Branch `fix/remove-pin-bug-444`: no lock screen, no PIN routes or
+  settings, greeting re-armed on voice-config readiness, desktop signs itself in.
+  Same PR codes **BUG-444** (session id, never the token) and **BUG-452** (a
+  foreign web page could drive the API of any PIN-less install; now refused).
+  Security-reviewer pass: no critical/high; its one medium applied.
+
+| state | tickets |
 |---|---|
-| **Live-verified, closed** | **433** greeting heard after unlock · **434** typing claim stands · **442** no token prompt after 11 idle min on a 2-min session · **268** Ctrl+Alt+X read, copied, toasted in 489 ms |
-| **Partial, still open** | **437** X quit leaves no process and the shell waits, but the server hangs on its reflection (LLM) step, is hard-killed at 6 s, and the checkpoint is never written · **422** a child death CAPTURED: exit 0xE06D7363, native C++ exception, suspect the in-process Kokoro worker killed mid-inference · **436** an 18 s silence with a healthy server (model-side) and a 3 s zero-CPU freeze during a sync PowerShell spawn the profiler likely cannot see · **432** measured: the flag holds tool results too — keep it OFF |
-| **Not exercised** | **439** (model used the media tool) · **441** (no `unverified:true` click) · **421** · 437's tray and in-app quits |
-| **Filed** | **445** snapshot cut to 4,000 chars, only the 1st video addressable (CRITICAL, golden path) · **446** paused over-budget "commitment" goals from 09-11 acted at boot, launched Brave, while locked (HIGH) · **447** 15 of 51 turns system-initiated, heal lines spoken in log vocabulary (HIGH) · **448** window-control false retraction · **449** tool syntax spoken aloud · **450** TTS chain retries dead engines, audio 51 s behind text · **451** wrong lessons saved to the vault |
-
-Evidence: `.cache/windows-operator/attended-2026-09-23/` — merged `timeline.log`,
-`raw-*.log` copies of every source, `crash1-*` and `silence1-*` snapshots,
-`refpos.js` (the 4,000-char measurement). Gitignored; this machine only.
+| **Coded, attended session owed** | 444, 452 (startup/access session) |
+| **Open, next** | **445** (golden path), 446, then Wave 2 |
 
 ## The golden path
 
@@ -48,34 +54,33 @@ with the suite's TAP piped in or a long-form TEMP. Regenerate `index.html` BEFOR
 the counting run; read each gate's exit directly. An agent shell's 8.3 short
 `TEMP` makes the suite honestly report `fail=2 skipped=1`. In `BUGS.md`'s OPEN WORK
 register, FIXED/RESOLVED/CLOSED/SATISFIED anywhere in a bullet closes that ticket.
+CI is manual dispatch: run it once, on a final commit, when no more commits are owed.
 
 ## Operator decisions owed
 
-- **Should a "commitment" expire?** A "right now" from 12 days ago fired today (446).
-- **Should a successful self-heal ever be spoken during a live conversation?**
-  Recommendation: no (447).
-- **Shutdown:** save data before the reflection call, cap it, or drop it at quit (437).
-- **Remove the two wrong records** in `vault/Lessons/` and notes once 445 lands (451).
-- Still open from before: background polls count as PIN activity (442); D1
-  wake-word licence (274 T3); D2 recordings (406); D6 operator mode (421).
+- **Close the eleven superseded PRs?** Their content is merged; GitHub left them open.
+- **Should autonomy run while nobody is at the HUD?** The PIN lock was the only
+  signal for "unattended"; it no longer exists.
+- D7/D8/D9 were taken under delegation ("whatever works now") and are reversible:
+  the validated voice lane is deferred, the wake-word licence stays a lawyer's call,
+  the mic hold gets a recorder first. So 449, 275, 406, 274 stay open this round.
 - Operator action, not code: **Gmail needs re-authorising** (`invalid_grant`).
 
 ## NEXT ACTION
 
-**BUG-445 first** — it is the golden path, and the mechanism is fully measured:
-give the model a compact, reference-first view of a page bounded by element count,
-never a character-cut raw tree, and never a screenshot through a text result.
-Learn from BUG-397, the same defect on the desktop path. Prove it attended with
-"play the third video" and "play the sixth video".
+**Land the PIN-removal PR** (CI once on its final commit), then **BUG-445**: a
+bounded, main-first view of the page built by `browser_snapshot` itself, whose
+accepted refs are exactly the refs it emitted, links collapsed by target so "the
+third video" is the third distinct `/watch` link. Measured on Chrome 2026-09-23:
+the old cap had stripped every `/url` line, so the model never knew which link was
+which video. Then **446** (status and budget as hard gates at execution).
 
-Then, in order of harm: **446** (status and budget as hard gates at execution),
-**437**'s shutdown ordering (one-line reorder, big data-safety win), **450**'s
-circuit breaker (which also cuts BUG-422's crash exposure), **447**, **448**.
-Nothing merges from PR #96 until CI runs once on the final SHA.
+Tracker note for the next ledger pass: BUG-406 is open but has no OPEN WORK
+register bullet, so the register lists 17 names while the index counts 18 open.
 
 ## Where the detail lives
 
 Archive: `MYTHOS-IRIS-Synthesis-Plan.md` (roadmap), `-V2-spine.md` (source-level),
-`MYTHOS-Post-Parity-Plan.md` (post-step-7). Defect evidence: `BUGS.md`. This run:
-`%APPDATA%\MYTHOS\mythos-server.log` from `--- boot: MYTHOS 0.1.12-dev pid=18264`,
-`vault/Audit/2026-09-23.jsonl`, `vault/Episodic/2026-09-23.jsonl`.
+`MYTHOS-Post-Parity-Plan.md` (post-step-7). Defect evidence: `BUGS.md`. The
+2026-09-23 attended run: `.cache/windows-operator/attended-2026-09-23/` (gitignored,
+this machine only), `vault/Audit/2026-09-23.jsonl`, `vault/Episodic/2026-09-23.jsonl`.

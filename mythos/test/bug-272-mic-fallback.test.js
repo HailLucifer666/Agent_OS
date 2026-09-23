@@ -285,15 +285,16 @@ describe('BUG-272 slice 1 — a failed wake word re-arms itself', () => {
       + `found ${calls.length}`);
   });
 
-  it('the re-arm respects the PIN gate', () => {
+  // REWRITTEN 2026-09-23: this required the re-arm to respect the PIN gate. The
+  // PIN was removed; what must still hold is that the re-arm really re-arms.
+  it('the re-arm calls ensureWakeWord and consults no lock', () => {
     const src = appSrc();
     const fn = src.slice(src.indexOf('function scheduleWakewordRearm'));
     const end = fn.indexOf('\n}\n');
     assert.notEqual(end, -1, 'the function body must be locatable — an unfound end slices to '
       + 'empty and makes every assertion below vacuous');
     const body = fn.slice(0, end + 1);
-    assert.match(body, /isGateClosed/,
-      'a timer must never start listening behind a locked HUD — armOnce and armInShell '
-      + 'both gate on this and a third path must not be the exception');
+    assert.match(body, /ensureWakeWord\(\)/);
+    assert.doesNotMatch(body, /isGateClosed|lockState/);
   });
 });

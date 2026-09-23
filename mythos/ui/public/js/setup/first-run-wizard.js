@@ -6,9 +6,7 @@
 //      named inside a REQUIRED gap, so there was no way to enter the providers
 //      the operator intended to use — only the ones doctor.js was complaining
 //      about.
-//   2. There was no way to set a PIN from the product at all (see
-//      pin/pin-setup-screen.js).
-//   3. Neither surface said what to do afterwards, and a stored key does not
+//   2. Neither surface said what to do afterwards, and a stored key does not
 //      reach a running server: keys are decrypted into the child's env at
 //      fork() (electron/main.js), so the last step here offers the restart.
 //
@@ -25,7 +23,6 @@
 import { trapFocus } from '../a11y/focus-trap.js';
 import { createKeyField } from './key-field.js';
 import { buildProviderCatalog, planGapActions, wizardCanFinish } from './setup-state.js';
-import { createPinSetupForm } from '../pin/pin-setup-screen.js';
 import { createVoicePicker } from '../voice/voice-picker.js';
 
 const INERT_SELECTOR = '#hud-canvas, #core-orb, #hud-a11y-root, #widget-root, #overlay-root, #confirm-root, #compose-bar, #camera-preview';
@@ -40,21 +37,19 @@ const STEPS = [
   // and component steps means the rest of the wizard starts from what the operator
   // already has rather than from schema defaults.
   { id: 'import', title: 'Import' },
-  { id: 'lock', title: 'Local lock' },
   { id: 'brain', title: 'Provider keys' },
   { id: 'components', title: 'Components' },
   { id: 'finish', title: 'Finish' },
 ];
 
-// mountFirstRunWizard(root, {status, pinStatus, fetchImpl, bridge, onClose})
+// mountFirstRunWizard(root, {status, fetchImpl, bridge, onClose})
 //   status    — the parsed GET /api/setup/status body (required; the caller has
 //               already probed, so this screen never re-races the server boot)
-//   pinStatus — the parsed GET /api/pin/status body, or null if it did not answer
+// (The 'Local lock' step went with the PIN, removed 2026-09-23.)
 export function mountFirstRunWizard(root, opts) {
   if (!root) return { dispose() {} };
   const o = opts || {};
   const body = o.status || {};
-  const pinStatus = o.pinStatus || null;
   const doFetch = o.fetchImpl || ((...args) => fetch(...args));
   const bridge = o.bridge !== undefined ? o.bridge : (typeof window !== 'undefined' ? window.mythos : null);
   const hasKeyStore = Boolean(bridge && typeof bridge.setKey === 'function');
@@ -66,7 +61,6 @@ export function mountFirstRunWizard(root, opts) {
   // Components installed during this run, so the finish step reports what really
   // landed rather than what was ticked.
   const componentsInstalled = new Set();
-  let pinWasSet = false;
   // Whether the operator imported from an existing MYTHOS on this run, so the
   // finish step can say that the restart is what makes those settings live.
   let importedFromExisting = false;
@@ -122,13 +116,12 @@ export function mountFirstRunWizard(root, opts) {
     const frag = document.createDocumentFragment();
     frag.append(
       h('h2', 'wiz-step-title', 'Finish setting up MYTHOS'),
-      h('p', 'wiz-lede', 'Nothing is configured on this machine yet. Five short steps: bring an existing MYTHOS across if you have one, a local PIN, at least one LLM provider key, whatever optional capabilities you want, then a restart so the server picks it all up.'),
+      h('p', 'wiz-lede', 'Nothing is configured on this machine yet. Four short steps: bring an existing MYTHOS across if you have one, at least one LLM provider key, whatever optional capabilities you want, then a restart so the server picks it all up.'),
     );
 
     const list = h('ul', 'wiz-facts');
     const facts = [
       'Keys are encrypted on this machine (safeStorage/DPAPI) and never written into the repo.',
-      'The PIN is stored as a salted scrypt hash in the vault, never in plain text.',
       'You can reopen this from the key button in the compose bar at any time.',
     ];
     for (const text of facts) list.appendChild(h('li', null, text));
@@ -245,30 +238,6 @@ export function mountFirstRunWizard(root, opts) {
       }
     })();
 
-    return frag;
-  }
-
-  function stepLock() {
-    const frag = document.createDocumentFragment();
-    frag.append(
-      h('h2', 'wiz-step-title', pinStatus && pinStatus.configured ? 'Replace the local PIN' : 'Set a local PIN'),
-      h('p', 'wiz-lede', 'The PIN is asked for when the HUD opens, so someone at this keyboard cannot just start talking to MYTHOS. It is separate from the network token and can be skipped.'),
-    );
-
-    if (!pinStatus) {
-      // Honest, not optimistic: the status probe failed, so we cannot say
-      // whether a PIN exists. The form is still offered — the server is the
-      // authority and will refuse if it disagrees.
-      frag.appendChild(h('p', 'wiz-warn', 'The server did not report PIN state. Setting one may fail; nothing changes until it confirms.'));
-    }
-
-    const form = createPinSetupForm({
-      fetchImpl: doFetch,
-      configured: Boolean(pinStatus && pinStatus.configured),
-      hasWindowsHello: pinStatus ? Boolean(pinStatus.hasWindowsHello) : undefined,
-      onDone: () => { pinWasSet = true; renderFooter(); },
-    });
-    frag.appendChild(form.el);
     return frag;
   }
 
@@ -514,9 +483,7 @@ export function mountFirstRunWizard(root, opts) {
     summary.appendChild(h('li', null, hasGoogleKey
       ? 'Replies will speak in the Gemini voice (Aoede) after the restart below — pick a different one there if you prefer.'
       : 'Replies will speak in the local voice — or the browser voice if no local engine is installed. Store GOOGLE_API_KEY to get the Gemini voices instead.'));
-    summary.appendChild(h('li', null, pinWasSet
-      ? 'A PIN is set — it is asked for the next time the HUD opens.'
-      : 'No PIN was set. Anyone at this keyboard can use the HUD.'));
+
     if (importedFromExisting) {
       summary.appendChild(h('li', null,
         'Settings and identity files were imported from an existing MYTHOS. Like keys, the settings reach the server at the restart below.'));
@@ -597,7 +564,6 @@ export function mountFirstRunWizard(root, opts) {
   const RENDERERS = {
     welcome: stepWelcome,
     import: stepImport,
-    lock: stepLock,
     brain: stepBrain,
     components: stepComponents,
     finish: stepFinish,
@@ -624,9 +590,6 @@ export function mountFirstRunWizard(root, opts) {
     const last = index === STEPS.length - 1;
     backBtn.disabled = index === 0;
     nextBtn.textContent = last ? 'Done' : 'Next';
-    // The skip label is the honest one for a step the operator has not acted on:
-    // calling it "Next" on the PIN step would imply the PIN got set.
-    if (!last && STEPS[index].id === 'lock' && !pinWasSet) nextBtn.textContent = 'Skip for now';
   }
 
   function paint() {

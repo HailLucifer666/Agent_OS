@@ -1,7 +1,8 @@
 'use strict';
 // test/ui-wiring-smoke.test.js — the HONEST CEILING for the browser-shell
-// halves of three newly-wired features (S2S bridge, voice-latency tile, PIN
-// lock screen). There is no browser, no microphone and no speaker in this
+// halves of newly-wired features (S2S bridge, voice-latency tile; the PIN
+// lock screen was a third until it was removed on 2026-09-23 — its absence is
+// pinned by test/pin-removal-access.test.js). There is no browser, no microphone and no speaker in this
 // environment, so this file asserts EXACTLY these things and nothing more:
 //
 //   1. every module in the new import chain parses and evaluates under Node;
@@ -128,14 +129,11 @@ describe('app.js static import chain resolves (guards a blank-screen boot)', () 
       return { ok: true, json: async () => ({ enabled: true }) };
     }).refresh();
     assert.ok(fetched.includes('/api/config/s2s'), 'the shared loader must fetch VOICE_S2S_ENABLED');
-    assert.match(src, /mountPinLockScreen\(/, 'the PIN lock screen must be mounted');
   });
 
-  it('index.html loads app.js and provides the pin-root the lock screen mounts into', () => {
+  it('index.html loads app.js', () => {
     const html = fs.readFileSync(path.join(PUBLIC_JS, '..', 'index.html'), 'utf8');
     assert.match(html, /src="\/js\/app\.js"/);
-    assert.match(html, /id="pin-root"/);
-    assert.match(html, /href="\/css\/pin\.css"/);
   });
 });
 
@@ -201,45 +199,3 @@ describe('voice-latency tile module chain (ceiling: imports + registry shape)', 
   });
 });
 
-describe('PIN lock screen module chain (ceiling: imports + reuses the shared focus trap)', () => {
-  it('pin-lock-screen.js evaluates and exports mountPinLockScreen', async () => {
-    const mod = await import(url('pin', 'pin-lock-screen.js'));
-    assert.equal(typeof mod.mountPinLockScreen, 'function');
-  });
-
-  it('pin-gate.js evaluates and exports all three decisions', async () => {
-    const mod = await import(url('pin', 'pin-gate.js'));
-    ['derivePinGate', 'interpretVerifyResponse', 'validatePinInput'].forEach((k) => {
-      assert.equal(typeof mod[k], 'function', `${k} must be exported`);
-    });
-  });
-
-  it('reuses the existing a11y/focus-trap.js helper instead of hand-rolling a new trap', () => {
-    const src = codeOnly(path.join(PUBLIC_JS, 'pin', 'pin-lock-screen.js'));
-    assert.match(src, /from '\.\.\/a11y\/focus-trap\.js'/);
-    assert.match(src, /trapFocus\(/);
-    // A lock screen must not be dismissible with Escape.
-    assert.equal(/onEscape:/.test(src), false, 'the lock screen must not wire an Escape dismissal');
-  });
-
-  it('never persists the PIN client-side', () => {
-    const src = codeOnly(path.join(PUBLIC_JS, 'pin', 'pin-lock-screen.js'));
-    assert.equal(/localStorage|sessionStorage|indexedDB|document\.cookie/.test(src), false,
-      'the entered PIN (or an unlock flag) must never be stored client-side');
-  });
-
-  it('mountPinLockScreen() with an injected fetch does NOT lock when no PIN is configured', async () => {
-    const { mountPinLockScreen } = await import(url('pin', 'pin-lock-screen.js'));
-    const calls = [];
-    const fetchImpl = async (path_) => {
-      calls.push(path_);
-      return { ok: true, status: 200, json: async () => ({ configured: false, hasWindowsHello: false }) };
-    };
-    const root = { appendChild() { throw new Error('must not paint an overlay when no PIN is configured'); } };
-    const screen = mountPinLockScreen(root, { fetchImpl });
-    await new Promise((r) => setImmediate(r));
-    assert.deepEqual(calls, ['/api/pin/status']);
-    assert.equal(screen.isLocked(), false);
-    screen.cleanup();
-  });
-});

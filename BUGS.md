@@ -603,7 +603,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-441 | coded | blocked | [CODED 2026-09-16; cause corrected — a missing `clicking` claim category, not a dropped caveat; 2026-09-23 mixed: a hedged click claim, but a claim spoken 8 s before a failed click and an Audit "ok" for a shell-denied open_web; no unverified:true click observed yet] A result carrying unverified:true is spoken as a completed action. Four calls this session returned outcome:ok WITH an unverified flag and an honest reason — open_web x2 "I cannot confirm whether the new tab opened because the browser did not expose a window handle", browser_click x2 "clicked ... from page script because it never became visibly actionable — a script click skips the checks that prove a real user could have". The effector layer is correct; the caveat is dropped between the ledger and the spoken turn, so the operator is told it worked. The healer caught one instance itself (claimed-action-not-taken). Operator incident inc-1789074035676-6 asks for exactly this root cause. Distinct from BUG-434 (a TRUE action wrongly retracted) and from BUG-438 (the unverified flag firing on the tab rather than the title): this is the general rule that ok means dispatched, not proven. Consumers: the spoken narration path; narration-claims.js. Remaining evidence: whether suppressing the claim is enough or the turn must say what could not be confirmed. | mythos/src/core/voice/narration-claims.js; mythos/src/core/voice/live-tool-adapter.js |
 | BUG-442 | verified | currently verified | [LIVE-VERIFIED 2026-09-23: combined mode, 11 idle minutes against a 2-minute PIN session, no token prompt, zero 401s; polling-as-activity decision still open] The PIN session cookie is issued with maxAge = PIN_SESSION_TTL_MS (30 min, hard) while pin-session.js slides its own expiry on every valid check; the browser dropped the cookie at unlock+30 min (10:29Z -> ~11:00Z), every /api fetch turned 401 in combined mode, and net-guard rendered the ACCESS TOKEN prompt for a lapsed PIN session. Live WS kept working (authenticated at upgrade). Consumers: routes/pin.js cookie issue, tokenOk() combined branch, ui/public/js/net-guard.js. Remaining evidence: none needed to start — the mechanism is read from the code and the timing matches the default TTL. | mythos/server/routes/pin.js; mythos/src/core/security/pin-session.js; mythos/ui/public/js/net-guard.js; candidate test: pin-session-cookie-slides.test.js |
 | BUG-443 | fixed | currently verified | [FIXED 2026-09-18 `2e707594`] app_reply failed with "Could not type the reply into slack: [object Object] Nothing was sent." (Audit 10:41:31Z). TWO origins, not the one this row named: from-pc.js delegate() read resp.error raw and window-recovery.js stringified it a line later (where the row was actually made), and from-app-reply.js rendered its own failures with String() because its local pc() helper bypasses from-pc. A sweep found two more private normalizers (reasonOf, from-cua) — seven recorded instances of this class. All route through util/reason-text.js; a derived guard fails on any NEW whole-failure-value stringification rather than counting known ones. Consumers: app_reply spoken failure text; the claim-check ledger reason. Remaining evidence: none, and no live run required — a pure string transformation with no device, timing or platform dependence. | mythos/src/core/effectors/from-app-reply.js; mythos/src/core/effectors/from-pc.js; mythos/src/core/effectors/from-cua.js; tests: bug-443-app-reply-keeps-the-reason.test.js, bug-443-no-unclassified-reason-stringify.test.js |
-| BUG-444 | open | currently reproduced | [FILED 2026-09-18 from the BUG-442 security review] POST /api/auth/session puts the raw MYTHOS_AUTH_TOKEN into the browser cookie for 30 days rather than minting a session identifier (`res.cookie(AUTH_COOKIE, authToken, …)`, routes/auth.js). The secret itself is then at rest in the cookie jar of every browser the operator has ever logged in from, and it cannot be revoked for one browser without rotating the token for the phone node and every other caller. Out of BUG-442's scope by decision, not by oversight: 442 separated the PIN session from the bearer and did not change what the bearer cookie carries. Consumers: browser navigation, the WS upgrade (a browser cannot attach headers), trusted-node auth. Remaining evidence: none — the shape is read directly from source. A fix mints an opaque per-browser session with its own store and revocation, and stops the raw secret ever reaching a cookie. | mythos/server/routes/auth.js; mythos/server/credentials.js |
+| BUG-444 | coded | blocked | [CODED 2026-09-23 with the PIN removal] The sign-in cookie is now a random session id (mythos_session); auth-sessions.js stores its SHA-256 and a token fingerprint beside config.json, never in the vault; the raw-token mythos_token cookie is cleared, never read; per-browser logout closes that session's sockets; rotation ends all sessions; a corrupt store fails closed. Red-first test and 11 mutation probes in the entry. Remaining evidence: attended remote sign-in, sign-out and rotation from a second device. | mythos/test/bug-444-session-cookie-is-not-the-token.test.js; mythos/server/auth-sessions.js; mythos/server/credentials.js |
 | BUG-445 | open | currently reproduced | [FILED 2026-09-23 from the attended run; the golden-path test] Tool results reach the Live model cut to 4,000 characters (truncateForModel); a YouTube snapshot is ~8,650 and the header uses ~3,400, so only the first video's reference is ever visible. Measured on four snapshots: video 1 at ~3,300, videos 2–6 at 4,100–7,900. The model guessed references (one off by one, two nonexistent) and played the wrong video. Same class as BUG-397. Consumers: every browser_snapshot → browser_click flow; Stage 1 golden path. Remaining evidence: none for the mechanism; a fix is proven by attended "play the third / sixth video". | mythos/src/core/voice/live-tool-adapter.js; measured with .cache/windows-operator/attended-2026-09-23/refpos.js |
 | BUG-446 | open | currently reproduced | [FILED 2026-09-23 from the attended run] Five paused "Commitment" goals from 2026-09-11, over budget (e.g. 36,566 of 20,000 tokens), made 9 tool calls at boot including a tier-2 launch_app brave, with the HUD PIN-locked and nobody speaking; budget-exhausted was healed 9 ms after it fired. Consumers: cortex goal execution, immune healer, commitment-goal creation. Remaining evidence: none; operator decision owed on commitment expiry. | mythos/src/core (cortex goal selection, immune healer budget-exhausted playbook); vault/Goals/goal-f3daf200*.json, goal-21999a3d*.json |
 | BUG-447 | open | currently reproduced | [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed "because a Live conversation is in progress". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live. | mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js |
@@ -611,6 +611,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-449 | open | currently reproduced | [FILED 2026-09-23 from the attended run; seen once] The output transcription began "call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…" — a function call rendered as speech and never dispatched; the same reply said "I'm searching … now". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection. | mythos/src/core/voice/live-session.js (outputTranscription handling) |
 | BUG-450 | open | currently reproduced | [FILED 2026-09-23 from the attended run] gemini-tts 429 on every call and kokoro-tts timing out, retried on every utterance before edge-tts: 10 provider failures, 8 speech-lock ceilings, greeting audio 51 s after its text. Kokoro's timeouts are also the prime suspect for BUG-422's crash. Consumers: every TTS-chain utterance (proactive speech, greeting). Remaining evidence: none; a fix is proven by text-to-audio lag under one working engine's synthesis time. | mythos/providers (TTS chain); mythos/providers/kokoro/client.js |
 | BUG-451 | open | currently reproduced | [FILED 2026-09-23 from the attended run] A healer recurring-failure lesson and a model note both record that clicking by reference fails, and the model saved "rapid re-rendering" as the cause; the real cause is BUG-445's truncation. Records left in the vault on purpose. Consumers: vault/Lessons, notes, future sessions' tool choice. Remaining evidence: none; the operator removes both records once BUG-445 lands. | mythos/src/core/immune (recurring-failure playbook); vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md |
+| BUG-452 | coded | blocked | [CODED 2026-09-23] The /api CORS middleware only set headers and never refused a foreign Origin, so any website could run /api calls on an install with no PIN and no token; the PIN's SameSite cookie had been the accidental barrier. createCrossOriginGuard refuses a foreign Origin or a Sec-Fetch-Site other than same-origin/none before any handler. Remaining evidence: attended check that a page on another origin cannot run an /api call. | mythos/test/pin-removal-access.test.js; mythos/src/core/server/boot-guards.js |
 | BUG-406 | open | blocked | [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -2147,9 +2148,9 @@ Both now route through `util/reason-text.js`, the helper extracted for this clas
 
 **Fix sketch.** Render the failure through the shared reason text helper (`util/reason-text.js`) instead of `String(...)`. Test: a `ui_type` failure carrying `{result:{error:'the foreground window is X, not Slack'}}` produces that sentence in app_reply's message and the string `[object Object]` never appears.
 
-## BUG-444 — `/api/auth/session` puts the raw bearer token in a 30-day browser cookie instead of minting a session (filed 2026-09-18)
+## BUG-444 — `/api/auth/session` puts the raw bearer token in a 30-day browser cookie instead of minting a session (CODED 2026-09-23; filed 2026-09-18)
 
-**Status:** 🐞 OPEN — filed from the BUG-442 security review, not yet worked.
+**Status:** 🔧 CODED 2026-09-23 — a random session id replaces the raw-token cookie, shipped with the PIN removal. Attended startup/access session pending. Filed from the BUG-442 security review.
 
 **Mechanism, read from source at `0502b51d`.** `server/routes/auth.js` exchanges a
 correct `MYTHOS_AUTH_TOKEN` for a cookie whose VALUE is that same token:
@@ -2190,6 +2191,65 @@ access, and the trusted-node bearer-only exception.
 here depends on a live run.
 
 **Attribution:** found by the `security-reviewer` pass on BUG-442, 2026-09-18.
+
+**Fix, 2026-09-23 — shipped with the PIN removal (operator decision: "I open the app, it straight puts me in
+the HUD… this is a single user app").** One PR, because the two change the same credential code and neither is
+safe to land alone.
+
+- **A session id, never the token.** `POST /api/auth/session` mints 32 random bytes (base64url) under a NEW
+  cookie name, `mythos_session`. `server/auth-sessions.js` stores only the SHA-256 of the id, a domain-separated
+  16-hex fingerprint of the token, and the two timestamps — so a copy of the file is neither anyone's cookie nor
+  the token. Fixed 30-day expiry (`AUTH_SESSION_COOKIE_TTL_MS`), never sliding; at most 32 live sessions.
+- **The old cookie is not a channel any more.** A new name makes the raw-token value structurally unreadable as a
+  credential instead of something every check must tell apart. `mythos_token` (and the PIN's `mythos_pin`) are
+  cleared on sight and logged by name only, once per process (`auth.legacy-cookie-rejected`).
+- **Resolved in exactly one place.** `credentials.evaluate()` resolves the cookie; `extractBearer()` reads header
+  and query only, which is what the AETHER node-trust branch uses. Explicit credential wins: a wrong
+  `Authorization` header fails even beside a valid cookie; an EMPTY one is treated as absent.
+- **Survives restarts; revocable per browser.** The file lives beside `config.json` (Electron userData, or next to
+  the vault headless) — never in the vault, so vault-push cannot carry it. `POST /api/auth/logout` revokes this
+  browser's session and closes the sockets it opened (tagged at connection); other browsers stay signed in.
+  Rotating the token ends every session through the fingerprint. A corrupt file fails CLOSED: nothing in it is
+  honoured, `auth.sessions-store-corrupt` is logged at error, the file is set aside (not overwritten) and a fresh
+  sign-in still works.
+- **The desktop never prompts.** The Electron main process already held the token and exchanged it
+  (`primeAuthSession`); it now installs the `mythos_session` value it gets back, and a response carrying only
+  the old raw-token cookie installs nothing.
+
+**Tests.** `test/bug-444-session-cookie-is-not-the-token.test.js` — written red first against `f283b293`:
+(a) no `mythos_session` cookie was issued, and (c) a raw-token cookie returned 200. Also covered: restart
+survival and what the file holds (d), rotation (e), wrong-header precedence (f), empty header (f2, ported from
+the deleted BUG-442 separation file), per-browser logout closing its sockets (g), corrupt store (h), and the
+no-token adjacent case (i). `test/server-auth.test.js`'s "200 with the mythos_token cookie" case was INVERTED, not
+deleted; `test/aether-node-verifyclient.test.js` now proves a browser session cannot open the node door, with a
+positive control that the same session opens the HUD socket; `test/auth-session-prime.test.js` covers the
+Electron half.
+
+**Mutation probes, run 2026-09-23** (each diffed to confirm it applied, restored sha256-identical):
+
+```
+M1  the token goes back into the cookie                    -> (a) (b) (d) (f2) + server-auth
+M2  node door accepts whatever tokenOk accepts (a session) -> aether: "a browser session is NOT a node credential"
+M3  a raw-token mythos_token cookie is accepted again      -> (c) + server-auth "401 with the raw token"
+M4  loopback source-address exemption                      -> (c) (e) (f) (g)
+M5  a wrong explicit bearer falls through to the cookie    -> (f)
+M6  a corrupt store is honoured (fail open)                -> (h)
+M7  the load-time prune ignores the token fingerprint      -> (e)
+    (first aimed at a fingerprint check inside isValid(): it SURVIVED, because the
+    prune had already dropped every foreign-fingerprint record — that check was
+    unreachable and was deleted, with the reason written above isValid)
+M8  logout does not close the session's sockets            -> (g)
+    (first run HUNG instead of failing: (g) awaited the close with no bound; it now
+    races a 3 s timer, so the regression is a named red, not a stuck run)
+M9  the cross-origin guard is not mounted                  -> pin-removal-access "refused BEFORE the handler runs"
+M10 Sec-Fetch-Site 'same-site' is allowed                  -> pin-removal-access "another localhost port"
+M11 a shipped file fetches /api/pin/status again           -> pin-removal-access "no shipped code reaches for the PIN"
+M12 the guard is not mounted on /vault/builds              -> pin-removal-access "/vault/builds is behind the same guard"
+```
+
+**Not verified, and what closes it:** nothing here has run against a second device. The attended startup/access
+session closes it — fresh boot straight into the HUD; restart; a remote browser signs in, signs out and is
+rotated out; upgrade from a PIN-only and a combined config; reconnect.
 
 ## BUG-445 — the voice model is shown only the first 4,000 characters of a browser snapshot, so "play the third video" can never work (filed 2026-09-23)
 
@@ -2314,6 +2374,45 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 **Direction.** A lesson should record a cause only when one was established, and otherwise record the symptom *as* a symptom; the model should not be invited to save a diagnosis it has not verified. Once BUG-445 lands, both records should be removed by the operator.
 
 **Attribution:** attended run 2026-09-23.
+
+## BUG-452 — a web page on another site could drive the local API of any install with no PIN and no token (CODED 2026-09-23)
+
+**Status:** 🔧 CODED 2026-09-23 — found while removing the PIN; guard shipped with it. Closes on the attended
+startup/access session (a page on another origin, opened in the operator's browser, cannot run an /api call).
+
+**Mechanism.** The `/api` CORS middleware in `server/index.js` only ever SET `Access-Control-Allow-*` headers
+for an allow-listed Origin; it never refused one. CORS decides whether a page may READ the response, not whether
+the request RUNS, so a form POST, a `fetch(..., { mode: 'no-cors' })` or an `<img src>` from any website reached
+every handler. With no token configured, `tokenOk()` passes every request, so that was the full tool surface.
+The DNS-rebinding guard (BUG-337) did not help: a foreign page is not rebound, its Host header is honestly
+127.0.0.1.
+
+**Why it never bit the operator, and why it would have.** The PIN session cookie was `SameSite`, so a cross-site
+request never carried it and was refused — the PIN was, by accident, the barrier. Every install WITHOUT a PIN
+(a fresh one, headless, Docker on loopback) had no such barrier. Removing the PIN would have handed the
+operator's machine the same exposure. Electron media windows load arbitrary sites (`open_web`), so "a web page"
+includes pages inside the app.
+
+**Fix.** `createCrossOriginGuard` in `src/core/server/boot-guards.js`, mounted on `/api` before CORS and every
+handler. A browser-shaped request is refused when its `Origin` names neither this request's own Host nor an
+`ALLOWED_ORIGINS` entry (the scheme is not compared, so a TLS-terminating proxy still works; `Origin: null` never
+parses to a host), or when `Sec-Fetch-Site` is anything but `same-origin` or `none`. `same-site` is refused on
+purpose: another localhost port is same-site. A non-browser client sends neither header and is unaffected.
+
+**Tests.** `test/pin-removal-access.test.js`: the full Origin × Sec-Fetch-Site matrix cell by cell, then a real
+server proving the MECHANISM — a foreign request is 403 and the handler never ran (call counter) — with the
+HUD's own origin and a plain client as the adjacent cases. Probes M9 (guard unmounted), M10 (`same-site`
+allowed) and M12 (unmounted from `/vault/builds`) in BUG-444's table each redden it.
+
+**What it does not cover.** A local PROCESS can still call the loopback API without any credential — that is
+the operator's single-user decision, stated in `SECURITY.md`. The WebSocket upgrade already refused foreign
+Origins and is unchanged. `/vault/builds` IS behind the same guard (added after the security review): an
+artifact opened from the HUD arrives same-origin and one opened in the OS browser arrives as `none`, so
+neither is refused. A browser too old to send `Origin` on a cross-site POST is the accepted residual (the
+guard cannot refuse a header-less POST without refusing Electron's own sign-in); a proxy that rewrites
+`Host` needs its public origin in `ALLOWED_ORIGINS`.
+
+**Attribution:** found by reading what the PIN protected before deleting it, 2026-09-23.
 
 ## BUG-441 — a result flagged unverified is spoken as a completed action (CODED 2026-09-16; partial evidence 2026-09-23; filed 2026-09-11)
 
@@ -22272,6 +22371,9 @@ those records remain owed (this section is the index until then).
   every browser the operator has logged in from and cannot be revoked for one of them
   without rotating it for the phone node too. Filed 2026-09-18 from the BUG-442 security
   review; deliberately outside that ticket's scope. Full entry above.
+  **CODED 2026-09-23 with the PIN removal:** a random session id under a new cookie name, stored hashed
+  beside config.json, revocable per browser; the raw-token cookie is only ever cleared. Attended
+  startup/access session pending.
 
 - BUG-445 - the voice model is shown only the first 4,000 characters of a browser snapshot.
   YouTube spends ~3,400 on its header, so only the FIRST video is ever addressable; asked for
@@ -22306,6 +22408,10 @@ those records remain owed (this section is the index until then).
   say clicking by reference is what fails, and the model saved "rapid re-rendering" as the
   cause. Both are false; the cause is the truncation in BUG-445. The records were left in the
   operator's vault on purpose. Filed 2026-09-23. Full entry above.
+
+- BUG-452 - a web page on another site could drive the local API of any install with no PIN and no token:
+  CORS only set headers and never refused a foreign Origin. CODED 2026-09-23 (a cross-origin guard on /api).
+  Attended check pending. Full entry above.
 
 
 - BUG-422 - the server child exits silently mid-session and never restarts.

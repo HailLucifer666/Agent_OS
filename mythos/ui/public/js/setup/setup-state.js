@@ -171,59 +171,20 @@ export function retryDelayMs(attempt) {
   return Math.min(400 * n, 3000);
 }
 
-// chooseSetupScreen({need, keyStoreNames, pinConfigured}) -> 'wizard'|'gaps'|'none'
-//   'wizard' — nothing has ever been configured on this machine (no key stored,
-//              no PIN set) AND something required is missing. That is a first
+// chooseSetupScreen({need, keyStoreNames}) -> 'wizard'|'gaps'|'none'
+//   'wizard' — nothing has ever been configured on this machine (no key
+//              stored) AND something required is missing. That is a first
 //              run, and a first run deserves an ordered flow that also offers
-//              the PIN and the optional providers, not a gap list.
+//              the optional providers, not a gap list. (A set PIN also used to
+//              count as "configured"; the PIN was removed on 2026-09-23.)
 //   'gaps'   — a configured machine that has drifted: show the existing list.
 //   'none'   — nothing required is missing, or the probe told us nothing.
 export function chooseSetupScreen(input) {
   const need = (input && input.need) || {};
   if (!need.show) return 'none';
   const names = (input && Array.isArray(input.keyStoreNames)) ? input.keyStoreNames : [];
-  const pinConfigured = Boolean(input && input.pinConfigured);
-  const untouched = names.length === 0 && !pinConfigured;
+  const untouched = names.length === 0;
   return untouched ? 'wizard' : 'gaps';
-}
-
-// PIN rules, mirrored from src/core/security/pin-lock.js (PIN_RE = /^\d{4,12}$/)
-// so the wizard can refuse a bad PIN before a round-trip. The SERVER stays the
-// authority — this only avoids a pointless request and a vague error.
-const PIN_RE = /^\d{4,12}$/;
-
-// validatePinPair(pin, confirm) -> {ok} | {ok:false, error, field}
-export function validatePinPair(pin, confirm) {
-  const a = typeof pin === 'string' ? pin : '';
-  const b = typeof confirm === 'string' ? confirm : '';
-  if (!a) return { ok: false, error: 'Choose a PIN.', field: 'pin' };
-  if (!PIN_RE.test(a)) return { ok: false, error: 'PIN must be 4–12 digits, numbers only.', field: 'pin' };
-  if (!b) return { ok: false, error: 'Type the PIN again to confirm.', field: 'confirm' };
-  if (a !== b) return { ok: false, error: 'The two PINs do not match.', field: 'confirm' };
-  return { ok: true };
-}
-
-// interpretPinSetResult(res, body) -> {ok, message}
-// The server owns the vocabulary (routes/pin.js → pinLock.setPin): 400 for a
-// malformed PIN or a wrong current PIN, 429 for a standing lockout, 404 when
-// PIN lock is not wired into this deployment at all. Each is shown as itself;
-// none is reworded into a friendlier lie.
-export function interpretPinSetResult(res, body) {
-  const status = res && typeof res.status === 'number' ? res.status : 0;
-  const serverError = body && typeof body.error === 'string' && body.error ? body.error : '';
-  if (status === 200 && body && body.ok === true) {
-    return { ok: true, message: 'PIN set. It is asked for on the next launch.' };
-  }
-  if (status === 404) {
-    return { ok: false, message: 'This build has no PIN lock wired, so a PIN cannot be set here.' };
-  }
-  if (status === 429) {
-    return { ok: false, message: serverError || 'Too many attempts — wait for the lockout to clear.' };
-  }
-  if (status === 0) {
-    return { ok: false, message: 'The server did not answer. Nothing was changed.' };
-  }
-  return { ok: false, message: serverError || `The server refused that PIN (HTTP ${status}).` };
 }
 
 // buildProviderCatalog(body) -> [{id,label,required,ok,why,fix,keyNames,storedNames,action}]

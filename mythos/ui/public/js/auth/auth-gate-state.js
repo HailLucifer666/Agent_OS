@@ -1,20 +1,18 @@
 // auth-gate-state.js — the two pure decisions behind the token prompt, split
 // out of the DOM shell (auth-gate.js) so node:test can cover them with no
-// browser. Exact same split (and same reasoning) as pin/pin-gate.js vs
-// pin/pin-lock-screen.js. See test/auth-gate-state.test.js.
+// browser. See test/auth-gate-state.test.js.
 //
 // Backed by server/routes/auth.js + server/index.js:
 //   GET  /health              -> 200 {ok, uptime, authRequired}
 //   GET  /api/status          -> 200 (a valid credential is already present)
 //                              | 401 (none is)
-//   POST /api/auth/session    -> 200 {ok:true}  + Set-Cookie mythos_token
+//   POST /api/auth/session    -> 200 {ok:true}  + Set-Cookie mythos_session (a random id, BUG-444)
 //                              | 400 {error} — no token in the body
 //                              | 401 {error:'Incorrect token.'}
 //                              | 404 {error} — no MYTHOS_AUTH_TOKEN configured
-//                              | 409 {error} — combined PIN+token deployment
 //                              | 429 {error} — 5/min exchange limit
 //
-// Honesty rules (AD-5), same as the PIN screen's:
+// Honesty rules (AD-5):
 //   - server error text is displayed VERBATIM; nothing is invented client-side,
 //     no remaining-attempts count (the server sends none), no countdown clock
 //     parsed out of the 429 message.

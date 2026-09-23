@@ -347,18 +347,18 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7949,
+      "value": 7876,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-18"
+      "measuredAt": "2026-09-23"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-18"
+      "measuredAt": "2026-09-23"
     },
     "withheld": {
       "value": 61,
@@ -5860,13 +5860,14 @@
         "n": 444,
         "shape": "entry",
         "state": "open",
-        "title": "`/api/auth/session` puts the raw bearer token in a 30-day browser cookie instead of minting a session (filed 2026-09-18)",
-        "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — filed from the BUG-442 security review, not yet worked. **Mechanism, read from source at `0502b51d`.** `server/routes/auth.js` exchanges a correct `MYTHOS_AUTH_TOKEN` for a cookie whose VALUE is that same token: `res.cookie(AUTH_COOKIE, authToken, { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: cookieTtlMs })`, with `cookieTtlMs` defaulting to 30 days. The file's own header states the intent plainly — \"the cookie carries MYTHOS_AUTH_TOKEN itself … no new secret, no new session type, nothing to keep in sync\" — so this is a recorded design choice rather than an accident, and the simplicity it bought is real. The cost is the part that was never written down. **Why it is worth a ticket.** The shared secret ends up at rest in the cookie jar of every browser the operator has ever logged in from, and on any machine they logged in from once. It cannot be r…",
+        "title": "`/api/auth/session` puts the raw bearer token in a 30-day browser cookie instead of minting a session (CODED 2026-09-23; filed 2026-09-18)",
+        "detail": {
+          "verification": "`test/bug-444-session-cookie-is-not-the-token.test.js` — written red first against `f283b293`: (a) no `mythos_session` cookie was issued, and (c) a raw-token cookie returned 200. Also covered: restart survival and what the file holds (d), rotation (e), wrong-header precedence (f), empty header (f2, ported from the deleted BUG-442 separation file), per-browser logout closing its sockets (g), corrupt store (h), and the no-token adjacent case (i). `test/server-auth.test.js`'s \"200 with the mythos_token cookie\" case was INVERTED, not deleted; `test/aether-node-verifyclient.test.js` now proves a browser session cannot open the node door, with a positive control that the same session opens the HUD socket; `test/auth-session-prime.test.js` covers the Electron half."
+        },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-18 from the BUG-442 security review] POST /api/auth/session puts the raw MYTHOS_AUTH_TOKEN into the browser cookie for 30 days rather than minting a session identifier (`res.cookie(AUTH_COOKIE, authToken, …)`, routes/auth.js). The secret itself is then at rest in the cookie jar of every browser the operator has ever logged in from, and it cannot be revoked for one browser without rotating the token for the phone node and every other caller. Out of BUG-442's scope by decision, not by oversight: 442 separated the PIN session from the bearer and did not change what the bearer cookie carries. Consumers: browser navigation, the WS upgrade (a browser cannot attach headers), trusted-node auth. Remaining evidence: none — the shape is read directly from source. A fix mints an opaque per-browser session with its own store and revocation, and stops the raw secret ever reaching a cookie.",
-          "source": "mythos/server/routes/auth.js; mythos/server/credentials.js"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-23 with the PIN removal] The sign-in cookie is now a random session id (mythos_session); auth-sessions.js stores its SHA-256 and a token fingerprint beside config.json, never in the vault; the raw-token mythos_token cookie is cleared, never read; per-browser logout closes that session's sockets; rotation ends all sessions; a corrupt store fails closed. Red-first test and 11 mutation probes in the entry. Remaining evidence: attended remote sign-in, sign-out and rotation from a second device.",
+          "source": "mythos/test/bug-444-session-cookie-is-not-the-token.test.js; mythos/server/auth-sessions.js; mythos/server/credentials.js"
         }
       },
       {
@@ -5961,18 +5962,34 @@
           "evidence": "[FILED 2026-09-23 from the attended run] A healer recurring-failure lesson and a model note both record that clicking by reference fails, and the model saved \"rapid re-rendering\" as the cause; the real cause is BUG-445's truncation. Records left in the vault on purpose. Consumers: vault/Lessons, notes, future sessions' tool choice. Remaining evidence: none; the operator removes both records once BUG-445 lands.",
           "source": "mythos/src/core/immune (recurring-failure playbook); vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md"
         }
+      },
+      {
+        "n": 452,
+        "shape": "entry",
+        "state": "open",
+        "title": "a web page on another site could drive the local API of any install with no PIN and no token (CODED 2026-09-23)",
+        "detail": {
+          "cause": "The `/api` CORS middleware in `server/index.js` only ever SET `Access-Control-Allow-*` headers for an allow-listed Origin; it never refused one. CORS decides whether a page may READ the response, not whether the request RUNS, so a form POST, a `fetch(..., { mode: 'no-cors' })` or an `\u003cimg src>` from any website reached every handler. With no token configured, `tokenOk()` passes every request, so that was the full tool surface. The DNS-rebinding guard (BUG-337) did not help: a foreign page is not rebound, its Host header is honestly 127.0.0.1.",
+          "fix": "`createCrossOriginGuard` in `src/core/server/boot-guards.js`, mounted on `/api` before CORS and every handler. A browser-shaped request is refused when its `Origin` names neither this request's own Host nor an `ALLOWED_ORIGINS` entry (the scheme is not compared, so a TLS-terminating proxy still works; `Origin: null` never parses to a host), or when `Sec-Fetch-Site` is anything but `same-origin` or `none`. `same-site` is refused on purpose: another localhost port is same-site. A non-browser client sends neither header and is unaffected.",
+          "verification": "`test/pin-removal-access.test.js`: the full Origin × Sec-Fetch-Site matrix cell by cell, then a real server proving the MECHANISM — a foreign request is 403 and the handler never ran (call counter) — with the HUD's own origin and a plain client as the adjacent cases. Probes M9 (guard unmounted), M10 (`same-site` allowed) and M12 (unmounted from `/vault/builds`) in BUG-444's table each redden it."
+        },
+        "campaign": {
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-23] The /api CORS middleware only set headers and never refused a foreign Origin, so any website could run /api calls on an install with no PIN and no token; the PIN's SameSite cookie had been the accidental barrier. createCrossOriginGuard refuses a foreign Origin or a Sec-Fetch-Site other than same-origin/none before any handler. Remaining evidence: attended check that a page on another origin cannot run an /api call.",
+          "source": "mythos/test/pin-removal-access.test.js; mythos/src/core/server/boot-guards.js"
+        }
       }
     ],
     "counts": {
       "verified": 89,
       "fixed": 182,
-      "open": 17,
+      "open": 18,
       "coded": 9,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 300,
+    "total": 301,
     "openDeclared": [
       274,
       275,
@@ -5989,7 +6006,8 @@
       448,
       449,
       450,
-      451
+      451,
+      452
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"

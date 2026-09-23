@@ -46,15 +46,12 @@ function ensureWakeWordBody() {
 
 describe('wake-word config race (defect 2)', () => {
   it('keeps the config fetch PROMISE, not just its resolved value', () => {
-    // The loader now owns all three authenticated requests so PIN unlock can
-    // replace the initial unauthorized snapshot. The consumer must retain each
-    // fresh promise, including the initial no-PIN load, rather than only a value.
+    // The loader owns all three authenticated requests. The consumer must retain
+    // each fresh promise, including the initial load, rather than only a value.
     assert.match(APP_JS, /voiceConfigReady\s*=\s*_wakewordCfgReady\s*=\s*voiceConfiguration\.refresh\(\)/,
       'every shared refresh must replace the awaitable wake-word promise');
     assert.match(APP_JS, /^refreshVoiceConfiguration\(\);/m,
-      'no-PIN boot still requires an initial fetch without waiting for unlock');
-    assert.match(APP_JS, /onUnlock:\s*\(\)\s*=>\s*\{[\s\S]{0,180}refreshVoiceConfiguration\(\)\.then\(/,
-      'successful PIN exchange must refresh previously unauthorized facts before arming');
+      'boot requires an initial fetch; nothing is waited for (the PIN unlock that used to be was removed 2026-09-23)');
     assert.match(APP_JS, /_wakewordCfg\s*=\s*wakeword\.value;\s*_wakewordCfgError\s*=\s*wakeword\.error/,
       'shared refresh must replace both the config and its previous failure');
   });
@@ -124,12 +121,14 @@ describe('arming without a click in the Electron shell (defect 1)', () => {
       'arming the mic loop without a gesture is a different, riskier change');
   });
 
-  it('the PIN gate holds on the early path too, and retries instead of giving up', () => {
-    const shellBlock = APP_JS.slice(APP_JS.indexOf('const armInShell ='), APP_JS.indexOf('const armInShell =') + 700);
-    assert.match(shellBlock, /isGateClosed\(pinLockScreen\.lockState\(\)\)/,
-      'a locked (or not-yet-known) HUD must never start listening — bystander wake');
-    assert.match(shellBlock, /setTimeout\(armInShell/,
-      "lockState() starts 'unknown', so a single check would lose the race and never arm");
+  // REWRITTEN 2026-09-23. This pinned that the early path polled the PIN gate
+  // (a locked HUD must not listen). The PIN was removed on the operator's
+  // decision, so there is nothing to poll: the shell arms the wake word once.
+  it('the early path arms the wake word once, with no lock left to poll', () => {
+    const shellBlock = APP_JS.slice(APP_JS.indexOf('const armInShell ='), APP_JS.indexOf('const armInShell =') + 400);
+    assert.match(shellBlock, /ensureWakeWord\(\)/, 'hands-free activation still arms without a click');
+    assert.doesNotMatch(shellBlock, /isGateClosed|lockState|setTimeout\(armInShell/,
+      'a leftover poll would wait ~20 s for a lock that can never resolve');
   });
 });
 
