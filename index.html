@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7937,
+      "value": 7948,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5942,14 +5942,14 @@
         "n": 450,
         "shape": "entry",
         "state": "open",
-        "title": "the TTS chain retries known-dead engines on every sentence, so proactive audio lags its own text by up to 51 s (filed 2026-09-23)",
+        "title": "the TTS chain retries known-dead engines on every sentence, so proactive audio lags its own text by up to 51 s (CODED 2026-09-23; filed 2026-09-23)",
         "detail": {
           "cause": "Every utterance walks `gemini-tts → kokoro-tts → edge-tts → piper-tts` from the top, and nothing remembers that the first two just failed. Gemini's failure is a daily quota, not a blip; Kokoro's is a timeout of up to 60 s."
         },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-23 from the attended run] gemini-tts 429 on every call and kokoro-tts timing out, retried on every utterance before edge-tts: 10 provider failures, 8 speech-lock ceilings, greeting audio 51 s after its text. Kokoro's timeouts are also the prime suspect for BUG-422's crash. Consumers: every TTS-chain utterance (proactive speech, greeting). Remaining evidence: none; a fix is proven by text-to-audio lag under one working engine's synthesis time.",
-          "source": "mythos/providers (TTS chain); mythos/providers/kokoro/client.js"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-23] Premise corrected: the chain is sticky and moved off an engine only when a LATER one succeeded, so concurrent sentences each paid gemini (429) and kokoro (timeout) before edge; nothing remembered a failure across calls or chain rebuilds. providers/tts-circuit.js adds one circuit per engine and credential: while an engine is unproven or just out of cooldown ONE call is admitted and the rest wait for its answer; a failure parks it (a 429 for Google's own sane retry delay, anything else for a 5 min / 30 min / 4 h ladder); a cancellation never counts; a rebuilt chain shares the parks; after the cooldown one probe may win the better engine back. Red-first test and 11 mutation probes. Remaining evidence: an attended speech session where Gemini is over quota and Kokoro times out, reading tts.provider-parked against per-sentence latency.",
+          "source": "mythos/test/bug-450-tts-circuit.test.js; mythos/providers/tts-circuit.js; mythos/providers/tts.js"
         }
       },
       {

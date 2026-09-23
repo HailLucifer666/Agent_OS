@@ -609,7 +609,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-447 | open | currently reproduced | [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed "because a Live conversation is in progress". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live. | mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js |
 | BUG-448 | open | currently reproduced | [FILED 2026-09-23 from the attended run] "Opening a new Notepad window right now" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction "that Notepad window didn't actually open" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app. | mythos/src/core/voice/claim-check.js |
 | BUG-449 | open | currently reproduced | [FILED 2026-09-23 from the attended run; seen once] The output transcription began "call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…" — a function call rendered as speech and never dispatched; the same reply said "I'm searching … now". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection. | mythos/src/core/voice/live-session.js (outputTranscription handling) |
-| BUG-450 | open | currently reproduced | [FILED 2026-09-23 from the attended run] gemini-tts 429 on every call and kokoro-tts timing out, retried on every utterance before edge-tts: 10 provider failures, 8 speech-lock ceilings, greeting audio 51 s after its text. Kokoro's timeouts are also the prime suspect for BUG-422's crash. Consumers: every TTS-chain utterance (proactive speech, greeting). Remaining evidence: none; a fix is proven by text-to-audio lag under one working engine's synthesis time. | mythos/providers (TTS chain); mythos/providers/kokoro/client.js |
+| BUG-450 | coded | blocked | [CODED 2026-09-23] Premise corrected: the chain is sticky and moved off an engine only when a LATER one succeeded, so concurrent sentences each paid gemini (429) and kokoro (timeout) before edge; nothing remembered a failure across calls or chain rebuilds. providers/tts-circuit.js adds one circuit per engine and credential: while an engine is unproven or just out of cooldown ONE call is admitted and the rest wait for its answer; a failure parks it (a 429 for Google's own sane retry delay, anything else for a 5 min / 30 min / 4 h ladder); a cancellation never counts; a rebuilt chain shares the parks; after the cooldown one probe may win the better engine back. Red-first test and 11 mutation probes. Remaining evidence: an attended speech session where Gemini is over quota and Kokoro times out, reading tts.provider-parked against per-sentence latency. | mythos/test/bug-450-tts-circuit.test.js; mythos/providers/tts-circuit.js; mythos/providers/tts.js |
 | BUG-451 | open | currently reproduced | [FILED 2026-09-23 from the attended run] A healer recurring-failure lesson and a model note both record that clicking by reference fails, and the model saved "rapid re-rendering" as the cause; the real cause is BUG-445's truncation. Records left in the vault on purpose. Consumers: vault/Lessons, notes, future sessions' tool choice. Remaining evidence: none; the operator removes both records once BUG-445 lands. | mythos/src/core/immune (recurring-failure playbook); vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md |
 | BUG-452 | coded | blocked | [CODED 2026-09-23] The /api CORS middleware only set headers and never refused a foreign Origin, so any website could run /api calls on an install with no PIN and no token; the PIN's SameSite cookie had been the accidental barrier. createCrossOriginGuard refuses a foreign Origin or a Sec-Fetch-Site other than same-origin/none before any handler. Remaining evidence: attended check that a page on another origin cannot run an /api call. | mythos/test/pin-removal-access.test.js; mythos/src/core/server/boot-guards.js |
 | BUG-406 | open | blocked | [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
@@ -2454,9 +2454,9 @@ Found by the probe: crash recovery pauses every active goal at boot **except** c
 
 **Attribution:** attended run 2026-09-23.
 
-## BUG-450 — the TTS chain retries known-dead engines on every sentence, so proactive audio lags its own text by up to 51 s (filed 2026-09-23)
+## BUG-450 — the TTS chain retries known-dead engines on every sentence, so proactive audio lags its own text by up to 51 s (CODED 2026-09-23; filed 2026-09-23)
 
-**Status:** 🐞 OPEN — measured; not worked. Distinct from BUG-433, whose scheduler is live-verified; this is the voice underneath it.
+**Status:** 🔧 CODED 2026-09-23. The repair is below. Distinct from BUG-433, whose scheduler is live-verified; this is the voice underneath it.
 
 **Evidence.** `tts.provider-failed` **10 times** in one session: `gemini-tts` answered **429 quota exceeded on every call**, and `kokoro-tts` **timed out** repeatedly (`kokoro synthesize timed out`), each time before the chain reached `edge-tts`, which worked. `speech.lock-ceiling` (20 s) fired **8 times**. The boot greeting's text reached the HUD at 13:42:15 and its audio played at 13:43:06 — **51 s later**; a self-heal line was spoken 17 s after the heal.
 
@@ -2467,6 +2467,34 @@ Found by the probe: crash recovery pauses every active goal at boot **except** c
 **Direction.** A per-provider circuit breaker: a 429 parks Gemini until its quota resets; N consecutive Kokoro timeouts park Kokoro for the session. Text shown and audio played should not drift apart by more than the synthesis time of one engine that works.
 
 **Attribution:** attended run 2026-09-23.
+
+### Repair (CODED 2026-09-23)
+
+**Premise correction, measured.** The chain was already sticky (`providers/tts.js`), but it moved off an engine only when a LATER engine succeeded, and nothing remembered a failure between calls:
+
+- **Concurrent sentences paid the same outage over and over.** Each one walked gemini (429), then kokoro (timeout), then edge. Gemini answered 429 six times in 34 s before the failover stuck.
+- **Kokoro failed twice more AFTER the failover,** on calls already in flight.
+- **A crash restart rebuilt the chain,** and Gemini 429'd again from the top.
+
+**What changed.**
+
+- **`providers/tts-circuit.js` (new): one circuit per engine, and per credential for Gemini.** The credential is a fingerprint, never the key. States:
+  - **unproven:** ONE call is admitted and concurrent callers WAIT for its answer.
+  - **healthy:** unlimited concurrency, as before.
+  - **cooling:** the engine is skipped without a call.
+  - **probing:** the cooldown has ended, and ONE call is the probe.
+- **What parks an engine.** A failure parks it. A 429 is parked for Google's RetryInfo delay when that is 1 s..24 h, otherwise for the ladder: 5 min, 30 min, 4 h. A cancellation never counts. A failure from a call admitted BEFORE the park counts as `failedAfterPark` and does not climb the ladder again. Every park is a `tts.provider-parked` line naming the cause and the length.
+- **`providers/gemini-tts.js`:** the error carries `status` and a validated `retryAfterMs`.
+- **`providers/tts.js`:** synthesis still starts at the active engine. The one walk backwards is to an engine parked by a failure, once its cooldown ends, through one probe. `resolve()` skips parked engines, so a rebuilt chain does not re-pay the outage.
+- **Sharing is explicit.** The server's boot chain and the voice-picker rebuild both pass `sharedCircuits`. A chain given no registry gets its own, which keeps tests that swap the real engine modules isolated.
+
+**Found while fixing, repaired in the same change (class 11).** The first cut also parked an engine that merely reported *unavailable* when the chain resolved. With the shared registry, that would have silenced a sidecar that starts a second late for a whole five-minute cooldown. `tts-down-sentence-chunks.test.js` went red on it. "Unavailable when asked" no longer parks anything; test (k) and probe M11 pin it.
+
+**Proof.** Red first against ca84e5d3: (a) gemini was called 3 times for 3 concurrent sentences, (b) a rebuilt chain paid gemini again, (c) the better engine was never tried again, (d) the retry delay was ignored, (h) no status, (i) a late failure escalated the park. Eleven mutation probes, each applied, restored sha256-identical and each reddening a named test. Full suite: 7948 tests, 7948 pass, 0 fail, 0 skipped.
+
+**Not covered.** The circuit is in-process: a crash restart pays ONE Gemini probe, not six. "Stale/cancelled audio discarded, utterance order preserved" is unchanged, because each caller already awaits its chunks in order. Kokoro's own worker-kill on a timeout is BUG-422.
+
+**Not verified.** An attended speech session in which Gemini is over quota and Kokoro times out: `tts.provider-parked` once per engine per outage, text and audio within one working engine's synthesis time.
 
 ## BUG-451 — lessons are recorded from symptoms, so MYTHOS wrote a false cause into permanent memory (filed 2026-09-23)
 
@@ -22548,6 +22576,8 @@ those records remain owed (this section is the index until then).
 - BUG-450 - the TTS chain retries known-dead engines on every sentence (Gemini 429 on every
   call, Kokoro timing out), so proactive audio lagged its text by up to 51 s and the speech
   lock ceiling fired 8 times. Filed 2026-09-23. Full entry above.
+  **CODED 2026-09-23:** one circuit per engine — a dead engine is paid for once per outage, parked
+  (429 for Google's retry delay), shared across chain rebuilds, won back by one probe after cooldown.
 
 - BUG-451 - lessons are recorded from symptoms: a healer lesson and a model-written note both
   say clicking by reference is what fails, and the model saved "rapid re-rendering" as the

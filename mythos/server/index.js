@@ -1316,7 +1316,9 @@ function createServer(deps) {
   // AbortController, so barge-in is unaffected, and no provider holds per-chain
   // state that would need tearing down (kokoro's model cache is a module-level
   // singleton, the rest are stateless HTTP wrappers).
-  let ttsChainRef = deps.ttsChain || createTtsChain({ config, logger });
+  // BUG-450: the SHARED circuit registry, so the voice-picker rebuild below
+  // (routes/tts-voices.js) inherits what is parked instead of paying for it again.
+  let ttsChainRef = deps.ttsChain || createTtsChain({ config, logger, circuits: require('../providers/tts-circuit').sharedCircuits });
   function currentTts() { return ttsChainRef; }
   function setTtsChain(next) {
     if (!next) return;
