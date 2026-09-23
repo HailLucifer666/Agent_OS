@@ -57,6 +57,10 @@ jobs:
           # No path args: node's own recursive discovery, not a shallow test/*.test.js
           # glob (which silently skipped 14 files one level deeper — found 2026-07-30).
           node --test --test-reporter=tap 2>&1 | Tee-Object -Variable out
+          # BUG-453: the runner's own verdict, read before any other native
+          # command replaces it. Nothing read it before, and the step's exit
+          # code was sync-test-count's, not the suite's.
+          $runnerExit = $LASTEXITCODE
           $failLine = $out | Select-String -Pattern '^# fail (\d+)' | Select-Object -Last 1
           $fails = if ($failLine) { [int]$failLine.Matches[0].Groups[1].Value } else { 999 }
           $cancelLine = $out | Select-String -Pattern '^# cancelled (\d+)' | Select-Object -Last 1
@@ -79,6 +83,18 @@ jobs:
             if (-not $bad -or $bad.Count -eq 0) { Write-Host "::error:: summary reported failures/cancellations but no 'not ok' lines matched" }
           }
           if ($fails -gt 0 -or $cancelled -gt 0) { exit 1 }
+          # SUITE-GATE:START — sliced and executed by
+          # mythos/test/bug-453-gates-blind-to-suite-level-failures.test.js.
+          # BUG-453: `# fail` counts failed LEAF tests only, so a describe()
+          # that throws while defining its tests printed `# fail 0` and
+          # `# cancelled 0` and passed the two checks above. tap-verdict.js is
+          # the rule the hook and sync-test-count share; this names the suite.
+          $verdict = $out | node scripts/tap-verdict.js --runner-exit $runnerExit
+          if ($LASTEXITCODE -ne 0) {
+            foreach ($line in $verdict) { Write-Host ("::error::" + $line) }
+            exit 1
+          }
+          # SUITE-GATE:END
           $out | node scripts/sync-test-count.js --check
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::error:: sync-test-count --check failed — the counts above do not match the committed README/ROADMAP numbers"

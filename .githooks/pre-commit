@@ -92,11 +92,30 @@ echo "pre-commit: ports MYTHOS_PORT=$MYTHOS_PORT EDGE_TTS_PORT=$EDGE_TTS_PORT"
 # No path args: node's own recursive discovery, not a shallow test/*.test.js glob
 # (which silently skipped test/assistant/*.test.js + test/engagements/*.test.js —
 # 14 files / ~188 tests never gated by this hook. Found 2026-07-30.)
+# The runner's own exit code is read on the very next line, because any command
+# in between would replace $? with its own.
 out=$(node --test --test-reporter=tap 2>&1)
+runner_exit=$?
+# SUITE-GATE:START — sliced and executed by
+# mythos/test/bug-453-gates-blind-to-suite-level-failures.test.js, which
+# supplies `out` and `runner_exit` through the environment.
 fails=$(printf '%s' "$out" | grep -Eo '^# fail [0-9]+' | tail -1 | grep -Eo '[0-9]+')
 [ -z "$fails" ] && fails=999
 echo "pre-commit: mythos test failures = $fails (baseline 0)"
-if [ "$fails" -gt 0 ]; then
+# BUG-453: `# fail` counts failed LEAF tests only. Measured 2026-09-23 on Node
+# v26.1.0: a describe() body that throws while defining its tests (a require of
+# a deleted module), a before() hook that throws, and a test that times out all
+# print `# fail 0` — the last two as `# cancelled 1` — while the runner exits 1.
+# This gate read only `# fail`, so it passed all of them. tap-verdict.js holds
+# the one rule the hook, CI and sync-test-count now share: summary present,
+# fail 0, cancelled 0, no top-level `not ok` (TODO excepted), runner exit 0.
+# The `fails` check above stays as well, so a broken verdict script cannot
+# weaken the gate below what it was. While tap-verdict.js works, no test can
+# tell that check is there — deleting it is a surviving mutation, by design.
+verdict=$(printf '%s\n' "$out" | node scripts/tap-verdict.js --runner-exit "$runner_exit" 2>&1)
+verdict_exit=$?
+if [ "$fails" -gt 0 ] || [ "$verdict_exit" -ne 0 ]; then
+  printf '%s\n' "$verdict"
   # Name the tests. This used to be `tail -40` of raw TAP, which is the last few
   # PASSING tests plus the summary counts — a blocked commit told you a number
   # and nothing else, so the first move was always to re-run the suite by hand
@@ -153,7 +172,8 @@ if [ "$fails" -gt 0 ]; then
     echo "pre-commit: no 'not ok' lines — the suite died without a summary. Last 40 lines:"
     printf '%s\n' "$out" | tail -40
   fi
-  echo "pre-commit: BLOCKED — failure count above baseline. Fix or revert."
+  echo "pre-commit: BLOCKED — the suite did not pass (failure count above baseline, or a failure the count does not see). Fix or revert."
   exit 1
 fi
 exit 0
+# SUITE-GATE:END

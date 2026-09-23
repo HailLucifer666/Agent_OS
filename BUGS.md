@@ -611,6 +611,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-449 | open | currently reproduced | [FILED 2026-09-23 from the attended run; seen once] The output transcription began "call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…" — a function call rendered as speech and never dispatched; the same reply said "I'm searching … now". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection. | mythos/src/core/voice/live-session.js (outputTranscription handling) |
 | BUG-450 | open | currently reproduced | [FILED 2026-09-23 from the attended run] gemini-tts 429 on every call and kokoro-tts timing out, retried on every utterance before edge-tts: 10 provider failures, 8 speech-lock ceilings, greeting audio 51 s after its text. Kokoro's timeouts are also the prime suspect for BUG-422's crash. Consumers: every TTS-chain utterance (proactive speech, greeting). Remaining evidence: none; a fix is proven by text-to-audio lag under one working engine's synthesis time. | mythos/providers (TTS chain); mythos/providers/kokoro/client.js |
 | BUG-451 | open | currently reproduced | [FILED 2026-09-23 from the attended run] A healer recurring-failure lesson and a model note both record that clicking by reference fails, and the model saved "rapid re-rendering" as the cause; the real cause is BUG-445's truncation. Records left in the vault on purpose. Consumers: vault/Lessons, notes, future sessions' tool choice. Remaining evidence: none; the operator removes both records once BUG-445 lands. | mythos/src/core/immune (recurring-failure playbook); vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md |
+| BUG-453 | verified | currently verified | [FIXED 2026-09-23, mutation-proven] The hook, CI and sync-test-count read `# fail N`, which counts failed leaf tests only; a describe() that throws at definition time, a failed before() hook and a timeout print `# fail 0` while node --test exits 1. All three gates now share tap-verdict.js (summary present, fail 0, cancelled 0, no top-level not ok except TODO, runner exit 0). Consumers: .githooks/pre-commit, .github/workflows/ci.yml, sync-test-count.js. Not covered: a file that calls process.exit(0) mid-test is reported ok. | test/bug-453-gates-blind-to-suite-level-failures.test.js |
 | BUG-406 | open | blocked | [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -2314,6 +2315,33 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 **Direction.** A lesson should record a cause only when one was established, and otherwise record the symptom *as* a symptom; the model should not be invited to save a diagnosis it has not verified. Once BUG-445 lands, both records should be removed by the operator.
 
 **Attribution:** attended run 2026-09-23.
+
+## BUG-453 — every test gate read `# fail N`, which counts failed LEAF tests only, so a suite that failed to load passed the commit hook, CI and the count check (FIXED 2026-09-23, mutation-proven)
+
+**Status:** ✅ FIXED 2026-09-23, mutation-proven (nine probes, recorded in the test file). The three gates now share one rule in `mythos/scripts/tap-verdict.js`.
+
+**The bug.** `node --test --test-reporter=tap` ends with summary lines, and `# fail N` counts failed *leaf* tests only. Measured 2026-09-23 on Node v26.1.0 with throwaway test files, four shapes of a broken run print `# fail 0` while the runner exits 1:
+
+1. a `describe()` body that throws while defining its tests — a `require` of a deleted module, which is how it was found in `test/bug-400-auth-gate-no-401-listener-without-a-token.test.js` during the PIN removal. TAP: `not ok 1 - <suite>`, `type: 'suite'`, `failureType: 'testCodeFailure'`; `# tests` and `# pass` both drop by the tests the suite never defined, so `# pass` still equals `# tests`;
+2. the same one `describe()` deeper — the top-level line is the outer suite, `failureType: 'subtestsFailed'`;
+3. a `before()` hook that throws — `failureType: 'hookFailed'`, `# cancelled 1`;
+4. a test that times out — `failureType: 'testTimeoutFailure'`, `# cancelled 1`.
+
+**Who was blind, and how far.** The pre-commit hook read `# fail` alone, so it passed **all four** — including a plain timeout, which nobody had noticed. CI also read `# cancelled`, so it caught 3 and 4 and passed 1 and 2; nothing in CI read the runner's exit code, and the step's final exit code was `sync-test-count --check`'s. `sync-test-count.js` read the same line: fed shape 1 it printed `tests=1 pass=1 fail=0` and "7 stale number(s). Run 'node scripts/sync-test-count.js --write'" — advice to commit the shrunken count as the new baseline.
+
+**The fix.** `tap-verdict.js` holds the rule: the summary must be present, `# fail` and `# cancelled` must be 0, there must be no top-level `not ok` line, and the runner's exit code must be 0 when the caller knows it. The hook and CI capture the exit code on the line straight after the suite runs and pipe the TAP through it; both name the failing suite (CI as `::error::` annotations). `sync-test-count.js` refuses — in both `--check` and `--write` — to derive counts from a run that failed while `# fail` says 0. A counted failure is still reported and not refused, as before: that script keeps documents honest and the hook and CI are the gates. The hook's own `# fail` check and its BUG-371 nested-failure report are unchanged.
+
+**What it catches by mistake, attacked before shipping.** A failing TODO test prints `not ok 1 - name # TODO reason` and the runner exits 0, so an unescaped `# TODO` directive is excluded; an escaped `\# TODO` inside a test name still counts. A test file's own stdout reaches the stream prefixed `# `, so a printed `not ok` is not a test point, and the LAST summary line is read because a child can print an earlier `# fail 0`. CRLF TAP (what PowerShell hands a native command) reads the same.
+
+**Not covered.** A test file that calls `process.exit(0)` before its tests finish is reported `ok` and the runner exits 0 — nothing in the stream says otherwise. The CI slice was executed under Windows PowerShell 5.1 locally, not under the `pwsh` 7 that CI runs; the lines it uses (`$LASTEXITCODE` after a pipe, `Write-Host`, `exit`) behave the same in both, but CI itself was not dispatched for this change.
+
+**Also found while measuring, not caused by this change:** the untouched baseline run was 7931 tests with 1 failure — `test/verify-lib-attach.test.js` failing with `Unable to deserialize cloned data` and `failureType: 'uncaughtException'` — the test runner's worker channel failing, which it counts as one failed test. Run alone it failed 1 time in 3, each time right after the file prints its `attached to MYTHOS on port` line; in the full suite it hit 3 of the 4 runs made on 2026-09-23. When it hits, the file dies part-way and 18 of its 23 tests vanish from `# tests` — the same undercount this ticket is about, one level up. It is counted in `# fail`, so every gate blocked it before this change and still does.
+
+**Tests.** `mythos/test/bug-453-gates-blind-to-suite-level-failures.test.js` — the rule on fixtures trimmed from the real captures; the hook's gate sliced between `SUITE-GATE` sentinels and executed with `sh`; CI's gate sliced from `ci.yml` and executed under PowerShell; `parseCounts` and the `--check` CLI; source-shape checks that each exit code is read before anything can replace it.
+
+**Live proof, 2026-09-23.** The new hook run end to end against the real suite with a planted test file whose `describe()` requires a missing module: it printed `mythos test failures = 0 (baseline 0)` — the old check alone would have passed — then `tap-verdict: NOT CLEAN: 1 top-level "not ok" line(s); node --test exited 1`, named the suite with its `Cannot find module` error, and exited 1. The planted file was deleted afterwards. Negative control on the real suite without it: 7976 tests, 7976 pass, 0 fail, 0 cancelled, runner exit 0, verdict clean.
+
+**Attribution:** found by the operator on 2026-09-23 during the PIN-removal work.
 
 ## BUG-441 — a result flagged unverified is spoken as a completed action (CODED 2026-09-16; partial evidence 2026-09-23; filed 2026-09-11)
 
@@ -22306,6 +22334,13 @@ those records remain owed (this section is the index until then).
   say clicking by reference is what fails, and the model saved "rapid re-rendering" as the
   cause. Both are false; the cause is the truncation in BUG-445. The records were left in the
   operator's vault on purpose. Filed 2026-09-23. Full entry above.
+
+- BUG-453 - every test gate read `# fail N`, which counts failed leaf tests only, so a
+  describe() that throws while defining its tests, a failed before() hook and a timeout all
+  passed the commit hook, and the first two passed CI. Filed 2026-09-23.
+  **FIXED 2026-09-23, mutation-proven:** the hook, CI and sync-test-count share one rule in
+  tap-verdict.js — summary present, fail 0, cancelled 0, no top-level "not ok", runner
+  exit 0 — and name the failing suite. Full entry above.
 
 
 - BUG-422 - the server child exits silently mid-session and never restarts.
