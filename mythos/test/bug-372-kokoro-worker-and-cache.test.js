@@ -388,14 +388,27 @@ describe('BUG-372 — the worker supervisor', () => {
 
   test('a synthesis deadline is measured from ADMISSION, so queue time is inside the budget', async () => {
     let t = 1000;
-    const { c } = clientWith(loadOk, { now: () => t, synthTimeoutMs: 5000 });
+    const { c, workers } = clientWith(loadOk, { now: () => t, synthTimeoutMs: 5000 });
     const queued = c.synthesize({ text: 'first' });
     const behind = c.synthesize({ text: 'second' });
     await new Promise((r) => setImmediate(r));
     t = 9000; // both admitted at 1000 with a 5000ms budget: both are now past it
-    await assert.rejects(behind, /deadline/,
+    // The queue looks at the second request only when the first one finishes, so
+    // finish it with a reply. FIXED 2026-09-23: this test used to WAIT for the
+    // first request's real 5 s timer instead (5,010 ms locally). That timer is
+    // unref'd by design, so nothing held the process open through it: Node 26's
+    // test runner happened to, Node 22's did not, and CI run 35856005319 had
+    // the whole file cancelled mid-run ("Promise resolution is still pending but
+    // the event loop has already resolved"). The fake clock was never what
+    // decided this test's outcome; the real clock was.
+    // Probe, 2026-09-23: disabling pump()'s queued-deadline check (`if (false &&
+    // next.deadlineAt <= now())`) turns THIS test red with "deadline passed
+    // before it could start" — so it watches the queue check, not post()'s.
+    const synth = workers[0].posted.find((m) => m.op === 'synthesize');
+    workers[0].emit('message', { id: synth.id, gen: synth.gen, ok: true, result: { wav: 'first' } });
+    assert.deepEqual(await queued, { wav: 'first' });
+    await assert.rejects(behind, /deadline passed while queued/,
       'time spent waiting behind another utterance counts against the budget rather than being added to it');
-    queued.catch(() => {});
   });
 
   test('shutdown settles every pending caller and AWAITS termination', async () => {
