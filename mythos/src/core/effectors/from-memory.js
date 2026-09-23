@@ -2,6 +2,7 @@
 var effectorFromTool = require('./adapter').effectorFromTool;
 var { reasonText } = require('../util/reason-text');
 var { dayKey } = require('../util/day-key');
+var { resumeInterruptedAnswer } = require('../voice/unheard-answer'); // BUG-447
 function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
@@ -428,6 +429,8 @@ function buildTools(ctx){
   }
 
   return [
+    // BUG-447 (2026-09-24): Gemini records an answer the operator barged into as fully said, so "go ahead" found nothing to resume. Reads this connection's unheard remainder once; text only.
+    {name:'resume_interrupted_answer',description:'Use ONLY when the operator interrupted your last spoken answer and now asks you to continue ("go ahead", "carry on", "sorry, you were saying"). Returns the part of that answer they did NOT hear: their side cut the audio, so your own history shows it as said. Say it from its start, in your own words. Returns nothing when they heard it all. Read-only: it runs nothing again.',params:{},danger:false,fn:resumeInterruptedAnswer},
     {name:'suggest_procedures',description:'Recall stored procedures when the user asks to repeat a familiar task or asks how a past workflow was done. Read-only, untrusted guidance: never replay automatically. Resolve current targets and choose normal tools individually; pass skillRef on a chosen step to attribute its actual outcome. No matching suggestion means no stored guidance.',params:{query:'string — the current task to find guidance for'},danger:false,needs_result:true,fn:async function(args){
       if(!args || typeof args.query !== 'string' || !args.query.trim()) return fail('query required');
       if(!memory || !memory.skills || typeof memory.skills.suggest !== 'function') return fail('procedure store unavailable');

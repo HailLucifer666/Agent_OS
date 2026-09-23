@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8055,
+      "value": 8068,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -368,14 +368,14 @@
       "measuredAt": "2026-09-24"
     },
     "registered": {
-      "value": 188,
+      "value": 189,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
       "measuredAt": "2026-09-24"
     },
     "voiceReachable": {
-      "value": 127,
+      "value": 128,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
@@ -764,6 +764,18 @@
       "kind": "subsystem",
       "note": "Interruption handling shipped and was accepted by ear. Stays warn: it genuinely needs a live acoustic session. But the number the whole path was tuned against was measuring the operator, not the room.",
       "ev": "MEASURED 2026-08-28 (BUG-388, Track E) from 731 voice.capture-suspend records across 20 sessions in mythos-server.log, and it corrects a premise this node and the plan were both carrying. bleedPeak is documented as \"loudest level seen while MYTHOS was provably speaking\" and is learned inside the 500ms protected window, on the written reasoning that \"the assistant's own onset is by construction the loudest thing present\". That is false: MYTHOS reaches the mic through the speakers and is then attenuated 15-20dB by AEC (probe-aec-routes.js measures the Gemini Live residual at 0.0069-0.0141) while the operator arrives direct, so whenever both are present the OPERATOR is the louder one. Of 31 upward moves of bleedPeak above 0.05, TWENTY-TWO landed on a value exactly equal to that hold's own peakRms -- the operator. Every session opens at 0.0043-0.0347 (the real room, agreeing with the probe) and then ratchets to 0.05-0.33 and never decays: 2026-08-24 read 0.1606 for 110 consecutive holds off one frame. The uncontaminated control is 2026-08-26, which ended at 0.0313 while the operator peaked at 0.1402. WHY IT MATTERED: this was diagnosed on 2026-08-19 and deferred because \"the learned floor is dormant, so consequence today is nil\" -- but a consumer existed. verify-voice-session.js called bleedPeak \"the ungagged oracle\" and concluded \"Echo cancellation is not removing it\", a hardware verdict drawn from the operator's own voice, and that conclusion is why an acoustic rework sits in the plan as \"the only fix that removes the trade\". FIXED: the protected window now decides once, at the transition out of IDLE, whether it may attribute anything to MYTHOS -- compared against the STATIC floor, never the learned one, so a poisoned peak cannot raise the bar for detecting the next contamination. The verifier reports the number and refuses the inference. NOT CLOSED: this changes no runtime behaviour (the learned floor is dormant either way) and closes no Track E node -- what it removes is a false reading that was steering the live session's agenda. An operator who starts speaking INSIDE the 500ms window is still learned from; that needs a per-frame source signal the client does not have. 10 assertions, 10 mutations all caught.",
+      "ok": 0,
+      "f": 0
+    },
+    {
+      "c": "voice",
+      "n": "resume-after-barge-in",
+      "s": "unknown",
+      "tools": [
+        "resume_interrupted_answer"
+      ],
+      "note": "After a barge-in and \"go ahead\", returns the part of the answer the room did not hear, once. Read-only.",
+      "ev": "CODED 2026-09-24 (BUG-447). A local barge-in drops the rest of the turn in the HUD while Gemini's history records it as said, so the model thought it had finished. The HUD now reports where playback was cut (positions only), the server takes the unheard sentences from its own transcript, and this tool hands them to the model. Status is unknown, not ok: it has never run in an attended session, and whether the model calls it when asked to go on is only visible there.",
       "ok": 0,
       "f": 0
     },
@@ -5905,10 +5917,10 @@
         "state": "open",
         "title": "system-initiated speech crowds out the live conversation: heal announcements are spoken into it, in log vocabulary, and the operator's question loses (filed 2026-09-23)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN, HIGH — PARTLY CODED 2026-09-23 (below). The biggest usability defect of the 2026-09-23 run. ### Repair, part 1 (CODED 2026-09-23) **Operator decision D5, taken in the plan:** a self-heal that SUCCEEDED is never spoken. Only what needs the operator is spoken, in one plain sentence. **Heals.** - **`src/core/immune/announcer.js` is deleted.** It was the only module that turned a successful heal or a crash recovery into speech: \"Self-healed: cortex restart after a stall. Trigger: …\". - **Nothing is lost from the record.** `health.healed` still reaches the HUD health card and the vault anomaly row, with the playbook title, trigger and actions. That is what BUG-162 needed, and its test now pins that the record carries those fields. - **What needs the operator still speaks,** through the explainer, and test (1d) pins it. - **Guarding against a comeback.** A deleted module c…",
+        "excerpt": "**Status:** 🐞 OPEN, HIGH — PARTLY CODED 2026-09-23 and 2026-09-24 (below). The biggest usability defect of the 2026-09-23 run. ### Repair, part 1 (CODED 2026-09-23) **Operator decision D5, taken in the plan:** a self-heal that SUCCEEDED is never spoken. Only what needs the operator is spoken, in one plain sentence. **Heals.** - **`src/core/immune/announcer.js` is deleted.** It was the only module that turned a successful heal or a crash recovery into speech: \"Self-healed: cortex restart after a stall. Trigger: …\". - **Nothing is lost from the record.** `health.healed` still reaches the HUD health card and the vault anomaly row, with the playbook title, trigger and actions. That is what BUG-162 needed, and its test now pins that the record carries those fields. - **What needs the operator still speaks,** through the explainer, and test (1d) pins it. - **Guarding against a comeback.** A d…",
         "campaign": {
           "disposition": "currently reproduced",
-          "evidence": "[PARTLY CODED 2026-09-23: successful heals and crash recoveries are no longer spoken — immune/announcer.js, their only speaker, is deleted (operator decision D5), and a derived map names every listener to heals so a new speaker cannot slip in; the greeting now knows a returning operator from a first boot. Still open: resume after a barge-in (not coded: Live has no system channel, and an injected \"continue\" would itself start an unprompted turn), the Spanish transcription (no audio of the session was kept, so it cannot be reproduced), and failed-action reporting plus holding actionable speech until the answer ends, which ride on BUG-432's answer lane] [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed \"because a Live conversation is in progress\". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live.",
+          "evidence": "[PARTLY CODED 2026-09-23: successful heals and crash recoveries are no longer spoken — immune/announcer.js, their only speaker, is deleted (operator decision D5), and a derived map names every listener to heals so a new speaker cannot slip in; the greeting now knows a returning operator from a first boot. Resume after a barge-in CODED 2026-09-24: the HUD reports where playback was cut, the server takes the unheard sentences from its own transcript, and a read-only tool hands them to the model once when the operator asks it to go on — nothing is injected. Still open: the Spanish transcription (no audio of the session was kept, so it cannot be reproduced), and failed-action reporting plus holding actionable speech until the answer ends, which ride on BUG-432's answer lane] [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed \"because a Live conversation is in progress\". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live.",
           "source": "mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js"
         }
       },

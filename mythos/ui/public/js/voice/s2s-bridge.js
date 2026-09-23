@@ -43,6 +43,8 @@ import { createBargeInBackstop, rmsFromPcm16 } from './barge-in-backstop.js';
 import { createLiveNoiseGate } from './live-noise-gate.js';
 import { createEchoVerdictTracker } from './echo-verdict.js';
 import { createGateRecorder, isGateRelease } from './gate-recorder.js'; // BUG-406: numbers-only mic-gate recorder, off unless configured
+import { arrayBufferToBase64 } from './pcm-base64.js';
+import { createUnheardMeter } from './unheard-meter.js'; // BUG-447: where a barge-in cut the answer, so "go ahead" can resume it
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -59,6 +61,7 @@ const PLAYBACK_RATE = 24000;
 // outside tests.
 export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOverride, gateRecorder: recordGate } = {}) {
   const send = sendMessageOverride || sendMessage; const gateRecorder = recordGate ? createGateRecorder({ rms: rmsFromPcm16 }) : null;
+  const unheard = createUnheardMeter();
   let active = false;
   let stream = null;
   let audioCtx = null;
@@ -871,10 +874,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // So stopping the speech has to be local and has to outlast the flush: for the rest
   // of this model turn, arriving audio is DROPPED instead of played.
   function stopAssistantSpeech(reason) {
-    if (player) player.flush();
+    if (player) unheard.cut(player.flush());
     armAudioOutSuppression();
     releaseOwnVoiceGate(reason);
   }
+  // Positions only, never words; the server resolves them against its own transcript.
+  function reportUnheard() { const report = unheard.endTurn(); if (report) send({ type: 'voice-unheard', ...report }); }
 
   // Fail-open window for the suppression above: if no audio has arrived for this long,
   // the turn is over whether or not a 'live-turn-complete' ever reached us. Q5 — this
@@ -914,6 +919,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (suppressIdleTimer) { clearTimeout(suppressIdleTimer); suppressIdleTimer = null; }
     if (!suppressAudioOut) return;
     suppressAudioOut = false;
+    if (how === 'idle') unheard.resumed(); // the turn carries on, and from here the room hears it
     // The cushion diagnostics used to be added here and were moved to
     // logSuspendTransition() itself on 2026-08-20: on this line they only ever
     // reached the log for turns the operator interrupted, which is the least likely
@@ -926,13 +932,6 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     });
     suppressedChunks = 0;
     suppressStartedAt = 0;
-  }
-
-  function arrayBufferToBase64(buf) {
-    const bytes = new Uint8Array(buf);
-    let bin = '';
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin);
   }
 
   async function start() {
@@ -957,10 +956,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // here so the suppression lasts exactly as long as the server keeps streaming.
       if (suppressAudioOut) {
         suppressedChunks += 1;
+        unheard.dropped(msg.data);
         refreshSuppressIdleTimer();
         return;
       }
       player.enqueue(msg.data);
+      unheard.played(msg.data);
       // The gate's ceiling is an IDLE window, so every chunk that arrives pushes
       // it out. Without this it was an absolute cap on reply length and tripped
       // mid-sentence on the longest answers — see OWN_VOICE_IDLE_CEILING_MS.
@@ -975,7 +976,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // would eat the start of the next reply.
     onInterruptedMsg = () => {
       bargeBackstop.reset();
-      if (player) player.flush();
+      if (player) unheard.cut(player.flush());
       if (player) player.endTurn();
       endAudioOutSuppression('server-interrupted');
     };
@@ -1029,7 +1030,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // between replies is the operator talking — and from inside the player those are
     // identical. Only this frame can separate them. Kept on ONE line: a source-shape
     // test in bug-274-local-flush-does-not-stop-the-turn.test.js reads this handler.
-    onTurnCompleteMsg = () => { endAudioOutSuppression('turn-complete'); if (player) player.endTurn(); };
+    onTurnCompleteMsg = () => { endAudioOutSuppression('turn-complete'); if (player) player.endTurn(); reportUnheard(); };
     onBroadcast('live-audio-out', onAudioOutMsg);
     onBroadcast('live-turn-complete', onTurnCompleteMsg);
     onBroadcast('live-interrupted', onInterruptedMsg);
@@ -1286,8 +1287,9 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (onEchoCheckMsg) { offBroadcast('live-echo-check', onEchoCheckMsg); onEchoCheckMsg = null; }
     if (onWatchdogClearMsg) { offBroadcast('live-watchdog-clear', onWatchdogClearMsg); onWatchdogClearMsg = null; }
     if (onTurnCompleteMsg) { offBroadcast('live-turn-complete', onTurnCompleteMsg); onTurnCompleteMsg = null; }
-    // A suppression must not survive the session that armed it.
+    // A suppression must not survive the session that armed it — nor may a cut.
     endAudioOutSuppression('session-stopped');
+    unheard.endTurn();
     if (captureNode) { try { captureNode.disconnect(); } catch { /* ok */ } captureNode = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (audioCtx) { try { await audioCtx.close(); } catch { /* ok */ } audioCtx = null; }

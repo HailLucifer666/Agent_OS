@@ -256,7 +256,12 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
     markStopped();
   }
 
+  // Returns the milliseconds of queued SPEECH it threw away — 0 when nothing was
+  // queued or the tail guard let the last word finish. BUG-447 (2026-09-24): the
+  // bridge's unheard-meter.js needs it, because only this file knows how much of
+  // an answer a barge-in removed from the room.
   function flush() {                    // barge-in / interrupted
+    let discardedSec = 0;
     if (ctx) {
       // Measure the AUDIO still to play, not the timeline still to elapse. Those
       // were the same number when the lead was 40ms and are not once there is a
@@ -267,9 +272,11 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
       // a tail this guard exists to spare.
       const audioFrom = Math.max(ctx.currentTime, runStartsAt);
       const remainingAudio = nextAt - audioFrom;
-      if (remainingAudio > 0 && remainingAudio < TAIL_GUARD_SEC) return; // let the tail finish
+      if (remainingAudio > 0 && remainingAudio < TAIL_GUARD_SEC) return 0; // let the tail finish
+      discardedSec = Math.max(0, remainingAudio);
     }
     stopAll();
+    return discardedSec * 1000;
   }
 
   function isSpeaking() { return ctx ? nextAt > ctx.currentTime + 0.02 : false; }

@@ -18,7 +18,7 @@ native crash · 3 speech · 4 qualification and memory.
 `main` and builds on the one before; the session's permission check refuses
 `gh pr merge`, so the agent cannot. CI ran green on each head it had finished on (#109's e2e job timed out once on the CI machine's media query, the same route passed on #110, and a re-run was green):
 #102 PIN removal + BUG-444/452 · #103 BUG-445 · #105 BUG-446 · #106 BUG-437 ·
-#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · #113 BUG-275 · #114 BUG-436 blocking half · #115 BUG-451 · #116 BUG-406 recorder · then the BUG-274 options-note PR. Eleven superseded PRs
+#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · #113 BUG-275 · #114 BUG-436 blocking half · #115 BUG-451 · #116 BUG-406 recorder · #117 BUG-274 options note · then the BUG-447 resume-after-barge-in PR. Eleven superseded PRs
 (#95 … #82) are also still open — their content is in main; closing them is the
 operator's call.
 
@@ -27,10 +27,9 @@ operator's call.
 | **Coded, attended session owed** | 444, 452 (startup/access) · 445 (browser targets) · 446 (spoken half) · 437 (three-way quit) · 450, 448 (speech) · 451 (provenance) |
 | **Contained, still open** | 422 — Kokoro is a child process; the attended 0xE06D7363 itself not reproduced |
 | **Coded behind a flag, comparison owed** | 432 — answers never wait behind notices, nothing forced into a reply; `VOICE_SERIALIZE_NOTICES` stays OFF until an attended A/B |
-| **Partly coded, still open** | 447 — heals silent, greeting fixed; resume-after-barge-in and Spanish transcript open |
+| **Partly coded, still open** | 447 — heals silent, greeting fixed, resume after a barge-in coded (2026-09-24); the Spanish transcript stays open (no audio was kept) |
 | **Coded, stall-profiler run owed** | 436 — delivery half and blocking half coded (no synchronous child process after boot, derived guard) |
 | **Open by decision D7, detectors shipped** | 449 — spoken tool-call syntax is a silent anomaly, never executed · 275 — an unsearched current fact is a silent anomaly (replayed first); the screen description is cut at a sentence. Prevention for both needs the validated text lane |
-| **Open, next** | Wave 4 |
 
 What the session proved headlessly, without the operator: a seeded-vault boot
 reproduced BUG-446 on the old build and showed zero steps on the new; a forked-IPC
@@ -72,15 +71,15 @@ manual dispatch: once, on a final commit.
 - **Should autonomy run while nobody is at the HUD?** The PIN lock was the only
   signal for "unattended"; it no longer exists.
 - D7/D8/D9 were taken under delegation ("whatever works now") and are reversible:
-  the validated voice lane is deferred (so 449, 275 and 447's resume-after-barge-in
-  stay open), the wake-word licence stays a lawyer's call (274), the mic hold gets a
+  the validated voice lane is deferred (so 449 and 275 stay open; 447's
+  resume-after-barge-in turned out not to need it and is coded), the wake-word licence stays a lawyer's call (274), the mic hold gets a
   recorder first (406).
 - Operator action, not code: **Gmail needs re-authorising** (`invalid_grant`).
 
 ## NEXT ACTION
 
-**The code plan is complete** (Waves 1–4; the 274 options note is written, awaiting the
-operator's choice). What remains is attended: the six sessions in the plan's
+**The code plan is complete** (Waves 1–4, and 447's resume-after-barge-in on 2026-09-24;
+the 274 options note is written, awaiting the operator's choice). What remains is attended: the six sessions in the plan's
 qualification table — startup/access, browser targets (445/439/421), speech
 (447/432 A/B/448/450/449/275 counts), crash containment (422), shutdown (437), and
 acoustics (the 406 recorder's first corpus). BUG-432's flag goes default-on only after the attended A/B in the

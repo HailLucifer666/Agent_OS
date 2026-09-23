@@ -33,6 +33,7 @@ const { _PATTERNS: LOG_SECRET_PATTERNS } = require('../src/core/effectors/creden
 // S2S (V2 §6-§10, merged-order step 4, Phase 5 wiring): Gemini Live transport,
 // hub->functionDeclarations conversion, and the tool-adapter safety seam.
 const { createLiveSession } = require('../src/core/voice/live-session');
+const unheardAnswer = require('../src/core/voice/unheard-answer'); // BUG-447
 // Installer parity (2026-08-11): do not DECLARE a tool whose adapter or
 // credentials do not exist on this machine — the fresh install fired
 // gmail_unread/media_status/spotify_status against neither. See tool-capability.js.
@@ -2788,6 +2789,8 @@ function createServer(deps) {
     // gate and compatibility with server fixtures that never exercise voice.
     let liveSession = null;
     let liveAdapter = null;
+    // BUG-447: where each Live answer's audio was cut, so "go ahead" can resume what the room did not hear.
+    const unheardTracker = unheardAnswer.createUnheardTracker({ remember: (entry) => unheardAnswer.rememberUnheard(connectionId, entry) });
     // BUG-433: the HUD registers its onBroadcast('live-audio-out') handler inside
     // s2s-bridge start() (:1031) and only then sends live-open (:1039), so the
     // message is a faithful proxy for "this client can play Live audio" — and
@@ -2868,6 +2871,7 @@ function createServer(deps) {
           browserAgentAdapter, cuaDriverAdapter, pcChild, androidChildAdapter,
           conversationToolAllowed: require('./desktop-connection').conversationToolAllowed });
         const outputGeneration = liveOutputGeneration;
+        unheardTracker.reset(); // a new session starts a new audio timeline, as the HUD's does
         liveSession = createLiveSession({
           // liveConfigNow() carries a voice picked in the HUD since boot.
           // live-session.js reads GEMINI_LIVE_VOICE ONCE, at construction
@@ -2891,6 +2895,7 @@ function createServer(deps) {
           onAudioOut: (b64) => {
             if (outputGeneration !== liveOutputGeneration) return;
             send({ type: 'live-audio-out', data: b64, ...(desktop ? { operatorReqId } : {}) });
+            unheardTracker.audio(b64);
             if (liveTurnUserSpeechAt !== null && !liveTurnAudioRecorded) {
               voiceLatencyTracker.record(Date.now() - liveTurnUserSpeechAt);
               liveTurnAudioRecorded = true;
@@ -2904,6 +2909,7 @@ function createServer(deps) {
           onState: (s) => { if (outputGeneration === liveOutputGeneration) send({ type: 'live-state', state: s.state, reason: s.reason }); },
           onTurnComplete: (turn) => {
             if (outputGeneration !== liveOutputGeneration) return;
+            unheardTracker.turnEnd(turn); // before 'live-turn-complete' below: the HUD's report answers it
             operatorLivePending = false;
             liveAdapter.onLiveTurnComplete(turn);
             liveTurnUserSpeechAt = null;
@@ -3732,6 +3738,7 @@ function createServer(deps) {
       // fire-and-forget, no reply expected. Gives Wave 2's lost-transcript
       // diagnosis a server-side record of every suspend/clear instead of only
       // inferring it after the fact from a blind turn.
+      else if (msg.type === 'voice-unheard') { const entry = unheardTracker.unheard(msg); logger.info('live.unheard-report', { remembered: !!entry, chars: entry ? entry.text.length : 0, turnId: entry ? entry.turnId : null }); } // BUG-447: positions only; the text comes from this server's own transcript
       else if (msg.type === 'voice-gate-recording') { gateRecordingSink.handle(msg).catch(() => {}); } // BUG-406: the mic-gate recorder's windows; the sink itself is off unless VOICE_GATE_RECORDER=true
       else if (msg.type === 'voice-capture-suspend') {
         // BUG-271: the own-voice-release transition also carries the ring/gate
@@ -4005,6 +4012,7 @@ function createServer(deps) {
       desktop?.close().catch(error => logger.warn('desktop.disconnect-failed', { error: error.message }));
       if (liveSession) liveSession.close('ws-closed');
       liveAdaptersByConnection.delete(connectionId);
+      unheardAnswer.forgetUnheard(connectionId);
       // Drop this node's registration — but ONLY if the map still points at THIS
       // socket. A phone that reconnected before its old socket's close event
       // landed has already overwritten the entry, and unconditionally deleting
