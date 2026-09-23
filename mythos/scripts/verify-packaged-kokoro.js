@@ -6,7 +6,7 @@
 // WHY A SECOND VERIFIER. `verify-kokoro-offline.js` proves the migrated cache is
 // self-sufficient; it runs from the source tree, where every path is an ordinary
 // directory. That cannot see the thing most likely to break here: the worker is
-// spawned by `worker_threads` from a path inside `app.asar.unpacked`, and it
+// forked as a child PROCESS (BUG-422; it was a worker thread until 2026-09-23) from a path inside `app.asar.unpacked`, and it
 // resolves `@huggingface/transformers` through kokoro-js's own `createRequire`
 // context. Module resolution is exactly what BUG-372 was — a second nested copy
 // nobody noticed — so a packaged build needs its own check rather than an
@@ -63,7 +63,9 @@ const path = require('node:path');
 const net = require('node:net');
 const dns = require('node:dns');
 
-const MODULES = ['client.js', 'worker.js', 'paths.js', 'timeouts.js', 'migrate-cache.js'];
+// BUG-422 (2026-09-23): child-transport.js joined — Kokoro now runs in a forked
+// child PROCESS, and a missing transport would fall over at the first synthesis.
+const MODULES = ['client.js', 'worker.js', 'paths.js', 'timeouts.js', 'migrate-cache.js', 'child-transport.js'];
 // A WAV of a short sentence is tens of kilobytes. Anything under this is a
 // header with no audio behind it, which is the shape a silent failure takes.
 const MIN_PLAUSIBLE_AUDIO_BYTES = 10000;
@@ -158,6 +160,11 @@ async function main() {
     process.exit(1);
   }
   const client = createKokoroClient({ env: process.env, initTimeoutMs: t.initMs, synthTimeoutMs: t.synthMs });
+  // BUG-422: the packaged server's execPath is MYTHOS.exe (Electron). The child is
+  // forked with ELECTRON_RUN_AS_NODE=1 in ITS env; if that were lost it would start
+  // a second GUI instead of the script, and load() below would time out.
+  report.transport = client.transport();
+  if (report.transport !== 'child-process') fail(report, `kokoro transport is ${report.transport}, expected child-process (BUG-422)`);
   await client.load();
   const meta = client.meta() || {};
   report.resolved = {

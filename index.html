@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7948,
+      "value": 7957,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5556,10 +5556,10 @@
         "state": "open",
         "title": "the server child exits silently mid-session and no restart follows (OPEN, found live 2026-09-09; a child death CAPTURED 2026-09-23)",
         "detail": {},
-        "excerpt": "**Status:** OPEN, CRITICAL. Reproduced live 2026-09-09. **A child death was captured with its exit code on 2026-09-23**, and it points at a strong suspect; the restart half now works. Cause not yet proven. **Attended run 2026-09-23 — one death, captured.** 13:40:59.641 `mythos child disconnect`, then `mythos child exited (code=3765269347 signal=null); restarting in 1000ms`. The server was back (`lifecycle.alive`) at 13:41:03 and the HUD reconnected under a new connection id. Logs were snapshotted at once (`.cache/windows-operator/attended-2026-09-23/crash1-*.log`). - **The exit code is the evidence.** 3765269347 = **0xE06D7363**, the Microsoft C++ exception code (`0x6D7363` is ASCII \"msc\"). A JavaScript exception does not produce it; an **unhandled C++ exception thrown inside native code** does. So this death came from a native module, not from our JavaScript. - **Prime suspect, from tim…",
+        "excerpt": "**Status:** OPEN, CRITICAL — **CONTAINED 2026-09-23.** The suspected mechanism is reproduced and contained; details below. The ticket stays open because the exact attended exit code was not reproduced, and because the 2026-09-09 death that no restart followed is still unexplained. ### Repro matrix and containment (2026-09-23) **The matrix.** Real Kokoro model, one fresh process per trial, more than 6 s observed after each operation (`.cache/bug422/matrix.js` + `trial.js`, gitignored). The trials drive the real `providers/kokoro/client.js`. | trial | worker THREAD (before) | child PROCESS (after) | |---|---|---| | terminate an idle worker (control) | exit 0 ×2 | exit 0 ×2 | | terminate mid-inference | **0xC0000409 ×2** (at exit, ~20 s late) | exit 0 ×2 | | … then a replacement load | **0xC0000409 ×2** | exit 0 ×2 | | … then a replacement synthesis | **0xC0000409 ×2** | exit 0 ×2, the repl…",
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[DEATH CAPTURED 2026-09-23: exit 0xE06D7363 (native C++ exception) 6 s after the fourth Kokoro timeout; prime suspect the in-process Kokoro worker terminated mid-inference; standalone repro needed. Restart now works] Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original \"the supervisor did not log it\" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation.",
+          "evidence": "[CONTAINED 2026-09-23, cause reproduced by MECHANISM: terminating the in-process Kokoro worker thread mid-inference killed the whole process — 0xC0000409 at exit on every trial and MID-SESSION after the second of four kills (real model, one fresh process per trial); Kokoro now runs in a child PROCESS, and the same matrix exits 0 on all 12 trials, the real server quits 0 in 65 ms, and the packaged MYTHOS.exe passes verify-packaged-kokoro.js. Stays OPEN: the attended code 0xE06D7363 was not the code reproduced, and the 2026-09-09 silent death is unexplained. Earlier: death captured 2026-09-23, 6 s after the fourth Kokoro timeout; restart now works] Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original \"the supervisor did not log it\" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation.",
           "source": "electron/child-lifecycle.js"
         }
       },

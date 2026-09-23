@@ -589,7 +589,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-403 | diagnosed | blocked | Auth priming emits safe state telemetry, awaits server/exchange/cookie readiness and keeps PIN semantics. Consumers: Electron packaged bootstrap, auth-session routes. Regression oracle: Auth matrix real dev/packaged boots; focused safe-telemetry regressions. Remaining evidence: Original historical failure mechanism is not conclusively reconstructed. | electron/main.js |
 | BUG-404 | fixed | blocked | Persistent infrastructure children use writable runtime cwd; relative binaries retain original resolution; ADB cleanup limits ownership. Consumers: pc/cua/android, TTS/search children; both raw browser launch sites. Regression oracle: 243 prior lifecycle regressions, packaged shutdown/rename and owned PID checks;browser family117pass. Remaining evidence: Handset/ADB shared-session live behavior, crash recovery and installed-artifact uninstall locks. | mythos/src/core/util/child-runtime.js |
 | BUG-405 | verified | blocked | Every pid-bearing failed PC command passes shared stale-target recovery; non-pid and non-stale failures avoid extra lookup. Consumers: from-pc delegate, focus/close/ui_elements and other pid tools. Regression oracle: Full helper/consumer tests read; browser family117pass includes recovery. Remaining evidence: Actual stale native pid followed by current live window list. | mythos/src/core/effectors/window-recovery.js |
-| BUG-422 | open | blocked | [DEATH CAPTURED 2026-09-23: exit 0xE06D7363 (native C++ exception) 6 s after the fourth Kokoro timeout; prime suspect the in-process Kokoro worker terminated mid-inference; standalone repro needed. Restart now works] Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original "the supervisor did not log it" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
+| BUG-422 | open | blocked | [CONTAINED 2026-09-23, cause reproduced by MECHANISM: terminating the in-process Kokoro worker thread mid-inference killed the whole process — 0xC0000409 at exit on every trial and MID-SESSION after the second of four kills (real model, one fresh process per trial); Kokoro now runs in a child PROCESS, and the same matrix exits 0 on all 12 trials, the real server quits 0 in 65 ms, and the packaged MYTHOS.exe passes verify-packaged-kokoro.js. Stays OPEN: the attended code 0xE06D7363 was not the code reproduced, and the 2026-09-09 silent death is unexplained. Earlier: death captured 2026-09-23, 6 s after the fourth Kokoro timeout; restart now works] Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original "the supervisor did not log it" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
 | BUG-429 | fixed | blocked | Unknown settings are announced through repeat backoff and listed by doctor. Voice kill switch and known-key non-change tested; browser-use stays parked. | mythos/scripts/doctor.js |
 | BUG-432 | open | blocked | [MEASURED 2026-09-23 with the flag on: notices stop cutting each other off, but tool results are held too (a reply said "no price found" while the price sat queued) and the 15 s hold forced 4 interruptions; keep the flag OFF until tool results bypass the queue] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. A held notice was then DESTROYED by two rotation paths — an unsolicited drop never called close() so the ceiling fired into a dead socket, and a deferred goAway released into a socket it had just nulled — with release() shifting before sending so a refusal could not retain the item. Now an explicit READY/SUSPENDED state plus a socket generation, peek-before-send, and per-item deadlines preserved across a rotation. Consumers: live-session setState/flushPendingAudio/turnComplete and sendSystemNotice's delivered check. Regression oracle: bug-432-notices-survive-a-rotation.test.js — 14 tests, 10 mutations each reddening a named test, one of which survived first time and produced test (n). Remaining evidence: FakeSocket only; the real ws library closes asynchronously, no attended rotation observed, and the flag stays OFF until the measured pass. | mythos/src/core/voice/notice-queue.js; mythos/src/core/voice/live-session.js |
 | BUG-433 | verified | currently verified | [LIVE-VERIFIED 2026-09-23: armed only after unlock, delivered once, heard; the 51 s audio lag is BUG-450] The boot greeting is injected into a Live session the HUD only subscribes to after the bridge starts, so the packaged app starts silent until the first wake word. Diagnosed from two boots; the proposed fix gates liveForSpeech on a client-started bridge. | mythos/server/index.js |
@@ -1435,7 +1435,41 @@ Both lane models are dead and the free catalog lists both as alive -- the defect
 
 ## BUG-422 — the server child exits silently mid-session and no restart follows (OPEN, found live 2026-09-09; a child death CAPTURED 2026-09-23)
 
-**Status:** OPEN, CRITICAL. Reproduced live 2026-09-09. **A child death was captured with its exit code on 2026-09-23**, and it points at a strong suspect; the restart half now works. Cause not yet proven.
+**Status:** OPEN, CRITICAL — **CONTAINED 2026-09-23.** The suspected mechanism is reproduced and contained; details below. The ticket stays open because the exact attended exit code was not reproduced, and because the 2026-09-09 death that no restart followed is still unexplained.
+
+### Repro matrix and containment (2026-09-23)
+
+**The matrix.** Real Kokoro model, one fresh process per trial, more than 6 s observed after each operation (`.cache/bug422/matrix.js` + `trial.js`, gitignored). The trials drive the real `providers/kokoro/client.js`.
+
+| trial | worker THREAD (before) | child PROCESS (after) |
+|---|---|---|
+| terminate an idle worker (control) | exit 0 ×2 | exit 0 ×2 |
+| terminate mid-inference | **0xC0000409 ×2** (at exit, ~20 s late) | exit 0 ×2 |
+| … then a replacement load | **0xC0000409 ×2** | exit 0 ×2 |
+| … then a replacement synthesis | **0xC0000409 ×2** | exit 0 ×2, the replacement speaks |
+| shut down mid-inference, then exit(0) (BUG-437's shape) | **0xC0000409 ×2** | exit 0 ×2, in 2 s |
+| four kills ~5 s apart (the attended shape) | **DIED MID-SESSION ×2**, after kill 2 | exit 0 ×2: four kills, a synthesis, 10 s alive |
+
+**What that proves.** A worker thread shares its process, and onnxruntime inference is not interruptible. Terminating the thread mid-inference therefore poisons the WHOLE process: it dies at exit every time, and mid-session once kills accumulate. The reproduced code is 0xC0000409, a fail-fast. The attended death was 0xE06D7363, a native C++ exception, after the same run of kills. The mechanism is the same, but **the code is not**. So the cause of the attended death is *consistent with* this finding and not proven by it.
+
+**Containment.**
+
+- `providers/kokoro/child-transport.js` (new) forks `worker.js` as a child PROCESS. It uses `serialization: 'advanced'`, so the audio ArrayBuffer crosses as bytes. `ELECTRON_RUN_AS_NODE=1` is set in the CHILD env only, because the packaged execPath is MYTHOS.exe. stdout is ignored and stderr inherited. It is unref'd while idle, and `terminate()` awaits the exit, capped at 3 s.
+- `client.js` defaults to the child transport. Request ids, generations, deadlines and cancellation are unchanged, so a timeout or cancel still replaces the engine, and that replacement now kills a PROCESS.
+- `worker.js` answers on a thread port or over IPC, and exits when its parent disconnects.
+- **No watchdog was added,** per this ticket's own rule.
+
+**Proof.**
+
+- **Unit tests.** `test/bug-422-kokoro-runs-out-of-process.test.js` uses a fake child that speaks the real protocol (CI has no weights). It measures "the server survives" as a real host process's exit code across a native `process.abort()` and a hung synthesis. A control test pins that the SAME abort inside a worker thread kills its host.
+- **Mutation probes.** Six: five red, and **one recorded as SURVIVED**. The "await the exit" in `terminate()` cannot be observed on Windows, where TerminateProcess leaves no window between kill and exit. It is kept for POSIX.
+- **Real server.** The forked-IPC quit probe from BUG-437 now exits 0 in 65 ms, ×2. Before the change it crashed 0xC0000409 about 4 s after `process-exit`.
+- **Packaged runtime.** `electron-builder --win --dir`, then `ELECTRON_RUN_AS_NODE=1 MYTHOS.exe scripts/verify-packaged-kokoro.js`, PASSES: `transport: child-process`, 28 voices, 211,244 bytes in 2.9 s, 0 network calls, ran under Electron.
+- **Full suite:** 7957 tests, 7957 pass, 0 fail, 0 skipped.
+
+**What would close it.** Either reproduce 0xE06D7363 itself (for example, kills landing during a replacement LOAD rather than a synthesis) and show the child transport contains it, or catch a live death with the child transport in place and read its code. Separately, the 2026-09-09 case, a death that no restart followed, is still unexplained.
+
+**Earlier status, kept for the record:** OPEN, CRITICAL. Reproduced live 2026-09-09. A child death was captured with its exit code on 2026-09-23 and pointed at a strong suspect; the restart half works.
 
 **Attended run 2026-09-23 — one death, captured.** 13:40:59.641 `mythos child disconnect`, then `mythos child exited (code=3765269347 signal=null); restarting in 1000ms`. The server was back (`lifecycle.alive`) at 13:41:03 and the HUD reconnected under a new connection id. Logs were snapshotted at once (`.cache/windows-operator/attended-2026-09-23/crash1-*.log`).
 
@@ -22600,6 +22634,9 @@ those records remain owed (this section is the index until then).
   code, 6 s after the fourth Kokoro synthesis timeout. Prime suspect: the Kokoro worker thread
   is terminated mid-inference inside the server's own process. Restart ran in 1 s. Hypothesis
   until a standalone repro reproduces the exit code. Full entry above.
+  **CONTAINED 2026-09-23:** a mid-inference kill of the in-process Kokoro worker thread is
+  reproduced as the killer (0xC0000409; mid-session after the second of four kills); Kokoro now
+  runs in a child process and the same matrix exits 0. Open: the attended 0xE06D7363 itself.
 
 - BUG-423 - Unavailable tools reach the model on every setup, measured progressive claims are detected, and greeting facts are constrained. Three active Reddit promises are covered; the fourth quoted waiting-for-direction sentence remains a negative control. Local replay and socket tests pass; attended voice behavior remains untested.
   **FIXED 2026-09-10 — Missing tool facts now reach each Live setup; measured progressive claims and greeting facts are checked. Local regression proof; attended behavior remains untested.**
