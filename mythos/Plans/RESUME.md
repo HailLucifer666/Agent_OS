@@ -16,19 +16,19 @@ native crash · 3 speech · 4 qualification and memory.
 
 **A chain of PRs is waiting for the OPERATOR to merge, in this order.** Each targets
 `main` and builds on the one before; the session's permission check refuses
-`gh pr merge`, so the agent cannot. CI ran green on each head it had finished on:
+`gh pr merge`, so the agent cannot. CI ran green on each head it had finished on (#109's e2e job timed out once on the CI machine's media query, the same route passed on #110, and a re-run was green):
 #102 PIN removal + BUG-444/452 · #103 BUG-445 · #105 BUG-446 · #106 BUG-437 ·
-#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · then the BUG-432 + 436-delivery PR. Eleven superseded PRs
+#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · then the BUG-448 PR. Eleven superseded PRs
 (#95 … #82) are also still open — their content is in main; closing them is the
 operator's call.
 
 | state | tickets |
 |---|---|
-| **Coded, attended session owed** | 444, 452 (startup/access) · 445 (browser targets) · 446 (spoken half) · 437 (three-way quit) · 450 (speech) |
+| **Coded, attended session owed** | 444, 452 (startup/access) · 445 (browser targets) · 446 (spoken half) · 437 (three-way quit) · 450, 448 (speech) |
 | **Contained, still open** | 422 — Kokoro is a child process; the attended 0xE06D7363 itself not reproduced |
 | **Coded behind a flag, comparison owed** | 432 — answers never wait behind notices, nothing forced into a reply; `VOICE_SERIALIZE_NOTICES` stays OFF until an attended A/B |
 | **Partly coded, still open** | 447 — heals silent, greeting fixed; resume-after-barge-in and Spanish transcript open · 436 — delivery half coded (a result mid-rotation reaches the resumed session); blocking half open |
-| **Open, next** | Wave 3: 448, then the 449/275 detectors; then Wave 4 |
+| **Open, next** | Wave 3: the 449/275 detectors; then Wave 4 |
 
 What the session proved headlessly, without the operator: a seeded-vault boot
 reproduced BUG-446 on the old build and showed zero steps on the new; a forked-IPC
@@ -76,10 +76,9 @@ manual dispatch: once, on a final commit.
 
 ## NEXT ACTION
 
-Wave 3, in order: **BUG-448** (category matches whose words overlap are one action,
-judged together; a sibling's success never overrules the claimed category's own
-failed tool; non-overlapping claims stay independent), then the **449/275
-detectors**. Then Wave 4: 436's blocking half, 421/439, 451, the 406 recorder, the
+Wave 3, last item: the **449/275 detectors** (449: spoken tool-call syntax as an
+anomaly, never executed; 275: corpus replay over 09-19 and 09-23 before any new
+detector, and a sentence-boundary cut at `from-pc.js:634`). Then Wave 4: 436's blocking half, 421/439, 451, the 406 recorder, the
 274 options note. BUG-432's flag goes default-on only after the attended A/B in the
 speech session.
 

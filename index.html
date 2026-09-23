@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7971,
+      "value": 7988,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5916,12 +5916,12 @@
         "n": 448,
         "shape": "entry",
         "state": "open",
-        "title": "the claim checker's `window-control` category retracts a true \"opening a Notepad window\", because its backing tools do not include `launch_app` (filed 2026-09-23)",
+        "title": "the claim checker's `window-control` category retracts a true \"opening a Notepad window\", because its backing tools do not include `launch_app` (CODED 2026-09-23; filed 2026-09-23)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — a false retraction was spoken to the operator. Mechanism read from source; not worked. Same class as BUG-434, F1b, BUG-398 row 4 and BUG-441. **Evidence (13:59:43–14:00:22).** `launch_app {\"name\":\"notepad\"}` completed ok at 13:59:46. MYTHOS said *\"Opening a new Notepad window right now.\"* At 13:59:49.734 the checker logged `claimed-action-not-taken target=window-control` and queued `ad4-correction-retract`. After its 15 s hold it was injected, and MYTHOS said: *\"Actually, Sir, just to set the record straight, that Notepad window didn't actually open after all. Minor glitch there.\"* Fifteen seconds later: *\"Well now, that's unexpected… it seems the system actually did manage to open Notepad.\"* The operator: *\"I see under your agent action list, you were able to launch.\"* MYTHOS then logged an incident about it, accurately. **Mechanism, `src/core/voice/claim-check.js`…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-23 — repair below; an attended speech session is owed. Same class as BUG-434, F1b, BUG-398 row 4 and BUG-441. ### Repair (CODED 2026-09-23) **The filed mechanism was half the story.** Grouping overlapping matches — the direction recorded below — made the detector tests pass and left the test that drives the real adapter red. The real turn held TWO rows for the one launch: `launch_app` is a slow tool, so the adapter records a \"started\" row and, later, a result row with the same call id, and both stay in the turn. The checker counted the stale \"started\" row as pending, and a pending tool silences its category's progressive tier. So `opening` never matched at all, and `window-control` was judged alone whatever the grouping rule said. **Two changes, `src/core/voice/claim-check.js` and the new pure `claim-overlap.js`:** - **A started row whose own call has returne…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-23 from the attended run] \"Opening a new Notepad window right now\" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction \"that Notepad window didn't actually open\" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app.",
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-23] Two causes, not one: category matches whose words overlap are now ONE action judged together (a backed match excuses the others unless their own tool failed this turn), and a slow tool's \"started\" row no longer counts as pending once the same call has returned — that stale row had removed the opening category from the judgement entirely. Not \"any launch backs any panel\": a sentence only window-control matches is still judged by its own tools. [FILED 2026-09-23 from the attended run] \"Opening a new Notepad window right now\" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction \"that Notepad window didn't actually open\" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app.",
           "source": "mythos/src/core/voice/claim-check.js"
         }
       },
