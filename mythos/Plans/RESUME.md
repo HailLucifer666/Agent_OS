@@ -3,38 +3,37 @@
 *Under 100 lines, by rule. The roadmap is the archive; this file is the position.
 Rewrite in place, never append.*
 
-## Position (2026-09-23, evening)
+## Position (2026-09-23, night)
 
 **One workflow, until it is boring.** Stage 1 only; Stages 2-7 paused until the
 golden path holds 10 consecutive PASS lines across two cold boots for a week.
-**Streak: 0.** "Play the third video" is still structurally impossible (BUG-445).
+**Streak: 0.** BUG-445 (the golden path's own blocker) is now CODED, not yet proven.
 
-**Working plan:** rev 5 of the 17-bug plan, approved 2026-09-23. It lives outside
-the repo at `~/.claude/plans/file-d-agen-20os-agent-os-main-agent-os-linked-hoare.md`
-(plan mode's own file). Waves: 0 baseline · 1 access + browser targets + autonomy ·
-2 shutdown, TTS, native crash · 3 speech · 4 qualification and memory.
+**Working plan:** rev 5 of the 17-bug plan, approved 2026-09-23, at
+`~/.claude/plans/file-d-agen-20os-agent-os-main-agent-os-linked-hoare.md` (plan mode's
+own file). Waves: 0 baseline · 1 access, browser targets, autonomy · 2 shutdown, TTS,
+native crash · 3 speech · 4 qualification and memory.
 
-**Done today.**
-- **PR #96 merged** (`ca477ad9`) after CI ran green on its final commit `0cc336f5`.
-  The first CI run was red on two tests that only held on this machine (a real
-  timer Node 22 does not keep alive; an SDDL alias for a RID-500 account); both
-  fixed test-side. Eleven superseded PRs (#95 … #82) stay OPEN: they target
-  stacked side branches, so GitHub did not auto-close them. Their commits are all
-  in main — the operator decides whether to close them.
-- **The PIN is gone** (operator decision: "I open the app, it straight puts me in
-  the HUD"). Branch `fix/remove-pin-bug-444`: no lock screen, no PIN routes or
-  settings, greeting re-armed on voice-config readiness, desktop signs itself in.
-  Same PR codes **BUG-444** (session id, never the token) and **BUG-452** (a
-  foreign web page could drive the API of any PIN-less install; now refused).
-  Security-reviewer pass: no critical/high; its one medium applied.
+**A chain of PRs is waiting for the OPERATOR to merge, in this order.** Each targets
+`main` and builds on the one before; the session's permission check refuses
+`gh pr merge`, so the agent cannot. CI ran green on each head it had finished on:
+#102 PIN removal + BUG-444/452 · #103 BUG-445 · #105 BUG-446 · #106 BUG-437 ·
+#107 BUG-450 · #108 BUG-422 · then the BUG-447 PR. Eleven superseded PRs
+(#95 … #82) are also still open — their content is in main; closing them is the
+operator's call.
 
 | state | tickets |
 |---|---|
-| **Coded, attended session owed** | 444, 452 (startup/access); **445** (browser targets); **446** (spoken D10 half only — headless boot passed) |
-| **Coded, attended shutdown session owed** | **437** (server half headless-verified; three-way quit owed) |
-| **Coded, attended speech session owed** | **450** (TTS circuit) |
-| **Contained, still open** | **422** (Kokoro now a child process; the attended 0xE06D7363 itself not reproduced) |
-| **Open, next** | Wave 3: 447, 432 + 436 delivery, 448, 449/275 detectors |
+| **Coded, attended session owed** | 444, 452 (startup/access) · 445 (browser targets) · 446 (spoken half) · 437 (three-way quit) · 450 (speech) |
+| **Contained, still open** | 422 — Kokoro is a child process; the attended 0xE06D7363 itself not reproduced |
+| **Partly coded, still open** | 447 — heals silent, greeting fixed; resume-after-barge-in, Spanish transcript, and the 432-dependent halves open |
+| **Open, next** | Wave 3: 432 + 436 delivery (outcome outbox), 448, 449/275 detectors; then Wave 4 |
+
+What the session proved headlessly, without the operator: a seeded-vault boot
+reproduced BUG-446 on the old build and showed zero steps on the new; a forked-IPC
+quit of the real server ran every step clean (BUG-437); the real-model Kokoro
+matrix crashed 12 of 12 ways on the old transport and 0 on the new, and the packaged
+MYTHOS.exe passed `verify-packaged-kokoro.js` (BUG-422).
 
 ## The golden path
 
@@ -51,39 +50,37 @@ on 9222 before boot, or the model launches a fresh-profile one itself.
 
 ## Gates
 
-Pre-commit runs the full suite and blocks on `fail > 0`, nothing else. The five
-documentation gates are `cd mythos && npm run docs:check` — run before a push,
-with the suite's TAP piped in or a long-form TEMP. Regenerate `index.html` BEFORE
-the counting run; read each gate's exit directly. An agent shell's 8.3 short
-`TEMP` makes the suite honestly report `fail=2 skipped=1`. In `BUGS.md`'s OPEN WORK
-register, FIXED/RESOLVED/CLOSED/SATISFIED anywhere in a bullet closes that ticket.
-CI is manual dispatch: run it once, on a final commit, when no more commits are owed.
+Pre-commit runs the full suite and blocks on `fail > 0`, nothing else — and it only
+greps `# fail`, so also count top-level `not ok` lines yourself. The five
+documentation gates are `cd mythos && npm run docs:check`, with the suite's TAP
+piped in. Regenerate `index.html` BEFORE the counting run; read each gate's exit
+directly. A long-form TEMP is required (8.3 short form fakes `fail=2 skipped=1`).
+`verify-lib-attach.test.js` glitches about 1 run in 3 ("Unable to deserialize cloned
+data") and takes its ~12 tests out of the count — rerun, never write counts from it;
+a follow-up task is filed. In `BUGS.md`'s OPEN WORK register,
+FIXED/RESOLVED/CLOSED/SATISFIED anywhere in a bullet closes that ticket. CI is
+manual dispatch: once, on a final commit.
 
 ## Operator decisions owed
 
-- **Close the eleven superseded PRs?** Their content is merged; GitHub left them open.
+- **Merge the PR chain above, in order.**
+- **Close the eleven superseded PRs?**
 - **Should autonomy run while nobody is at the HUD?** The PIN lock was the only
   signal for "unattended"; it no longer exists.
 - D7/D8/D9 were taken under delegation ("whatever works now") and are reversible:
-  the validated voice lane is deferred, the wake-word licence stays a lawyer's call,
-  the mic hold gets a recorder first. So 449, 275, 406, 274 stay open this round.
+  the validated voice lane is deferred (so 449, 275 and 447's resume-after-barge-in
+  stay open), the wake-word licence stays a lawyer's call (274), the mic hold gets a
+  recorder first (406).
 - Operator action, not code: **Gmail needs re-authorising** (`invalid_grant`).
 
 ## NEXT ACTION
 
-**Merge in order — each PR targets `main` and builds on the one before:** #102 (PIN
-removal, CI green on `ec2efd93`; the session's permission check blocked the agent from
-merging, so the operator merges), then the BUG-445 PR. BUG-445 is CODED: `browser_snapshot`
-returns a bounded, paged, main-first list whose accepted refs are exactly the refs it
-printed, and the voice adapter bounds results as a structure. Its proof owed is one
-`golden-path.js` line and an attended "play the third / sixth video". Then the BUG-446
-PR: Goals.md never activates an unaccepted commitment, autonomous work is gated on
-status and budget where it executes, commitments are listed only when asked. A headless
-seeded-vault boot reproduced the incident on the old build (4 steps ran) and showed 0 on
-the new. Then the BUG-437 PR: the saving steps run before reflection, under one deadline. Then the BUG-450 PR: one
-circuit per TTS engine, a dead engine paid for once per outage. Then the BUG-422
-PR: Kokoro runs in a child process; the kill that crashed the server is contained, and
-the packaged app verifies. Next: **Wave 3** — 447, 432 + 436 delivery, 448, 449/275.
+Wave 3, in order: **BUG-432 + 436's delivery half** (a bounded, correlated outcome
+outbox; ordinary notices expire after 60 s, outcomes and corrections never through
+ordinary expiry; the notice-hold flag goes default-on only after a measured
+comparison), then **BUG-448** (a claim backed by ANY matching category's successful
+tool), then the **449/275 detectors**. Then Wave 4: 436's blocking half, 421/439,
+451, the 406 recorder, the 274 options note.
 
 Tracker note for the next ledger pass: BUG-406 is open but has no OPEN WORK
 register bullet, so the register lists 17 names while the index counts 18 open.
@@ -94,3 +91,5 @@ Archive: `MYTHOS-IRIS-Synthesis-Plan.md` (roadmap), `-V2-spine.md` (source-level
 `MYTHOS-Post-Parity-Plan.md` (post-step-7). Defect evidence: `BUGS.md`. The
 2026-09-23 attended run: `.cache/windows-operator/attended-2026-09-23/` (gitignored,
 this machine only), `vault/Audit/2026-09-23.jsonl`, `vault/Episodic/2026-09-23.jsonl`.
+Headless probes of this session: `.cache/bug446/seeded-boot.js`,
+`.cache/bug437/ipc-quit-probe.js`, `.cache/bug422/matrix.js` (all gitignored).

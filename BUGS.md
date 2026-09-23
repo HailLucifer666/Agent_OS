@@ -606,7 +606,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-444 | coded | blocked | [CODED 2026-09-23 with the PIN removal] The sign-in cookie is now a random session id (mythos_session); auth-sessions.js stores its SHA-256 and a token fingerprint beside config.json, never in the vault; the raw-token mythos_token cookie is cleared, never read; per-browser logout closes that session's sockets; rotation ends all sessions; a corrupt store fails closed. Red-first test and 12 mutation probes in the entry. Remaining evidence: attended remote sign-in, sign-out and rotation from a second device. | mythos/test/bug-444-session-cookie-is-not-the-token.test.js; mythos/server/auth-sessions.js; mythos/server/credentials.js |
 | BUG-445 | coded | blocked | [CODED 2026-09-23] browser_snapshot now returns a bounded, paged list built by snapshot-view.js — dialog and search box first, then main in page order, links to one target merged into one item — and the tools accept exactly the refs printed on pages the model has read; a ref from a page that has since changed address is refused. The voice adapter bounds results as a structure (model-result.js): binary fields never reach the model as text, arrays lose items from the end without renumbering. Red-first test and 12 mutation probes in the entry. Remaining evidence: attended "play the third video" and "play the sixth video" on the real page, with the intended video id in the URL and playback advancing. | mythos/test/bug-445-snapshot-view-shows-what-it-accepts.test.js; mythos/src/core/effectors/snapshot-view.js; mythos/src/core/voice/model-result.js |
 | BUG-446 | coded | blocked | [CODED 2026-09-23] Premise corrected by measurement: the goals were PROPOSED commitments, not paused ones — writeBack() lists every user-service goal in Goals.md unchecked and the next boot's sync() set every unchecked row active; the "healed 9 ms later" was the budget-pause playbook applied. Repaired: sync() never activates an unchecked row (tick -> done, untick of a done row -> active); autonomous work is gated at the shared dispatch on goal status and budget, with one action reserved before it starts, and a cortex-raised confirm carries its origin so a late accept is re-checked; plan() checks the budget before any branch; open commitments are listed only when asked (commitment_list) and can be dismissed (commitment_dismiss) without being marked done. Red-first test and 14 mutation probes. Headless seeded-vault boot 2026-09-23: old build 4 Audit rows and proposed 1 -> 0; fixed build 0 rows and proposed 1 -> 1; a ticked row becomes done. Remaining evidence: the spoken D10 half (ask, dismiss, unrelated turn). | mythos/test/bug-446-autonomy-runs-only-active-goals-with-budget.test.js; mythos/src/core/goals/execution-gate.js; mythos/src/core/effectors/goals.js |
-| BUG-447 | open | currently reproduced | [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed "because a Live conversation is in progress". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live. | mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js |
+| BUG-447 | open | currently reproduced | [PARTLY CODED 2026-09-23: successful heals and crash recoveries are no longer spoken — immune/announcer.js, their only speaker, is deleted (operator decision D5), and a derived map names every listener to heals so a new speaker cannot slip in; the greeting now knows a returning operator from a first boot. Still open: resume after a barge-in (not coded: Live has no system channel, and an injected "continue" would itself start an unprompted turn), the Spanish transcription (no audio of the session was kept, so it cannot be reproduced), and failed-action reporting plus holding actionable speech until the answer ends, which ride on BUG-432's answer lane] [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed "because a Live conversation is in progress". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live. | mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js |
 | BUG-448 | open | currently reproduced | [FILED 2026-09-23 from the attended run] "Opening a new Notepad window right now" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction "that Notepad window didn't actually open" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app. | mythos/src/core/voice/claim-check.js |
 | BUG-449 | open | currently reproduced | [FILED 2026-09-23 from the attended run; seen once] The output transcription began "call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…" — a function call rendered as speech and never dispatched; the same reply said "I'm searching … now". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection. | mythos/src/core/voice/live-session.js (outputTranscription handling) |
 | BUG-450 | coded | blocked | [CODED 2026-09-23] Premise corrected: the chain is sticky and moved off an engine only when a LATER one succeeded, so concurrent sentences each paid gemini (429) and kokoro (timeout) before edge; nothing remembered a failure across calls or chain rebuilds. providers/tts-circuit.js adds one circuit per engine and credential: while an engine is unproven or just out of cooldown ONE call is admitted and the rest wait for its answer; a failure parks it (a 429 for Google's own sane retry delay, anything else for a 5 min / 30 min / 4 h ladder); a cancellation never counts; a rebuilt chain shares the parks; after the cooldown one probe may win the better engine back. Red-first test and 11 mutation probes. Remaining evidence: an attended speech session where Gemini is over quota and Kokoro times out, reading tts.provider-parked against per-sentence latency. | mythos/test/bug-450-tts-circuit.test.js; mythos/providers/tts-circuit.js; mythos/providers/tts.js |
@@ -2442,7 +2442,38 @@ Found by the probe: crash recovery pauses every active goal at boot **except** c
 
 ## BUG-447 — system-initiated speech crowds out the live conversation: heal announcements are spoken into it, in log vocabulary, and the operator's question loses (filed 2026-09-23)
 
-**Status:** 🐞 OPEN, HIGH — the biggest usability defect of the 2026-09-23 run. Measured; not worked.
+**Status:** 🐞 OPEN, HIGH — PARTLY CODED 2026-09-23 (below). The biggest usability defect of the 2026-09-23 run.
+
+### Repair, part 1 (CODED 2026-09-23)
+
+**Operator decision D5, taken in the plan:** a self-heal that SUCCEEDED is never spoken. Only what needs the operator is spoken, in one plain sentence.
+
+**Heals.**
+
+- **`src/core/immune/announcer.js` is deleted.** It was the only module that turned a successful heal or a crash recovery into speech: "Self-healed: cortex restart after a stall. Trigger: …".
+- **Nothing is lost from the record.** `health.healed` still reaches the HUD health card and the vault anomaly row, with the playbook title, trigger and actions. That is what BUG-162 needed, and its test now pins that the record carries those fields.
+- **What needs the operator still speaks,** through the explainer, and test (1d) pins it.
+- **Guarding against a comeback.** A deleted module cannot catch a speaker re-added elsewhere, so a derived map names every listener to `health.healed` / `lifecycle.recovered`: the server (HUD, episodic, entity state) and the explainer (no-match path). A new one fails the test; probe M1 added exactly that and turned it red.
+- **Stale comments corrected** in `conversation/announcer.js`, `aether-rebind.js` and BUG-324's test.
+
+**Greeting.** `conversation/briefing.js` `greetingRelationshipClause(previousBootAt)`: a returning operator is told "you already know each other — do NOT introduce yourself"; a first boot gets a half-sentence introduction. `previousBootAt` is the existing `Identity/last-boot.json` record.
+
+**Proof.** Red first against ab1a585c: the module existed and main.js built it, and the greeting clause did not exist. Five mutation probes, all red; the table is in `test/bug-447-heals-are-not-spoken.test.js`. Six older tests that pinned heal SPEECH were re-pointed with dated notes: bug-162, bug-234, bug-273, immune, w6, and bug-324's comments. Full suite: 7952 tests, 7952 pass, 0 fail, 0 skipped.
+
+**Sub-claim map.**
+
+| sub-claim | state |
+|---|---|
+| heal announcements spoken into the conversation, in log vocabulary | **coded** — never spoken |
+| the two rules disagree (explanations muted in Live, heals spoken) | **coded** — heals are gone; the explainer's rule stands |
+| greeted a weeks-long user with "Allow me to introduce myself" | **coded** — relationship clause |
+| actionable lines wait for the operator's answer to finish | open — BUG-432's answer lane and notice hold |
+| a failed action not reported until asked | open — BUG-432's outcome outbox |
+| no resume after a barge-in and "go ahead" | **not coded, deliberately.** Live has no system channel (BUG-117); any injected "continue" is user-role text that starts a turn of its own — another unprompted line, the defect this ticket is about. Needs the validated text lane (D7, deferred) |
+| one correction transcribed in Spanish | open — **cannot be reproduced**: no audio of the 2026-09-23 session was kept (`.cache/windows-operator/attended-2026-09-23/` holds logs only) |
+| Gmail `invalid_grant` | operator action, not a code defect |
+
+**Not verified.** An attended speech session: no heal line spoken, and the greeting does not introduce itself to the operator.
 
 **Measured over one session (13:53–14:13, 51 voice turns).** **15 of 51 turns were started by the system**, not the operator; **15 turns were interrupted** mid-sentence; **15 unprompted lines** were spoken or injected, most of them heal announcements such as *"Self-healed: cortex restart after a stall. Trigger: cortex-stall on tick-loop. Action taken: restart-cortex."* Injections into the Live session by source: `late-outcome` 8, `proactive-speak` 6, `ad4-correction-retract` 2, `ad4-correction-unheard` 1, `late-for-turn` 1.
 
@@ -22597,6 +22628,9 @@ those records remain owed (this section is the index until then).
   started by the system, 15 were interrupted, and heal announcements were spoken in log
   vocabulary ("cortex-stall on tick-loop"). The operator's question lost. Filed 2026-09-23.
   Full entry above.
+  **PARTLY CODED 2026-09-23:** successful heals are never spoken (the announcer is deleted, D5);
+  the greeting knows a returning operator. Open: resume after barge-in, the Spanish transcription
+  (no audio kept), and the two halves that ride on BUG-432.
 
 - BUG-448 - the claim checker's window-control category matches "opening a Notepad window"
   but lacks launch_app among its backing tools, so a true statement was retracted aloud

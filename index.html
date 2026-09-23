@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7957,
+      "value": 7952,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5905,10 +5905,10 @@
         "state": "open",
         "title": "system-initiated speech crowds out the live conversation: heal announcements are spoken into it, in log vocabulary, and the operator's question loses (filed 2026-09-23)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN, HIGH — the biggest usability defect of the 2026-09-23 run. Measured; not worked. **Measured over one session (13:53–14:13, 51 voice turns).** **15 of 51 turns were started by the system**, not the operator; **15 turns were interrupted** mid-sentence; **15 unprompted lines** were spoken or injected, most of them heal announcements such as *\"Self-healed: cortex restart after a stall. Trigger: cortex-stall on tick-loop. Action taken: restart-cortex.\"* Injections into the Live session by source: `late-outcome` 8, `proactive-speak` 6, `ad4-correction-retract` 2, `ad4-correction-unheard` 1, `late-for-turn` 1. **What the operator experienced.** Asked about the Nothing Phone (4a) Pro's price, the answer competed with a heal announcement, a \"lesson learned\" narration and a note MYTHOS decided to take. Operator: *\"I was asking you about the Nothing (4a) Pro. You diverted. You…",
+        "excerpt": "**Status:** 🐞 OPEN, HIGH — PARTLY CODED 2026-09-23 (below). The biggest usability defect of the 2026-09-23 run. ### Repair, part 1 (CODED 2026-09-23) **Operator decision D5, taken in the plan:** a self-heal that SUCCEEDED is never spoken. Only what needs the operator is spoken, in one plain sentence. **Heals.** - **`src/core/immune/announcer.js` is deleted.** It was the only module that turned a successful heal or a crash recovery into speech: \"Self-healed: cortex restart after a stall. Trigger: …\". - **Nothing is lost from the record.** `health.healed` still reaches the HUD health card and the vault anomaly row, with the playbook title, trigger and actions. That is what BUG-162 needed, and its test now pins that the record carries those fields. - **What needs the operator still speaks,** through the explainer, and test (1d) pins it. - **Guarding against a comeback.** A deleted module c…",
         "campaign": {
           "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed \"because a Live conversation is in progress\". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live.",
+          "evidence": "[PARTLY CODED 2026-09-23: successful heals and crash recoveries are no longer spoken — immune/announcer.js, their only speaker, is deleted (operator decision D5), and a derived map names every listener to heals so a new speaker cannot slip in; the greeting now knows a returning operator from a first boot. Still open: resume after a barge-in (not coded: Live has no system channel, and an injected \"continue\" would itself start an unprompted turn), the Spanish transcription (no audio of the session was kept, so it cannot be reproduced), and failed-action reporting plus holding actionable speech until the answer ends, which ride on BUG-432's answer lane] [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed \"because a Live conversation is in progress\". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live.",
           "source": "mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js"
         }
       },

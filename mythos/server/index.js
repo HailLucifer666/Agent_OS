@@ -21,7 +21,7 @@ const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = r
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
-const { buildBriefingFacts, GREETING_FACT_DISCIPLINE } = require('../src/core/conversation/briefing');
+const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause } = require('../src/core/conversation/briefing');
 const { TOOL_RESPONSE_DISCIPLINE } = require('../src/core/voice/narration-claims');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
@@ -2451,6 +2451,7 @@ function createServer(deps) {
               'The correct greeting for right now is exactly "' + salutation + '" — open with it or a natural ' +
               'equivalent for that same time of day, and do not invent, guess, or state a different time of day ' +
               '(do not say "morning" if the salutation says afternoon or evening, and so on). ' +
+              greetingRelationshipClause(previousBootAt) + // BUG-447: a first meeting is not the hundredth
               (config.LIVE_VOICE_HONESTY_ENABLED === false ? '' : GREETING_FACT_DISCIPLINE) + 'Facts you may use:\n- ' +
               facts.join('\n- ') + '\n' +
               'If a "Last time we spoke" fact is present, open by picking up that thread in half a sentence, ' +

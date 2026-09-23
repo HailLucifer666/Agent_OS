@@ -36,7 +36,6 @@ const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
 const { createHealer } = require('./core/immune/healer');
 const { createWatchdog } = require('./core/immune/watchdog');
-const { createAnnouncer } = require('./core/immune/announcer');
 const { createMonitor, recoverFromCrash } = require('./core/immune/monitor');
 const { createMetricSensor } = require('./core/sensors/metric');
 const { createEffectorHub } = require('./core/effectors/hub');
@@ -273,7 +272,7 @@ async function main() {
   let leash = null;
   let cortex = null;
   let timerSensor = null;
-  let immune = null; // { probes, diagnostician, healer, watchdog, announcer, monitor }
+  let immune = null; // { probes, diagnostician, healer, watchdog, monitor }
   let metricSensor = null;
   let buildRunner = null;
   let buildEngine = null;
@@ -350,23 +349,19 @@ async function main() {
         getScannerProxy: function() { return scannerProxy; }
       });
       const watchdog = createWatchdog({ bus: bus, config: config, getCortex: function() { return cortex; } });
-      const announcer = createAnnouncer({
-        bus: bus, config: config,
-        // Speech is NOT a hub effector — the old 'speak' effector was dead code and
-        // was removed 2026-07-31 (see effectors/voice.js's header). This re-emits onto
-        // 'action.speak-requested', which server/index.js subscribes to and feeds to
-        // proactiveSpeak() -> providers/edge-tts.synthesize(). Never a silent no-op:
-        // announcer.js requires a real speak() at construction.
-        speak: function(text) { bus.emit('action.speak-requested', { text: text }); return Promise.resolve(); }
-      });
+      // BUG-447 (2026-09-23, operator decision D5): immune/announcer.js is gone.
+      // It spoke every successful heal and every crash recovery — "Self-healed:
+      // cortex restart after a stall…" — over the operator's own questions. A heal
+      // that worked needs nothing from anyone; it stays on the HUD health card and
+      // in the vault's anomaly row. What NEEDS the operator is still spoken, by the
+      // explainer (immune/explainer.js). test/bug-447-heals-are-not-spoken.test.js.
       const monitor = createMonitor({ bus: bus, config: config, memory: memory });
 
       diagnostician.start();
       healer.start();
-      announcer.start();
       monitor.start();
 
-      immune = { probes: probes, diagnostician: diagnostician, healer: healer, watchdog: watchdog, announcer: announcer, monitor: monitor };
+      immune = { probes: probes, diagnostician: diagnostician, healer: healer, watchdog: watchdog, monitor: monitor };
       logger.info('immune.ready', {});
     }},
 
@@ -1325,7 +1320,6 @@ async function main() {
       immune.watchdog.stop();
       immune.diagnostician.stop();
       immune.healer.stop();
-      immune.announcer.stop();
       immune.monitor.stop();
     }
   }

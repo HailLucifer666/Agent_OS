@@ -348,4 +348,16 @@ async function buildBriefingFacts(deps) {
 // BUG-423: a greeting once invented a refreshed Gmail token immediately before
 // the same process reported reauthentication required. Only the supplied facts count.
 const GREETING_FACT_DISCIPLINE = 'State only facts explicitly listed below. Never invent completed repairs, refreshed tokens, connectivity, or successful checks. Omit anything not listed. ';
-module.exports = { buildBriefingFacts, GREETING_FACT_DISCIPLINE };
+// BUG-447 (2026-09-23): a weeks-long operator was greeted with "Allow me to
+// introduce myself" — the prompt never said whether they had met. The previous
+// boot's record (Identity/last-boot.json, read into `previousBootAt`) is the
+// evidence that they have: it exists from the second boot on.
+function greetingRelationshipClause(previousBootAt) {
+  if (Number.isFinite(previousBootAt)) {
+    return 'You and the operator already know each other — you have run on this machine before. '
+      + 'Do NOT introduce yourself or explain what you are; greet them as someone you work with every day. ';
+  }
+  return 'This is your first boot with this operator: introduce yourself in half a sentence, then give the status. ';
+}
+
+module.exports = { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause };

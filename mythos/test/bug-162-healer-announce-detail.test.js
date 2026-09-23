@@ -14,58 +14,15 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { fakeBus } = require('./helpers');
-const { createAnnouncer } = require('../src/core/immune/announcer');
 const { createHealer, SEED_PLAYBOOKS } = require('../src/core/immune/healer');
 
-function heard(payload) {
-  const bus = fakeBus();
-  const lines = [];
-  const announcer = createAnnouncer({ bus, config: {}, speak: (t) => { lines.push(t); } });
-  announcer.start();
-  bus.emit('health.healed', payload);
-  announcer.stop();
-  return lines;
-}
-
-describe('BUG-162: the heal announcement says what was healed', () => {
-  it('THE RECORDED CASE: a recurring-failure heal names the lesson recording, its trigger, and its action', () => {
-    const lines = heard({
-      playbookId: 'recurring-failure-record',
-      title: 'recording of a repeated failure as a lesson',
-      kind: 'recurring-failure', target: 'spotify_play',
-      outcome: 'applied', actions: ['record-lesson'],
-    });
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /recording of a repeated failure as a lesson/);
-    assert.match(lines[0], /recurring-failure on spotify_play/);
-    assert.match(lines[0], /record-lesson/);
-    assert.ok(!/^Self-healed: recurring-failure-record\.$/.test(lines[0]),
-      'the bare-ID sentence is the defect and must be gone');
-  });
-
-  it('an event with only an ID admits details were not recorded rather than padding', () => {
-    const lines = heard({ playbookId: 'mystery-playbook', outcome: 'applied' });
-    assert.equal(lines.length, 1);
-    assert.match(lines[0], /mystery-playbook/);
-    assert.match(lines[0], /Details were not recorded/);
-  });
-
-  it('a restore event with kind/target but no actions states the trigger and does NOT claim missing details', () => {
-    const lines = heard({
-      playbookId: 'lane-restore', title: 'brain lane restored after quota recovery',
-      kind: 'quota-recovered', target: 'voice', outcome: 'applied',
-    });
-    assert.match(lines[0], /brain lane restored/);
-    assert.match(lines[0], /quota-recovered on voice/);
-    assert.ok(!/Details were not recorded/.test(lines[0]));
-  });
-
-  it('non-applied outcomes stay silent (cooldown/no-match/error are not heals)', () => {
-    for (const outcome of ['cooldown', 'no-match', 'error']) {
-      assert.equal(heard({ playbookId: 'x', outcome }).length, 0, outcome + ' must not be announced');
-    }
-  });
-
+// 2026-09-23, BUG-447 (operator decision D5): a successful heal is no longer SPOKEN
+// at all — immune/announcer.js, whose sentence the deleted cases here pinned, is
+// gone. BUG-162's substance survives unchanged: "what was fixed?" is answerable,
+// because the healer puts the playbook's human title, the trigger (kind/target)
+// and the actions on health.healed, and that payload is what reaches the HUD's
+// health card and the vault's anomaly row. The two cases below pin exactly that.
+describe('BUG-162: the heal record says what was healed', () => {
   it('every seed playbook carries a human title, so no future heal regresses to a bare ID', () => {
     for (const p of SEED_PLAYBOOKS) {
       assert.ok(typeof p.title === 'string' && p.title.length > 5, p.id + ' needs a title');
@@ -86,8 +43,8 @@ describe('BUG-162: the heal announcement says what was healed', () => {
     assert.deepEqual(healed.payload.actions, ['record-lesson']);
   });
 
-  it('no brain call anywhere in the announcer path (AD-5 source assertion, BUG-123 style)', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, '../src/core/immune/announcer.js'), 'utf8');
-    assert.ok(!/brain\.(think|generate)/.test(src), 'the announcer must never ask a model to explain a heal');
+  it('no brain call explains a heal (AD-5, BUG-123 style) — the healer states it from the playbook', () => {
+    const src = fs.readFileSync(path.resolve(__dirname, '../src/core/immune/healer.js'), 'utf8');
+    assert.ok(!/brain\.(think|generate)/.test(src), 'the healer must never ask a model to explain a heal');
   });
 });
