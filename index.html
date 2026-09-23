@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8034,
+      "value": 8045,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5956,12 +5956,12 @@
         "n": 451,
         "shape": "entry",
         "state": "open",
-        "title": "lessons are recorded from symptoms, so MYTHOS wrote a false cause into permanent memory (filed 2026-09-23)",
+        "title": "lessons are recorded from symptoms, so MYTHOS wrote a false cause into permanent memory (CODED 2026-09-23; filed 2026-09-23)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — two wrong records now sit in the operator's vault. Not worked; the records were deliberately **not** deleted, because they are the operator's data. **Evidence.** At 14:11:23 the healer's `recurring-failure` playbook wrote `vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md`: *\"browser_click on specific element refs/selectors (e.g., f5e1537, f5e298) fails repeatedly.\"* At 14:11:40 the model wrote a `note_take` titled \"Lesson…\" tagged `troubleshooting, browser-control, lessons-learned`, and told the operator the cause was *\"rapid re-rendering… on dynamic sites. I'll be more proactive about getting fresh snapshots.\"* **Why both are wrong.** `f5e1537` failed because the model **invented** it; it was never in any snapshot. `f5e298` failed because the operator had refreshed the page. The real cause is BUG-445. The lesson blames the one mechanism th…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-23 (below). The wrong records were deliberately **not** deleted or edited, because they are the operator's data. ### Repair (CODED 2026-09-23) - **Provenance, assigned by the server** (`src/core/memory/provenance.js`). A sentence that states a cause (\"due to\", \"because\", \"suggests that\", …) is a **hypothesis**; one that reports what happened is an **observation**. The only input is the text, so a model, a reflection pass or an incident report cannot pick its own label, and **no code path can produce \"verified\"** — that needs trusted evidence for the specific claim, which no writer supplies yet. - **Lessons** (`memory/lessons.js`) store the label per entry. An entry keeps the label it was written with; appending labels only the new one. A file written before labels existed is classified at read, so the two 09-23 records are covered without editing them. Recall…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-23 from the attended run] A healer recurring-failure lesson and a model note both record that clicking by reference fails, and the model saved \"rapid re-rendering\" as the cause; the real cause is BUG-445's truncation. Records left in the vault on purpose. Consumers: vault/Lessons, notes, future sessions' tool choice. Remaining evidence: none; the operator removes both records once BUG-445 lands.",
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-23] Every remembered sentence now carries provenance assigned by the server from its text, never by the model: a stated cause is a hypothesis, a reported symptom is an observation, and nothing can be labelled verified. The goal planner reads observations only; a note MYTHOS writes is marked on its entry. Records written earlier, the two 09-23 ones included, are classified at read without being edited. [FILED 2026-09-23 from the attended run] A healer recurring-failure lesson and a model note both record that clicking by reference fails, and the model saved \"rapid re-rendering\" as the cause; the real cause is BUG-445's truncation. Records left in the vault on purpose. Consumers: vault/Lessons, notes, future sessions' tool choice. Remaining evidence: none; the operator removes both records once BUG-445 lands.",
           "source": "mythos/src/core/immune (recurring-failure playbook); vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md"
         }
       },

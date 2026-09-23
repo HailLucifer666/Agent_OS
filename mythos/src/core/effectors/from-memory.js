@@ -348,17 +348,31 @@ function buildTools(ctx){
     return fail('notes store unavailable — MYTHOS_NOTES_DIR could not be resolved');
   }
 
+  // BUG-451 (2026-09-23): the entry MYTHOS writes carries its provenance, set by
+  // the server from the text (memory/provenance.js), never by the model: a note
+  // that states a cause is a HYPOTHESIS. The marker is an HTML comment, so it is
+  // hidden in Obsidian's reading view and travels with the entry into note_read;
+  // it labels only the entry being written — earlier content, and anything the
+  // operator wrote, is left exactly as it is. The result says the label too, so
+  // the model is told at once that its diagnosis was stored as a guess.
+  var provenanceOf=require('../memory/provenance').provenanceOf;
+  function markEntry(text,label){
+    return '<!-- mythos-provenance: '+label+(label==='hypothesis'?' (states a cause MYTHOS has not verified)':'')+' -->\n'+text;
+  }
+
   async function note_take(args){
     if(!notes||typeof notes.write!=='function') return notesUnavailable();
     var title=(args&&(args.title||args.name)||'').trim();
     var text=(args&&(args.text||args.body||args.content)||'').trim();
     if(!title) return fail('title required — what to call the note');
     if(!text) return fail('text required — the note body');
+    var label=provenanceOf(text);
     try{
-      var res=notes.write({title:title,text:text,mode:(args&&args.mode)||'append',
+      var res=notes.write({title:title,text:markEntry(text,label),mode:(args&&args.mode)||'append',
         tags:(args&&args.tags)||[]});
-      return ok({title:res.title,file:res.slug+'.md',mode:res.mode,bytes:res.bytes,
-        evidence:(res.created?'created ':'updated ')+res.path+' ('+res.bytes+' bytes on disk)'});
+      return ok({title:res.title,file:res.slug+'.md',mode:res.mode,bytes:res.bytes,provenance:label,
+        evidence:(res.created?'created ':'updated ')+res.path+' ('+res.bytes+' bytes on disk)'
+          +(label==='hypothesis'?'; stored as an unverified hypothesis, because it states a cause':'')});
     }catch(err){return fail('note_take failed: '+reasonText(err));}
   }
 

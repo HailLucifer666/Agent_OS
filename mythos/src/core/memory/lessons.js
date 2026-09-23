@@ -1,6 +1,8 @@
 'use strict';
 
 const crypto = require('crypto');
+// BUG-451: how each lesson line was established — see provenance.js.
+const { provenanceOf, OBSERVATION, HYPOTHESIS } = require('./provenance');
 
 // Lessons store — durable failure memory. The missing half of the learning loop.
 // vault/Lessons/<topic>.md
@@ -35,6 +37,15 @@ const crypto = require('crypto');
 //  * argsHash is a short stable hash of the action args (not the args verbatim)
 //    so "shell_run {cmd:'npm test'}" matches the same failure mode without
 //    exact-string equality on a whole args blob.
+//  * PROVENANCE (BUG-451, 2026-09-23). The sidecar's `provenance` array labels
+//    each bullet, by index: 'observation' (what happened) or 'hypothesis' (a
+//    stated cause). The label is computed from the bullet's text by the server
+//    (provenance.js) — never taken from a caller, so nothing written here can
+//    claim to be verified. An entry keeps the label it was written with; a file
+//    written before labels existed is classified at read. The planner is given
+//    only the observations (`plannerSnippet`): a guessed cause read back as an
+//    instruction is how the 2026-09-23 lesson would have steered later sessions
+//    away from the one click mechanism that works.
 
 function createLessonsStore({ fs, config, bus, logger }) {
   var log = logger || { info: function() {}, warn: function() {} };
@@ -98,6 +109,24 @@ function createLessonsStore({ fs, config, bus, logger }) {
     return facts;
   }
 
+  // Only the two labels a writer can earn. Anything else a caller passes — a
+  // 'verified', a typo, an object — is discarded and recomputed from the text.
+  function safeLabel(label, text) {
+    return label === OBSERVATION || label === HYPOTHESIS ? label : provenanceOf(text);
+  }
+
+  function labelsFor(sidecar, bullets) {
+    var stored = sidecar && Array.isArray(sidecar.provenance) ? sidecar.provenance : [];
+    return bullets.map(function(b, i) { return safeLabel(stored[i], b); });
+  }
+
+  // What the planner may read as a prior failure: the observations only.
+  function plannerSnippetFor(bullets, labels) {
+    var grounded = bullets.filter(function(b, i) { return labels[i] !== HYPOTHESIS; });
+    if (!grounded.length) return 'a failure is recorded here, but the only cause it states is unverified';
+    return grounded.slice(0, 2).join('; ').slice(0, 220);
+  }
+
   function renderFile(topic, sidecar, lessons) {
     var scJson = JSON.stringify(sidecar);
     var bullets = lessons.map(function(l) { return '- ' + l; }).join('\n');
@@ -127,6 +156,8 @@ function createLessonsStore({ fs, config, bus, logger }) {
     };
     var arr = Array.isArray(lessons) ? lessons.filter(function(l) { return l && String(l).trim(); }) : [];
     if (arr.length === 0) return { ref: null, degraded: true };
+    var given = Array.isArray(meta.provenance) ? meta.provenance : [];
+    sidecar.provenance = arr.map(function(l, i) { return safeLabel(given[i], l); });
     try {
       fs.writeText(relPath, renderFile(slug, sidecar, arr.map(function(l){ return String(l); })));
       return { ref: id, degraded: false, path: relPath };
@@ -156,7 +187,10 @@ function createLessonsStore({ fs, config, bus, logger }) {
       var dup = bullets.some(function(b) {
         return b.toLowerCase().replace(/[.!?]+$/, '') === normalized;
       });
-      if (!dup) bullets.push(text);
+      // Existing entries keep the labels they were written with; the new one is
+      // labelled from its own text. Never relabel content that was already there.
+      var labels = labelsFor(sidecar, bullets);
+      if (!dup) { bullets.push(text); labels.push(provenanceOf(text)); }
       sidecar.count = (sidecar.count || 1) + 1;
       sidecar.lastSeen = now;
       if (opts.source && sidecar.sources.indexOf(opts.source) === -1) {
@@ -168,7 +202,8 @@ function createLessonsStore({ fs, config, bus, logger }) {
         count: sidecar.count,
         lastSeen: sidecar.lastSeen,
         trigger: sidecar.trigger,
-        sources: sidecar.sources
+        sources: sidecar.sources,
+        provenance: labels
       });
       return { ref: sidecar.id, count: sidecar.count, isNew: false, path: existing.path };
     }
@@ -239,6 +274,7 @@ function createLessonsStore({ fs, config, bus, logger }) {
       var score = triggerScore + kwScore;
       // Include only if there's any signal: a trigger hit OR any keyword match.
       if (score > 0) {
+        var labels = labelsFor(sc, bullets);
         hits.push({
           ref: sc.id || files[i].name,
           score: score,
@@ -251,6 +287,8 @@ function createLessonsStore({ fs, config, bus, logger }) {
             lessons: bullets
           },
           snippet: bullets.slice(0, 2).join('; ').slice(0, 220),
+          provenance: labels,
+          plannerSnippet: plannerSnippetFor(bullets, labels),
           store: 'lessons'
         });
       }
@@ -276,7 +314,8 @@ function createLessonsStore({ fs, config, bus, logger }) {
           topic: files[i].name.replace(/\.md$/, ''),
           content: content,
           sidecar: sc,
-          lessons: parseBullets(content)
+          lessons: parseBullets(content),
+          provenance: labelsFor(sc, parseBullets(content))
         };
       }
     }
@@ -341,6 +380,7 @@ function createLessonsStore({ fs, config, bus, logger }) {
         lastSeen: sc.lastSeen,
         trigger: sc.trigger || {},
         sources: sc.sources || [],
+        provenance: labelsFor(sc, bullets),
         body: bullets.map(function(b) { return '- ' + b; }).join('\n')
       });
     }

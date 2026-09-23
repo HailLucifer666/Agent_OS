@@ -485,7 +485,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
         if (lessonHits.length || cacheFails.length) {
           var lines = [];
           for (var lj = 0; lj < lessonHits.length && lines.length < 4; lj++) {
-            lines.push('  - [x' + (lessonHits[lj].count || 1) + '] ' + (lessonHits[lj].snippet || '').slice(0, 180));
+            lines.push('  - [x' + (lessonHits[lj].count || 1) + '] ' + (lessonHits[lj].plannerSnippet || lessonHits[lj].snippet || '').slice(0, 180)); // BUG-451: observations only — a stated cause is unverified and is not repeated as an instruction
           }
           for (var cj = 0; cj < cacheFails.length && lines.length < 6; cj++) {
             var fr = cacheFails[cj].record || cacheFails[cj];
