@@ -10418,6 +10418,35 @@ that quietly degrades detection is worse than the licence problem it solves.
 **Owner:** this is real work (data generation + training), not a config change. Size it before
 starting.
 
+#### T3 options note — for the operator and a lawyer (written 2026-09-23, plan decision D8)
+
+**What this is not.** It is not a legal conclusion, and none is written here or anywhere in a
+tracked file (root CLAUDE.md). It sets out the choices, what each costs in engineering, and the
+questions only a lawyer can answer. The decision stays with the operator.
+
+**The facts the choice rests on, read from the repo on 2026-09-23.**
+- The weights (`melspectrogram.onnx`, `embedding_model.onnx`, `hey_jarvis_v0.1.onnx`) are never
+  committed and never bundled into the installer. `scripts/setup-wakeword.js` downloads them from
+  the upstream project's GitHub releases onto the operator's own machine, into the userData model
+  directory. `THIRD_PARTY_NOTICES.md` records them as CC BY-NC-SA 4.0 (non-commercial), and the
+  code that runs them (`ui/public/js/voice/wakeword.js`) is a port of openWakeWord's Apache-2.0
+  pipeline code — a separate artefact under separate terms.
+- A hands-free alternative exists already: the desktop app's global push-to-talk hotkey
+  (Alt+Space by default, `electron/main.js` → `app.js`), plus clicking the orb.
+
+**The options.**
+
+| option | engineering work | what the operator gives up | question for the lawyer |
+|---|---|---|---|
+| **A. Keep today's arrangement** — the operator's own setup step fetches the upstream weights | none | nothing | Does a paid product that runs non-commercial weights the *user* fetched count as commercial use by the vendor, the user, or neither? Does it matter that the product ships the code that loads them? |
+| **B. Train weights MYTHOS owns**, with Apache-2.0 tooling (`livekit/livekit-wakeword` preferred; openWakeWord's own training path as fallback) | real: synthetic data generation, training, and a measured detection-rate comparison against today's model before it replaces it | a training project; a detection rate that must be re-earned | The licences of whatever produces the training data (for example a TTS engine used to synthesise samples) — do they allow the resulting weights to be used commercially? |
+| **C. License weights commercially** — from the weights' author, or buy a commercial wake-word engine | integration; per-seat or per-device fees | money, and a vendor dependency (Porcupine was already evaluated and rejected in this entry's table) | The licence terms themselves. |
+| **D. Paid tier without a wake word** — push-to-talk and click only; the wake word stays a free/personal feature, or goes | small: hide the wake-word setting and skip `setup-wakeword.js` in paid builds | hands-free activation in the paid product | Is a free tier that runs the NC weights separable enough from the paid product? (CLAUDE.md already records that a free demo sharing a codebase with the paid product does not rescue the gate by itself.) |
+
+**If it helps to sequence them:** D is available today and B is the only option that removes the
+question rather than answering it. A and C need the lawyer first. Nothing here is started; this
+ticket stays open until the operator chooses.
+
 ### T4 (P1) — find out why AEC3 is not working, THEN go full-duplex
 
 **This is a diagnosis, not an implementation, and it must stay that way until it produces a
@@ -22915,3 +22944,5 @@ those records remain owed (this section is the index until then).
   amount of engineering closes it. Declared here as BUG-394 step 1 so the state
   does not rest on a nested bullet about another ticket. Full entry, with the
   per-item evidence table, is at the top of this file.
+  **T3 options note written 2026-09-23** (keep user-fetched weights / train our own / license / paid tier
+  without a wake word), with the question each needs a lawyer to answer. No choice made; operator decision.

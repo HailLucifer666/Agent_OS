@@ -18,7 +18,7 @@ native crash · 3 speech · 4 qualification and memory.
 `main` and builds on the one before; the session's permission check refuses
 `gh pr merge`, so the agent cannot. CI ran green on each head it had finished on (#109's e2e job timed out once on the CI machine's media query, the same route passed on #110, and a re-run was green):
 #102 PIN removal + BUG-444/452 · #103 BUG-445 · #105 BUG-446 · #106 BUG-437 ·
-#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · #113 BUG-275 · #114 BUG-436 blocking half · #115 BUG-451 · then the BUG-406 recorder PR. Eleven superseded PRs
+#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · #113 BUG-275 · #114 BUG-436 blocking half · #115 BUG-451 · #116 BUG-406 recorder · then the BUG-274 options-note PR. Eleven superseded PRs
 (#95 … #82) are also still open — their content is in main; closing them is the
 operator's call.
 
@@ -79,8 +79,11 @@ manual dispatch: once, on a final commit.
 
 ## NEXT ACTION
 
-Waves 1–4 are coded except the 274 options note (next). What remains after it is
-attended: the sessions in the plan's qualification table, 421/439 included. BUG-432's flag goes default-on only after the attended A/B in the
+**The code plan is complete** (Waves 1–4; the 274 options note is written, awaiting the
+operator's choice). What remains is attended: the six sessions in the plan's
+qualification table — startup/access, browser targets (445/439/421), speech
+(447/432 A/B/448/450/449/275 counts), crash containment (422), shutdown (437), and
+acoustics (the 406 recorder's first corpus). BUG-432's flag goes default-on only after the attended A/B in the
 speech session.
 
 
