@@ -39,6 +39,8 @@ const TERMINAL_SUPPRESS_MS = 24 * 60 * 60 * 1000;
 
 // BUG-379: the aether rebind action, with its retry budget and terminal condition.
 const { createAetherRebindAction } = require('./aether-rebind');
+// F8 / BUG-449: the acknowledge-only playbooks, kept in their own file (see there).
+const { KNOWN_CONDITION_PLAYBOOKS } = require('./known-conditions');
 
 const SEED_PLAYBOOKS = [
   {
@@ -182,75 +184,10 @@ const SEED_PLAYBOOKS = [
     then: [{ do: 'retry-aether-proxy' }],
     cooldownMs: 15000
   },
-  // F8 (2026-08-15) — THE FIVE KINDS THAT MATCHED NOTHING.
-  //
-  // 26 anomalies in the 2026-08-14 session reached no-match, and four kinds
-  // account for all of the recurring ones: live-turn-no-user-transcript x16,
-  // live-turn-silent x3, claimed-action-not-taken x2,
-  // live-tool-outcome-late-for-turn x1. (build-engine-fallback-used x4 was the
-  // fifth and can no longer be emitted at all — see build-engine.js's F5 note.)
-  //
-  // The no-match path is expensive: it is what invokes the immune explainer,
-  // whose episodic recall was the measured source of loop.stalled. So leaving the
-  // MOST COMMON anomalies unmatched made the costly branch the default outcome.
-  //
-  // These are acknowledged, NOT healed, and that distinction is deliberate. None
-  // of them has a remediation the healer can perform — the first is a client-side
-  // audio-gate condition, the second a provider behaviour, the third a
-  // model-honesty check, the fourth a timing race. Inventing a "fix" for any of
-  // them would be worse than admitting there isn't one. What acknowledgement buys
-  // is that the system stops treating a known, understood, already-instrumented
-  // condition as an unexplained emergency.
-  //
-  // NOTHING IS HIDDEN BY THIS (rules/core.md §11.2). The health.anomaly records
-  // are stored by the server's anomaly subscriber independently of the healer, so
-  // every occurrence remains countable in the vault exactly as before; what
-  // changes is only that a brain call and a 7-day episodic scan no longer fire
-  // for a condition nobody can act on from here.
-  {
-    id: 'live-turn-no-transcript-known',
-    title: 'a Live turn that arrived with no operator transcript',
-    when: { kind: 'live-turn-no-user-transcript' },
-    then: [{ do: 'acknowledge', args: {
-      note: 'Known condition, no automatic remedy. The operator\'s speech reaches Gemini but is '
-        + 'not transcribed, most often because the half-duplex gate held it past the preroll ring '
-        + '(see s2s-bridge.js F3) or because what reached the VAD was MYTHOS\'s own voice. The '
-        + 'release log\'s framesDropped/heldMs is the evidence to read, not this anomaly.',
-    } }],
-    cooldownMs: 60000
-  },
-  {
-    id: 'live-turn-silent-known',
-    title: 'a Live turn that produced text but no audio',
-    when: { kind: 'live-turn-silent' },
-    then: [{ do: 'acknowledge', args: {
-      note: 'Known condition, already remediated elsewhere: BUG-170\'s re-speak path routes a '
-        + 'silent turn to the TTS chain with skipLive. Nothing further for the healer to do.',
-    } }],
-    cooldownMs: 60000
-  },
-  {
-    id: 'claimed-action-not-taken-known',
-    title: 'a spoken claim with no tool call behind it',
-    when: { kind: 'claimed-action-not-taken' },
-    then: [{ do: 'acknowledge', args: {
-      note: 'Known condition, handled in-band: the claim checker already injects a correction on '
-        + 'the turn itself. Note that a FALSE positive here is worse than a miss — on 2026-08-14 '
-        + 'both instances were the detector\'s own category gap (F1b), not the model lying.',
-    } }],
-    cooldownMs: 60000
-  },
-  {
-    id: 'live-tool-outcome-late-known',
-    title: 'a tool outcome that arrived after its turn ended',
-    when: { kind: 'live-tool-outcome-late-for-turn' },
-    then: [{ do: 'acknowledge', args: {
-      note: 'Known condition, by design: reportLateOutcome() pushes the real result into the next '
-        + 'turn through the [SYSTEM] channel. This anomaly records the race, it does not report a '
-        + 'fault.',
-    } }],
-    cooldownMs: 60000
-  }
+  // F8 (2026-08-15) and BUG-449 (2026-09-23): the known, instrumented conditions
+  // with no remedy the healer can perform — acknowledged, never healed. They live
+  // in known-conditions.js, spread here so matching order is unchanged.
+  ...KNOWN_CONDITION_PLAYBOOKS,
 ];
 
 // ---------------------------------------------------------------------------

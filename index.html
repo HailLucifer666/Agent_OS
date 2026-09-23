@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7988,
+      "value": 8000,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5931,10 +5931,10 @@
         "state": "open",
         "title": "the voice model spoke raw tool-call syntax aloud (\"call:web_search{maxResults:5,query:…\") and the call it named did not run (filed 2026-09-23)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — observed once; not worked. **Evidence (turn 50, 14:13:16).** The output transcription of what the operator heard begins verbatim: `call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256I completely understand your frustration, Sir.` The model rendered a function call as spoken text. The same reply ended *\"I'm searching specifically for the current Indian price… now\"*, and no `web_search` followed that turn. **Why it matters.** It is audible nonsense to the operator, and a textual \"call\" is not a tool call — nothing is dispatched, and nothing in the claim checker treats a spoken call string as a claim. **Direction.** Detect function-call syntax in `outputTranscription` and treat it as a failed tool call — log it and do not let it pass as speech. Worth checking whether it follows a long, heavily-injected turn: this one came straight after a forced notice inject…",
+        "excerpt": "**Status:** 🐞 OPEN — the detector half is CODED 2026-09-23 (below); prevention is blocked on plan decision D7 (the validated text lane, deferred), so this ticket stays open by scope decision. ### Detector (CODED 2026-09-23) - **`src/core/voice/spoken-tool-syntax.js`.** Scans a turn's output transcript for three call shapes — `call:NAME{`, Gemini's code-style `default_api.NAME(`, and a snake_case `NAME(key=` / `NAME{key:` — and reports only names in the leash's tier table, derived rather than typed, so a new tool is covered the day it is registered. Prose that merely names a tool is not matched. - **The report** is a `spoken-tool-syntax` health anomaly: the tool named, whether a real call of it ran that turn, a bounded fragment and a `reason`. One row per tool per turn. - **Never executed.** The parsed name is a label. The module requires only the tier table, and a test pins that it name…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-23 from the attended run; seen once] The output transcription began \"call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…\" — a function call rendered as speech and never dispatched; the same reply said \"I'm searching … now\". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection.",
+          "disposition": "blocked",
+          "evidence": "[DETECTOR CODED 2026-09-23; prevention OPEN by decision D7] Tool-call syntax naming a real tool in a turn's output transcript is now a silent spoken-tool-syntax anomaly naming the tool and whether a real call of it ran; the parsed text is never executed and nothing about it is spoken (the healer acknowledges the kind). Keeping it from reaching playback needs the validated text lane, which is deferred. [FILED 2026-09-23 from the attended run; seen once] The output transcription began \"call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…\" — a function call rendered as speech and never dispatched; the same reply said \"I'm searching … now\". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection.",
           "source": "mythos/src/core/voice/live-session.js (outputTranscription handling)"
         }
       },
