@@ -173,6 +173,9 @@ describe('BUG-449 — the known-condition playbooks moved without changing', () 
 //   P7  the reporter speaks the finding                   -> (i)(j)
 //   P8  the healer playbook stops matching the kind       -> (j)
 //   P9  the adapter no longer runs the detector           -> (k)
+//       [2026-09-23, later the same day: the call moved into silent-turn-anomalies.js
+//       with BUG-275's detector. Re-run there as P9b — removing it from that module —
+//       and (k) still reddens.]
 //   P10 the tool set is hand-typed instead of derived     -> (g)
 //   P11 the module takes a door to run things             -> (h)
 //

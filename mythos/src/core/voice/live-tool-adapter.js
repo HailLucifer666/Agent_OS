@@ -1362,7 +1362,7 @@ function createLiveToolAdapter(deps) {
         detectUnsourcedRankedEntities(assistantText, actionsThisTurn, recentActionLedger.forClaims()),
         { claim: 'unsourced-ranked-entity', tool: 'unsourced-ranking',
           site: 'bug275-h3-unsourced-ranking', notice: unsourcedRankingNotice,
-          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) }); require('./spoken-tool-syntax').reportSpokenToolSyntax({ bus, assistantText, actionsThisTurn }); require('./promoted-rank-anomaly').reportPromotedRanks({ bus, assistantText, actionsThisTurn, recentActions: recentActionLedger.forClaims() }); // BUG-449: tool-call syntax spoken aloud, a SILENT anomaly that is never executed (spoken-tool-syntax.js). BUG-275 H1, folded onto the line above because this file is AT its size ratchet: a name given a rank its source never gave it. Deliberately NOT through reportTurnAudit — operator decision 2026-09-10; every path through that helper speaks aloud, and why this one must not is in promoted-rank-anomaly.js.
+          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) }); require('./silent-turn-anomalies').reportSilentTurnAnomalies({ bus, assistantText, actionsThisTurn, recentActions: recentActionLedger.forClaims() }); // BUG-275 H1 and unsearched-current-fact, BUG-449 spoken tool syntax: detectors that REPORT and never speak — deliberately not reportTurnAudit, whose every path speaks aloud. The list, and why each is silent, is in silent-turn-anomalies.js.
 
       // BUG-275 H2: the operator disputes a claim and the reply EXPLAINS it
       // rather than re-checking — the DIG-IN twin of row 7 above. Its evidence

@@ -29,10 +29,19 @@
 // Read both numbers or read neither: hits=0 with withEvidence=0 measured
 // nothing, and the script says so in as many words.
 //
+// BUG-275, 2026-09-23 — A THIRD PASS, AND ITS OWN RULE ABOUT EVIDENCE. The
+// unsearched-current-fact detector fires on replies WITHOUT a web lookup, so it
+// cannot use the evidence filter above (which skips exactly those replies). It
+// runs over EVERY reply, against every action in the window plus the turn's own
+// detail.actions. An archived day (Episodic/_archive/<day>.md.gz — the vault's
+// own archive format, raw rows inside a code fence) is read too, because
+// 2026-08-19, BUG-275's evidence session, is archived now.
+//
 // Usage:
 //   node scripts/replay-ranked-detectors.js                       # today
 //   node scripts/replay-ranked-detectors.js 2026-08-19            # one day
 //   node scripts/replay-ranked-detectors.js 2026-08-19 --verbose
+//   node scripts/replay-ranked-detectors.js path/to/day.jsonl     # a file
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -42,6 +51,8 @@ const {
   detectUnsourcedRankedEntities, detectPromotedRankedEntities, EVIDENCE_TOOLS,
 } = require('../src/core/voice/ranked-claim-check');
 const { buildEvidenceDigest } = require('../src/core/voice/evidence-digest');
+const { detectUnsearchedCurrentFacts } = require('../src/core/voice/unsearched-current-fact');
+const zlib = require('node:zlib');
 
 const WINDOW_MS = 120000; // the live recent-action ledger's window
 
@@ -51,13 +62,21 @@ function vaultDir() {
 }
 
 function readDay(day) {
-  const file = path.join(vaultDir(), day + '.jsonl');
-  if (!fs.existsSync(file)) {
-    console.error('no such day file: ' + file);
-    process.exit(2);
+  let file = /\.jsonl$/.test(day) ? path.resolve(day) : path.join(vaultDir(), day + '.jsonl');
+  let body = null;
+  if (fs.existsSync(file)) body = fs.readFileSync(file, 'utf8');
+  else {
+    const archived = path.join(vaultDir(), '_archive', day + '.md.gz');
+    if (!fs.existsSync(archived)) {
+      console.error('no such day file: ' + file + ' (nor ' + archived + ')');
+      process.exit(2);
+    }
+    file = archived;
+    body = zlib.gunzipSync(fs.readFileSync(archived)).toString('utf8');
   }
   const rows = [];
-  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+  for (const line of body.split(/\r?\n/)) {
+    if (!line.trim().startsWith('{')) continue;
     if (!line.trim()) continue;
     try { rows.push(JSON.parse(line)); } catch { /* a partial last line is normal */ }
   }
@@ -81,7 +100,7 @@ const resultOf = (row) => (row.detail && row.detail.result !== undefined ? row.d
 function main() {
   const args = process.argv.slice(2);
   const verbose = args.includes('--verbose');
-  const day = args.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a)) || new Date().toISOString().slice(0, 10);
+  const day = args.find((a) => /^\d{4}-\d{2}-\d{2}$/.test(a) || /\.jsonl$/.test(a)) || new Date().toISOString().slice(0, 10);
   const { file, rows } = readDay(day);
 
   const actions = rows.filter(isAction).map((row) => ({
@@ -91,14 +110,18 @@ function main() {
     evidence: buildEvidenceDigest(resultOf(row)),
   })).filter((a) => EVIDENCE_TOOLS.indexOf(a.tool) !== -1);
 
+  const allActions = rows.filter(isAction).map((row) => ({ tool: toolOf(row), at: at(row) }));
   let replies = 0, withEvidence = 0;
-  const hits = { promoted: [], unsourced: [] };
+  const hits = { promoted: [], unsourced: [], unsearched: [] };
 
   for (const row of rows) {
     const text = replyOf(row);
     if (!text) continue;
     replies += 1;
     const when = at(row);
+    const turnActions = ((row.detail && row.detail.actions) || []).filter((a) => a && a.tool);
+    const recent = allActions.filter((a) => a.at <= when && when - a.at <= WINDOW_MS);
+    for (const hit of detectUnsearchedCurrentFacts(text, turnActions, recent)) hits.unsearched.push({ when, hit });
     const window = actions.filter((a) => a.at <= when && when - a.at <= WINDOW_MS && a.evidence);
     if (!window.length) continue;
     withEvidence += 1;
@@ -111,13 +134,14 @@ function main() {
     + ' replies=' + replies + ' replies-with-rebuildable-evidence=' + withEvidence);
   console.log('  promoted-ranked-entity hits: ' + hits.promoted.length);
   console.log('  unsourced-ranked-entity hits: ' + hits.unsourced.length);
+  console.log('  unsearched-current-fact hits: ' + hits.unsearched.length + ' (over all ' + replies + ' replies)');
   if (!withEvidence) {
     console.log('  NOTE: no reply had rebuildable evidence in this file, so zero hits above');
     console.log('        measured NOTHING. Check the reader before reading the numbers.');
   }
-  for (const kind of ['promoted', 'unsourced']) {
+  for (const kind of ['promoted', 'unsourced', 'unsearched']) {
     for (const h of hits[kind]) {
-      const names = h.hit.promoted || h.hit.absent || [];
+      const names = h.hit.promoted || h.hit.absent || [h.hit.phrase];
       console.log('  ' + kind + ' @' + new Date(h.when).toISOString() + ': ' + names.join(', '));
       if (verbose) console.log('      ' + String(h.hit.sentence).slice(0, 160));
     }

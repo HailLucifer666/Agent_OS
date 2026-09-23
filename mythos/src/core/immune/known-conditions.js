@@ -99,6 +99,22 @@ const KNOWN_CONDITION_PLAYBOOKS = [
         + 'it ran that turn. Prevention needs the validated voice lane (decision D7).',
     } }],
     cooldownMs: 60000
+  },
+  {
+    // BUG-275, 2026-09-23: a changeable fact stated as current with no web lookup
+    // behind it (voice/unsearched-current-fact.js). Telemetry by design — judging
+    // prose can be wrong, so it is never spoken — and acknowledged here for the
+    // same reasons as spoken-tool-syntax above.
+    id: 'unsearched-current-fact-known',
+    title: 'a changeable fact stated as current without a web lookup',
+    when: { kind: 'unsearched-current-fact' },
+    then: [{ do: 'acknowledge', args: {
+      note: 'Known condition, no automatic remedy. The reply stated something that can change as '
+        + 'current fact with no web lookup in its evidence window. Replayed over two whole days '
+        + 'before shipping: 2 real hits and 1 false positive in 773 sentences. Making the model '
+        + 'search first needs the validated voice lane (decision D7).',
+    } }],
+    cooldownMs: 60000
   }
 ];
 
