@@ -18,7 +18,7 @@ native crash · 3 speech · 4 qualification and memory.
 `main` and builds on the one before; the session's permission check refuses
 `gh pr merge`, so the agent cannot. CI ran green on each head it had finished on (#109's e2e job timed out once on the CI machine's media query, the same route passed on #110, and a re-run was green):
 #102 PIN removal + BUG-444/452 · #103 BUG-445 · #105 BUG-446 · #106 BUG-437 ·
-#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · #113 BUG-275 · #114 BUG-436 blocking half · then the BUG-451 PR. Eleven superseded PRs
+#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · #113 BUG-275 · #114 BUG-436 blocking half · #115 BUG-451 · then the BUG-406 recorder PR. Eleven superseded PRs
 (#95 … #82) are also still open — their content is in main; closing them is the
 operator's call.
 
@@ -79,12 +79,10 @@ manual dispatch: once, on a final commit.
 
 ## NEXT ACTION
 
-Wave 3, 436's blocking half and 451 are coded. **Wave 4**, what is left: the 406
-recorder, the 274 options note; 421/439 are attended qualification. BUG-432's flag goes default-on only after the attended A/B in the
+Waves 1–4 are coded except the 274 options note (next). What remains after it is
+attended: the sessions in the plan's qualification table, 421/439 included. BUG-432's flag goes default-on only after the attended A/B in the
 speech session.
 
-Tracker note for the next ledger pass: BUG-406 is open but has no OPEN WORK
-register bullet, so the register lists 17 names while the index counts 18 open.
 
 ## Where the detail lives
 

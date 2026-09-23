@@ -42,6 +42,7 @@ import { createBargeInPolicy } from './barge-in-policy.js';
 import { createBargeInBackstop, rmsFromPcm16 } from './barge-in-backstop.js';
 import { createLiveNoiseGate } from './live-noise-gate.js';
 import { createEchoVerdictTracker } from './echo-verdict.js';
+import { createGateRecorder, isGateRelease } from './gate-recorder.js'; // BUG-406: numbers-only mic-gate recorder, off unless configured
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -56,8 +57,8 @@ const PLAYBACK_RATE = 24000;
 // a spy here instead of mocking the whole ws.js module graph (which every other
 // voice-loop.js import shares). Defaults to the real one — no behavior change
 // outside tests.
-export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOverride } = {}) {
-  const send = sendMessageOverride || sendMessage;
+export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOverride, gateRecorder: recordGate } = {}) {
+  const send = sendMessageOverride || sendMessage; const gateRecorder = recordGate ? createGateRecorder({ rms: rmsFromPcm16 }) : null;
   let active = false;
   let stream = null;
   let audioCtx = null;
@@ -319,6 +320,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         missedTurnEnds: cushion.missedTurnEnds,
         ...extra,
       });
+      if (gateRecorder && isGateRelease(extra, captureSuspended)) send({ type: 'voice-gate-recording', at: Date.now(), reason: extra && extra.reason, samples: gateRecorder.drain() });
     } catch (_) { /* logging only — never block the gate */ }
   }
   function setCaptureSuspended(flag, holdMs, reason) {
@@ -1058,7 +1060,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         processorOptions: { targetRate: TARGET_RATE, frameMs: FRAME_MS },
       });
       captureNode.port.onmessage = (e) => {
-        if (!active || captureSuspended) return;   // see setCaptureSuspended
+        if (!active) return; if (gateRecorder) gateRecorder.sample(e.data, { captureSuspended, ownVoiceGate, speaking: player ? player.isSpeaking() : false, playhead: player ? player.playhead() : null, micContextTime: audioCtx ? audioCtx.currentTime : null }); if (captureSuspended) return;   // see setCaptureSuspended. BUG-406: sampled BEFORE this return — the frames the gate holds are the ones being studied
         // Measured on the way out, on the same frames the server hears, so the
         // backstop and Gemini's VAD are looking at identical audio. Deliberately
         // AFTER the captureSuspended gate: while we are knowingly making noise

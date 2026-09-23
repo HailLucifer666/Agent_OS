@@ -308,8 +308,13 @@ export function createPcmPlayer({ sampleRate = 24000, contextFactory, onSpeakSta
   // close() is a real teardown (session ending), not a barge-in guess — it
   // always stops everything immediately, bypassing flush()'s tail guard. The
   // cushion resets with it: it describes one session's link, not the machine.
+  // BUG-406 recorder: how far ahead of its own clock the player has audio queued
+  // (nextAt is the end of the last scheduled chunk). 0 means nothing is left to play.
+  function playhead() {
+    return ctx ? { aheadMs: Math.max(0, (nextAt - ctx.currentTime) * 1000), contextTime: ctx.currentTime } : { aheadMs: 0, contextTime: null };
+  }
   return {
-    enqueue, flush, isSpeaking, stats, endTurn,
+    enqueue, flush, isSpeaking, stats, endTurn, playhead,
     close: () => {
       stopAll();
       cushionSec = CUSHION_BASE_SEC;

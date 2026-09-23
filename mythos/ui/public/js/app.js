@@ -116,7 +116,7 @@ subscribe(['entity-state'], (msg) => {
 // current facts so a fast click cannot freeze default VAD values.
 let _vadOverrides = null, _wakewordCfg = null, _wakewordCfgError = null;
 let _s2sEnabled = false, _operatorEnabled = false, operatorPlayback = null, disposeDesktopTask = null;
-let _screenShareCfg = null;
+let _screenShareCfg = null; let _gateRecorder = false; // BUG-406
 let voiceConfigReady, _wakewordCfgReady, voiceConfigLoaded = false;
 voiceConfiguration.subscribe(({ vad, wakeword, s2s }) => {
   voiceConfigLoaded = true;
@@ -124,7 +124,7 @@ voiceConfiguration.subscribe(({ vad, wakeword, s2s }) => {
   _wakewordCfg = wakeword.value; _wakewordCfgError = wakeword.error;
   _s2sEnabled = Boolean(s2s.value && s2s.value.enabled);
   _operatorEnabled = Boolean(s2s.value && s2s.value.operatorEnabled);
-  _screenShareCfg = s2s.value?.screenShare?.enabled ? s2s.value.screenShare : null;
+  _screenShareCfg = s2s.value?.screenShare?.enabled ? s2s.value.screenShare : null; _gateRecorder = s2s.value?.gateRecorder === true;
   if (_operatorEnabled && !disposeDesktopTask) disposeDesktopTask = mountDesktopTask();
   if (!_operatorEnabled && disposeDesktopTask) { disposeDesktopTask.close(); disposeDesktopTask = null; }
   publishHudReady(); // BUG-433: readiness just went UP.
@@ -353,6 +353,7 @@ function ensureS2S() {
           // reported it enabled, so a failed or missing fetch cannot start
           // streaming the operator's desktop.
           screenShare: _screenShareCfg,
+          gateRecorder: _gateRecorder, // BUG-406: off unless the server says VOICE_GATE_RECORDER=true
         });
         return s2s;
       })

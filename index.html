@@ -343,11 +343,11 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-23",
+  "generated": "2026-09-24",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8045,
+      "value": 8055,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -365,28 +365,28 @@
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-23"
+      "measuredAt": "2026-09-24"
     },
     "registered": {
       "value": 188,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-23"
+      "measuredAt": "2026-09-24"
     },
     "voiceReachable": {
       "value": 127,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-23"
+      "measuredAt": "2026-09-24"
     },
     "untriaged": {
       "value": 1,
       "label": "untriaged incidents",
       "tone": "fail",
       "source": "live vault incident ledger",
-      "measuredAt": "2026-09-23",
+      "measuredAt": "2026-09-24",
       "stale": false
     }
   },
@@ -5338,10 +5338,10 @@
         "state": "open",
         "title": "the half-duplex gate held the operator's microphone for 40% of a conversation, and 92 seconds of that ended in a timeout rather than in actual echo (🔴 DIAGNOSED 2026-09-03, deliberately NOT fixed here)",
         "detail": {},
-        "excerpt": "**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. **2026-09-10 update:** BUG-428 wires the server's numeric echo verdict into the existing ceiling decision, behind `VOICE_ECHO_VERDICT_TO_CLIENT=false` rollback. No timer tuning and no barge-in echo veto. A verdict is evidence of a transcript, not a labelled acoustic sample; a live room is still required and no operator session was run here. Also, the historical `frames zeroed` column sums cumulative counter snapshots; it cannot establish the number of distinct frames lost. Release durations remain directly measured. **Measured from `voice.capture-suspend` releases, operator session 2026-09-03 (~11 minutes of conversation):** | release reason | n | total held | worst single hold | frames zeroed | |---|---|---|---|---| | `own-voice-ended` (normal) | 25 | 159.4s | 11.0s | 37,918 | | `own-voice-ceiling-near…",
+        "excerpt": "**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. The **recorder** the closing note asks for is CODED 2026-09-23 (next section); the study and the repair are not. ### The recorder (CODED 2026-09-23 — decision D9: recorder this round, study next round) The entry's own conclusion was that scalar release summaries cannot establish acoustic ground truth, and that the next step needs synchronised microphone and playback evidence around each release. That instrument now exists, behind `VOICE_GATE_RECORDER=true` (off by default, documented in `.env.example`). - **HUD** (`ui/public/js/voice/gate-recorder.js`): a ring buffer of the last 30 s, at most one sample per 50 ms, each holding the mic frame's RMS, the media gate and the own-voice hold, whether the player says it is speaking, how far ahead of its clock the player has audio queued (new `playhead()` in `pc…",
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room.",
+          "evidence": "[RECORDER CODED 2026-09-23; study and repair OPEN by decision D9] VOICE_GATE_RECORDER=true now records, around every gate release, the mic level, both gates, whether and how far ahead the player is speaking, and both audio clocks — numbers only, never audio or words — under the repo's .cache/. The acoustic study, a replay harness, any change to the gate and the p95 250 ms target are the next round's work. [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room.",
           "source": "mythos/src/core/voice/live-session.js"
         }
       },
@@ -5995,6 +5995,7 @@
     "openDeclared": [
       274,
       275,
+      406,
       421,
       422,
       432,

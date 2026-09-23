@@ -1708,6 +1708,7 @@ function createServer(deps) {
   // Live session that raised it, the same way handleConfirmReply already does
   // for an explicit accept/reject on this same connection's closure.
   const liveAdaptersByConnection = new Map();
+  const gateRecordingSink = require('./voice-gate-recording').createGateRecordingSink({ logger }); // BUG-406: writes nothing unless VOICE_GATE_RECORDER=true
   // The Aether aggregator's current election owner, cached from the sensor's
   // perception. Read at speak time rather than passed in, because the sensor
   // starts in a later boot step than the server and the owner changes as the
@@ -3731,6 +3732,7 @@ function createServer(deps) {
       // fire-and-forget, no reply expected. Gives Wave 2's lost-transcript
       // diagnosis a server-side record of every suspend/clear instead of only
       // inferring it after the fact from a blind turn.
+      else if (msg.type === 'voice-gate-recording') { gateRecordingSink.handle(msg).catch(() => {}); } // BUG-406: the mic-gate recorder's windows; the sink itself is off unless VOICE_GATE_RECORDER=true
       else if (msg.type === 'voice-capture-suspend') {
         // BUG-271: the own-voice-release transition also carries the ring/gate
         // diagnostics the client has computed since 36561bd (and framesZeroed
