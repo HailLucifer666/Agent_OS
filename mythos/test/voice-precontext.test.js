@@ -121,13 +121,39 @@ describe('B2: RULES source-scans for the new paragraphs', () => {
 });
 
 describe('B2: capability digest wiring through buildPrompt/buildSystemContext', () => {
+  // buildPrompt embeds `LOCAL CLOCK: <date> <HH:MM:SS>` from `new Date()`. Two
+  // real-time calls that straddle a second boundary therefore differ in that one
+  // line, and an equality between them fails for a reason unrelated to the
+  // digest. Seen 2026-09-24 in a full-suite TAP run (actual 01:49:57, expected
+  // 01:49:56) while the file passed alone every time. The instant below is the
+  // millisecond before that boundary (20:19:57Z = 01:49:57 Asia/Colombo).
+  //
+  // Probes, all run 2026-09-24:
+  //  (a) the OLD assertion (no held clock) with Date mocked to HELD_CLOCK_MS and
+  //      ticked 1 ms between the two calls -> red, `LOCAL CLOCK: 2026-09-23
+  //      01:49:57` vs `01:49:56`, byte-for-byte the suite failure. Same probe at
+  //      20:19:56.500Z, no boundary crossed -> green.
+  //  (b) buildPrompt mutated to append a line only when `'capabilityDigest' in
+  //      args` -> the "identical output" test below is red; restored -> green.
+  //      Holding the clock did not blind it to a non-clock difference.
+  //  (c) a tick(1000) inserted between the two held-clock calls -> red, i.e. the
+  //      hold is what makes the equality pass, and the control test's claim.
+  //  (d) buildPrompt's sysTime mutated to `new Intl.DateTimeFormat(...).format()`
+  //      -> the "identical output" test stayed GREEN (flaky again, silently) and
+  //      the control test went red: "exactly one line should move with the
+  //      clock, got 0". That silent case is why the control exists.
+  const HELD_CLOCK_MS = Date.parse('2026-09-23T20:19:56.999Z');
+
   it('buildPrompt includes the digest text when capabilityDigest is supplied', () => {
     const digest = 'CAPABILITY SNAPSHOT (live — trust this over any assumption):\n- test line';
     const prompt = _internal.buildPrompt({ text: 'hello', history: [], toolResults: null, capabilityDigest: digest });
     assert.ok(prompt.includes(digest), 'prompt should include the supplied capability digest');
   });
 
-  it('buildPrompt produces identical output to before when capabilityDigest is not supplied (no behavior change)', () => {
+  it('buildPrompt produces identical output to before when capabilityDigest is not supplied (no behavior change)', (t) => {
+    // Hold Date rather than strip the clock line, so the comparison stays
+    // byte-for-byte over the WHOLE prompt (probe b).
+    t.mock.timers.enable({ apis: ['Date'], now: HELD_CLOCK_MS });
     const withoutDigestArg = _internal.buildPrompt({ text: 'hello', history: [], toolResults: null });
     const withExplicitUndefined = _internal.buildPrompt({ text: 'hello', history: [], toolResults: null, capabilityDigest: undefined });
     assert.equal(withoutDigestArg, withExplicitUndefined);
@@ -136,6 +162,25 @@ describe('B2: capability digest wiring through buildPrompt/buildSystemContext', 
     // RULE paragraph also mentions independent of any injected digest) proves
     // no digest block was appended when the param is omitted.
     assert.ok(!withoutDigestArg.includes('- test line'), 'no digest supplied means no digest block injected');
+  });
+
+  // The adjacent case the hold depends on. The fake clock replaces Date only:
+  // measured 2026-09-24, with it enabled `new Intl.DateTimeFormat().format()`
+  // still printed the real time. If buildPrompt ever reads the time that way,
+  // the hold above stops governing it and that equality is flaky again with no
+  // one told. This test fails first (no line changes on a tick). It also pins
+  // that the clock line is the prompt's ONLY time-dependent content, so holding
+  // Date hides nothing else. If buildPrompt drops the clock line entirely, delete
+  // this test and the hold together.
+  it('control: under the held clock a one-second tick changes the LOCAL CLOCK line and nothing else', (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: HELD_CLOCK_MS });
+    const before = _internal.buildPrompt({ text: 'hello', history: [], toolResults: null }).split('\n');
+    t.mock.timers.tick(1000);
+    const after = _internal.buildPrompt({ text: 'hello', history: [], toolResults: null }).split('\n');
+    assert.equal(after.length, before.length, 'a tick must not add or remove prompt lines');
+    const changed = before.flatMap((line, i) => (line === after[i] ? [] : [i]));
+    assert.equal(changed.length, 1, `exactly one line should move with the clock, got ${changed.length}`);
+    assert.match(before[changed[0]], /^LOCAL CLOCK: /);
   });
 });
 
