@@ -88,113 +88,113 @@ function plan(overrides) {
 }
 
 describe("BUG-415 (a,b) — the ladder is derived, and the operator's browser is first", () => {
-  it("(a) the resolver's answer gets the first attempt, even from the back of the order", () => {
-    const attempts = plan();
+  it("(a) the resolver's answer gets the first attempt, even from the back of the order", async () => {
+    const attempts = (await plan());
     assert.equal(attempts[0].name, 'edge',
       '(m1) edge is LAST in BROWSER_SEARCH_ORDER — only an honoured resolver can put it first');
     assert.equal(attempts[0].source, 'os-default', 'and it says WHY it was chosen');
   });
 
-  it('(b) the fallback ladder still runs after it, deduplicated', () => {
+  it('(b) the fallback ladder still runs after it, deduplicated', async () => {
     // (m4). The resolver returns the best answer, not the only viable one — a
     // UserChoice entry can outlive an uninstall — so removing the tail would
     // trade one failure mode for another.
-    assert.deepEqual(plan().map((a) => a.name), ['edge', 'brave', 'chrome']);
+    assert.deepEqual((await plan()).map((a) => a.name), ['edge', 'brave', 'chrome']);
   });
 
-  it('on THIS machine, whose default really is brave, brave leads', () => {
+  it('on THIS machine, whose default really is brave, brave leads', async () => {
     // The measured case, kept honest by not being the fixture: here the expected
     // value coincides with the fallback, so this test alone proves nothing about
     // the rule — it proves the rule produces the right answer for the operator.
-    const names = plan({
+    const names = (await plan({
       resolveLaunchTarget: () => ({ name: 'brave', exe: allInstalled('brave'), source: 'os-default' }),
-    }).map((a) => a.name);
+    })).map((a) => a.name);
     assert.deepEqual(names, ['brave', 'chrome', 'edge'], 'brave is promoted, not duplicated');
   });
 
-  it('does not attempt the same browser twice when it is also the default', () => {
-    const names = plan({
+  it('does not attempt the same browser twice when it is also the default', async () => {
+    const names = (await plan({
       resolveLaunchTarget: () => ({ name: 'chrome', exe: allInstalled('chrome'), source: 'os-default' }),
-    }).map((a) => a.name);
+    })).map((a) => a.name);
     assert.deepEqual(names, ['chrome', 'brave', 'edge'], 'chrome is promoted, not duplicated');
   });
 
-  it('falls back to the search order when the registry cannot answer', () => {
-    const names = plan({ resolveLaunchTarget: () => ({ error: 'no supported browser found' }) }).map((a) => a.name);
+  it('falls back to the search order when the registry cannot answer', async () => {
+    const names = (await plan({ resolveLaunchTarget: () => ({ error: 'no supported browser found' }) })).map((a) => a.name);
     assert.deepEqual(names, ['brave', 'chrome', 'edge'], 'an unreadable default is not a reason to launch nothing');
   });
 
-  it('survives a resolver that throws rather than answering', () => {
-    const names = plan({ resolveLaunchTarget: () => { throw new Error('reg.exe exploded'); } }).map((a) => a.name);
+  it('survives a resolver that throws rather than answering', async () => {
+    const names = (await plan({ resolveLaunchTarget: () => { throw new Error('reg.exe exploded'); } })).map((a) => a.name);
     assert.deepEqual(names, ['brave', 'chrome', 'edge']);
   });
 });
 
 describe('BUG-415 (c) — the profile follows the browser', () => {
-  it('(c) brave never inherits the directory chrome wrote', () => {
+  it('(c) brave never inherits the directory chrome wrote', async () => {
     // (m2). debugProfileDir takes a name precisely so switching browsers does
     // not hand Brave a profile Chrome wrote; the caller passes a hardcoded
     // chrome path, so without this every non-chrome attempt would do exactly
     // that. Asserted on brave BY NAME rather than on attempts[0], so the
     // assertion cannot be satisfied by whichever browser happens to lead.
-    const brave = plan().find((a) => a.name === 'brave');
+    const brave = (await plan()).find((a) => a.name === 'brave');
     assert.match(brave.profileDir, /brave-debug-profile$/);
     assert.notEqual(brave.profileDir, USER_DATA_DIR,
       'the caller hands in the chrome directory; brave must not be launched into it');
-    const edge = plan().find((a) => a.name === 'edge');
+    const edge = (await plan()).find((a) => a.name === 'edge');
     assert.match(edge.profileDir, /edge-debug-profile$/);
   });
 
-  it('every profile directory still satisfies the close-path authorisation', () => {
+  it('every profile directory still satisfies the close-path authorisation', async () => {
     // browser-process.js refuses to close anything not shaped like
     // MYTHOS/<name>-debug-profile. A launch into a directory that guard rejects
     // would produce a browser MYTHOS started and cannot stop.
-    for (const attempt of plan()) {
+    for (const attempt of (await plan())) {
       assert.equal(browserAgent.isMythosDebugProfile(attempt.profileDir), true,
         attempt.name + ' launches into ' + attempt.profileDir + ', which browser_close could not authorise');
     }
   });
 
-  it('DISPOSITION: the profile stays EMPTY — the real one is deliberately not used', () => {
+  it('DISPOSITION: the profile stays EMPTY — the real one is deliberately not used', async () => {
     // Recorded as a decision, not an oversight. See the header. The route to the
     // operator's logged-in window is open_web(browser:true), which does not use
     // the debug port at all.
-    for (const attempt of plan()) {
+    for (const attempt of (await plan())) {
       assert.match(attempt.profileDir, /-debug-profile$/,
         'a real Chromium profile directory never ends in -debug-profile');
     }
   });
 
-  it('keeps the caller directory when the profile resolver throws', () => {
+  it('keeps the caller directory when the profile resolver throws', async () => {
     // debugProfileDir joins process.env.LOCALAPPDATA with no guard, deliberately
     // (browser-target.js says so). A throw there must cost the naming, not the
     // launch.
-    const attempts = plan({ debugProfileDir: () => { throw new Error('LOCALAPPDATA unset'); } });
+    const attempts = (await plan({ debugProfileDir: () => { throw new Error('LOCALAPPDATA unset'); } }));
     assert.equal(attempts[0].profileDir, USER_DATA_DIR);
   });
 });
 
 describe('BUG-415 (d) — a browser that is installed nowhere is not attempted', () => {
-  it('(d) drops a candidate with no channel and no executable', () => {
+  it('(d) drops a candidate with no channel and no executable', async () => {
     // (m3). Brave has no playwright channel, so with no executable there is
     // nothing to launch and the attempt would burn a real Playwright timeout.
-    const attempts = plan({ findBrowserExecutable: (n) => (n === 'brave' ? null : allInstalled(n)) });
+    const attempts = (await plan({ findBrowserExecutable: (n) => (n === 'brave' ? null : allInstalled(n)) }));
     assert.deepEqual(attempts.map((a) => a.name), ['edge', 'chrome'],
       'brave is unreachable on this machine and must not be attempted');
   });
 
-  it('keeps a CHANNEL candidate even when the executable resolver cannot find it', () => {
+  it('keeps a CHANNEL candidate even when the executable resolver cannot find it', async () => {
     // The adjacent case that must keep passing: a machine-wide Chrome under a
     // root browserCandidatePaths does not enumerate is still launchable by
     // channel, and dropping it would be a regression on the path that worked.
-    const attempts = plan({ findBrowserExecutable: () => null });
+    const attempts = (await plan({ findBrowserExecutable: () => null }));
     assert.deepEqual(attempts.map((a) => a.name), ['edge', 'chrome'],
       'brave has no channel and no exe, so only the two channel browsers remain');
     assert.deepEqual(attempts[0].options, { channel: 'msedge' });
   });
 
-  it('launches brave by executablePath and chrome/edge by channel', () => {
-    const byName = new Map(plan().map((a) => [a.name, a.options]));
+  it('launches brave by executablePath and chrome/edge by channel', async () => {
+    const byName = new Map((await plan()).map((a) => [a.name, a.options]));
     assert.deepEqual(byName.get('brave'), { executablePath: allInstalled('brave') },
       'playwright has no brave channel');
     assert.deepEqual(byName.get('chrome'), { channel: 'chrome' });
@@ -202,8 +202,8 @@ describe('BUG-415 (d) — a browser that is installed nowhere is not attempted',
       "edge's playwright channel is msedge, not its browser name");
   });
 
-  it('returns an empty plan when nothing is reachable, so launchLocal can say so', () => {
-    const attempts = browserAgent.planLocalLaunch(USER_DATA_DIR, {
+  it('returns an empty plan when nothing is reachable, so launchLocal can say so', async () => {
+    const attempts = (await browserAgent.planLocalLaunch(USER_DATA_DIR, {
       resolveLaunchTarget: () => ({ error: 'none' }),
       findBrowserExecutable: () => null,
       debugProfileDir: (n) => path.join('C:', 'fake', 'MYTHOS', n + '-debug-profile'),
@@ -211,17 +211,17 @@ describe('BUG-415 (d) — a browser that is installed nowhere is not attempted',
       // that has none. BROWSER_SEARCH_ORDER is chrome/edge/brave, two of which
       // have channels, so an empty plan is only reachable through the real
       // module when the table itself is empty. Asserted as a shape instead.
-    });
+    }));
     assert.ok(Array.isArray(attempts), 'the plan is always a list, never null');
   });
 });
 
 describe('BUG-415 — the choice is not restated anywhere else', () => {
-  it('the search order and the channel map both derive from browser-target', () => {
+  it('the search order and the channel map both derive from browser-target', async () => {
     // Gate D: the failure being fixed IS a hand-typed list. A second copy of the
     // browser set inside the adapter would rebuild it one browser later.
     assert.deepEqual(browserTarget.BROWSER_SEARCH_ORDER, ['brave', 'chrome', 'edge']);
-    for (const attempt of plan()) {
+    for (const attempt of (await plan())) {
       assert.ok(browserTarget.BROWSER_SUBPATHS[attempt.name],
         attempt.name + ' must be a browser browser-target knows, not a name typed here');
     }

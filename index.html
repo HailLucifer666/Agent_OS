@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8016,
+      "value": 8034,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5746,13 +5746,13 @@
         "state": "open",
         "title": "MYTHOS goes quiet mid-conversation: the server event loop freezes 2–9 s with zero CPU, and a Live rotation drops the in-flight tool turn (OPEN, filed 2026-09-10)",
         "detail": {
-          "fix": "Behind the same `VOICE_SERIALIZE_NOTICES` flag, because it needs the queue: -",
+          "fix": "New `src/core/util/exec-file-text.js` runs the same commands asynchronously, still bounded (the child is killed on timeout). Every function in the list is async now and every caller awaits it — the close-window guard, the launch and adopt paths, the default-browser resolver, the external-open oracle, the setup route. The TTS helpers' `start()` never rejects (its callers fire and forget), and a start that `stop()` overtook while a probe was pending spawns nothing — without that, making the probes async would have created orphan children.",
           "cause": "2026-09-11 session read. Four boots (18:18, 19:38, 20:11, 20:46Z) measured end to end. **52 `loop.stalled` rows, 450 s of frozen event loop, worst single 31,777 ms, 1,132 CPU-seconds burned.** The filed premise is now CONTRADICTED and that matters more than the count: this ticket says \"zero CPU\", but",
           "verification": "`test/bug-436-a-stall-names-what-blocked-it.test.js` 9/9, plus `loop-lag`, `config-doc-truth`, `env-example-stall-ms`, `file-size-ratchet` and the real-boot test — 29/29, 0 skipped. Five mutations, each grep-verified applied and restored sha256-identical: dropping `lastSync` from the emit reddens (a); keeping the last overlapping call instead of the largest reddens (b); `DEFAULT_MIN_MS = 0` reddens (d); widening the window back reddens (c); recording only when the call did not throw reddens (f). One earlier attempt at that last mutation only broke the parse, which proves nothing, so it was redone behaviourally — the record now says so."
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[DELIVERY HALF CODED 2026-09-23 with BUG-432: a result that finishes while the voice connection is reconnecting is held for the replacement connection and delivered there once, instead of being spoken over plain TTS outside Live; the blocking half (synchronous child-process calls) is still open] [PROFILER RUN 2026-09-23: an 18 s silence had NO loop stall (model-side); a 3 s zero-CPU freeze ended as the debug-browser launch's execFileSync returned, and the profiler named nothing (likely blind to a destructured import — unconfirmed); one non-deferred goAway rotated cleanly] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code.",
+          "evidence": "[BLOCKING HALF CODED 2026-09-23: every synchronous child-process call reachable after boot is now async and still bounded — the browser process queries and taskkill, the default-browser registry read, the setup page's WSL probe, and the Piper / edge-tts probes that re-ran on every crash-restart — with a derived guard over the rest; attended qualification with the stall profiler owed] [DELIVERY HALF CODED 2026-09-23 with BUG-432: a result that finishes while the voice connection is reconnecting is held for the replacement connection and delivered there once, instead of being spoken over plain TTS outside Live; the blocking half (synchronous child-process calls) is still open] [PROFILER RUN 2026-09-23: an 18 s silence had NO loop stall (model-side); a 3 s zero-CPU freeze ended as the debug-browser launch's execFileSync returned, and the profiler named nothing (likely blind to a destructured import — unconfirmed); one non-deferred goAway rotated cleanly] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code.",
           "source": "mythos/src/core/loop-lag.js"
         }
       },

@@ -898,7 +898,9 @@ async function browser_launch_debug(args) {
   // request. One predicate now. The probe is lazy: it costs a PowerShell round
   // trip only for a named request whose identity we cannot already vouch for.
   const probeOwner = () => launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrlEarly);
-  const refuseNamed = () => browserTarget.namedRequestRefusal({ want, attached: attachedBrowser, probe: probeOwner });
+  // BUG-436: the probe is async now. It is still asked only when the predicate would ask it (a named
+  // request with no identity we can vouch for), and its answer is handed to the unchanged predicate.
+  const refuseNamed = async () => { const probed = (want && !attachedBrowser) ? await probeOwner() : null; return browserTarget.namedRequestRefusal({ want, attached: attachedBrowser, probe: () => probed }); };
 
   const status0 = browserAgent.getStatus();
   if (status0.state === 'ONLINE') {
@@ -906,7 +908,7 @@ async function browser_launch_debug(args) {
     // instead of "launched" — the debug port cannot be shared. BUG-107's
     // browser_switch remedy now lives in namedRequestRefusal, which also
     // closed the null-attachedBrowser hole this branch had.
-    const onlineRefusal = refuseNamed();
+    const onlineRefusal = await refuseNamed();
     if (onlineRefusal) return fail(onlineRefusal);
     return ok({ alreadyOnline: true, browser: attachedBrowser || 'unknown' });
   }
@@ -957,7 +959,7 @@ async function browser_launch_debug(args) {
   // why waitForDebugPortReady polls this same call).
   const adopted = await browserAgent.ensureOnline({ cdpUrl }).catch(() => false);
   if (adopted) {
-    const found = launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
+    const found = await launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
     // attachedBrowser is deliberately NOT set here. Its contract since BUG-106
     // is "a browser MYTHOS launched and can therefore vouch for and close", and
     // this is not that — see browser_switch's own null branch. `portOwner` is
@@ -972,7 +974,7 @@ async function browser_launch_debug(args) {
   // BUG-407: one resolver, and it now reads the machine's own default browser
   // rather than answering from a list of its own. `source` says which rule
   // chose, and rides out on the result.
-  const target = launchDep('resolveLaunchTarget', resolveLaunchTarget)(want);
+  const target = await launchDep('resolveLaunchTarget', resolveLaunchTarget)(want);
   if (target.error) return fail(target.error);
   const exe = target.exe;
   const chosen = target.name;
@@ -1027,7 +1029,7 @@ async function browser_launch_debug(args) {
   // operator was looking at. That is the "it opened YouTube in Brave but could
   // not act on it" report: two browsers, and MYTHOS driving the invisible one
   // under the visible one's name.
-  const observed = launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
+  const observed = await launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
   if (observed && observed !== chosen) {
     // Do not relabel and carry on. Something else holds the port, so the
     // browser just spawned is not the one attached, and the operator now has

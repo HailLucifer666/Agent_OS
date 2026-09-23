@@ -18,7 +18,7 @@ native crash · 3 speech · 4 qualification and memory.
 `main` and builds on the one before; the session's permission check refuses
 `gh pr merge`, so the agent cannot. CI ran green on each head it had finished on (#109's e2e job timed out once on the CI machine's media query, the same route passed on #110, and a re-run was green):
 #102 PIN removal + BUG-444/452 · #103 BUG-445 · #105 BUG-446 · #106 BUG-437 ·
-#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · then the BUG-275 PR. Eleven superseded PRs
+#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · #113 BUG-275 · then the BUG-436 blocking-half PR. Eleven superseded PRs
 (#95 … #82) are also still open — their content is in main; closing them is the
 operator's call.
 
@@ -27,7 +27,8 @@ operator's call.
 | **Coded, attended session owed** | 444, 452 (startup/access) · 445 (browser targets) · 446 (spoken half) · 437 (three-way quit) · 450, 448 (speech) |
 | **Contained, still open** | 422 — Kokoro is a child process; the attended 0xE06D7363 itself not reproduced |
 | **Coded behind a flag, comparison owed** | 432 — answers never wait behind notices, nothing forced into a reply; `VOICE_SERIALIZE_NOTICES` stays OFF until an attended A/B |
-| **Partly coded, still open** | 447 — heals silent, greeting fixed; resume-after-barge-in and Spanish transcript open · 436 — delivery half coded (a result mid-rotation reaches the resumed session); blocking half open |
+| **Partly coded, still open** | 447 — heals silent, greeting fixed; resume-after-barge-in and Spanish transcript open |
+| **Coded, stall-profiler run owed** | 436 — delivery half and blocking half coded (no synchronous child process after boot, derived guard) |
 | **Open by decision D7, detectors shipped** | 449 — spoken tool-call syntax is a silent anomaly, never executed · 275 — an unsearched current fact is a silent anomaly (replayed first); the screen description is cut at a sentence. Prevention for both needs the validated text lane |
 | **Open, next** | Wave 4 |
 
@@ -77,11 +78,9 @@ manual dispatch: once, on a final commit.
 
 ## NEXT ACTION
 
-Wave 3 is coded. **Wave 4**, in order: 436's blocking half (bounded async
-`execFile` in `browser-process.js`, `browser-target.js`, `routes/components.js`
-and the healer spawns, plus a derived guard), 451 (server-assigned provenance for
-lessons and notes), the 406 recorder, the 274 options note; 421/439 are attended
-qualification. BUG-432's flag goes default-on only after the attended A/B in the
+Wave 3 and 436's blocking half are coded. **Wave 4**, in order: 451
+(server-assigned provenance for lessons and notes), the 406 recorder, the 274
+options note; 421/439 are attended qualification. BUG-432's flag goes default-on only after the attended A/B in the
 speech session.
 
 Tracker note for the next ledger pass: BUG-406 is open but has no OPEN WORK

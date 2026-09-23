@@ -197,20 +197,20 @@ describe('BUG-410 — the attached browser is the one that ANSWERED', () => {
   // monkey-patched `browserAgent.processOnPort` — which the moved code does not
   // read, so the test would have gone on passing while exercising nothing. That
   // is the false-green shape (/kee class 14), caught by the move.
-  test('the identity oracle answers null for "cannot tell", never a guess', () => {
+  test('the identity oracle answers null for "cannot tell", never a guess', async () => {
     const at = (owner) => bp.identifyBrowserOnPort('http://127.0.0.1:9222', { processOnPort: owner });
-    assert.equal(at(() => ({ pid: 21708, exe: EXE.chrome })), 'chrome');
-    assert.equal(at(() => ({ pid: 24080, exe: EXE.brave })), 'brave',
+    assert.equal(await at(() => ({ pid: 21708, exe: EXE.chrome })), 'chrome');
+    assert.equal(await at(() => ({ pid: 24080, exe: EXE.brave })), 'brave',
       'brave.exe must be identifiable — the CDP product string says Chrome for both');
-    assert.equal(at(() => null), null);
-    assert.equal(at(() => ({ pid: 1, exe: 'C:\\x\\firefox.exe' })), null,
+    assert.equal(await at(() => null), null);
+    assert.equal(await at(() => ({ pid: 1, exe: 'C:\\x\\firefox.exe' })), null,
       'a browser MYTHOS cannot drive is unknown, not a mismatch and not a match');
-    assert.equal(at(() => ({ pid: 1, exe: null })), null, 'a process with no path is not an identity');
-    assert.equal(at(() => { throw new Error('powershell missing'); }), null,
+    assert.equal(await at(() => ({ pid: 1, exe: null })), null, 'a process with no path is not an identity');
+    assert.equal(await at(() => { throw new Error('powershell missing'); }), null,
       'the oracle runs on the launch path — it must degrade, never fail the launch');
     const good = () => ({ pid: 1, exe: EXE.chrome });
-    assert.equal(bp.identifyBrowserOnPort('not a url', { processOnPort: good }), null);
-    assert.equal(bp.identifyBrowserOnPort('http://127.0.0.1/', { processOnPort: good }), null,
+    assert.equal((await bp.identifyBrowserOnPort('not a url', { processOnPort: good })), null);
+    assert.equal((await bp.identifyBrowserOnPort('http://127.0.0.1/', { processOnPort: good })), null,
       'no port, no answer');
   });
 
@@ -221,20 +221,20 @@ describe('BUG-410 — the attached browser is the one that ANSWERED', () => {
       'and from-browser keeps a named seam, so the launch path stays readable');
   });
 
-  test('processOnPort rejects a port number it cannot use', () => {
+  test('processOnPort rejects a port number it cannot use', async () => {
     // Guards the string interpolated into the PowerShell query. Anything but a
     // real port must never reach it.
     for (const bad of [0, -1, 70000, 'nine', null, undefined, 1.5]) {
-      assert.equal(bp.processOnPort(bad, { execFileSync: () => { throw new Error('must not run'); } }), null,
+      assert.equal((await bp.processOnPort(bad, { execFile: () => { throw new Error('must not run'); } })), null,
         JSON.stringify(bad) + ' must not reach the query');
     }
   });
 
-  test('processOnPort reads the owning process, and reports "could not tell" as null', () => {
-    const ok = bp.processOnPort(9222, { execFileSync: () => Buffer.from('21708=' + EXE.chrome) });
+  test('processOnPort reads the owning process, and reports "could not tell" as null', async () => {
+    const ok = (await bp.processOnPort(9222, { execFile: () => Buffer.from('21708=' + EXE.chrome) }));
     assert.deepEqual(ok, { pid: 21708, exe: EXE.chrome });
-    assert.equal(bp.processOnPort(9222, { execFileSync: () => Buffer.from('') }), null, 'nothing listening');
-    assert.equal(bp.processOnPort(9222, { execFileSync: () => { throw new Error('blocked'); } }), null,
+    assert.equal((await bp.processOnPort(9222, { execFile: () => Buffer.from('') })), null, 'nothing listening');
+    assert.equal((await bp.processOnPort(9222, { execFile: () => { throw new Error('blocked'); } })), null,
       'a blocked or absent PowerShell is ignorance, not "nothing is running"');
   });
 });
