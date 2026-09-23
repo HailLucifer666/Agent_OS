@@ -3,45 +3,36 @@
 *Under 100 lines, by rule. The roadmap is the archive; this file is the position.
 Rewrite in place, never append.*
 
-## Position (2026-09-18, after the four-fix pass)
+## Position (2026-09-23, after the attended run)
 
 **One workflow, until it is boring.** Stage 1 only; Stages 2-7 paused until the
 golden path holds 10 consecutive PASS lines across two cold boots for a week.
-**Streak: 0** (last line: `PREREQ-MISSING` — no debuggable browser on 9222 before
-the session started). Not re-run on 09-18: that pass was headless.
+**Streak: 0.** The golden path cannot pass today: "play the third video" is
+structurally impossible (BUG-445, below).
 
-**The four fixes the 09-16 attended run asked for are coded, in order.** Four
-commits on `verify/live-2026-09-10`, each with a failing-first test, mutation
-probes diffed against a full-path backup, and the full suite green at commit.
-**Pushed 2026-09-18 to `b0553793`; PR #96 carries the whole branch, 87 commits
-ahead of `main`, and is NOT for merge until the attended pass below.** CI still
-wants one dispatch on the final SHA.
+**The attended run happened** (2026-09-23, 13:37-14:14, from source via
+`npm start`, combined auth mode, 51 voice turns, flags `LOOP_LAG_TRACE`,
+`VOICE_SERIALIZE_NOTICES`, `PIN_SESSION_TTL_MS=120000` — all three removed after).
+Register: **open 13 -> 17, verified 85 -> 89.** Four closed, seven filed. The bugs
+were already there; the run wrote them down.
 
-| commit | ticket | what changed |
-|---|---|---|
-| `b2d52872` | **437** | `electron/quit-sequence.js` + `process-tree.js` + `vault-push.js`. `before-quit` now `preventDefault()`s and awaits the shutdown it already asked for; `will-quit` deleted; process identity is `(ProcessId, CreationDate)`, so a reaped pid is never tree-killed |
-| `8041b595` | **442** | `server/credentials.js`. The PIN session and the bearer token stop sharing the cookie name `mythos_token`; `isValidNoSlide()`/`renew()`; a 12 h absolute ceiling replaces the hard Max-Age that was the only cap; net-guard routes a 401 by which credential is missing |
-| `2e707594` | **443** | Every failure site in `from-app-reply`/`from-pc`/`from-cua` goes through `reasonText()`; a derived guard fails on any NEW `String(x.error)` site rather than counting known ones |
-| `0502b51d` | **433** | `server/boot-greeting.js` + `ui/public/js/hud-ready.js`. The greeting waits for a client that says it can PLAY one, instead of arming on the first connection and spending the shot there |
+| result | tickets |
+|---|---|
+| **Live-verified, closed** | **433** greeting heard after unlock · **434** typing claim stands · **442** no token prompt after 11 idle min on a 2-min session · **268** Ctrl+Alt+X read, copied, toasted in 489 ms |
+| **Partial, still open** | **437** X quit leaves no process and the shell waits, but the server hangs on its reflection (LLM) step, is hard-killed at 6 s, and the checkpoint is never written · **422** a child death CAPTURED: exit 0xE06D7363, native C++ exception, suspect the in-process Kokoro worker killed mid-inference · **436** an 18 s silence with a healthy server (model-side) and a 3 s zero-CPU freeze during a sync PowerShell spawn the profiler likely cannot see · **432** measured: the flag holds tool results too — keep it OFF |
+| **Not exercised** | **439** (model used the media tool) · **441** (no `unverified:true` click) · **421** · 437's tray and in-app quits |
+| **Filed** | **445** snapshot cut to 4,000 chars, only the 1st video addressable (CRITICAL, golden path) · **446** paused over-budget "commitment" goals from 09-11 acted at boot, launched Brave, while locked (HIGH) · **447** 15 of 51 turns system-initiated, heal lines spoken in log vocabulary (HIGH) · **448** window-control false retraction · **449** tool syntax spoken aloud · **450** TTS chain retries dead engines, audio 51 s behind text · **451** wrong lessons saved to the vault |
 
-Suite 7859 -> **7949, 0 fail, 0 cancelled, 0 skipped, exit 0** (long-form TEMP,
-`MYTHOS_PORT=4999 EDGE_TTS_PORT=5099`). All five documentation gates green.
-
-**Three defects were found inside these fixes, by probes rather than by reading:**
-442's `tokenOk()` accepted a PIN session where a bearer was required; 433's server
-kept a socket variable beside the scheduler's target id and the two could
-disagree; 433's lock screen resolved `unknown -> unlocked` on the ordinary no-PIN
-boot in silence, which would have meant no greeting on any machine without a PIN.
+Evidence: `.cache/windows-operator/attended-2026-09-23/` — merged `timeline.log`,
+`raw-*.log` copies of every source, `crash1-*` and `silence1-*` snapshots,
+`refpos.js` (the 4,000-char measurement). Gitignored; this machine only.
 
 ## The golden path
 
 Spoken, in the operator's already-signed-in browser: **open YouTube, play the
 third video, pause, resume, next.** Instrument: `cd mythos && node
-scripts/golden-path.js`, once a day with MYTHOS up; it appends one
-`PASS|FAIL|UNVERIFIED|PREREQ-MISSING` line to
-`.cache/windows-operator/golden-path.log` (gitignored). The debug browser MYTHOS
-launches is a fresh profile, so the "signed-in" premise is only met when the
-operator's own browser carries the port.
+scripts/golden-path.js`, once a day with MYTHOS up. It needs a debuggable browser
+on 9222 before boot, or the model launches a fresh-profile one itself.
 
 ## Stages
 
@@ -54,47 +45,37 @@ operator's own browser carries the port.
 Pre-commit runs the full suite and blocks on `fail > 0`, nothing else. The five
 documentation gates are `cd mythos && npm run docs:check` — run before a push,
 with the suite's TAP piped in or a long-form TEMP. Regenerate `index.html` BEFORE
-the counting run; read each gate's exit directly, never through `| tail`. An
-agent shell exports the 8.3 short `TEMP`, under which the suite honestly reports
-`fail=2 skipped=1` that a long-form `TEMP` does not.
+the counting run; read each gate's exit directly. An agent shell's 8.3 short
+`TEMP` makes the suite honestly report `fail=2 skipped=1`. In `BUGS.md`'s OPEN WORK
+register, FIXED/RESOLVED/CLOSED/SATISFIED anywhere in a bullet closes that ticket.
 
-## Still open
+## Operator decisions owed
 
-- Open: **274, 275, 406, 421, 422, 432, 434, 436, 439, 444**; coded and owing one human
-  confirmation: **268, 433, 437, 441, 442**.
-- **443 closed 2026-09-21**, the only one of the four closable offline. Count 14 -> 13.
-- 274 T3 and 406 are decisions (D1, D2) nobody has made. 436/422 stay
-  diagnosis-gated. 421 needs desktop operator mode (decision D6).
-- **New decision, from 442's security review:** a background poll still counts as
-  PIN-session activity. The 12 h ceiling bounds a session's life; it does not
-  establish a person is there. Making renewal depend on real input is a product
-  call and it touches the voice path.
-- **BUG-444, filed 2026-09-18 and not worked:** `/api/auth/session` puts the raw
-  `MYTHOS_AUTH_TOKEN` into a 30-day browser cookie rather than minting a session
-  id, so it cannot be revoked per browser. MEDIUM; out of 442's scope by choice.
-- Track E: E1/E2/E5/E6/E9 shipped; E3/E4/E8 measured and left; E7 not done.
-- Licensing and release decisions (step 6.5, 274 T3). No release authorized.
+- **Should a "commitment" expire?** A "right now" from 12 days ago fired today (446).
+- **Should a successful self-heal ever be spoken during a live conversation?**
+  Recommendation: no (447).
+- **Shutdown:** save data before the reflection call, cap it, or drop it at quit (437).
+- **Remove the two wrong records** in `vault/Lessons/` and notes once 445 lands (451).
+- Still open from before: background polls count as PIN activity (442); D1
+  wake-word licence (274 T3); D2 recordings (406); D6 operator mode (421).
+- Operator action, not code: **Gmail needs re-authorising** (`invalid_grant`).
 
 ## NEXT ACTION
 
-**Nothing here is attended-verified. Four fixes sit on evidence that is entirely
-offline, and three of them are about what the running app does.**
+**BUG-445 first** — it is the golden path, and the mechanism is fully measured:
+give the model a compact, reference-first view of a page bounded by element count,
+never a character-cut raw tree, and never a screenshot through a text result.
+Learn from BUG-397, the same defect on the desktop path. Prove it attended with
+"play the third video" and "play the sixth video".
 
-1. **One attended session, cold boot from source, speaker on, Task Manager open.**
-   433: was the greeting heard? 437: quit three ways (X, tray, in-app) and check
-   `lifecycle.shutdown.complete`, the checkpoint and the process inventory. 442:
-   a full conversation with a PIN configured, watching for the token prompt.
-   434: the operator's caret in the DM box first, so the model reaches `ui_type`.
-   268: toast seen plus paste.
-2. Quote the lines into `BUGS.md`, rerun `docs:check`, commit, push.
-3. Then dispatch `ci.yml` once on the final SHA and decide PR #96's fate. After
-   442 lands the operator is asked for the access token once more (30-day cookie,
-   `routes/auth.js`) — already said in the PR.
+Then, in order of harm: **446** (status and budget as hard gates at execution),
+**437**'s shutdown ordering (one-line reorder, big data-safety win), **450**'s
+circuit breaker (which also cuts BUG-422's crash exposure), **447**, **448**.
+Nothing merges from PR #96 until CI runs once on the final SHA.
 
 ## Where the detail lives
 
 Archive: `MYTHOS-IRIS-Synthesis-Plan.md` (roadmap), `-V2-spine.md` (source-level),
-`MYTHOS-Post-Parity-Plan.md` (post-step-7). Defect evidence: `BUGS.md`. Raw run
-artifacts: `.cache/windows-operator/`; the 09-16 run:
-`%APPDATA%\MYTHOS\mythos-server.log` from `--- boot: MYTHOS 0.1.12-dev pid=15388`,
-`vault/Audit/2026-09-16.jsonl`.
+`MYTHOS-Post-Parity-Plan.md` (post-step-7). Defect evidence: `BUGS.md`. This run:
+`%APPDATA%\MYTHOS\mythos-server.log` from `--- boot: MYTHOS 0.1.12-dev pid=18264`,
+`vault/Audit/2026-09-23.jsonl`, `vault/Episodic/2026-09-23.jsonl`.
