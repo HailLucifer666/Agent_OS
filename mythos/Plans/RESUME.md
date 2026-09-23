@@ -30,8 +30,8 @@ the repo at `~/.claude/plans/file-d-agen-20os-agent-os-main-agent-os-linked-hoar
 
 | state | tickets |
 |---|---|
-| **Coded, attended session owed** | 444, 452 (startup/access session) |
-| **Open, next** | **445** (golden path), 446, then Wave 2 |
+| **Coded, attended session owed** | 444, 452 (startup/access); **445** (browser targets) |
+| **Open, next** | **446**, then Wave 2 (437, 450, 422) |
 
 ## The golden path
 
@@ -68,12 +68,13 @@ CI is manual dispatch: run it once, on a final commit, when no more commits are 
 
 ## NEXT ACTION
 
-**Land the PIN-removal PR** (CI once on its final commit), then **BUG-445**: a
-bounded, main-first view of the page built by `browser_snapshot` itself, whose
-accepted refs are exactly the refs it emitted, links collapsed by target so "the
-third video" is the third distinct `/watch` link. Measured on Chrome 2026-09-23:
-the old cap had stripped every `/url` line, so the model never knew which link was
-which video. Then **446** (status and budget as hard gates at execution).
+**Merge in order — each PR targets `main` and builds on the one before:** #102 (PIN
+removal, CI green on `ec2efd93`; the session's permission check blocked the agent from
+merging, so the operator merges), then the BUG-445 PR. BUG-445 is CODED: `browser_snapshot`
+returns a bounded, paged, main-first list whose accepted refs are exactly the refs it
+printed, and the voice adapter bounds results as a structure. Its proof owed is one
+`golden-path.js` line and an attended "play the third / sixth video". Then **446**
+(status and budget as hard gates at execution).
 
 Tracker note for the next ledger pass: BUG-406 is open but has no OPEN WORK
 register bullet, so the register lists 17 names while the index counts 18 open.

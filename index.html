@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7876,
+      "value": 7903,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5866,7 +5866,7 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-23 with the PIN removal] The sign-in cookie is now a random session id (mythos_session); auth-sessions.js stores its SHA-256 and a token fingerprint beside config.json, never in the vault; the raw-token mythos_token cookie is cleared, never read; per-browser logout closes that session's sockets; rotation ends all sessions; a corrupt store fails closed. Red-first test and 11 mutation probes in the entry. Remaining evidence: attended remote sign-in, sign-out and rotation from a second device.",
+          "evidence": "[CODED 2026-09-23 with the PIN removal] The sign-in cookie is now a random session id (mythos_session); auth-sessions.js stores its SHA-256 and a token fingerprint beside config.json, never in the vault; the raw-token mythos_token cookie is cleared, never read; per-browser logout closes that session's sockets; rotation ends all sessions; a corrupt store fails closed. Red-first test and 12 mutation probes in the entry. Remaining evidence: attended remote sign-in, sign-out and rotation from a second device.",
           "source": "mythos/test/bug-444-session-cookie-is-not-the-token.test.js; mythos/server/auth-sessions.js; mythos/server/credentials.js"
         }
       },
@@ -5874,14 +5874,14 @@
         "n": 445,
         "shape": "entry",
         "state": "open",
-        "title": "the voice model is shown only the first 4,000 characters of a browser snapshot, so \"play the third video\" can never work (filed 2026-09-23)",
+        "title": "the voice model is shown only the first 4,000 characters of a browser snapshot, so \"play the third video\" can never work (CODED 2026-09-23; filed 2026-09-23)",
         "detail": {
           "cause": "`truncateForModel()` in `src/core/voice/live-tool-adapter.js` cuts every tool result to"
         },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-23 from the attended run; the golden-path test] Tool results reach the Live model cut to 4,000 characters (truncateForModel); a YouTube snapshot is ~8,650 and the header uses ~3,400, so only the first video's reference is ever visible. Measured on four snapshots: video 1 at ~3,300, videos 2–6 at 4,100–7,900. The model guessed references (one off by one, two nonexistent) and played the wrong video. Same class as BUG-397. Consumers: every browser_snapshot → browser_click flow; Stage 1 golden path. Remaining evidence: none for the mechanism; a fix is proven by attended \"play the third / sixth video\".",
-          "source": "mythos/src/core/voice/live-tool-adapter.js; measured with .cache/windows-operator/attended-2026-09-23/refpos.js"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-23] browser_snapshot now returns a bounded, paged list built by snapshot-view.js — dialog and search box first, then main in page order, links to one target merged into one item — and the tools accept exactly the refs printed on pages the model has read; a ref from a page that has since changed address is refused. The voice adapter bounds results as a structure (model-result.js): binary fields never reach the model as text, arrays lose items from the end without renumbering. Red-first test and 12 mutation probes in the entry. Remaining evidence: attended \"play the third video\" and \"play the sixth video\" on the real page, with the intended video id in the URL and playback advancing.",
+          "source": "mythos/test/bug-445-snapshot-view-shows-what-it-accepts.test.js; mythos/src/core/effectors/snapshot-view.js; mythos/src/core/voice/model-result.js"
         }
       },
       {

@@ -24,7 +24,11 @@ const PROSE_BASELINE = {
   "claim-check.js": ["331fa7dc114f198f"],
   "narration-claims.js": ["d98c73994603d126"],
   "turn-audit-notices.js": ["2516cec7e56c2064"],
-  "voice-agent.js": ["0389baa340c47aa1", "a769c4ee72490ffc", "8266b6bf213bc2b9", "37bb0d112fd86208", "829d84f969b61a66", "e498939cf2a8d0b0", "57ac9c3a016ac87a"],
+  // 2026-09-23, BUG-445: was "e498939cf2a8d0b0". A SWAP, not an addition — still
+  // 7 sites. The hashed literal is the whole RULES block; its BROWSER INTERACTION
+  // RULE now says browser_snapshot LISTS items with a ref like e12 (it no longer
+  // returns a tree of [ref=e12] markers), which rehashes the block. No new advice.
+  "voice-agent.js": ["0389baa340c47aa1", "a769c4ee72490ffc", "8266b6bf213bc2b9", "37bb0d112fd86208", "829d84f969b61a66", "4ef68331d4e70f3f", "57ac9c3a016ac87a"],
   "browser-intent-remedy.js": [
     "49a97d7d71bc722c",
     "50518bdca0531d56"
