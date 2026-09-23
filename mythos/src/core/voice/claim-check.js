@@ -79,6 +79,33 @@ const CLAIM_CATEGORIES = [
   {
     name: 'sending',
     tools: ['whatsapp_send', 'gmail_send', 'phone_sms_send'],
+    // BUG-434 (2026-09-10 09:51Z): `ui_type({"text":"Checking in, as requested."})`
+    // completed outcome:ok into Slack's message box, MYTHOS said "I sent the text
+    // 'Checking in, as requested' to that message box", `re` below matched "I
+    // sent", the backed check looked only at the three send tools above, and a
+    // TRUE sentence was retracted aloud ("the typing didn't actually go through").
+    // The operator: "The typing did go through." F1b's class exactly, one
+    // category over: a hand-kept tool list missing the tool that really ran.
+    //
+    // backingTools are tools whose SUCCESS backs this category's claim without
+    // being this category's own tools. The reason is "a tool that put text into,
+    // or submitted, the focused control makes 'I sent the text' true" — ui_type
+    // puts the text, send_key submits it (Enter) — and the set is derived from
+    // that reason, not from the one incident. Three bounds, all test-pinned
+    // (test/bug-434-typing-backs-a-sent-claim.test.js):
+    //   - they do NOT gate the elliptical tier: a failed ui_type is a failed
+    //     typing attempt, not "a send that was attempted and failed", so the
+    //     2026-08-14 "Message sent to Alex, sir." + whatsapp_send FAIL case is
+    //     unchanged and a passive "Message sent" over a failed send is still
+    //     caught even when a ui_type also succeeded nearby;
+    //   - they are NOT candidateTools: the correction names what should have run,
+    //     and "call ui_type" is the wrong remedy for an unbacked "sent" claim;
+    //   - honest limit, per the header's favour-misses rule: a first-person "I
+    //     sent" beside a successful ui_type is backed even if a send tool also
+    //     failed in the window — the model may have typed into the messaging app
+    //     after the API send failed, and guessing which it meant risks the one
+    //     error this file must never make (telling MYTHOS to retract the truth).
+    backingTools: ['ui_type', 'send_key'],
     re: /\b(?:i(?:'ve| have) |i )(sent|texted|emailed|messaged)\b/i,
     // A3 (2026-08-14): the measured false claim was "Message sent to Alex, sir."
     // at 17:29:26, in the same turn as whatsapp_send=FAIL — and the mandatory
@@ -106,6 +133,7 @@ const CLAIM_CATEGORIES = [
   },
   {
     name: 'opening',
+    incidentProgressiveRe: /^(?:opening(?!\s+hours\b)|launching|navigating\s+to)\b|\bi(?:'m| am)\s+retrying\b[^.]{0,70}\b(?:open|launch|navigate)\b|\bi(?:'m| am)\s+working on\b[^.]{0,70}\b(?:open|launch|navigate)\b/i,
     // BUG-398 row 7, found while measuring it: open_folder and open_file were in
     // NO category, so a SUCCESSFUL open_folder could not back "I opened the
     // Downloads folder" — `re` matched "I opened", the backed check looked only
@@ -133,9 +161,44 @@ const CLAIM_CATEGORIES = [
     // have flagged it however the tiers were written. The gap was the category
     // table, not the regexes.
     name: 'window-control',
+    incidentProgressiveRe: /^(?:closing|dismissing|spawning)\b|\bi(?:'m| am)\s+retrying\b[^.]{0,70}\b(?:close|dismiss|spawn)\b|\bi(?:'m| am)\s+working on\b[^.]{0,70}\b(?:closed|dismissed|spawned|close|dismiss|spawn)\b/i,
     tools: ['close_panel', 'close_window', 'manage_widget', 'spawn_widget'],
     re: /\b(?:i(?:'ve| have) |i )(closed|dismissed|opened up|spawned)\b[^.]{0,30}\b(widget|panel|window|card)\b|\b(?:the\s+)?(widget|panel|window|card)\b[^.]{0,20}\b(?:has been|is now)\s+(?:closed|dismissed|open)\b/i,
     progressiveRe: /\b(?:closing|dismissing|opening|spawning)\b[^.]{0,40}\b(widget|panel|window|card)\b|\b(?:is|am|'m)\s+(?:now\s+)?(?:closing|dismissing)\b/i,
+  },
+  {
+    // BUG-441 (2026-09-11 session; fixed 2026-09-16). `browser_click` x2 came
+    // back ok + unverified:true ("clicked ... from page script because it never
+    // became visibly actionable") and MYTHOS said "I clicked the play button".
+    // The filed cause was "the unverified caveat is dropped on the way to the
+    // spoken turn". It is not: evaluateOutcome folds unverified into ok:false,
+    // the ledger stores that, and `a.ok === true` is the backing test — the same
+    // session's unverified open_web WAS caught (3 claimed-action-not-taken
+    // target:opening events in Episodic/2026-09-11.jsonl). No category owned
+    // the verb "clicked", so the sentence had no shape to fail against. Same
+    // class as window-control above: the gap was the table, not the regexes.
+    //
+    // Tools: every `*click*` name in leash/tiers.js's TIER_TABLE — the test in
+    // claim-check-categories.test.js derives that set and fails if this list
+    // and TIER_TABLE disagree in either direction. see_and_click is OWNED, not
+    // backing: it ends in a real click.
+    //
+    // "pressed" is deliberately absent. A successful browser_press_key/send_key
+    // is not a click, and flagging "I pressed Enter" would retract a true
+    // statement (BUG-434's failure). A keys category is a separate decision.
+    //
+    // WHAT THIS CANNOT DO, on purpose. On Gemini Live the audio is already
+    // heard when the detector runs (live-session.js: "It cannot un-speak the
+    // audio"); the ad4-correction-retract notice is the earliest correction
+    // that path allows. And the detector backs by TOOL NAME: a real
+    // browser_click earlier in the evidence window backs a later false "I
+    // clicked the pause button" (pinned as test (f) in
+    // bug-441-clicks-are-a-claim-shape.test.js, recorded as a residual in
+    // BUGS.md). Matching the claimed target to the action's args is the next
+    // step if that residual is measured to matter.
+    name: 'clicking',
+    tools: ['browser_click', 'ui_click', 'click_at', 'right_click_at', 'see_and_click', 'cua_click'],
+    re: /\b(?:i(?:'ve| have) |i )(clicked|tapped)\b/i,
   },
   {
     name: 'reminders',
@@ -297,7 +360,7 @@ function splitSentences(text) {
 // carry their own `status` when the caller precomputed one (live-tool-adapter's
 // ledger does); anything without one is derived here from ok/unverified, same
 // as actionStatus() would.
-function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
+function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, options) {
   const text = String(assistantText || '');
   if (!text) return [];
 
@@ -344,9 +407,11 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
       const gate = (category.gateTools && category.gateTools.length)
         ? category.gateTools : category.tools;
       let match = category.re ? category.re.exec(sentence) : null;
+      let elliptical = false;
       if (!match && category.ellipticalRe
           && gate.some((tool) => attemptedUnproven.has(tool))) {
         match = category.ellipticalRe.exec(sentence);
+        elliptical = !!match;
       }
       // BUG-398 row 4: the progressive tier, and its gate is the OPPOSITE shape
       // to the elliptical one above. Elliptical needs a tool ATTEMPTED and
@@ -364,13 +429,30 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
       // with a pending row is silent here, and the premature-claim path owns it.
       if (!match && category.progressiveRe && !gate.some((tool) => pendingTools.has(tool))
           && !PROGRESSIVE_SUBJECT_IS_THEIRS_RE.test(sentence)) {
-        match = category.progressiveRe.exec(sentence);
+        match = category.progressiveRe.exec(sentence) || (options?.voiceHonesty !== false && category.incidentProgressiveRe?.exec(sentence));
       }
       if (!match) continue;
       // A fact-finding tool that SUCCEEDED backs the claim. This is what stops
       // the detector telling the assistant to retract a statement it had just
       // earned — the F1b lesson recorded in the searching category above.
-      const backed = gate.some((tool) => successfulTools.has(tool));
+      // BUG-434: a category may name backingTools — tools that are not its own
+      // but whose success makes its claim true (see the sending category). They
+      // are read HERE only: not in `gate` (so they never OPEN the elliptical
+      // tier) and not in candidateTools below.
+      //
+      // AND THEY MUST NOT CLOSE THE ELLIPTICAL TIER EITHER. Not obvious, and the
+      // first draft of this fix got it wrong: `backed` is evaluated AFTER any
+      // tier has matched, so an OR here suppressed every tier at once. Measured
+      // 2026-09-10 by running the adjacent-case test before trusting the diff —
+      // "Message sent to Alex, sir." over a FAILED whatsapp_send stopped being
+      // flagged the moment a successful ui_type stood in the same window, which
+      // is the 2026-08-14 false claim walking back in. The elliptical tier only
+      // fires when an OWNED tool of this category was attempted and did not
+      // succeed: that is direct counter-evidence about the very action claimed,
+      // and a backing tool is not entitled to overrule it. The first-person and
+      // progressive tiers carry no such counter-evidence, so they are backed.
+      const backed = gate.some((tool) => successfulTools.has(tool))
+        || (!elliptical && (category.backingTools || []).some((tool) => successfulTools.has(tool)));
       if (backed) continue;
       flaggedCategories.add(category.name);
       claims.push({
@@ -382,6 +464,48 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions) {
     }
   }
   return claims;
+}
+
+// BUG-441 D3 (operator decision 2026-09-16, "also suppress-before") — the legacy
+// text->TTS path's correction. Given the reply, the claims detectUnbackedClaims
+// found in it, and the turn's failed/unverified actions, REPLACE each flagged
+// sentence whose category tool really did not succeed with "<tool> did not
+// succeed — <why>." Until this change voice-agent.js appended that clause AFTER
+// the false sentence, so the operator heard the lie and then the correction.
+//
+// Only a claim that names a failed tool is removed. voice-agent.js passes the
+// failed actions ALONE to the detector, so a true sentence about a tool that
+// succeeded ("I sent the email" over a real gmail_send) is flagged too — and it
+// must stay. Lives here rather than in voice-agent.js because that file sits at
+// its file-size-ratchet ceiling and because this is pure text over pure data.
+// ponytail: a sentence mixing a true and a false clause ("I sent it and opened
+// the page") loses its true half; the corrective brain pass upstream already
+// tends to split them. Split by clause if that is measured to bite.
+function replaceUnbackedClaims(say, claims, unprovenActions) {
+  let text = String(say || '');
+  const byTool = new Map();
+  (unprovenActions || []).forEach((a) => { if (a && a.tool && !byTool.has(a.tool)) byTool.set(a.tool, a); });
+  const said = new Set();
+  const clauses = [];
+  const retracted = [];
+  (claims || []).forEach((claim) => {
+    let named = false;
+    (claim.candidateTools || []).forEach((tool) => {
+      const a = byTool.get(tool);
+      if (!a || said.has(tool)) return;
+      said.add(tool);
+      named = true;
+      const why = a.unverified
+        ? ((a.raw && a.raw.reason) || a.summary || 'could not be confirmed')
+        : (a.summary || 'failed');
+      clauses.push(tool + ' did not succeed — ' + why + '.');
+    });
+    if (named && claim.sentence) retracted.push(claim.sentence);
+  });
+  if (!clauses.length) return text;
+  retracted.forEach((sentence) => { text = text.replace(sentence, ''); });
+  text = text.replace(/\s{2,}/g, ' ').trim();
+  return (text ? text + ' ' : '') + clauses.join(' ');
 }
 
 // BUG-357 — the affirmative twin of the spoken-no cancellation. "Yeah. Yeah. Go
@@ -607,7 +731,7 @@ function detectFalseRetractions(assistantText, actionsThisTurn, recentActions) {
 }
 
 module.exports = {
-  detectUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice,
+  detectUnbackedClaims, replaceUnbackedClaims, CLAIM_CATEGORIES, buildSpokenGoAheadNotice,
   detectUnscheduledCommitments, SCHEDULE_WRITE_TOOLS, SCHEDULE_READ_TOOLS,
   detectFalseRetractions,
   // Exported for ranked-claim-check.js, which is a second detector over the

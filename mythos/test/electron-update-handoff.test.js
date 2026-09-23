@@ -217,13 +217,20 @@ test('the child is never restarted during shutdown', () => {
 
 test('before-quit does not repeat the blocking vault push during an update', () => {
   const code = codeOnly(readMainJs());
-  const body = code.slice(code.indexOf("app.on('before-quit'"), code.indexOf("app.on('will-quit'"));
-  const guardAt = body.indexOf('handedOverToInstaller');
-  const pushAt = body.lastIndexOf("syncVault('--push')");
+  // RE-POINTED 2026-09-18 (BUG-437). The quit-time push and its handover skip
+  // moved into electron/quit-sequence.js; before-quit is now one delegating
+  // line. What this guards is unchanged — an update handover must not push a
+  // second time inside the uninstaller's ~5 s retry window — so it is asserted
+  // where the decision now lives, plus the wiring that reaches it.
+  assert.match(code, /isInstallerHandover: \(\) => installerHandover/,
+    'main.js must still tell the sequence whether beginInstall already pushed');
+  const seq = codeOnly(fs.readFileSync(path.join(REPO_ROOT, 'electron', 'quit-sequence.js'), 'utf8'));
+  const guardAt = seq.indexOf("call('isInstallerHandover'");
+  const pushAt = seq.indexOf("callAsync('pushVault'");
   assert.ok(guardAt !== -1 && pushAt !== -1 && guardAt < pushAt,
-    'before-quit must skip the push when beginInstall already did it — it is a BLOCKING spawnSync '
-    + 'with a 15s timeout, and the uninstaller only waits ~5s for us to let go');
-  assert.ok(/return;/.test(body.slice(guardAt, pushAt)), 'the guard must return before the push');
+    'the sequence must check the handover BEFORE pushing — beginInstall already pushed with the clock still ours, '
+    + 'and the uninstaller only waits ~5s for us to let go');
+  assert.ok(/return;/.test(seq.slice(guardAt, pushAt)), 'the guard must return before the push');
 
   // And the push must still happen on the install path — just earlier, where it
   // is not inside the uninstaller's retry window.

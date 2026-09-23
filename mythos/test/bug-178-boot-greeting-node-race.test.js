@@ -89,6 +89,21 @@ async function connect(port) {
   return ws;
 }
 
+// RE-POINTED 2026-09-18 (BUG-433). Connecting no longer arms the greeting; the
+// client has to say it can PLAY one, because on 2026-09-16 the first connection
+// was a PIN-locked HUD that could not, and the greeting was synthesized, sent
+// and discarded while the server logged a delivery. These fixtures stood in for
+// a dashboard, so they now send what a dashboard sends. Every assertion below is
+// unchanged — this file's own claims (a node must not consume the greeting, one
+// greeting per boot rather than one per tab) are exactly as load-bearing as
+// before, and a client that stays silent is covered separately by the
+// compatibility-limit case in bug-433-…-hear-it.test.js.
+async function connectHud(port) {
+  const ws = await connect(port);
+  ws.send(JSON.stringify({ type: 'hud-ready', greetable: true }));
+  return ws;
+}
+
 describe('BUG-178: the boot greeting belongs to the dashboard, not to whoever connects first', () => {
   it('a phone node connecting first does not consume the greeting — the HUD that connects after still gets it', async () => {
     const bus = createBus({ historySize: 50 });
@@ -112,7 +127,7 @@ describe('BUG-178: the boot greeting belongs to the dashboard, not to whoever co
     // already gone by now — delivered to the node.
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    const hud = await connect(port);
+    const hud = await connectHud(port);
     const hudFrames = collect(hud);
 
     try {
@@ -137,7 +152,7 @@ describe('BUG-178: the boot greeting belongs to the dashboard, not to whoever co
     server._internal.setBootGreetingDelayMs(40);
     server._internal.rearmBootGreeting();
 
-    const hud = await connect(port);
+    const hud = await connectHud(port);
     const hudFrames = collect(hud);
 
     try {
@@ -169,7 +184,7 @@ describe('BUG-178: the boot greeting belongs to the dashboard, not to whoever co
     await waitFor(nodeFrames, (m) => m.type === 'identified' && m.ok === true, 2000);
 
     // Inside the node's still-pending window, not after it.
-    const hud = await connect(port);
+    const hud = await connectHud(port);
     const hudFrames = collect(hud);
 
     try {
@@ -201,10 +216,10 @@ describe('BUG-178: the boot greeting belongs to the dashboard, not to whoever co
     await waitFor(nodeFrames, (m) => m.type === 'identified' && m.ok === true, 2000);
     await new Promise((resolve) => setTimeout(resolve, 300));
 
-    const tabA = await connect(port);
+    const tabA = await connectHud(port);
     const framesA = collect(tabA);
     await waitFor(framesA, isGreeting, 3000);
-    const tabB = await connect(port);
+    const tabB = await connectHud(port);
     const framesB = collect(tabB);
 
     try {

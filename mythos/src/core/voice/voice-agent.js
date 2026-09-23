@@ -3,7 +3,7 @@
 // F3: Import tierOf to compute danger flags dynamically from the tier table.
 const { tierOf } = require('../leash/tiers');
 const { truncateAtSentenceBoundary } = require('../effectors/voice');
-const { detectUnbackedClaims } = require('./claim-check');
+const { detectUnbackedClaims, replaceUnbackedClaims } = require('./claim-check');
 
 // voice-agent.js — the voice tool-calling brain. CA of NOVA
 // app/lib/voice/voice-agent.js: persona + tool catalog + history ->
@@ -234,7 +234,7 @@ BREVITY: Match your reply length to the question, not to a word count — a gree
 
 REASONING: Before acting, reason about what the user actually wants. Consider context from RECENT EXCHANGES and RELEVANT MEMORIES. If you remember something relevant, reference it naturally — from a past conversation ("last time you mentioned...") or from earlier in THIS one. Callbacks and running jokes are always welcome: continuity is what makes you feel present rather than freshly booted.
 
-HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below allows. If the user asks for something with no tool, NEVER claim you are doing it. However, you CAN record and capture things — use these tools: remember (saves a durable fact/preference/instruction to permanent memory), log_incident (records an error/bug/incident), capture_idea (saves a build idea to the pipeline inbox), create_goal (saves a to-do). NEVER refuse a "log this","remember this","note that","don't forget", or "record this" request — you have remember and log_incident for exactly these. Pick remember for facts/preferences/standing rules, log_incident for errors/bugs/incidents. For other genuinely-missing capabilities (inspect audio buffers, restart pipelines, download files, access the filesystem directly), say plainly: "I don't have a tool to [X]." Fabricating capabilities — or overstating how well a real one works — destroys trust faster than any bug.
+HONESTY RULE (critical for trust): You can ONLY do what the TOOLS list below allows. If the user asks for something with no tool, NEVER claim you are doing it. However, you CAN record and capture things — use these tools: remember (saves a durable fact/preference/instruction to permanent memory), log_incident (records an error/bug/incident), capture_idea (saves a build idea to the pipeline inbox), create_goal (saves a to-do). NEVER refuse a "log this","remember this","note that","don't forget", or "record this" request — you have remember and log_incident for exactly these. Pick remember for facts/preferences/standing rules, log_incident for errors/bugs/incidents. For other genuinely-missing capabilities (inspect audio buffers, restart pipelines, download files, access the filesystem directly), say plainly: "I don't have a tool to [X]." Fabricating capabilities — or overstating how well a real one works — destroys trust faster than any bug. Never give a name a rank its source did not give it either; a passing mention is not a ranking.
 
 MEMORY RULE (prevents memory pollution): Only call remember when the user EXPLICITLY asks you to save something — they must say one of: "remember", "note that", "don't forget", "from now on", "keep in mind", "log this", "record this", or give a direct instruction to persist a fact. Do NOT call remember for conversational fragments, vague references, incomplete sentences, or speech-to-text artifacts. If the user mentions a preference casually ("I like X", "I prefer Y", "that you like") WITHOUT asking you to remember it, do NOT call remember — just acknowledge naturally in your reply. Not writing it down is no reason to be flat about it — react with an opinion, a question, or a bit of teasing. Never write a "the user mentioned..." meta-summary to memory; write the actual fact if explicitly asked, or nothing. When in doubt whether the user wants something remembered, ASK ("Want me to remember that?") instead of silently writing to memory.
 
@@ -244,7 +244,7 @@ FRUSTRATION RULE: if the user expresses frustration AT YOU OR THE SYSTEM ('not w
 
 DANGER TOOLS RULE (safety-critical, read carefully): each tool below is marked "danger": true or "danger": false. For a danger:true tool, you may ONLY put it in "actions" if the utterance itself clearly and specifically names the target (an exact goal/card/file described in THIS utterance, or an explicit direct confirmation like "yes, delete it" replying to a question YOU just asked in this same turn). If the utterance is vague about WHAT to act on (words like "it", "that", "this", "the thing") and nothing concrete is named anywhere else in this turn, that is NOT authorization: you MUST put "actions": [] and instead ask a clarifying question in "say". Never put a danger:true tool call in "actions" as a placeholder while you ask a clarifying question — asking a question and queuing the dangerous action in the same turn is always wrong. When genuinely unsure, prefer actions: [] and ask.
 
-PROJECT INTAKE RULE: when the user asks you to build/make/create something open-ended (a game, a landing page, an app), do NOT start immediately. Ask ALL your clarifying questions in ONE turn as a short list (2-3 questions max, covering the essentials: what kind, what style, what audience). After the user answers, you may ask at most ONE more round of questions ONLY if an answer is genuinely ambiguous and blocks you from building. NEVER ask a third round of questions — by then you have enough to build. Once you have style/topic/audience, restate the plan in one sentence and ask for an explicit go-ahead. Call start_project ONLY after the user clearly says to proceed in a LATER turn, with the full accumulated spec as description. Never call start_project on the same turn you first proposed the plan.
+PROJECT INTAKE RULE: when the user asks you to build/make/create something open-ended (a game, a landing page, an app), do NOT start immediately. Ask ALL your clarifying questions in ONE turn as a short list (2-3 questions max, covering the essentials: what kind, what style, what audience). After the user answers, you may ask at most ONE more round of questions ONLY if an answer is genuinely ambiguous and blocks you from building. NEVER ask a third round of questions — by then you have enough to build. Once you have style/topic/audience, restate the plan in one sentence and ask for an explicit go-ahead. Call start_project ONLY after the user clearly says to proceed in a LATER turn, with the full accumulated spec as description.
 AFFIRMATION RESOLUTION RULE: when the user says "go ahead", "proceed", "yes", "do it", "sure", or "okay", they are confirming whatever YOU proposed or offered in YOUR most recent reply — NOT authorizing a build. Read RECENT EXCHANGES to find your last offer. If you offered to search, play music, open a website, or look something up, do THAT action. Only call start_project / build_project / run_mission on an affirmation if YOU explicitly proposed building something specific in the immediately preceding turn AND the user is confirming that build. A bare "go ahead" after "want me to search the web for that?" means SEARCH, not BUILD.
 IDEA SPARRING: you are a creative partner, not a form. When you ask intake questions, ALSO propose — offer 1-2 concrete opinionated suggestions with each round ("I could give it a dark hero section with a live demo embed — want that?"). When the user describes requirements, volunteer one improvement or addition they did not ask for, phrased as an offer ("Shall I also add X?"), never silently included. If the user rejects a suggestion, drop it and do not re-propose it. Suggestions ride along with your questions in the same turn — they never add extra rounds beyond the two the PROJECT INTAKE RULE allows.
 
@@ -573,9 +573,14 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // extra brain call on every Ctrl+N — real cost for no honesty gained, since
   // nobody hears "I pressed ctrl+n" as a claim about the world. These are the ones
   // where an unproven result gets spoken as an accomplishment.
+  // BUG-441 (2026-09-16): only ui_click was here, so an unverified browser_click
+  // could not trigger re-derivation at all. The reason above covers every
+  // *click* tool in TIER_TABLE, so the set is completed, not patched by one name.
   const OUTCOME_CLAIMED_TOOLS = {
     ui_type: true, app_reply: true, whatsapp_send: true, gmail_send: true,
-    spotify_play: true, launch_app: true, ui_click: true,
+    spotify_play: true, launch_app: true,
+    ui_click: true, browser_click: true, click_at: true, right_click_at: true,
+    see_and_click: true, cua_click: true,
   };
 
   // Channels that represent the operator talking, right now. An explicit
@@ -858,29 +863,13 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
       // exactly which tool didn't succeed instead of leaving the false claim
       // standing.
       try {
-        const unbacked = allFailedActions.concat(allUnverifiedActions)
-          .map((a) => ({ tool: a.tool, ok: false })); // unverified never backs a claim (module contract)
-        const claims = detectUnbackedClaims(finalSay, unbacked);
-        if (claims.length) {
-          const byTool = new Map();
-          allFailedActions.concat(allUnverifiedActions).forEach((a) => {
-            if (!byTool.has(a.tool)) byTool.set(a.tool, a);
-          });
-          const said = new Set();
-          const clauses = [];
-          claims.forEach((claim) => {
-            claim.candidateTools.forEach((tool) => {
-              const a = byTool.get(tool);
-              if (!a || said.has(tool)) return;
-              said.add(tool);
-              const why = a.unverified
-                ? ((a.raw && a.raw.reason) || a.summary || 'could not be confirmed')
-                : (a.summary || 'failed');
-              clauses.push(tool + ' did not succeed — ' + why + '.');
-            });
-          });
-          if (clauses.length) finalSay = (finalSay ? finalSay + ' ' : '') + clauses.join(' ');
-        }
+        const unproven = allFailedActions.concat(allUnverifiedActions);
+        const unbacked = unproven.map((a) => ({ tool: a.tool, ok: false })); // unverified never backs a claim (module contract)
+        const claims = detectUnbackedClaims(finalSay, unbacked, [], { voiceHonesty: false }); // BUG-423: legacy progressive patterns stay unchanged.
+        // BUG-441 D3 (2026-09-16): the false sentence is REPLACED by the
+        // correction, not spoken and then corrected. The text logic is in
+        // claim-check.js (pure, tested there); this file is at its size ceiling.
+        finalSay = replaceUnbackedClaims(finalSay, claims, unproven);
       } catch (_) { /* claim-check is best-effort — never block the reply */ }
     }
 

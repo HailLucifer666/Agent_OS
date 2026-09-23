@@ -22,7 +22,8 @@ const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = r
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
-const { buildBriefingFacts } = require('../src/core/conversation/briefing');
+const { buildBriefingFacts, GREETING_FACT_DISCIPLINE } = require('../src/core/conversation/briefing');
+const { TOOL_RESPONSE_DISCIPLINE } = require('../src/core/voice/narration-claims');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
 const { dispatchAction: sharedDispatch } = require('../src/core/effectors/dispatch-action');
@@ -33,7 +34,6 @@ const { _PATTERNS: LOG_SECRET_PATTERNS } = require('../src/core/effectors/creden
 // S2S (V2 §6-§10, merged-order step 4, Phase 5 wiring): Gemini Live transport,
 // hub->functionDeclarations conversion, and the tool-adapter safety seam.
 const { createLiveSession } = require('../src/core/voice/live-session');
-const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
 // Installer parity (2026-08-11): do not DECLARE a tool whose adapter or
 // credentials do not exist on this machine — the fresh install fired
 // gmail_unread/media_status/spotify_status against neither. See tool-capability.js.
@@ -65,6 +65,9 @@ const version = require('../src/core/identity/version');
 const { getUpdateReport } = require('../src/core/identity/update-report');
 const { isProviderDown } = require('../src/core/immune/probes');
 const { createPinSessionStore } = require('../src/core/security/pin-session');
+// BUG-442: one owner for both cookie names, the channel rules and the policy.
+const credentials = require('./credentials');
+const { pinCookieOptions } = require('./routes/pin');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -215,6 +218,7 @@ function createServer(deps) {
   const engagementManager = deps.engagementManager;     // Engagement layer — .engagement.{list,findById,transition}, .handleEngagementAction; Phase 1 executor lives on it (may be undefined in tests)
   const conversationGateway = deps.conversationGateway; // Engagement layer — .receive()/.classify()/.route() utterance classification
   const getCapabilityDigest = deps.getCapabilityDigest; // B2 — pre-context live capability digest (may be undefined in tests)
+  const stopBrowserOfflineNotice = browserAgentAdapter.onOffline(p => { if (config.LIVE_VOICE_HONESTY_ENABLED !== false) bus.emit('health.anomaly', { kind: 'browser-automation-offline', reason: p.reason, target: 'browser automation' }); });
   const identity = deps.identity;                      // S2S (Phase 5) — identity.persona() for buildLiveSystemInstruction (may be undefined in tests)
   const pinLock = deps.pinLock;                        // §7.3 — local PIN lock (may be undefined in tests)
   // Voice Nodes — the per-phone Aether scanner-proxy (src/core/aether/
@@ -257,12 +261,12 @@ function createServer(deps) {
   // embedded-JSON contract) + persona + version + capability digest + skills
   // catalog. Same content as today's per-turn voice prompt, assembled once —
   // V2 estimates ~50x cheaper under S2S (today ~3,524 tokens x every turn).
-  function buildLiveSystemInstruction() {
+  function buildLiveSystemInstruction(extra) {
     // BUG-117: the transport has no system role after setup, so every pipeline
     // injection arrives as user-role realtimeInput and the model attributed it
     // to the operator. This clause is the other half of SYSTEM_NOTICE_PREFIX —
     // both live in live-tool-adapter.js so they cannot drift apart.
-    const parts = [RULES, LIVE_SYSTEM_NOTICE_INSTRUCTION];
+    const parts = [RULES, config.LIVE_VOICE_HONESTY_ENABLED === false ? LIVE_SYSTEM_NOTICE_INSTRUCTION.replace(TOOL_RESPONSE_DISCIPLINE, '') : LIVE_SYSTEM_NOTICE_INSTRUCTION];
     try {
       const persona = identity && typeof identity.persona === 'function' ? identity.persona() : null;
       if (persona) parts.push(persona);
@@ -335,7 +339,7 @@ function createServer(deps) {
       const now = new Date();
       parts.push('Current local date/time: ' + now.toString());
     } catch (err) { logger.warn('live.time-compose-failed', { error: err.message }); }
-    return parts.filter(Boolean).join('\n\n');
+    return parts.filter(Boolean).join('\n\n') + (extra || '');
   }
 
   // Server-initiated camera look: broadcast a frame request; any connected UI
@@ -679,20 +683,25 @@ function createServer(deps) {
   // exact "one subsuming the other" the old comment here disclaimed while
   // the code below it did precisely that.
   //
-  // The fix cannot mean "one presented string satisfies both" — extractToken()
-  // resolves to a single credential per request. Instead the two layers are
-  // pinned to DISTINCT channels for the combined case:
-  //   - the bearer secret must arrive via Authorization header or ?token=
-  //     query (extractBearerChannel) — the channels a non-browser/API client
-  //     can always set;
-  //   - the PIN session must arrive via the mythos_token cookie
-  //     (extractCookieToken) — the only channel routes/pin.js ever issues it
-  //     on.
-  // This is forced by a real naming collision: routes/pin.js's session
-  // cookie and the plain back-compat bearer-via-cookie path (see the
-  // 'mythos_token cookie' test in server-auth.test.js) share the literal
-  // cookie name mythos_token. Splitting the bearer check to header/query-only
-  // for the combined case avoids that collision instead of relying on it —
+  // The fix cannot mean "one presented string satisfies both" — a single
+  // merged extractor resolves to one credential per request. The two layers are
+  // therefore pinned to DISTINCT channels, and since BUG-442 (2026-09-18) those
+  // channels are distinct COOKIES rather than a header/cookie split:
+  //   - the bearer secret arrives via Authorization header, ?token= query, or
+  //     the `mythos_token` cookie;
+  //   - the PIN session arrives via its own `mythos_pin` cookie, and on a
+  //     deployment with no bearer configured also via header/query.
+  // Both names and both channel rules live in server/credentials.js.
+  //
+  // THE ORIGINAL SPLIT WAS FORCED BY A NAMING COLLISION, AND THAT COLLISION WAS
+  // ITSELF THE BUG. routes/pin.js's session cookie and the back-compat
+  // bearer-via-cookie path shared the literal name `mythos_token`, so the
+  // combined case had to bar the bearer from the cookie channel to avoid one
+  // credential overwriting the other. Giving the PIN its own name removes the
+  // collision at the root instead of routing around it — which also let the
+  // combined-mode 409 in routes/auth.js go, since a browser on a combined
+  // deployment can now hold both cookies at once. Historical note, kept because
+  // the reasoning still applies to any future second credential:
   // a browser can send both a query/header bearer token AND its session
   // cookie on the same request (including a WS upgrade, which sends normal
   // headers/cookies even though it can't be scripted to set arbitrary ones
@@ -725,61 +734,52 @@ function createServer(deps) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
+  // BUG-442 (2026-09-18): the four extractors and the policy moved to
+  // server/credentials.js, which owns both cookie names so they cannot silently
+  // become one again. Every path here uses isValidNoSlide() — asking whether a
+  // session is valid must not be what keeps it alive. requireToken() is the
+  // ONLY renewer, and re-issues the cookie from the same expiry it slides.
+  function credentialCheck(req) {
+    return credentials.evaluate(req, {
+      authToken: AUTH_TOKEN,
+      authTokenMatches,
+      pinRequired: pinSessionRequired(),
+      pinValid: (presented) => pinSession.isValidNoSlide(presented),
+    });
+  }
+
   function tokenOk(req) {
-    if (AUTH_TOKEN && pinSessionRequired()) {
-      // Both layers active: distinct channels, both required. See the block
-      // comment above for why neither may be satisfied from the other's
-      // channel or from a single merged credential.
-      return authTokenMatches(extractBearerChannel(req)) && pinSession.isValid(extractCookieToken(req));
-    }
-    const presented = extractToken(req);
-    if (pinSession.isValid(presented)) return true;
-    if (!AUTH_TOKEN) return !pinSessionRequired();
-    const a = Buffer.from(String(presented || ''));
-    const b = Buffer.from(AUTH_TOKEN);
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
+    return credentialCheck(req).ok;
   }
 
-  // extractBearerChannel/extractCookieToken are the two channels extractToken
-  // (below) merges in priority order; split out so tokenOk()'s combined-layer
-  // branch above can pin each credential to its own channel instead of the
-  // single merged value every other branch still uses.
-  function extractBearerChannel(req) {
-    const auth = req.headers && req.headers.authorization;
-    if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, '').trim();
-    try {
-      const fromQuery = new URL(req.url, 'http://internal').searchParams.get('token');
-      if (fromQuery) return fromQuery;
-    } catch (_) { /* malformed url */ }
-    return null;
-  }
-
-  function extractCookieToken(req) {
-    const cookieHeader = req.headers && req.headers.cookie;
-    if (cookieHeader) {
-      const parts = cookieHeader.split(';');
-      for (let i = 0; i < parts.length; i++) {
-        const kv = parts[i].trim().split('=');
-        if (kv[0] === 'mythos_token') return decodeURIComponent(kv.slice(1).join('=') || '');
-      }
-    }
-    return null;
-  }
-
-  // Shared by the /api|/vault/builds HTTP gate and the WS verifyClient below.
-  // Order: Authorization: Bearer header (any client) -> ?token= query (the
-  // §18.2 fix — a browser WebSocket cannot set headers, so this is how a
-  // remote HUD tab authenticates the WS upgrade) -> mythos_token cookie (set
-  // by the HUD once the operator enters the token, reused on plain HTTP nav).
+  // Kept as a named export of this closure because verifyClient's node-trust
+  // branch wants the bearer specifically, not "whatever credential arrived".
   function extractToken(req) {
-    return extractBearerChannel(req) || extractCookieToken(req);
+    return credentials.extractBearer(req);
   }
 
   function requireToken(req, res, next) {
-    if (!tokenOk(req)) {
-      // BUG-400: three deployments, three missing credentials. See ./auth-hint.js.
+    const verdict = credentialCheck(req);
+    if (!verdict.ok) {
+      // BUG-400 gave this a human hint; BUG-442 adds the machine-readable half.
+      // The client has to choose between relocking the PIN screen and opening
+      // the token prompt, and it was previously guessing from the URL alone.
       const hint = unauthorizedHint({ hasToken: !!AUTH_TOKEN, pinRequired: pinSessionRequired() });
-      return res.status(401).json({ error: hint });
+      return res.status(401).json({ error: hint, missing: verdict.missing });
+    }
+    // Authorized, and a PIN session carried part of that authorization: slide
+    // the server window and re-issue the browser's cookie from the SAME expiry.
+    // Two clocks derived from one number cannot drift apart, which is the whole
+    // of BUG-442's live symptom.
+    if (pinSessionRequired() && verdict.pinPresented) {
+      const renewed = pinSession.renew();
+      if (renewed) {
+        // no-store is load-bearing: the PIN credential now rides ordinary GET
+        // /api responses that carry no freshness headers, and a caching proxy
+        // would serve one client's session cookie to another (review 2026-09-18).
+        res.setHeader('Cache-Control', 'no-store');
+        res.cookie(credentials.PIN_COOKIE, verdict.pinPresented, pinCookieOptions(req, renewed.maxAgeMs));
+      }
     }
     next();
   }
@@ -980,7 +980,7 @@ function createServer(deps) {
     if (PIN_UNLOCK_EXEMPT_PATHS.has(req.path)) return next();
     return requireToken(req, res, next);
   });
-  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken, pinSessionRequired, pinSessionValid: (r) => pinSession.isValid(extractCookieToken(r)) })); // BUG-317: a signed artifact link substitutes for the bearer token, never for the PIN session
+  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken, pinSessionRequired, pinSessionValid: (r) => pinSession.isValidNoSlide(credentials.extractPin(r, { allowHeaderQuery: !AUTH_TOKEN })) })); // BUG-317: a signed artifact link substitutes for the bearer token, never for the PIN session. BUG-442: reads the PIN's own cookie. NOTE (security review 2026-09-18): the no-slide applies to the SIGNED-LINK branch only — an unsigned request falls through to requireToken(), which renews like any other, so an <img src="/vault/builds/…"> from a same-site page does slide the session. Stated rather than claimed otherwise; narrowing it belongs with the open question of whether a background request should count as presence at all
 
   // ---- static asset delivery: compression + caching -----------------------
   //
@@ -1301,7 +1301,7 @@ function createServer(deps) {
   require('./routes/pin').mountPinRoutes(app, { pinLock, pinSession });
 
   // ---- /api/auth/session — exchange MYTHOS_AUTH_TOKEN for the mythos_token
-  // cookie extractCookieToken() above already reads. Without this the HUD
+  // cookie server/credentials.js already reads. Without this the HUD
   // (a plain browser tab, which cannot set an Authorization header on its own
   // navigation and cannot set headers on a WebSocket upgrade at all) had no
   // way to authenticate on a token-configured deployment. See routes/auth.js. ----
@@ -2099,7 +2099,13 @@ function createServer(deps) {
       // duplicate gmail announcement opening/consuming Live moments earlier and
       // this greeting arriving second. Logged as a warning because with
       // VOICE_UNIFIED_LIVE_VOICE on, a fall-through is a defect, not a mode.
-      if (!(liveSession && liveSession.isOpen()) && config.VOICE_UNIFIED_LIVE_VOICE) {
+      // BUG-433: this fall-through has two causes and they are not one event. No
+      // listener is the designed mode (the greeting speaks in the TTS voice);
+      // anything else with unified voice ON is the defect BUG-149 named.
+      const noListener = typeof targetWs.hasLiveListener === 'function' && !targetWs.hasLiveListener();
+      if (!(liveSession && liveSession.isOpen()) && config.VOICE_UNIFIED_LIVE_VOICE && noListener) {
+        logger.info('proactive.live-skipped-no-listener', { note: 'no client is listening on the Live channel; speaking via the TTS chain' });
+      } else if (!(liveSession && liveSession.isOpen()) && config.VOICE_UNIFIED_LIVE_VOICE) {
         logger.warn('proactive.live-unavailable-voice-will-differ', {
           note: 'unified live voice is ON but no Live session — speaking via the TTS chain instead',
           chain: String(config.VOICE_TTS_CHAIN || process.env.VOICE_TTS_CHAIN || ''),
@@ -2354,17 +2360,20 @@ function createServer(deps) {
   // "upgraded since last boot" check compares the current git ref against
   // Identity/last-boot.json (written at construction, so the diff survives
   // even if the brain is offline when the client connects).
-  // Disable with BOOT_GREETING=false (env, same passthrough convention as
-  // VOICE_INTAKE_IDLE_MS above). Also suppressed under the node test runner
-  // (NODE_TEST_CONTEXT): the greeting fires 2.5s after a WS connection and
-  // its TTS-probe/brain fetches leave sockets open past the last test, which
-  // wedges the test-file child process (the runner then waits forever).
-  let bootGreetingFired = process.env.BOOT_GREETING === 'false' || !!process.env.NODE_TEST_CONTEXT;
-  // BUG-148: bootGreetingFired means "scheduled", not "spoken" — it is set the
-  // moment the timer is armed. The gmail-batch subscriber needs to know whether
-  // the greeting has actually been DELIVERED, which is a different question and
-  // ~2.5s later. See that subscriber for why.
-  let bootGreetingDelivered = bootGreetingFired;   // pre-satisfied when there will be no greeting
+  // BOOT_GREETING=false disables greetings; NODE_TEST_CONTEXT also avoids delayed test fetches.
+  // BUG-148: the gmail-batch subscriber needs to know whether the greeting has
+  // actually been DELIVERED, so this is set after proactiveSpeak, never at
+  // arming time. It starts true wherever no greeting will be spoken at all.
+  //
+  // BUG-433 (2026-09-18) deleted its companion `bootGreetingFired`. That flag
+  // meant "a timer is running", which was the only record of the single shot
+  // while arming happened on connection; the scheduler owns that state now, and
+  // a second variable saying the same thing is what let the 09-16 greeting be
+  // marked spent before anything had been spoken.
+  // The old two-line form ORed in `BOOT_GREETING==='false' && !hasSettingsWarnings`
+  // on top of a plain `BOOT_GREETING==='false'`, so the warnings term could never
+  // change the result. Same value, arithmetic no longer hiding that.
+  let bootGreetingDelivered = !!process.env.NODE_TEST_CONTEXT || process.env.BOOT_GREETING === 'false';
   const serverBootAt = Date.now();
   // How long after boot the greeting is still considered "about to happen". Only
   // used to bound the gmail suppression below, so a sensor batch arriving hours
@@ -2375,6 +2384,28 @@ function createServer(deps) {
   // it — the real 2.5s outlives a test file, and BUG-178's race is unobservable
   // from outside without arming the actual timer.
   let bootGreetingDelayMs = 2500;
+  // BUG-433 (2026-09-18). The greeting used to arm on the FIRST connection and
+  // mark the single shot fired at that moment. On 2026-09-16 that connection
+  // was a PIN-locked HUD, which drops proactive speech before registering a
+  // handler — so the audio was synthesized, sent, discarded, and logged as
+  // delivered. "Something connected" is not "something can play this", and only
+  // the client knows the second one. It says so in a `hud-ready` message; this
+  // scheduler waits for one that can. States and rationale: ./boot-greeting.js.
+  // Keyed by connection id, NOT one mutable "the greetable socket": the scheduler already
+  // owns which connection the shot belongs to, and a second variable tracking
+  // the same fact can disagree with it. A first draft here did — a second tab
+  // announcing itself while tab one was scheduled was refused by the scheduler
+  // and still overwrote the socket, so the greeting would have gone to a tab the
+  // scheduler had never chosen. The socket is now DERIVED from the target id.
+  const greetableSockets = new Map();
+  const greetingScheduler = require('./boot-greeting').createGreetingScheduler({
+    get delayMs() { return bootGreetingDelayMs; },
+    log: (event, data) => logger.info(event, data),
+    // Re-asked when the timer fires: the operator can relock, or the tab can
+    // close, inside the delay — which is precisely where 09-16's greeting died.
+    stillEligible: (id) => { const s = greetableSockets.get(id); return !!s && s.readyState === 1 && !s._mythosNodeId; },
+    deliver: (id) => deliverBootGreeting(greetableSockets.get(id)),
+  });
   const LAST_BOOT_PATH = 'Identity/last-boot.json';
   const bootUpgrade = { upgraded: false, changes: [] };
   // Genuine "since this entity was last alive" instant for the self-healing
@@ -2462,12 +2493,15 @@ function createServer(deps) {
   const GREETING_DEDUP_KEY = 'greeting:session';
 
   async function deliverBootGreeting(targetWs) {
+    if (targetWs && (targetWs.readyState !== 1 || targetWs._mythosNodeId)) return false; // BUG-433: hand the shot back
+    if (process.env.BOOT_GREETING === 'false') {
+      await proactiveSpeak(conversationAnnouncer?.appendSettingsWarnings('', deps.settingsDiagnostics), targetWs);
+      return;
+    }
     const hour = new Date().getHours();
     const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-    // TASK B2: fact assembly lives in conversation/briefing.js now (extracted
-    // for the same reason electron/child-exit.js was — testable behaviorally,
+    // TASK B2: fact assembly lives in conversation/briefing.js (testable behaviorally,
     // not just source-shape) and each source is individually time-boxed there.
-    // Deps below are exactly the closure state the inline code used to read.
     // `dispatch` reaches read-only T0 tools (get_weather, reminder_list) via
     // the same dispatchAction() wrapper every other caller uses — AD-1's
     // "one execution surface" rule forbids briefing.js from calling
@@ -2507,7 +2541,7 @@ function createServer(deps) {
               'The correct greeting for right now is exactly "' + salutation + '" — open with it or a natural ' +
               'equivalent for that same time of day, and do not invent, guess, or state a different time of day ' +
               '(do not say "morning" if the salutation says afternoon or evening, and so on). ' +
-              'Facts you may use:\n- ' +
+              (config.LIVE_VOICE_HONESTY_ENABLED === false ? '' : GREETING_FACT_DISCIPLINE) + 'Facts you may use:\n- ' +
               facts.join('\n- ') + '\n' +
               'If a "Last time we spoke" fact is present, open by picking up that thread in half a sentence, ' +
               'the way someone resumes a conversation rather than starting one.\n' +
@@ -2540,15 +2574,17 @@ function createServer(deps) {
       text = salutation + ', sir. ' + (config.MYTHOS_NAME || 'MYTHOS') + ' online.' +
         (bootUpgrade.upgraded ? ' I have received an upgrade since we last spoke.' : ' All systems nominal.');
     }
-    // Mark THE canonical "session opened" greeting so any other greeting-shaped
-    // source (the daily planner's morning brief) sharing this dedup key is
-    // suppressed for conversationAnnouncer's dedup window (BUG-112).
+    // Recheck after generation; a replacement dashboard may already be waiting.
+    if (targetWs && (targetWs.readyState !== 1 || targetWs._mythosNodeId)) {
+      targetWs = [...wss.clients].find((ws) => ws.readyState === 1 && !ws._mythosNodeId);
+      if (!targetWs) return false; // BUG-433: nothing was spoken, so the scheduler re-arms
+    }
     try {
       if (conversationAnnouncer && typeof conversationAnnouncer.markAnnounced === 'function') {
         conversationAnnouncer.markAnnounced(GREETING_DEDUP_KEY);
       }
     } catch (_) {}
-    await proactiveSpeak(text, targetWs);
+    await proactiveSpeak(conversationAnnouncer ? conversationAnnouncer.appendSettingsWarnings(text, deps.settingsDiagnostics) : text, targetWs);
     // BUG-148: set AFTER the greeting has actually been spoken, so the gmail-batch
     // subscriber's suppression window closes at the right moment. Set in a finally-
     // style position rather than early, because a batch arriving while the greeting
@@ -2838,6 +2874,12 @@ function createServer(deps) {
     // gate and compatibility with server fixtures that never exercise voice.
     let liveSession = null;
     let liveAdapter = null;
+    // BUG-433: the HUD registers its onBroadcast('live-audio-out') handler inside
+    // s2s-bridge start() (:1031) and only then sends live-open (:1039), so the
+    // message is a faithful proxy for "this client can play Live audio" — and
+    // ws.js drops an unhandled broadcast type in silence (:166-169), which is why
+    // the 0.1.12 boot greeting reached Gemini and was never heard by anyone.
+    let clientLiveRequested = false;
     let liveOutputGeneration = 0, operatorReqId = null, operatorLivePending = false;
     const desktop = config.DESKTOP_OPERATOR_ENABLED && deps.desktopRuntime ? require('./desktop-connection').createDesktopConnection({
       runtime: deps.desktopRuntime, connectionId, leash, dispatch: dispatchAction, send, historyAppend, logger,
@@ -2888,12 +2930,14 @@ function createServer(deps) {
           leash, dispatchAction: (decision, ctx) => dispatchAction(decision, { ...ctx, connectionId }), bus, logger, connectionId,
           memory, historyAppend, reflection,
           summarizeActionsForResult,
-          getLiveSession: () => liveSession,
+          getLiveSession: () => liveSession, speakWhenClosed: async text => {
+            await proactiveSpeak(text, ws, { skipLive: true });
+          },
           sanitizeErrorForClient,
           goals, // BUG-113: commitment-ledger logging in onLiveTurnComplete
           // Fix-plan 2.3: the schema key the .env.example doc points at —
           // without this the documented dial silently did nothing.
-          toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS,
+          toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS, config,
         });
         liveAdaptersByConnection.set(connectionId, liveAdapter);
       }
@@ -2905,46 +2949,10 @@ function createServer(deps) {
         // rotation, contradicting this function's own comment below. Passed as a
         // FUNCTION now, the same way buildLiveSystemInstruction is (BUG-079), so
         // live-session.js rebuilds it on every open()/reconnect.
-        const rebuildDeclarations = () => buildFunctionDeclarations(effectors, {
-          allowlist: String(config.LIVE_TOOL_ALLOWLIST || '').split(',').map((s) => s.trim()).filter(Boolean),
-          // Do not declare a tool whose machinery is absent on this machine.
-          // The freshly installed build fired gmail_unread / media_status /
-          // spotify_status before the operator had spoken, against credentials
-          // and adapters the install does not have. Built HERE, per session, not
-          // at boot: an adapter that comes online later must become declarable
-          // on the next session without a restart. See core/voice/tool-capability.js.
-          capability: buildCapabilitySnapshot({
-            config,
-            // The adapter modules are singletons holding their own connection
-            // state, and pc-child is already require()d at the top of this file
-            // for exactly that reason. getStatus() is a pure read; requiring
-            // these starts nothing.
-            adapters: {
-              browser: config.DESKTOP_OPERATOR_ENABLED ? deps.desktopRuntime?.getBridge() || { getStatus: () => ({ state: 'OFFLINE' }) } : browserAgentAdapter,
-              cua: cuaDriverAdapter,
-              pcChild,
-              android: androidChildAdapter,
-            },
-          }),
-          log: (m) => logger.info('live-tools', { detail: m }),
-        });
-        const { declarations, withheld, unavailable } = rebuildDeclarations();
-        // Only the tool NAMES go to the session; withheld/unavailable are
-        // reported here. Re-logging them on every rotation would turn a
-        // once-per-session diagnostic into a recurring one, so the rebuild
-        // closure below deliberately keeps just `declarations`.
-        const declarationsForSession = () => rebuildDeclarations().declarations.filter(d => !desktop || require('./desktop-connection').conversationToolAllowed(d.name));
-        if (withheld.length) logger.info('live-tools.withheld', { count: withheld.length });
-        // Logged as its own event, not folded into the line above: "withheld by
-        // curation" and "withheld because this machine cannot do it" are
-        // different findings and only one of them is a setup problem.
-        if (unavailable && unavailable.length) {
-          logger.warn('live-tools.unavailable', {
-            count: unavailable.length,
-            tools: unavailable.map((u) => u.name),
-            reasons: [...new Set(unavailable.map((u) => u.reason))],
-          });
-        }
+        const liveDeclarations = require('../src/core/voice/live-declarations').createLiveDeclarations({
+          config, effectors, logger, desktop, desktopRuntime: deps.desktopRuntime,
+          browserAgentAdapter, cuaDriverAdapter, pcChild, androidChildAdapter,
+          conversationToolAllowed: require('./desktop-connection').conversationToolAllowed });
         const outputGeneration = liveOutputGeneration;
         liveSession = createLiveSession({
           // liveConfigNow() carries a voice picked in the HUD since boot.
@@ -2959,10 +2967,10 @@ function createServer(deps) {
           // buildSetup() calls it fresh on every open()/reconnect so the local
           // time (and anything else composed here) never goes stale across a
           // long-running or rotated session.
-          systemInstruction: buildLiveSystemInstruction,
+          systemInstruction: () => buildLiveSystemInstruction(liveDeclarations.instructionBlock()),
           // BUG-079's reasoning applied to the catalog, not just the prompt: a
           // function, so a rotation re-reads which adapters are actually up.
-          functionDeclarations: declarationsForSession,
+          functionDeclarations: liveDeclarations.forSession,
           onToolCall: (calls, handlers) => desktop ? require('./desktop-connection').conversationTools(calls, handlers, liveAdapter) : liveAdapter.handleLiveToolCalls(calls, handlers),
           onAudioOut: (b64) => {
             if (outputGeneration !== liveOutputGeneration) return;
@@ -2992,18 +3000,20 @@ function createServer(deps) {
             // know the frame.
             send({ type: 'live-turn-complete', ...(desktop ? { operatorReqId } : {}) });
           },
-          // Direct per-connection barge-in callback — NOT the shared bus (see
-          // live-session.js's onInterrupted comment: a bare bus.subscribe here
-          // would fire for every OTHER connection's interruption too).
+          onEchoCheck: ({ ratio, matched }) => { if (config.VOICE_ECHO_VERDICT_TO_CLIENT !== false && outputGeneration === liveOutputGeneration) send({ type: 'live-echo-check', ratio, matched }); },
+          // Direct per-connection callbacks — a bare bus.subscribe here
+          // would fire for every OTHER connection's interruption too.
           onInterrupted: () => { if (outputGeneration === liveOutputGeneration) send({ type: 'live-interrupted', ...(desktop ? { operatorReqId } : {}) }); },
           // BUG-170: Live produced a reply the operator could read and no
           // audio at all — which is indistinguishable, from the room, from
           // being ignored. Speak it through the TTS chain instead. skipLive
           // is not optional here: routing it back into the session that just
           // failed to speak would be the same silence again.
-          onSilentTurn: ({ turnId, text }) => {
-            if (desktop) return; // The operator sink reports missing native audio; no competing TTS turn.
+          onSilentTurn: ({ turnId, text, interrupts }) => {
+            if (desktop) return; // Native operator audio owns this turn.
             if (outputGeneration !== liveOutputGeneration) return;
+            const reason = config.LIVE_VOICE_HONESTY_ENABLED !== false && require('../src/core/voice/silent-turn').silentTurnWithheld({ text, interrupts });
+            if (reason) { logger.info('live.turn-silent.withheld', { turnId, reason }); return; }
             logger.warn('live.turn-silent.speaking-via-tts', { turnId, chars: text.length });
             proactiveSpeak(text, ws, { skipLive: true })
               .catch((err) => logger.warn('live.turn-silent.tts-failed', { turnId, error: err.message }));
@@ -3043,7 +3053,20 @@ function createServer(deps) {
     // now open without the operator having spoken — but live-session.js's
     // MAX_IDLE_ROTATIONS_WITHOUT_SPEECH ceiling still stops an unattended
     // session rotating forever.
-    async function liveForSpeech() {
+    // THREE clients can render live-audio-out, announcing it three different ways,
+    // so one predicate would be wrong for two of them: the HUD bridge sends
+    // live-open; a voice node declares live-audio at identify time and never sends
+    // live-open; and in operator mode operator-playback.js subscribes on its own,
+    // keyed on operatorReqId, while batch STT owns the mic and the bridge never
+    // starts. Naming the renderer at the call site is deliberate — one name with
+    // two predicates is how this repo has broken audit semantics before. An
+    // omitted renderer gets the broadcast rule, the refusing direction.
+    function canRender(renderer) { return renderer === 'operator' ? !!desktop : (clientLiveRequested || ws._nodeLiveAudio === true); }
+    ws.hasLiveListener = () => canRender();
+    async function liveForSpeech(renderer) {
+      // Opening a metered Gemini session for a client that cannot play its audio
+      // spends money to produce silence (BUG-433).
+      if (!canRender(renderer)) return null;
       if (!config.VOICE_UNIFIED_LIVE_VOICE) return null;
       if (!config.VOICE_S2S_ENABLED) return null;
       // No key -> open() would fail anyway; skip the attempt and the log noise.
@@ -3069,51 +3092,6 @@ function createServer(deps) {
     // client connecting AFTER boot would otherwise sit on 'booting' forever.
     send({ type: 'entity-state', payload: { name: config.MYTHOS_NAME, status: entityStatus, tick: memory.working.tick } });
 
-    // First dashboard connection this boot → spoken greeting + status brief.
-    // Small delay so the client finishes wiring its WS handlers and voice
-    // machinery before the proactive-speech broadcast lands.
-    if (!bootGreetingFired) {
-      bootGreetingFired = true;
-      const greetTimer = setTimeout(() => {
-        // BUG-178: a voice node must not consume the greeting. Nodes share this
-        // /ws path and only reveal themselves via {type:'identify',role:'node'}
-        // AFTER the upgrade, so "the first connection this boot" is not the same
-        // question as "the dashboard" — and the answer is only available here, at
-        // fire time, not at the arming site above. A phone reconnecting at boot
-        // (the normal case per NodeLink.kt) won that race: the whole greeting
-        // went to the phone while the HUD connecting a second later got nothing,
-        // silently. Speaking through a phone IS a feature, but an election-gated
-        // one (nodeSpeechTarget: AETHER_NODE_AUDIO + an elected aetherOwner);
-        // picking a socket bypassed that gate entirely.
-        //
-        // Re-arming alone is NOT enough, and the first cut of this fix got that
-        // wrong — live-probed 2026-08-10. A dashboard that connected during the
-        // node's 2.5s window already saw bootGreetingFired === true and so never
-        // armed a timer of its own; re-arming at fire time is then too late for
-        // it and the greeting is lost by both devices. So look for a dashboard
-        // that is already connected and hand it over directly, and only re-arm
-        // when there is genuinely nobody to greet yet.
-        //
-        // Either way this stays one greeting per boot, never one per tab (the
-        // BUG-112 shape): the handover keeps the gate closed, and a re-armed gate
-        // is closed again by whichever dashboard connects next.
-        if (ws._mythosNodeId) {
-          const dashboard = [...wss.clients].find((c) => c.readyState === 1 && !c._mythosNodeId);
-          if (dashboard) {
-            logger.info('boot-greeting.rerouted-from-node', { nodeId: ws._mythosNodeId });
-            deliverBootGreeting(dashboard).catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
-            return;
-          }
-          bootGreetingFired = false;
-          logger.info('boot-greeting.deferred-node-connection', { nodeId: ws._mythosNodeId });
-          return;
-        }
-        // Deliver to THIS connection only — with two dashboard tabs open, a
-        // broadcast greeting plays twice in overlap ("two voices").
-        deliverBootGreeting(ws).catch((err) => logger.warn('boot-greeting.failed', { error: err.message }));
-      }, bootGreetingDelayMs);
-      if (greetTimer.unref) greetTimer.unref();
-    }
 
     // CONSISTENCY FIX (spec vs shipped brain, documented in ROADMAP.md P9): the
     // spec's handleUtterance calls brain.interpret(), which no shipped phase ever
@@ -3758,7 +3736,7 @@ function createServer(deps) {
       // the native Live session; operator playback retains ownership until drain.
       if (msg.type === 'utterance') {
         if (desktop) {
-          require('./desktop-connection').routeConversation(msg, { router: desktop, getLive: liveForSpeech, send, sanitize: sanitizeErrorForClient, onStart: id => { operatorReqId = id; operatorLivePending = true; } });
+          require('./desktop-connection').routeConversation(msg, { router: desktop, getLive: () => liveForSpeech('operator'), send, sanitize: sanitizeErrorForClient, onStart: id => { operatorReqId = id; operatorLivePending = true; } });
           return;
         }
         // Proof that the mic-hot window that ducked the speakers was a person.
@@ -4006,6 +3984,18 @@ function createServer(deps) {
           resolveLocalWake([]);
         }
       }
+      // BUG-433: the client tells us whether it can actually PLAY proactive
+      // speech — socket up, PIN explicitly unlocked, voice config loaded,
+      // playback wired. A playback hint, never an authentication claim: the
+      // server decides what this socket IS (`isNode` below), the message does
+      // not get to say. An old HUD never sends this and is therefore never
+      // greeted; that is the documented compatibility limit.
+      else if (msg.type === 'hud-ready') {
+        const greetable = msg.greetable === true;
+        if (greetable) greetableSockets.set(connectionId, ws);
+        else { greetableSockets.delete(connectionId); greetingScheduler.withdraw(connectionId, msg.why || 'not-greetable'); }
+        greetingScheduler.offer({ id: connectionId, greetable, why: msg.why || null, isNode: !!ws._mythosNodeId });
+      }
       // A node claims its identity, so speech can be routed back to it. Last
       // writer wins (a reconnecting phone must be able to replace its own stale
       // socket), but a duplicate claim is reported as an anomaly because the
@@ -4064,7 +4054,7 @@ function createServer(deps) {
           send({ type: 'identified', ok: true, nodeId });
         }
       }
-      else if (msg.type === 'live-open') { queueTurn(function () { return liveOpen(); }); }
+      else if (msg.type === 'live-open') { clientLiveRequested = true; queueTurn(function () { return liveOpen(); }); }
       else if (msg.type === 'live-audio') { if (config.DESKTOP_OPERATOR_ENABLED) send({ type: 'live-state', state: 'closed', reason: 'operator-mode-requires-completed-transcription' }); else if (liveSession) liveSession.sendAudio(msg.data); }
       // Slice 3 screen share. Same guard shape as live-audio: a frame arriving
       // before live-open (or after a close) is a silent no-op, never a throw —
@@ -4079,7 +4069,7 @@ function createServer(deps) {
       else if (msg.type === 'live-video') {
         if (liveSession && config.LIVE_SCREEN_SHARE_ENABLED === true) liveSession.sendVideoFrame(msg.data);
       }
-      else if (msg.type === 'live-close') { if (liveSession) liveSession.close('client-request'); }
+      else if (msg.type === 'live-close') { clientLiveRequested = false; if (liveSession) liveSession.close('client-request'); }
       else if (msg.type === 'live-text') {
         if (liveSession) liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
       }
@@ -4089,6 +4079,12 @@ function createServer(deps) {
     // dangling Gemini socket would otherwise keep billing for open-mic time
     // with no client left to hear the reply.
     ws.on('close', () => {
+      // BUG-433: a socket that goes away hands the greeting back, so the next
+      // eligible HUD still gets one. The old code had already spent the single
+      // shot at arming time and could not.
+      greetableSockets.delete(connectionId);
+      greetingScheduler.withdraw(connectionId, 'socket-closed');
+      clientLiveRequested = false;
       desktop?.close().catch(error => logger.warn('desktop.disconnect-failed', { error: error.message }));
       if (liveSession) liveSession.close('ws-closed');
       liveAdaptersByConnection.delete(connectionId);
@@ -4315,6 +4311,10 @@ function createServer(deps) {
       // Fire-and-forget: a globalShortcut callback can't await, and a failure
       // must surface as an honest ocr-result, never crash the server.
       if (msg && msg.channel === 'mythos:ocr-grab') {
+        // BUG-268 D4 (2026-09-16): also up the fork IPC channel, for the main-process toast + clipboard (electron/ocr-result.js — the HUD is unfocused when the hotkey fires). `npm start` has no parent: guard.
+        const sendOcrResultToShell = (payload) => { if (typeof process.send !== 'function') return;
+          try { process.send({ channel: 'mythos:ocr-result', payload }); }
+          catch (err) { try { logger.warn('ocr.hotkey.shell-send-failed', { error: err && err.message }); } catch { /* never break the handler to log */ } } };
         (async () => {
           // BUG-268 boundary 2 (Electron callback owns boundary 1): entry without
           // outcome means dispatch hung; ok:true with empty text implicates capture/OCR.
@@ -4334,17 +4334,14 @@ function createServer(deps) {
                 error: error,
               });
             } catch { /* never break the handler to log */ }
-            broadcastAll({
-              type: 'ocr-result',
-              payload: {
-                ok: ok,
-                text: ok ? String((r.result && r.result.text) || '') : '',
-                error: error,
-              },
-            });
+            const payload = { ok: ok, text: ok ? String((r.result && r.result.text) || '') : '', error: error };
+            sendOcrResultToShell(payload);
+            broadcastAll({ type: 'ocr-result', payload });
           } catch (err) {
+            const payload = { ok: false, text: '', error: String((err && err.message) || err || 'OCR failed') };
+            sendOcrResultToShell(payload);
             try {
-              broadcastAll({ type: 'ocr-result', payload: { ok: false, text: '', error: String((err && err.message) || err || 'OCR failed') } });
+              broadcastAll({ type: 'ocr-result', payload });
             } catch { /* no clients connected — nothing to report to */ }
           }
         })();
@@ -4629,6 +4626,9 @@ function createServer(deps) {
   }
 
   function stop() {
+    stopBrowserOfflineNotice();
+    // BUG-372: no kokoro worker thread may outlive the server. Called on the PROVIDER MODULE, not through a chain object — routes/tts-voices.js builds replacement chains over the same singleton providers, so a chain-scoped shutdown would terminate a worker another chain still holds. The obvious home is stopRunningLoops() in src/main.js beside edgeTtsChild.stop(), but that file is AT its ratchet ceiling (1373), so this must stay one line.
+    try { const k = require('../providers/kokoro-tts').shutdown(); if (k && k.catch) k.catch(() => {}); } catch (_) { /* optional provider; never block shutdown on it */ }
     return new Promise((resolve) => {
       try {
         for (const client of wss.clients) {
@@ -4660,7 +4660,7 @@ function createServer(deps) {
       // NODE_TEST_CONTEXT pre-fires the gate, so the connection race that bug is
       // about cannot be reached from outside without re-arming it, and the real
       // 2.5s delay outlives a test file.
-      rearmBootGreeting: () => { bootGreetingFired = false; bootGreetingDelivered = false; },
+      rearmBootGreeting: () => { bootGreetingDelivered = false; }, // BUG-433: the scheduler owns the shot now
       setBootGreetingDelayMs: (ms) => { bootGreetingDelayMs = Number(ms) || 0; },
       // Voice Nodes: proactive speech targets lastActiveWs, and a phone pushing
       // proximity telemetry several times a second must never become that

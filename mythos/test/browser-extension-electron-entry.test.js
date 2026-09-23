@@ -31,7 +31,9 @@ test('compiled console native host exchanges bounded frames over restricted pipe
     if (message.type === 'command') child.stdin.write(encodeNativeMessage({ id: message.id, taskId: message.taskId, ok: true, result: { tabs: [{ tabId: 42, url: 'https://www.youtube.com/', active: true }] } }));
   });
   child.stdout.on('data', chunk => { fs.appendFileSync(path.join(run,'stdout.bin'), chunk); decode(chunk); }); child.stderr.on('data', chunk => stderr.push(String(chunk)));
-  child.stdin.write(encodeNativeMessage({ type: 'hello', protocol: 1, extensionId, browserName: 'brave' }));
+  // BUG-416: protocol 2 carries a persisted, UUID-shaped instanceId, and the
+  // bridge adopts it as the browserId instead of minting one per connection.
+  child.stdin.write(encodeNativeMessage({ type: 'hello', protocol: 2, instanceId: '11111111-2222-4333-8444-555555555555', extensionId, browserName: 'brave' }));
   await Promise.race([ready, new Promise((_, reject) => setTimeout(() => reject(new Error('Native entry handshake timed out: ' + stderr.join(''))), 10000).unref())]);
   const result = await bridge.execute('tabs', {}, { taskId: 'entry-proof' });
   assert.equal(result.ok, true); assert.equal(result.result.tabs[0].tabId, 42);
@@ -54,7 +56,12 @@ test('compiled host rejects unauthorized origin and malformed native frames with
     ['https://untrusted.test/', Buffer.alloc(0), /origin/],
     ['chrome-extension://' + extensionId + '/', Buffer.from([255,255,255,255]), /size/],
     ['chrome-extension://' + extensionId + '/', Buffer.from([20,0]), /Truncated/],
+    ['chrome-extension://' + extensionId + '/', encodeNativeMessage({ type: 'hello', extensionId, protocol: 1, instanceId: '11111111-2222-4333-8444-555555555555' }), /handshake/],
+    // BUG-416: protocol is right, identity is not. The host must refuse a
+    // missing or malformed instanceId AT THE EDGE, before anything is written
+    // to the pipe — the bridge re-checks, but by then the frame has travelled.
     ['chrome-extension://' + extensionId + '/', encodeNativeMessage({ type: 'hello', extensionId, protocol: 2 }), /handshake/],
+    ['chrome-extension://' + extensionId + '/', encodeNativeMessage({ type: 'hello', extensionId, protocol: 2, instanceId: 'not-a-uuid' }), /handshake/],
   ]) {
     const child = spawn(exe, [origin], { cwd: run, windowsHide: true, env: { ...process.env, TEMP: run, TMP: run, MYTHOS_BROWSER_EXTENSION_RUNTIME_DIR: run }, stdio: ['pipe','pipe','pipe'] });
     let output = '', errors = ''; child.stdout.on('data', data => { output += data.toString('hex'); }); child.stderr.on('data', data => { errors += String(data); });

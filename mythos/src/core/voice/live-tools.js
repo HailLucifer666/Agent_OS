@@ -525,13 +525,17 @@ function buildFunctionDeclarations(hub, opts) {
     }
   }
 
-  const declared = [], withheld = [], unavailable = [];
+  const declared = [], withheld = [], unavailable = [], needsSetup = [];
   for (const entry of catalog) {
     if (!entry || !entry.name) continue;
     if (!allow.has(entry.name)) { withheld.push(entry.name); continue; }
     if (snapshot) {
       const cap = checkToolCapability(entry.name, snapshot);
       if (!cap.ok) { unavailable.push({ name: entry.name, rule: cap.rule, reason: cap.reason }); continue; }
+      // A self-healing gate DECLARES the tool and records the step it needs.
+      // Falling through to declared.push() is the point: withholding it was what
+      // left the model with a launcher and nothing to launch FOR.
+      if (cap.needs) needsSetup.push({ name: entry.name, rule: cap.rule, reason: cap.needs });
     }
     declared.push(toDeclaration(entry, allow.has('suggest_procedures') && catalog.some(e => e.name === 'suggest_procedures')));
   }
@@ -548,7 +552,14 @@ function buildFunctionDeclarations(hub, opts) {
     options.log(`live-tools: withheld ${unavailable.length} allowlisted tool(s) as UNAVAILABLE on this machine — `
       + unavailable.map((u) => `${u.name} (${u.reason})`).join('; '));
   }
-  return { declarations: declared, withheld, unavailable };
+  // A THIRD list, for the same reason the first two are separate: "declared but
+  // needs a step first" is neither a curation choice nor a missing machine, and
+  // reading it as either is what made the 2026-09-10 browser session unwinnable.
+  if (options.log && needsSetup.length) {
+    options.log(`live-tools: declared ${needsSetup.length} tool(s) that NEED A STEP FIRST — `
+      + needsSetup.map((u) => `${u.name} (${u.reason})`).join('; '));
+  }
+  return { declarations: declared, withheld, unavailable, needsSetup };
 }
 
 module.exports = {

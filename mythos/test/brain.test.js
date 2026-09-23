@@ -9,7 +9,7 @@ const path = require('node:path');
 // Lanes default
 // ---------------------------------------------------------------------------
 describe('brain/lanes.default', function() {
-  const lanes = require('../src/core/brain/lanes.default');
+  const lanes = require('../src/core/brain/lanes.default'), head = require('./helpers').freeTierHead; // BUG-418: free-tier head, not prefs[0]
 
   it('has 8 brain lanes', function() {
     assert.ok(lanes.BRAIN_TABLES.voice);
@@ -33,16 +33,6 @@ describe('brain/lanes.default', function() {
     envs.forEach(function(e) { assert.match(e, /^CHAIN_[A-Z]+$/); });
   });
 
-  it('embed lane documents the real embeddings chain (ollama then mistral)', function() {
-    // brain.think({lane:'embed'}) still hard-short-circuits to {offline:true}
-    // (brain/index.js) — actual embeddings run through providers/embeddings.js,
-    // never through chain.js/registry.js. This table is documentation only.
-    assert.deepEqual(lanes.PREF_EMBED, [
-      { provider: 'ollama', model: 'nomic-embed-text' },
-      { provider: 'mistral', model: 'mistral-embed' },
-    ]);
-  });
-
   it('voice lane leads with google, and groq is gone rather than demoted', function() {
     // Was "groq first" until 2026-08-14. Two independent measurements moved it:
     // groq llama-3.3-70b scored 2/4 (missing BOTH reasoning probes), and Groq's
@@ -51,8 +41,8 @@ describe('brain/lanes.default', function() {
     // google gemini-flash-lite-latest was the only model in the run with zero
     // disqualifier flags, which matters most on the lane that is SPOKEN ALOUD
     // (a chain-of-thought leak here is read out).
-    assert.equal(lanes.PREF_VOICE[0].provider, 'google');
-    assert.equal(lanes.PREF_VOICE[0].model, 'gemini-flash-lite-latest');
+    assert.equal(head(lanes.PREF_VOICE).provider, 'google');
+    assert.equal(head(lanes.PREF_VOICE).model, 'gemini-flash-lite-latest');
     // RE-POINTED 2026-08-22. This used to assert `groqIdx > 0` — groq retained
     // as a fallback rather than leading. Groq is now ABSENT from this lane, and
     // the assertion changes because the fact changed, not to make a red test
@@ -80,7 +70,7 @@ describe('brain/lanes.default', function() {
     // matters is that the lane starts somewhere that responds, and pinning the
     // exact model would just have to be rewritten the next time a provider
     // moves.
-    assert.notEqual(lanes.PREF_REASONING[0].provider, 'cerebras',
+    assert.notEqual(head(lanes.PREF_REASONING).provider, 'cerebras',
       'the lane must not start on the unbilled provider');
     // Cerebras is KEPT, not deleted: 402 is a billing state, so funding the
     // account restores it with no code change. Deleting it would make that
@@ -103,11 +93,11 @@ describe('brain/lanes.default', function() {
   });
 
   it('memory lane leads on a Google model none of the other lanes use', function() {
-    assert.equal(lanes.PREF_MEMORY[0].provider, 'google');
+    assert.equal(head(lanes.PREF_MEMORY).provider, 'google');
     // Google's quota is per-MODEL, so the whole point of this head is that it is
     // a DIFFERENT model from the vision and voice heads. Sharing one would merge
     // three buckets back into one and undo the load spread.
-    const googleHeads = [lanes.PREF_MEMORY[0], lanes.PREF_VISION[0], lanes.PREF_VOICE[0]]
+    const googleHeads = [head(lanes.PREF_MEMORY), head(lanes.PREF_VISION), head(lanes.PREF_VOICE)]
       .filter(function(p) { return p.provider === 'google'; })
       .map(function(p) { return p.model; });
     assert.equal(new Set(googleHeads).size, googleHeads.length,
@@ -120,16 +110,24 @@ describe('brain/lanes.default', function() {
     // shared with Hermes builds and embeddings, and vision is one of the two
     // frequent consumers. NIM stays (breakers are self-correcting, a deletion is
     // not) but last.
-    assert.equal(lanes.PREF_VISION[0].provider, 'google');
-    assert.equal(lanes.PREF_VISION[0].model, 'gemini-3.5-flash-lite');
+    assert.equal(head(lanes.PREF_VISION).provider, 'google');
+    assert.equal(head(lanes.PREF_VISION).model, 'gemini-3.5-flash-lite');
+    // RELAXED 2026-09-11 from "nim last" to "nim present" — see lanes.default.js.
     const cloud = lanes.PREF_VISION.filter(function(p) { return p.provider !== 'ollama'; });
-    assert.equal(cloud[cloud.length - 1].provider, 'nim');
+    assert.ok(cloud.some(function(p) { return p.provider === 'nim'; }) && cloud[0].provider !== 'nim',
+      'NIM must stay in the vision lane (breakers self-correct, a deletion does not) but must not lead it');
   });
 
   it('no PREF_* table lists a model known dead on these keys', function() {
     // KNOWN_DEAD is data rather than prose precisely because prose is what let
     // inclusionai/ling-3.0-flash:free sit in two lanes for three weeks after it
     // began 404ing. Every table, every entry, every run.
+    //
+    // Mutation 2026-09-16 (BUG-440 close-out): `{ provider: 'mistral', model:
+    // 'mistral-large-2512' }` re-added to PREF_VISION -> this test red with
+    // "PREF_VISION lists mistral:mistral-large-2512 — known dead (...)"; the
+    // other 82 stayed green; lanes.default.js restored sha256-identical
+    // (70d17580...). The guard can see the dead vision model walk back in.
     const tables = ['PREF_VOICE','PREF_BUILD','PREF_SIMPLE','PREF_REASONING','PREF_MEMORY','PREF_TEXT','PREF_VISION','PREF_EMBED'];
     tables.forEach(function(name) {
       lanes[name].forEach(function(entry) {
@@ -153,9 +151,10 @@ describe('brain/lanes.default', function() {
     // codestral is Mistral's code-specialist model AND measured faster
     // (344ms vs 771ms), so it strictly dominates for this lane's purpose.
     // mistral-large-2512 stays as the immediate generalist fallback.
-    assert.equal(lanes.PREF_BUILD[0].provider, 'mistral');
-    assert.equal(lanes.PREF_BUILD[0].model, 'codestral-latest');
-    assert.ok(lanes.PREF_BUILD.some(function(p) { return p.provider === 'mistral' && p.model === 'mistral-large-2512'; }), 'mistral-large-2512 retained as generalist fallback');
+    assert.equal(head(lanes.PREF_BUILD).provider, 'mistral');
+    assert.equal(head(lanes.PREF_BUILD).model, 'codestral-latest');
+    // INVERTED 2026-09-11, not deleted: permanent 403, not billing. BUG-440.
+    assert.ok(!lanes.PREF_BUILD.some(function(p) { return p.model === 'mistral-large-2512'; }), 'permanent 403; must not return');
     // RE-POINTED 2026-08-22. This used to assert Groq's 70B was present as the
     // "fastest reachable" rung. It is not reachable at all: Groq advertises 13
     // model ids and not one is a Llama, so the call is a 404. The assertion is

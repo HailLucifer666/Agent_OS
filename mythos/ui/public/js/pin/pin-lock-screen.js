@@ -47,6 +47,7 @@
 
 import { trapFocus } from '../a11y/focus-trap.js';
 import { derivePinGate, interpretVerifyResponse, validatePinInput } from './pin-gate.js';
+import { advanceRecoveryGeneration, onPinSessionLost } from '../auth/auth-state.js';
 
 // Elements outside the overlay that must be unreachable while locked. `inert`
 // removes them from the tab order AND from hit-testing in one attribute —
@@ -82,6 +83,13 @@ function buildOverlay() {
 // GET /api/pin/status answers, so HUD boot is never gated on the round-trip.
 export function mountPinLockScreen(root, opts) {
   const onUnlock = (opts && opts.onUnlock) || (() => {});
+  // BUG-442 seam: tests drive the relock subscription without a real store.
+  const subscribeSessionLost = (opts && opts.onPinSessionLostImpl) || onPinSessionLost;
+  // BUG-433: lockState is an INPUT to the HUD's proactive-playback readiness,
+  // and three of its four writes happen with no onUnlock — notably the ordinary
+  // no-PIN boot, which resolves 'unknown' -> 'unlocked' below in silence. A
+  // caller cannot poll for that, so every transition leaves through one door.
+  const onLockState = (opts && opts.onLockState) || (() => {});
   // Test/injection seam, mirroring live-session.js's createSocket convention:
   // defaults to the real fetch.
   const doFetch = (opts && opts.fetchImpl) || ((...args) => fetch(...args));
@@ -95,6 +103,14 @@ export function mountPinLockScreen(root, opts) {
   // has answered) must NOT be treated as open by callers guarding a real
   // capability (mic arming, wake word, proactive speech).
   let lockState = 'unknown';
+  // Idempotent by design: the relock subscriber and the status probe race each
+  // other, and a repeated 'locked' must not re-announce a change that did not
+  // happen. A throwing subscriber never takes the lock screen down with it.
+  function setLockState(next) {
+    if (lockState === next) return;
+    lockState = next;
+    try { onLockState(next); } catch (_) {}
+  }
 
   function setInert(on) {
     if (on) {
@@ -161,7 +177,12 @@ export function mountPinLockScreen(root, opts) {
       if (disposed) return;
       submit.disabled = false;
       if (state.unlocked) {
-        lockState = 'unlocked';
+        setLockState('unlocked');
+        // BUG-442: a credential has actually been re-established, so every 401
+        // still in flight from before this moment is stale news about a solved
+        // problem. Advancing the generation is what stops those late arrivals
+        // relocking the screen the operator just satisfied.
+        advanceRecoveryGeneration();
         teardown();
         onUnlock();
         return;
@@ -191,10 +212,19 @@ export function mountPinLockScreen(root, opts) {
       gate = derivePinGate(undefined);
     }
     if (disposed) return;
-    if (gate.locked) { lockState = 'locked'; lock(); return; }
+    if (gate.locked) { setLockState('locked'); lock(); return; }
     // not-configured / unavailable / indeterminate all resolve the 'unknown'
     // window to 'unlocked' — only an explicit configured:true ever locks.
-    lockState = 'unlocked';
+    //
+    // ONLY out of 'unknown', and the security review of 2026-09-18 found why.
+    // This probe runs concurrently with the BUG-442 relock subscriber below. If
+    // a `missing:['pin']` 401 arrived first and locked the screen, an
+    // indeterminate probe answer landing afterwards wrote 'unlocked' WITHOUT
+    // tearing the overlay down — leaving the lock visibly on screen while
+    // lockState() reported unlocked, so mic arming, wake word and proactive
+    // speech would all re-enable behind it.
+    if (lockState !== 'unknown') return;
+    setLockState('unlocked');
     if (gate.reason === 'indeterminate') {
       // Loud enough to diagnose, quiet enough not to block the HUD. See
       // pin-gate.js's scope note for why this fails open.
@@ -202,8 +232,22 @@ export function mountPinLockScreen(root, opts) {
     }
   })();
 
+  // BUG-442: the server said the PIN session is what is missing, so put the PIN
+  // screen back up. Before this, that 401 reached the token prompt instead and
+  // asked the operator for an access token that was never the problem.
+  //
+  // Guarded on lockState rather than on overlay presence: relocking while
+  // already locked would tear down a live focus trap under the operator's
+  // hands, and 'unknown' means the status probe has not answered yet, which
+  // lock() itself is about to resolve.
+  const releaseSessionLost = subscribeSessionLost(() => {
+    if (disposed || lockState === 'locked') return;
+    setLockState('locked');
+    lock();
+  });
+
   return {
-    cleanup() { disposed = true; teardown(); },
+    cleanup() { disposed = true; if (releaseSessionLost) releaseSessionLost(); teardown(); },
     // Boolean overlay-presence check — kept for existing callers/tests. Do
     // NOT use this to guard a real capability (mic arming, wake word,
     // proactive speech): it reads false during the 'unknown' window before

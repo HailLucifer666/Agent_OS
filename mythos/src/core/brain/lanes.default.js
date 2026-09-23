@@ -71,7 +71,49 @@
 // Each entry: { provider, model }. Provider 'nim' entries are expanded by
 // chain.js into one attempt per configured NIM key (key rotation).
 
+// ---------------------------------------------------------------------------
+// BUG-418 (2026-09-09) — the two BYO entries that head six of the eight lanes.
+// ---------------------------------------------------------------------------
+//
+// Free tiers are the DEVELOPMENT constraint, not the product. The operator
+// builds on free keys because paid calls are not affordable while building;
+// the shipped product is bring-your-own-key with any provider. Until now
+// mythos/providers/ held google, mistral, groq, nim, cerebras, ollama, zcode
+// and openrouter -- so a buyer with an Anthropic or OpenAI key had to open an
+// OpenRouter account and pay its margin to use a key they already owned.
+//
+// WHY AT THE HEAD, which is a product decision and not a measurement.
+// Everything else in these tables is ranked on measured free-tier latency and
+// quality (see the header above). These two are ranked on INTENT: a buyer who
+// has gone to the trouble of supplying a paid key wants it used, and a paid
+// key sitting below four free rungs would almost never be reached.
+//
+// THEY COST THIS MACHINE NOTHING, which is why the change is safe to make
+// blind. registry.isProviderAlive returns false for either without its key, so
+// on the development stack both are filtered out before a chain walk begins --
+// measured after the change: chainFor(build) and chainFor(simple) are
+// byte-identical to before.
+//
+// NO LATENCY OR QUALITY CLAIM IS MADE ABOUT EITHER. There is no Anthropic or
+// OpenAI key on this machine, so neither has been probed the way every other
+// entry here was. Deliberately left uncommented rather than given a plausible
+// number -- a stale measurement at the head of a lane is the exact failure this
+// file records three times.
+//
+// A BUYER WHO WANTS THEM ELSEWHERE NEEDS NO CODE CHANGE: CHAIN_VOICE,
+// CHAIN_BUILD, CHAIN_REASONING, CHAIN_TEXT, CHAIN_SIMPLE and CHAIN_MEMORY each
+// replace their table wholesale (see parseOverride in registry.js).
+//
+// NOT ADDED TO PREF_VISION or PREF_EMBED. Both models are vision-capable, but
+// the vision lane passes provider-specific image payloads and the embed lane is
+// a different API entirely; adding an untested entry to either would be a claim
+// this session cannot support.
+const BYO_PREMIUM = [
+  { provider: 'anthropic', model: 'claude-sonnet-4-5' },   // ANTHROPIC_API_KEY; ANTHROPIC_MODEL overrides
+  { provider: 'openai',    model: 'gpt-4.1' },             // OPENAI_API_KEY; OPENAI_MODEL overrides
+];
 const PREF_VOICE = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // gemini-flash-lite was already documented here as "slower than the 8B but far
   // better at this lane's actual job: persona-heavy JSON tool-calling against a
   // ~40k-char prompt". The 2026-08-14 run turned that argument into a
@@ -80,15 +122,36 @@ const PREF_VOICE = [
   // leaking into `content` (which this lane would SPEAK ALOUD) and no
   // array-shaped content. Latency order is not capability order; only
   // demote/promote entries with a real completion call behind the claim.
-  { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 961-1030ms, 4/4, no flags (2026-08-14)
-  { provider: 'mistral',  model: 'mistral-medium-latest' },       // 783ms, 4/4 (2026-08-14); 414ms measured 2026-07-29
-  { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms — fast but flat; last cloud resort
+  // NOT PROMOTED HERE, and the near-miss is worth recording. groq/qwen3.8-27b
+  // measured 280ms median (3 serial samples, 3/3 correct, no chain-of-thought
+  // leak, emits real tool_calls) — the fastest qualifying model on any
+  // configured key, by a factor of three, and it passed every disqualifier this
+  // lane documents. It was staged at this head on 2026-09-11 and then REVERTED,
+  // because none of those measurements is the binding constraint:
+  //   Groq's free tier allows ~12,000 TOKENS PER MINUTE, and this lane's prompt
+  //   is ~40k chars (~10k tokens). One utterance nearly exhausts the window, so
+  //   the SECOND utterance inside a minute gets 429'd.
+  // That is a RATE limit, not a context limit — qwen3.8-27b advertises a 131,042
+  // token context, so a context check would have said it was fine. The header
+  // budget above already said this ("Groq is now last-resort everywhere except
+  // PREF_SIMPLE"), and brain.test.js pins it. A model that is three times faster
+  // and unavailable every second turn is slower than one that always answers.
+  { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 906ms (2026-09-11); 961-1030ms, 4/4, no flags (2026-08-14)
+  // DEMOTED 2026-09-11 from rank 2. Not dead and not removed: every call on this
+  // key now returns `429 Rate limit exceeded`, and the same 429 hits
+  // mistral-medium-3.5, -2604 and magistral-medium while ministral-8b/14b and
+  // codestral answer in under 600ms on the SAME key. So this is a per-model TIER
+  // boundary, not an account outage, and it returns if the plan changes.
+  { provider: 'mistral',  model: 'mistral-medium-latest' },       // 429 tier-limited 2026-09-11; 783ms, 4/4 (2026-08-14)
+  // REMOVED 2026-09-11: nim/meta/llama-3.1-8b-instruct. Not a rename — NVIDIA's
+  // /models advertises 80 ids and no Llama 3.1 8B among them, so the id is
+  // absent rather than moved and no guessing recovers it. Its 271ms measurement
+  // is preserved in KNOWN_DEAD with the reason.
   // DEMOTED 2026-08-22 from rank 3 to last cloud, NOT deleted. `402 Payment
   // required` — the Cerebras account is unbilled, so this is a billing state and
   // not a dead model: it returns the moment the account is funded, and its
   // 336ms/3-of-4 measurement below still stands. Kept last so a lane call stops
   // paying an attempt for it while the account is dry.
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 336ms, 3/4 (2026-08-14); 402 unbilled 2026-08-22
   // REMOVED 2026-08-22: groq/llama-3.3-70b-versatile. It is not a renamed id —
   // Groq's /models advertises 13 ids and NONE of them is any Llama 3.3, so a
   // call returns `404 does not exist or you do not have access`. Its 2026-08-14
@@ -119,6 +182,7 @@ const PREF_VOICE = [
 // fallbacks below are what absorbs a burst. Watch brain-spend for Cerebras 429s
 // if a burst ever becomes routine.
 const PREF_REASONING = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // REORDERED 2026-08-22, and this is the lane the change matters most for: ten
   // roles ride it (mull, think_deeply, self-reflection x2, reviewer,
   // reality-checker, design verify, orchestrator synthesize, ask_agent,
@@ -131,7 +195,23 @@ const PREF_REASONING = [
   //     it. See KNOWN_DEAD.
   // The new head was already rank 3 and is measured healthy, so this promotes
   // what the lane was reaching anyway rather than introducing anything new.
-  { provider: 'nim',      model: 'nvidia/nemotron-3.5-lightning-30b-a3b' },   // 4123ms, 4/4 — different provider, absorbs a Cerebras burst
+  // NEW HEAD 2026-09-11. This is the single highest-value change in this file:
+  // ten roles ride this lane, and the head below had degraded from its recorded
+  // 4123ms to a 21958ms MEDIAN (3 serial samples [17719, 21958, 40003], and it
+  // failed 1 of 3 outright). Against a 30s per-attempt cap that is a coin flip,
+  // which is exactly what the operator watched when think_deeply gave up and the
+  // healer logged chain-whole-lane-timeout "repeated 30s timeout per-attempt".
+  // The head is nemotron-3-super-120b and NOT groq/openai/gpt-oss-120b, even
+  // though groq measured 687ms median against nemotron's 3866ms and groq
+  // answered 7 of 7 models called that day. Groq's free tier is ~12,000 TOKENS
+  // PER MINUTE, and this lane carries ten roles including think_deeply and the
+  // reviewer, whose prompts are large. Putting it first would buy ~5x latency in
+  // exchange for 429s under exactly the burst this lane produces. It stays a
+  // rung, one place down, where a single call can use the window without
+  // starving the next. See the budget header.
+  { provider: 'nim',      model: 'nvidia/nemotron-3-super-120b-a12b' },       // 3866ms median, 3/3 (2026-09-11)
+  { provider: 'groq',     model: 'openai/gpt-oss-120b' },                     // 687ms median, 3/3; 12k TPM window (2026-09-11)
+  { provider: 'nim',      model: 'nvidia/nemotron-3.5-lightning-30b-a3b' },   // 21958ms median, 2/3 (2026-09-11); was 4123ms, 4/4 (2026-08-22)
   // COT-LEAK flagged by the benchmark heuristic, which is why it sits here and
   // NOT in PREF_VOICE: nothing on this lane is spoken aloud, so a stray
   // reasoning preamble costs tokens rather than trust.
@@ -155,16 +235,21 @@ const PREF_REASONING = [
 // Terse styling deliberately follows this lane (see schema.js's
 // BRAIN_TERSE_LANES default): consolidated memory should stay compact.
 const PREF_MEMORY = [
-  { provider: 'google',   model: 'gemini-3-flash-preview' },      // 3090ms, 4/4 — its own per-model quota bucket
-  { provider: 'mistral',  model: 'mistral-medium-2604' },         // 461ms, 4/4
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
+  { provider: 'google',   model: 'gemini-3-flash-preview' },      // 2129ms (2026-09-11); 3090ms, 4/4 — its own per-model quota bucket
+  // ADDED 2026-09-11. This lane had 5 rungs and ONE that answered: two BYO
+  // entries with no key, a tier-limited Mistral, and an ollama rung that died
+  // when ollama was uninstalled. A second live cloud rung is the whole point.
+  { provider: 'google',   model: 'gemini-3.1-flash-lite' },       // 2914ms median, 3/3 (2026-09-11)
+  { provider: 'mistral',  model: 'mistral-medium-2604' },         // 429 tier-limited 2026-09-11; 461ms, 4/4 (2026-08-14)
   // Unchanged position — it was already last cloud. Noting only that it is
   // currently `402` (unbilled Cerebras account), so this lane is effectively
   // two-deep in the cloud until the account is funded.
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 336ms, 3/4; 402 unbilled 2026-08-22
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
 const PREF_BUILD = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // Cloud-first (P22): this lane once led with ollama/hermes3:8b, which was never
   // `ollama pull`ed — silently filtered out, so every build fell through anyway.
   // Optional local models sit last so their absence never costs a build attempt.
@@ -184,11 +269,31 @@ const PREF_BUILD = [
   // mistral-medium-2604 inserted ABOVE -large on 2026-08-14: 4/4 vs 3/4 (-large
   // missed a reasoning probe) and 461ms vs 701ms. Same key, same lane, strictly
   // better on both axes measured — the previous ranking predates this model.
-  { provider: 'mistral',    model: 'mistral-medium-2604' },                  // 461ms, 4/4
-  { provider: 'mistral',    model: 'mistral-large-2512' },                   // 701ms, 3/4 — generalist fallback
+  // NEW rank 2, 2026-09-11. This lane had NINE rungs and exactly ONE that
+  // answered: everything below was BYO-without-a-key, tier-limited, unbilled,
+  // or removed when ollama was uninstalled.
+  //
+  // NOT groq, though groq was the fastest option and answered 7/7 models called
+  // that day. Two reasons, and the second is the binding one: brain.test.js
+  // asserts no groq entry in this lane (inverted deliberately in 2026-08-22 so a
+  // future session could not re-add the 404ing Llama from a stale note), and the
+  // budget header puts Groq at last-resort outside PREF_SIMPLE because of its
+  // ~12,000 tokens/minute window. Build prompts carry source files; they are
+  // exactly the shape that window does not suit.
+  { provider: 'nim',        model: 'nvidia/nemotron-3-super-120b-a12b' },    // 3866ms median, 3/3 (2026-09-11)
+  { provider: 'mistral',    model: 'mistral-medium-2604' },                  // 429 tier-limited 2026-09-11; 461ms, 4/4 (2026-08-14)
+  // REMOVED 2026-09-11: mistral/mistral-large-2512 — and this one had a cost.
+  // It is ABSENT from Mistral's catalog on this key and answers
+  // `403 This model is not available in your subscription tier` on every call,
+  // permanently. It sat in BOTH this lane and PREF_VISION, where it burned
+  // ~1.2s of screen_look's 12s budget per attempt before the operator was told
+  // the screen could not be read. Filed as BUG-440; see KNOWN_DEAD.
   // openrouter:inclusionai/ling-3.0-flash:free DELETED 2026-08-14 — 404
   // "unavailable for free". See this file's header note 1.
-  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },           // 271ms
+  // REMOVED 2026-09-11: nim/meta/llama-3.1-8b-instruct — absent from NVIDIA's
+  // catalog. Missed on the first pass of this change and caught by brain.test.js's
+  // KNOWN_DEAD guard, which is the argument for that guard being data-driven
+  // rather than a list someone keeps in their head. See KNOWN_DEAD.
   // 2026-08-22, ranks 4-6 resolved. Two deletions and one demotion, and the
   // three Mistral heads above are untouched because all three are measured
   // healthy — this lane's ordering is not being second-guessed, only its dead
@@ -204,6 +309,7 @@ const PREF_BUILD = [
 ];
 
 const PREF_SIMPLE = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // Cheapest/fastest lane. Previously led with mistral-large-2512 — the most
   // expensive model available, in the lane that least needs it.
   // 2026-08-22: groq/llama-3.1-8b-instant REMOVED from the HEAD of this lane.
@@ -214,9 +320,15 @@ const PREF_SIMPLE = [
   // call was paying a failed attempt first. Groq is NOT replaced here with
   // openai/gpt-oss-20b — that would be a new model in a lane the operator asked
   // to leave as wired; ministral-3b-latest below was already rank 2 and answers.
-  { provider: 'mistral',  model: 'ministral-3b-latest' },         // 315ms
-  { provider: 'nim',      model: 'meta/llama-3.1-8b-instruct' },  // 271ms
-  { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 643ms
+  // REORDERED 2026-09-11: the 8B is now FASTER than the 3B on this key, which is
+  // not what a parameter count predicts and is why it was measured rather than
+  // assumed — 417ms median [393, 417, 437] against the 3B's 1212ms. Both are
+  // 3/3 correct, neither leaks chain-of-thought, both emit tool calls.
+  { provider: 'mistral',  model: 'ministral-8b-latest' },         // 417ms median, 3/3 (2026-09-11)
+  { provider: 'mistral',  model: 'ministral-3b-latest' },         // 1212ms (2026-09-11); 315ms (2026-08-14)
+  // REMOVED 2026-09-11: nim/meta/llama-3.1-8b-instruct — absent from the NVIDIA
+  // catalog, see KNOWN_DEAD.
+  { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 906ms (2026-09-11); 643ms (2026-08-14)
   // ADDED 2026-08-22 on the operator's instruction, restoring a Groq rung to
   // this lane after llama-3.1-8b-instant was deleted as a 404. Placed HERE and
   // not at the head, because the measurement disagreed with the assumption:
@@ -236,9 +348,8 @@ const PREF_SIMPLE = [
   // errors, if that ever changes. test/brain.test.js pins it.
   // Not a chain-of-thought risk: reasoning arrives in its own `reasoning` field,
   // `content` is a clean string, 0/7 leaks across both probes.
-  { provider: 'groq',     model: 'openai/gpt-oss-20b' },          // 776ms median, no max_tokens sent (2026-08-22)
+  { provider: 'groq',     model: 'openai/gpt-oss-20b' },          // 546ms median, 3/3 (2026-09-11); 776ms, no max_tokens sent (2026-08-22)
   // Demoted below Google, not deleted: 402 unbilled, returns when funded.
-  { provider: 'cerebras', model: 'gemma-4-31b' },                 // 519ms; 402 unbilled 2026-08-22
   { provider: 'ollama',   model: 'qwen3:8b' },
 ];
 
@@ -249,6 +360,7 @@ const PREF_SIMPLE = [
 // 27.9-second model. registry.js now emits health.anomaly on that path as well,
 // so the substitution is audible rather than merely slower.
 const PREF_TEXT = [
+  ...BYO_PREMIUM,   // BUG-418 — inert without a key; see BYO_PREMIUM above
   // DELETED 2026-08-14: openrouter:inclusionai/ling-3.0-flash:free (404,
   // "unavailable for free") and nim:nvidia/nemotron-3-super-120b-a12b (27.9s —
   // unusable interactively, and past CHAIN_ATTEMPT_TIMEOUT_MS on any tightened
@@ -261,9 +373,18 @@ const PREF_TEXT = [
   // registry.js's fallback for an UNRECOGNISED lane name, so a typo'd `lane:`
   // string was walking two failures before answering. That is the exact
   // condition the 2026-08-14 deletions were made to end.
-  { provider: 'google',     model: 'gemini-3.6-flash' },                     // 4975ms, 4/4 on 2026-08-14 (1382ms on 2026-07-29) — see note below
-  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct' },           // 271ms
-  { provider: 'cerebras',   model: 'gpt-oss-120b' },                         // 778ms, 4/4; 402 unbilled 2026-08-22
+  // NEW HEAD 2026-09-11. gemini-3.6-flash is DEMOTED, not removed, and the
+  // reason is a caution about sampling as much as about the model: a single
+  // concurrent sample put it at 3054ms, and three SERIAL samples put its median
+  // at 24985ms [14248, 24985, 29207]. Had this file been rewritten on the first
+  // number it would have kept a ~25s model at the head of a lane and called it
+  // measured. It still answers 3/3 correctly, so it is a fallback, not a head.
+  { provider: 'nim',        model: 'nvidia/nemotron-3-super-120b-a12b' },    // 3866ms median, 3/3 (2026-09-11)
+  { provider: 'groq',       model: 'openai/gpt-oss-120b' },                  // 687ms median, 3/3; 12k TPM window keeps it off the head (2026-09-11)
+  { provider: 'google',     model: 'gemini-3.6-flash' },                     // 24985ms median, 3/3 (2026-09-11); 4975ms, 4/4 (2026-08-14)
+  // REMOVED 2026-09-11: nim/meta/llama-3.1-8b-instruct — absent from NVIDIA's
+  // catalog entirely, see KNOWN_DEAD.
+  { provider: 'cerebras',   model: 'gpt-oss-120b' },                         // 402 unbilled, re-confirmed 2026-09-11; 778ms, 4/4 when funded
   { provider: 'ollama',     model: 'kimi-k2.5:cloud' },
   { provider: 'ollama',     model: 'qwen3:14b' },
   { provider: 'ollama',     model: 'qwen3:8b' },
@@ -317,8 +438,22 @@ const PREF_VISION = [
   // measures 1378-2293ms, comfortably inside it.
   // If you re-measure, put the DATE next to the number.
   { provider: 'google',  model: 'gemini-3.5-flash-lite' },               // 1473ms on a real 320KB screenshot, 3/3 correct (2026-08-14)
-  { provider: 'mistral', model: 'mistral-small-latest' },                // 433ms measured ~2026-07-29; 1.8-2.0s and 100% success on 2026-08-14
-  { provider: 'mistral', model: 'mistral-large-2512' },                  // 771ms — natively multimodal, same key as text
+  // DEMOTED 2026-09-11: every call returns `429 Rate limit exceeded` on this
+  // key. Tier-limited rather than dead — ministral and codestral answer fine on
+  // the same key — so it is kept and moved down, not removed.
+  { provider: 'mistral', model: 'mistral-small-latest' },                // 429 tier-limited 2026-09-11; 1.8-2.0s, 100% (2026-08-14)
+  // REMOVED 2026-09-11: mistral/mistral-large-2512. Absent from the catalog and
+  // a permanent `403 not available in your subscription tier`. THIS LANE is
+  // where it did the damage: screen_look spends a 12s budget across three rungs,
+  // and this one consumed ~1.2s of it on every single look while being incapable
+  // of ever answering. BUG-440. See KNOWN_DEAD.
+  //
+  // NOT PROMOTED, deliberately: nim/meta/llama-3.2-11b-vision-instruct measured
+  // 445ms on 2026-09-11 and is the fastest entry here — but that was a TEXT
+  // prompt, and this lane's job is reading screenshots. The head below is the
+  // only entry with a real image measurement behind it (1473ms on a 320KB
+  // screenshot, 3/3 correct). Promoting on a text latency would be exactly the
+  // "latency order is not capability order" mistake this file warns about.
   // SWAPPED with the NIM entry below, 2026-08-22. Not deleted, because a
   // non-response is not a 404 and this repo has already written off a working
   // model twice on an abort that was really a cold start. But it has now failed
@@ -331,7 +466,10 @@ const PREF_VISION = [
   // 7.5-15s with hallucinated content 2026-08-14 → `500 EngineCore encountered
   // an issue` after 100s on 2026-08-22. If it is still 500ing next check, delete
   // it; three consecutive measurements in one direction is not noise.
-  { provider: 'nim',     model: 'nvidia/nemotron-nano-12b-v2-vl' },      // 500 after 100s (2026-08-22)
+  // REMOVED 2026-09-11: nim/nvidia/nemotron-nano-12b-v2-vl. Its 2026-08-22 note
+  // read "500 after 100s"; the id is now absent from NVIDIA's catalog outright,
+  // so the earlier 500 was the model going away rather than a transient. See
+  // KNOWN_DEAD.
   { provider: 'ollama',  model: 'qwen3.5:latest' },
   { provider: 'ollama',  model: 'qwen2.5vl:7b' },
 ];
@@ -343,9 +481,26 @@ const PREF_VISION = [
 // 3072-dim against mistral-embed's 1024 — swapping it in would invalidate
 // every stored vector in semantic memory. That is a migration, not a re-rank,
 // so this table is deliberately unchanged.
+//
+// REVISITED 2026-09-11 and the caution above, while correct about dimensions,
+// was answering the wrong question. It reads as though a second provider would
+// corrupt the index; embeddings.js's own contract says the opposite — "vectors
+// from different providers are NEVER comparable" and vector-index.js PARTITIONS
+// BY PROVIDER. So an added provider gets its own partition and invalidates
+// nothing. Two measurements settled it:
+//   * gemini-embedding-001 accepts outputDimensionality and returned exactly
+//     1024 dims in 521ms, so it need not be 3072 at all.
+//   * ollama was uninstalled from this machine on 2026-09-11, which left
+//     mistral-embed as the ONLY rung — while Mistral was returning 429 on four
+//     other models on the same key. A one-rung embed chain is one rate limit
+//     away from keyword-only recall.
+// Google is added LAST in embeddings.js: it shares GOOGLE_API_KEY with the
+// voice, vision, memory and text lanes, and memory writes must not be what
+// exhausts the quota the operator hears.
 const PREF_EMBED = [
   { provider: 'ollama',  model: 'nomic-embed-text' },
-  { provider: 'mistral', model: 'mistral-embed' },
+  { provider: 'mistral', model: 'mistral-embed' },        // 334ms, 1024 dims (2026-09-11)
+  { provider: 'google',  model: 'gemini-embedding-001' }, // 521ms at outputDimensionality 1024 (2026-09-11)
 ];
 
 // Every lane a caller may name MUST be registered here. registry.js's chainFor()
@@ -369,6 +524,7 @@ const BRAIN_TABLES = {
 // is what let inclusionai/ling-3.0-flash:free sit in two lanes for three weeks
 // after it started 404ing.
 const KNOWN_DEAD = [
+  { provider: 'cerebras', model: 'gemma-4-31b', reason: '404 measured 2026-09-09 — unavailable despite catalog listing' },
   { provider: 'openrouter', model: 'inclusionai/ling-3.0-flash:free', reason: '404 unavailable for free' },
   { provider: 'google',     model: 'gemini-2.5-pro',                  reason: '404 no longer available to new users' },
   { provider: 'google',     model: 'gemini-2.5-flash',                reason: '404 no longer available to new users' },
@@ -388,23 +544,42 @@ const KNOWN_DEAD = [
   { provider: 'groq',       model: 'llama-3.3-70b-versatile',         reason: '404 — Groq advertises no Llama 3.3 at all (was rank 4 of voice, rank 5 of build)' },
   { provider: 'groq',       model: 'llama-3.1-8b-instant',            reason: '404 — Groq advertises no Llama 3.1 at all (was the HEAD of simple)' },
   { provider: 'cerebras',   model: 'zai-glm-4.7',                     reason: '404 archived and unavailable for the organization (was rank 2 of reasoning, head of text)' },
+  // Added 2026-09-11 by a live sweep that CALLED all 159 chat-capable models
+  // advertised across the six configured keys. Every reason below is an HTTP
+  // response, not a catalog absence — the two are different and this file has
+  // already been burned by treating a listing as availability.
+  { provider: 'mistral',    model: 'mistral-large-2512',              reason: '403 not available in your subscription tier, and absent from the catalog — permanent. Sat in BOTH build and vision, burning ~1.2s of screen_look\'s 12s budget per look. BUG-440' },
+  { provider: 'nim',        model: 'meta/llama-3.1-8b-instruct',      reason: '404 — absent from NVIDIA\'s 80-id catalog, not renamed (was in voice, build, simple and text; measured 271ms when it existed)' },
+  { provider: 'nim',        model: 'nvidia/nemotron-nano-12b-v2-vl',  reason: '404 — absent from the catalog; the 2026-08-22 "500 after 100s" was it going away, not a transient' },
+  { provider: 'google',     model: 'gemini-2.5-flash-lite',           reason: '404 no longer available to new users (measured 2026-09-11, same family as the 2.5-flash/2.5-pro removals above)' },
 ];
 
-// NOT in KNOWN_DEAD on purpose, because they are not dead: every `cerebras/*`
-// entry currently returns `402 Payment required` because that ACCOUNT is
-// unbilled, and Cerebras advertises only `gpt-oss-120b` and `gemma-4-31b` at
-// all. Billing the account restores both. They were demoted to last-cloud in
-// their lanes on 2026-08-22 rather than deleted, so a dry account costs one
-// attempt at the end of a walk instead of two at the start — and funding it
-// needs no code change. A test asserting no PREF_* lists a KNOWN_DEAD entry
-// would delete them permanently, which is the wrong call for a billing state.
+// Models that ANSWER but are too slow to be worth a rung, kept separate from
+// KNOWN_DEAD because the distinction is load-bearing: a dead model can never
+// return, a slow one returns the moment the provider adds capacity. Recorded as
+// data so a future session does not "discover" them and promote one.
+//
+// All measured 2026-09-11. The 180s figures were re-run at that bound
+// specifically because BUGS.md records deepseek-v4-flash being written off TWICE
+// by a premature abort that was really a cold start.
+const TOO_SLOW_NOT_DEAD = [
+  { provider: 'nim',    model: 'moonshotai/kimi-k3',                 reason: 'no answer within 180s, twice' },
+  { provider: 'nim',    model: 'deepseek-ai/deepseek-v4-pro-0813',   reason: 'no answer within 180s, twice (the -flash-0731 sibling answers in 6341ms and is healthy)' },
+  { provider: 'nim',    model: 'meta/llama-3.2-90b-vision-instruct', reason: 'no answer within 180s, twice' },
+  { provider: 'google', model: 'gemini-3.8-flash',                   reason: '503 "experiencing high demand" on 2 of 3 attempts; the one success took 38134ms. Newest Google flash and the most rationed' },
+];
+
+// gpt-oss-120b remains: its measured 402 is billing state. gemma's later 404
+// supersedes the older unbilled diagnosis (2026-09-09), so it moved above.
 const UNBILLED_NOT_DEAD = [
   { provider: 'cerebras', model: 'gpt-oss-120b', reason: '402 Payment required — unbilled account, not a dead model' },
-  { provider: 'cerebras', model: 'gemma-4-31b',  reason: '402 Payment required — unbilled account, not a dead model' },
 ];
 
 module.exports = {
-  BRAIN_TABLES, KNOWN_DEAD, UNBILLED_NOT_DEAD,
+  BRAIN_TABLES, KNOWN_DEAD, UNBILLED_NOT_DEAD, TOO_SLOW_NOT_DEAD,
+  // BUG-418: exported so a guard can derive "the free-tier head of this lane"
+  // rather than typing the BYO provider names a second time (gate D).
+  BYO_PREMIUM,
   PREF_VOICE, PREF_BUILD, PREF_SIMPLE, PREF_REASONING, PREF_MEMORY,
   PREF_TEXT, PREF_VISION, PREF_EMBED,
 };

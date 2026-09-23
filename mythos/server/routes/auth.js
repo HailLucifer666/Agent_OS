@@ -25,7 +25,10 @@
 
 const { createLimiter } = require('../rate-limit');
 
-const AUTH_COOKIE = 'mythos_token';
+// BUG-442: the name is owned by server/credentials.js now, together with the
+// PIN session's own cookie, so the two can never silently become one again.
+// Re-exported below because callers already import it from here.
+const { BEARER_COOKIE: AUTH_COOKIE } = require('../credentials');
 
 // Deliberately tight, and deliberately not a lockout. The token is boot-checked
 // for >=16 chars of real entropy (server/index.js), so 5 guesses/min is not a
@@ -39,13 +42,11 @@ const EXCHANGE_MAX = 5;
  * @param {object} deps
  * @param {string} deps.authToken            MYTHOS_AUTH_TOKEN ('' when unset)
  * @param {(presented:string)=>boolean} deps.authTokenMatches  timing-safe compare (server/index.js)
- * @param {()=>boolean} deps.pinSessionRequired
  * @param {number} deps.cookieTtlMs
  */
 function mountAuthRoutes(app, deps) {
   const authToken = (deps && deps.authToken) || '';
   const authTokenMatches = (deps && deps.authTokenMatches) || (() => false);
-  const pinSessionRequired = (deps && deps.pinSessionRequired) || (() => false);
   const cookieTtlMs = (deps && deps.cookieTtlMs) || 2592000000; // 30d
 
   const exchangeLimit = createLimiter({
@@ -64,17 +65,16 @@ function mountAuthRoutes(app, deps) {
       // install sees, which is how the HUD knows not to prompt.
       return res.status(404).json({ error: 'No MYTHOS_AUTH_TOKEN is configured for this deployment.' });
     }
-    if (pinSessionRequired()) {
-      // Combined mode. tokenOk()'s H1 fix pins the two layers to distinct
-      // channels: the bearer token via header/?token= and the PIN session via
-      // the mythos_token cookie. Setting our cookie here would clobber a live
-      // PIN session with a value pinSession.isValid() rejects, locking the
-      // operator out of the surface they just unlocked. Decline explicitly
-      // instead of mishandling it silently.
-      return res.status(409).json({
-        error: 'This deployment requires both a PIN session and the bearer token. Present the token via Authorization: Bearer <token> or ?token= instead — the cookie channel is reserved for the PIN session.',
-      });
-    }
+    // BUG-442 (2026-09-18): a 409 used to live here. Combined mode refused the
+    // exchange entirely, because setting this cookie would have clobbered a live
+    // PIN session — the two shared the name `mythos_token`, so writing one
+    // destroyed the other and locked the operator out of the surface they had
+    // just unlocked. The refusal was the right call for that shape and it left
+    // combined deployments with no way to log a browser in at all.
+    //
+    // The collision is gone: the PIN session lives on `mythos_pin` now
+    // (server/credentials.js), so both cookies coexist and a combined
+    // deployment satisfies both requirements the way its policy says it should.
     const presented = req.body && req.body.token;
     if (typeof presented !== 'string' || !presented) {
       return res.status(400).json({ error: 'A token is required.' });

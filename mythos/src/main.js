@@ -470,7 +470,7 @@ async function main() {
       var buildRefiner = null;
       if (config.BUILD_REFINE_ENABLED) {
         buildRefiner = require('./core/effectors/build-refine').createBuildRefiner({
-          vault: memory.fs, brain: brain, logger: logger,
+          vault: memory.fs, brain: brain, logger: logger, config: config,
         });
       }
       buildRunner = createBuildRunner({ config: config, brain: brain, bus: bus, vault: memory.fs, verifier: verifier, buildEngine: buildEngine, refiner: buildRefiner });
@@ -862,7 +862,7 @@ async function main() {
         // Installer parity — which layer set each key, for /api/config/settings
         // and scripts/parity-check.js. See src/core/config/settings-store.js.
         configOrigins: configResult.origins,
-        settingsFile: configResult.settingsFile,
+        settingsFile: configResult.settingsFile, settingsDiagnostics: configResult,
         pinLock: pinLock,
         goalsEffector: goalsEffector,
         kanbanEffector: kanbanEffector,
@@ -1299,7 +1299,7 @@ async function main() {
     if (checkpointSweepTimer) clearInterval(checkpointSweepTimer);
     if (actionReflectTimer) clearInterval(actionReflectTimer);
     pcChild.shutdownPcChild();
-    cuaDriver.shutdownCuaDriver();
+    cuaDriver.shutdownCuaDriver(); require('../adapters/dsh-agent').shutdown(); // BUG-437: in-flight dsh task children (see dsh-agent shutdown())
     androidChild.shutdownAndroidChild();
     browserAgent.stopAutoConnect();  // stop the poller before disconnect so it can't re-attach mid-shutdown
     browserAgent.disconnect();

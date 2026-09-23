@@ -20,9 +20,18 @@ test('actual Windows pipe has protected owner-only allow DACL, rejects anonymous
   const transport = createPipeTransport({ runtimeDir: path.resolve(dir), pipeName }); let socket;
   t.after(async () => { socket?.destroy(); await transport.stop(); cleanupVaultDir(dir); });
   const proof = await transport.start();
-  assert.match(proof.sid, /^S-1-5-21-/); assert.match(proof.sddl, /D:P/);
-  assert.ok(proof.sddl.includes('(A;;0x1f019f;;;' + proof.sid + ')'));
-  assert.equal((proof.sddl.match(/\(A;/g) || []).length, 1, 'no Everyone/Users/Authenticated Users allow ACE');
+  assert.match(proof.sid, /^S-1-5-21-/); assert.match(proof.sddl, /D:P/, proof.sddl);
+  // SDDL writes some account SIDs as ALIASES: the built-in administrator (RID 500)
+  // comes out as `LA`, not S-1-5-21-…-500. This account (RID 1001) is spelled in
+  // full, so a literal-SID match passed here and failed on CI run 35856005319
+  // (2026-09-23), whose runner account is an administrator. Ask Windows how IT
+  // spells this SID and require exactly that — the owner-only property is the same.
+  const ownerForm = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    `(New-Object System.Security.AccessControl.RawSecurityDescriptor ('O:${proof.sid}')).GetSddlForm('Owner')`],
+    { windowsHide: true, encoding: 'utf8', timeout: 15000 }).trim().replace(/^O:/, '');
+  assert.ok(ownerForm === proof.sid || /^[A-Z]{2}$/.test(ownerForm), 'unexpected SDDL spelling of the owner: ' + ownerForm);
+  assert.ok(proof.sddl.includes('(A;;0x1f019f;;;' + ownerForm + ')'), 'the one allow ACE must name this account; sddl=' + proof.sddl);
+  assert.equal((proof.sddl.match(/\(A;/g) || []).length, 1, 'no Everyone/Users/Authenticated Users allow ACE; sddl=' + proof.sddl);
   assert.match(proof.sddl, /\(D;;0x1f019f;;;NU\)/, 'network token explicitly denied');
   const script = `$ProgressPreference='SilentlyContinue'; Add-Type -TypeDefinition @'
 using System; using System.IO.Pipes; using System.Runtime.InteropServices;

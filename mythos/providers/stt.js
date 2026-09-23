@@ -14,11 +14,19 @@
 //   groq   — Groq Whisper API. Needs GROQ_API_KEY + network.
 //   local  — on-device Whisper (providers/local-whisper-stt.js). No network
 //            after the model is cached; WAV audio only (see that file for why).
+//   gemini — Google Gemini transcription (providers/gemini-stt.js). Needs
+//            GOOGLE_API_KEY + network. ADDED 2026-09-11 after a round-trip test
+//            on the already-configured key transcribed a sentence exactly in
+//            2876 ms. NOT in the default chain: 'groq' remains the default, so
+//            this rung is inert until an operator names it in VOICE_STT_CHAIN.
+//            One clean synthetic sentence is proof the wiring works, not proof
+//            it beats Whisper on real room audio — that is BUG-406's corpus.
 
 const groqStt = require('./groq-stt');
 const localWhisperStt = require('./local-whisper-stt');
+const geminiStt = require('./gemini-stt');
 
-const BY_NAME = { groq: groqStt, local: localWhisperStt };
+const BY_NAME = { groq: groqStt, local: localWhisperStt, gemini: geminiStt };
 
 function parseChain(config) {
   const raw = String((config && config.VOICE_STT_CHAIN) || process.env.VOICE_STT_CHAIN || 'groq');

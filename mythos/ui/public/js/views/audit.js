@@ -2,12 +2,10 @@
 // P9 panel contract: HTTP history plus live WS audit decisions. Optional WS
 // id/ts fields identify persisted rows; older payloads still render unchanged.
 import { subscribe } from '/js/ws.js';
+import { escapeHtml } from '../url.js';
 
 // Audit rows carry model-driven values: `tool` is whatever the brain asked to
 // call, `decision` the leash verdict for it. Neither is operator-typed.
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 export function render(mount) {
   // xss-safe: static template, no interpolation

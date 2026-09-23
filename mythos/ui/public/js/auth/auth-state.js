@@ -16,6 +16,30 @@
 // A subscriber added next month cannot get this wrong, because there is nothing
 // for it to get wrong.
 
+// BUG-442 (2026-09-18): a second channel, and a generation counter.
+//
+// THE SECOND CHANNEL. A 401 was only ever announced one way, so every
+// subscriber heard "the token is wrong" — including when the missing
+// credential was a PIN session. That is precisely how a PIN cookie expiring at
+// its hard 30-minute Max-Age, while the server's own window was still sliding,
+// asked the operator for their ACCESS TOKEN mid-conversation. The server now
+// says WHICH credential is missing (server/credentials.js), and this store
+// routes each to the thing that can actually satisfy it: the token prompt, or
+// relocking the PIN screen.
+//
+// THE GENERATION. Several fetches are usually in flight when a credential
+// lapses, so one lapse produces a burst of 401s. Without a fence, the ones
+// still arriving AFTER the operator has re-authenticated re-open the prompt
+// they just satisfied. Each request captures the generation at send time; a
+// notification from an older generation is ignored.
+//
+// It is deliberately NOT ws.js's `authGeneration`. That counter increments on
+// every socket open and tracks socket/probe freshness; sharing it would mean an
+// ordinary reconnect silently suppressed a real, current HTTP failure. Two
+// different facts, two different counters.
+const pinListeners = new Set();
+let recoveryGeneration = 0;
+
 const listeners = new Set();
 let unauthorized = false;
 // null = not yet learned (behave as before: a 401 is a credential problem);
@@ -56,4 +80,48 @@ export function isUnauthorized() {
 export function onUnauthorized(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
+}
+
+// ---- BUG-442: which credential, and is this news still current? ---------------
+
+// Read at send time by net-guard.js and handed back with the failure.
+export function currentRecoveryGeneration() {
+  return recoveryGeneration;
+}
+
+// Called after a credential has actually been re-established — a successful
+// token exchange or a successful PIN unlock. Everything already in flight is
+// now stale news about a problem that has been solved.
+export function advanceRecoveryGeneration() {
+  recoveryGeneration += 1;
+}
+
+export function onPinSessionLost(fn) {
+  pinListeners.add(fn);
+  return () => pinListeners.delete(fn);
+}
+
+/**
+ * Route a structured authorization failure to whatever can satisfy it.
+ *
+ * `missing` is the server's own list, never parsed out of English prose — the
+ * client choosing between "relock the PIN" and "ask for the token" by reading
+ * an error message is the guessing this replaces.
+ *
+ * A failure whose captured generation predates the current one is DROPPED: the
+ * operator has re-authenticated since that request left, and reopening the
+ * prompt they just satisfied is the bug this counter exists for. Concurrent
+ * failures within one generation collapse, because each channel's own flag is
+ * idempotent.
+ */
+export function markCredentialsMissing(missing, capturedGeneration) {
+  if (typeof capturedGeneration === 'number' && capturedGeneration < recoveryGeneration) return;
+  const names = Array.isArray(missing) ? missing : [];
+  // Token first when both are missing: on a combined deployment the PIN check
+  // itself runs through an authenticated /api call, so an unsatisfied token
+  // gate would make the PIN screen unable to succeed.
+  if (names.includes('token')) markUnauthorized();
+  if (names.includes('pin')) {
+    pinListeners.forEach((fn) => { try { fn(); } catch (_) { /* one bad listener must not stop the rest */ } });
+  }
 }

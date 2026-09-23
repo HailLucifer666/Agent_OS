@@ -345,4 +345,7 @@ async function buildBriefingFacts(deps) {
   return facts;
 }
 
-module.exports = { buildBriefingFacts };
+// BUG-423: a greeting once invented a refreshed Gmail token immediately before
+// the same process reported reauthentication required. Only the supplied facts count.
+const GREETING_FACT_DISCIPLINE = 'State only facts explicitly listed below. Never invent completed repairs, refreshed tokens, connectivity, or successful checks. Omit anything not listed. ';
+module.exports = { buildBriefingFacts, GREETING_FACT_DISCIPLINE };

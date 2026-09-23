@@ -65,6 +65,23 @@ export function safeHref(url) {
   // already treat as final.
   return safe.replace(/"/g, '&quot;');
 }
+// Escapes a string for TEXT position: & < > only, null/undefined -> "".
+//
+// E1 (2026-09-16): this function was defined SEVENTEEN times under ui/public/js
+// with three different bodies — this one; String(s) with no null guard, which
+// rendered the word "undefined"; and a textContent/innerHTML round trip that
+// needs a document. One home now, next to escapeAttr, for the same reason its
+// header gives: the engagements.js copy nothing rendered was where the tests
+// pointed. Deliberately NOT escaping `"` — that is escapeAttr's job, and the
+// distinction is what lets a reader see at the call site which position a
+// value is going into. test/hud-escape-html.test.js pins one definition, no
+// `="${escapeHtml(` anywhere, and an import in every caller.
+export function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
 // Escapes a string for interpolation inside a double-quoted HTML attribute.
 // The textContent/innerHTML trick used across the HUD escapes & < > and NOT
 // `"`, so an attribute built from it can be broken out of; this closes that.

@@ -1,3 +1,4 @@
+import { escapeHtml } from '../../url.js';
 // tokens.js — real-time token usage widget. Three sections: live per-provider usage
 // on the left, idle/active status in the middle, remaining quota on the right.
 // Fed by 'token-usage' WS broadcasts (4s cadence) + 'health' broadcasts for quota data
@@ -26,9 +27,6 @@ const ALL_PROVIDERS = ['groq', 'mistral', 'cerebras', 'nim', 'openrouter', 'zcod
 // Provider names arrive from server telemetry rather than this file's constant
 // list (an unrecognized provider falls through to the cyan default), so they are
 // escaped before reaching innerHTML like every other server-supplied string.
-function escapeHtml(s) {
-  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 function fmt(n) {
   if (n == null) return '0';

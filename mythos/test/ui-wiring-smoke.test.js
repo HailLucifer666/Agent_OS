@@ -113,11 +113,21 @@ describe('app.js static import chain resolves (guards a blank-screen boot)', () 
     });
   });
 
-  it('the three newly wired entry points are present in app.js', () => {
+  it('the three newly wired entry points are present in app.js', async () => {
     const src = codeOnly(APP);
     assert.match(src, /decideVoiceTransport/, 'S2S transport routing must be wired');
     assert.match(src, /import\('\.\/voice\/s2s-bridge\.js'\)/, 'the S2S bridge must be lazily imported');
-    assert.match(src, /'\/api\/config\/s2s'/, 'the VOICE_S2S_ENABLED flag must be fetched');
+    assert.match(src, /voiceConfiguration\.subscribe\(/, 'app must consume shared authenticated voice facts');
+    assert.match(src, /_s2sEnabled\s*=\s*Boolean\(s2s\.value\s*&&\s*s2s\.value\.enabled\)/,
+      'the shared S2S flag must drive transport selection');
+    assert.match(src, /voiceConfiguration\.refresh\(/, 'app must request shared voice facts');
+    const { createVoiceConfigStore } = await import(url('voice', 'voice-config.js'));
+    const fetched = [];
+    await createVoiceConfigStore(async endpoint => {
+      fetched.push(endpoint);
+      return { ok: true, json: async () => ({ enabled: true }) };
+    }).refresh();
+    assert.ok(fetched.includes('/api/config/s2s'), 'the shared loader must fetch VOICE_S2S_ENABLED');
     assert.match(src, /mountPinLockScreen\(/, 'the PIN lock screen must be mounted');
   });
 

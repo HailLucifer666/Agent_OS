@@ -116,7 +116,13 @@ function bootMythos(opts) {
 function attachMythos(opts) {
   opts = opts || {};
   const port = opts.port || Number(process.env.MYTHOS_PORT) || DEFAULT_PORT;
-  const token = opts.token || process.env.MYTHOS_AUTH_TOKEN || '';
+  // BUG-413 (2026-09-09): an EXPLICIT token — including '' meaning "none" — must
+  // win over the environment. `opts.token || process.env.X` read '' as absent and
+  // fell through to the machine's User-scope MYTHOS_AUTH_TOKEN (set for the phone
+  // node), so "fails loudly when the server wants a token and none was given"
+  // attached successfully on any machine with that variable and reddened the
+  // pre-commit hook on every commit. Only an OMITTED token consults the env.
+  const token = opts.token !== undefined ? String(opts.token) : (process.env.MYTHOS_AUTH_TOKEN || '');
   const timeoutMs = opts.timeoutMs || 8000;
 
   return new Promise((resolve, reject) => {

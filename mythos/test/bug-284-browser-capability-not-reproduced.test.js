@@ -71,9 +71,24 @@ describe('BUG-284: browser tools are declared when the adapter is healthy', () =
     // (like browser_launch_debug), its success would prove nothing about the
     // snapshot and BUG-284 would still be open.
     const offline = buildCapabilitySnapshot({ config: {}, adapters: OFFLINE_BROWSER });
-    assert.equal(checkToolCapability('browser_snapshot', offline).ok, false,
-      'browser_snapshot must be withheld while offline — if this ever becomes exempt, '
-      + 'the evidence closing BUG-284 stops holding and the ticket should be re-opened');
+    // 2026-09-11: the FIELD moved, the evidence did not, and the difference
+    // matters enough to state. This used to assert ok:false, and warned that if
+    // browser_snapshot ever became exempt "the evidence closing BUG-284 stops
+    // holding". It has not become exempt — BUG-435 made the browser rule
+    // selfHealing, which DECLARES the tool while still evaluating the snapshot
+    // and still reporting the gate. So the load-bearing fact is unchanged (the
+    // rule fires when the browser is offline) and is asserted below on `needs`
+    // instead of `ok`. What genuinely no longer holds is the inference
+    // "declared ⇒ the snapshot said ONLINE" — BUG-284's refutation rests on the
+    // historical 2026-08-20 session under the old code, where that inference was
+    // sound, so its conclusion stands; do not reuse that inference on new logs.
+    const snapshotVerdict = checkToolCapability('browser_snapshot', offline);
+    assert.equal(snapshotVerdict.rule, 'browser',
+      'the rule must still evaluate the snapshot for this tool — if it stops, BUG-284 should be re-opened');
+    assert.ok(snapshotVerdict.needs,
+      'and must still report the gate it found, or the offline state has become invisible');
+    assert.ok(!('reason' in snapshotVerdict) || snapshotVerdict.ok,
+      'browser_snapshot is no longer withheld; it is declared with a stated prerequisite');
   });
 });
 

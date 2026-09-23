@@ -30,6 +30,16 @@ const pcChild = require('../../../adapters/pc-child');
 const { effectorFromTool } = require('./adapter');
 const evidence = require('./evidence');
 const fromPc = require('./from-pc');
+// BUG-443 (2026-09-18). Every failure sentence below is SPOKEN and written to
+// vault/Audit, and each of them used to render its reason with String(). from-pc
+// returns structured failures ({ok:false, result:{error, ...}}), so on
+// 2026-09-16 the operator heard, and the Audit recorded, the literal:
+//   "Could not type the reply into whatsapp: [object Object] Nothing was sent."
+// The more the producer said, the less reached the person. This is the third
+// instance of the class here — dispatch-action.js on 2026-07-29 and BUG-101
+// before it — which is why the shared normalizer already existed and the fix is
+// to REACH it rather than to write a fourth private one.
+const { reasonText } = require('../util/reason-text');
 
 function ok(result) { return { ok: true, result }; }
 function fail(message) { return { ok: false, result: message }; }
@@ -80,7 +90,7 @@ async function app_reply({ app, text }) {
 
   // ---- 1. Find it among windows that already exist. Never launch. ----------
   const wins = await pc({ cmd: 'list_windows' });
-  if (!wins.ok) return fail('Could not list the open windows: ' + String(wins.error || 'unknown error'));
+  if (!wins.ok) return fail('Could not list the open windows: ' + reasonText(wins.error || 'unknown error'));
 
   const all = (wins.result && wins.result.windows) || [];
   const matches = all.filter((w) => nameRe.test(String(w.process || w.processName || '')));
@@ -104,7 +114,7 @@ async function app_reply({ app, text }) {
   // ---- 2. Focus it, and prove focus took. ---------------------------------
   const focused = await pc({ cmd: 'focus_window', pid: targetPid });
   if (!focused.ok) {
-    return fail('Could not bring ' + key + ' to the front: ' + String(focused.error || 'focus refused') +
+    return fail('Could not bring ' + key + ' to the front: ' + reasonText(focused.error || 'focus refused') +
       '. Nothing was typed.');
   }
   const fg = await pc({ cmd: 'get_foreground_window' });
@@ -130,7 +140,7 @@ async function app_reply({ app, text }) {
   const box = await pc({ cmd: 'focus_message_box', pid: targetPid });
   if (!box.ok || !box.result || box.result.focused !== true) {
     return fail('I can see ' + key + ' ("' + targetTitle + '") but I could not find its message box: ' +
-      String(box.error || (box.result && box.result.error) || 'no editable element') +
+      reasonText(box.error || (box.result && box.result.error) || 'no editable element') +
       '. Nothing was typed — I will not guess where the text goes.');
   }
 
@@ -139,7 +149,7 @@ async function app_reply({ app, text }) {
 
   if (!typed.ok) {
     return fail('Could not type the reply into ' + key + ': ' +
-      String(typed.result || typed.error || 'typing failed') + ' Nothing was sent.');
+      reasonText(typed.result || typed.error || 'typing failed') + ' Nothing was sent.');
   }
 
   const composed = {
@@ -166,7 +176,7 @@ async function app_reply({ app, text }) {
 
   // Typed, but the box would not read back. Say so — do not upgrade it to a quote.
   return evidence.unverified(ok(composed),
-    String(typed.reason || 'the message box would not read its text back') +
+    reasonText(typed.reason || 'the message box would not read its text back') +
     ' — the reply may be in ' + key + ', but I cannot quote it back to you, so check before sending');
 }
 

@@ -5,7 +5,10 @@
 
 const { createEvent } = require('../bus/event');
 
-function createLifecycle({ bus, logger, config }) {
+function createLifecycle({ bus, logger, config, proc: injectedProc }) {
+  // BUG-437: `proc` is injectable so registerShutdown()'s handlers can be
+  // driven by a test. Production passes nothing and gets the real process.
+  const proc = injectedProc || process;
   let steps = [];
   let bootIndex = 0;
   let state = 'idle';  // idle | booting | alive | shutting-down | dead
@@ -115,12 +118,35 @@ function createLifecycle({ bus, logger, config }) {
   }
 
   function registerShutdown() {
+    // BUG-422: exit cannot await a stream flush. Synchronous stderr reaches the
+    // parent's child log even when no event-loop work remains. No restart policy.
+    for (const [event, msg] of [['beforeExit', 'lifecycle.process-before-exit'], ['exit', 'lifecycle.process-exit']]) {
+      proc.on(event, (code) => {
+        try { require('node:fs').writeSync(2, JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg, code }) + '\n'); }
+        catch { /* parent stream-error instrumentation records a broken destination */ }
+      });
+    }
     const signals = ['SIGINT', 'SIGTERM'];
     for (let i = 0; i < signals.length; i++) {
-      process.on(signals[i], async function() {
+      proc.on(signals[i], async function() {
         logger.info('lifecycle.signal', { signal: signals[i] });
         await shutdown();
-        process.exit(0);
+        proc.exit(0);
+      });
+    }
+    // BUG-437 (2026-09-16): the Electron shell used to child.kill() this process,
+    // which on Windows is TerminateProcess — no signal is delivered, so the
+    // handlers above never ran from a GUI quit and none of the registered steps
+    // (stop-loops, episodic-flush, checkpoint-write, audit-flush) happened. The
+    // shell now sends this message first (electron/child-exit.js) and waits;
+    // same body as the signals, so both routes end in exit(0) after
+    // lifecycle.shutdown.complete. Only a forked child has process.send — under
+    // `npm start` there is no parent and no listener, deliberately.
+    if (typeof proc.send === 'function') {
+      proc.on('message', function(m) {
+      if (!m || m.channel !== 'mythos:shutdown') return;
+        logger.info('lifecycle.signal', { signal: 'ipc:mythos:shutdown' });
+      Promise.resolve(shutdown(m.timeoutMs)).then(function() { proc.exit(0); });
       });
     }
   }

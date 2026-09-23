@@ -1,3 +1,4 @@
+import { escapeHtml, escapeAttr } from '../../url.js';
 // widgets/kinds/web-result.js — renders web content cards in a floating widget.
 // Handles: search results, flight results, weather cards, image results.
 // Called by widget-host.spawnWebWidget with (el, payload). Renders synchronously
@@ -81,12 +82,6 @@ export function mountWebResult(el, payload) {
   el.innerHTML = '<span class="widget-sub text-faint">No content for type: ' + escapeHtml(payload.widgetType || 'unknown') + '</span>';
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function escapeAttr(s) {
-  return escapeHtml(s).replace(/"/g, '&quot;');
-}
 // Returns the URL only if it is http(s). Card URLs come from web search results
 // and model output, and escaping a javascript: URL still leaves it clickable —
 // the scheme has to be rejected outright. Mirrored in views/web-panel.js, which

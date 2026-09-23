@@ -573,7 +573,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
             );
             if (retryResult && !retryResult.offline && retryResult.content) {
               // Overwrite the artifact with the retry
-              artifact = saveDeliverable(retryResult.content, card.text, 'pipeline');
+              artifact = saveDeliverable(retryResult.content, card.text, 'pipeline'); j.engine = retryResult.engine || j.engine; j.laneFallback = !!retryResult.laneFallback;
               review = groundingCheck.reviewWithGrounding(await fullReview(card, artifact, brain), retryResult.content, { spec: card.text, brief: researchBrief, researchStatus: researchStatus }); // BUG-314: the retry must clear grounding too, not just re-review
             }
           } catch (_) { /* retry failed — ship original with issues flagged */ }
@@ -600,7 +600,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // 'reverted' after the visual gate listed six defects, and this call
         // never saw that field.
         var completion = completionStatusLib.deriveCompletionPayload({
-          reviewStatus: shipMeta.reviewStatus, buildEngine: j.engine,
+          reviewStatus: shipMeta.reviewStatus, buildEngine: j.engine, laneFallback: j.laneFallback,
           reviewRequired: needsReview, refineStatus: j.refineStatus
         });
         shipMeta.status = completion.status;
@@ -762,7 +762,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
               builderPersona
             );
             if (retryResult && !retryResult.offline && retryResult.content) {
-              artifact = saveDeliverable(retryResult.content, slug + '-' + j.id + '-r', 'kanban');
+              artifact = saveDeliverable(retryResult.content, slug + '-' + j.id + '-r', 'kanban'); j.engine = retryResult.engine || j.engine; j.laneFallback = !!retryResult.laneFallback;
               review = groundingCheck.reviewWithGrounding(await fullReview(card, artifact, brain), retryResult.content, { spec: card.title + " " + (card.detail || ""), brief: researchBrief, researchStatus: researchStatus }); // BUG-314
             }
           } catch (_) { /* retry failed — ship original with issues flagged */ }
@@ -778,7 +778,7 @@ function createAgentActions({ fs, pipeline, kanban, buildRunner, designSystem, b
         // one, must never read as a finished build downstream. BUG-311/316 adds
         // the declared-skip and visual-rejection signals.
         patchMeta.status = completionStatusLib.deriveCompletionPayload({
-          reviewStatus: patchMeta.reviewStatus, buildEngine: j.engine,
+          reviewStatus: patchMeta.reviewStatus, buildEngine: j.engine, laneFallback: j.laneFallback,
           reviewRequired: needsReview, refineStatus: j.refineStatus
         }).status;
         if (j.refineStatus) patchMeta.refineStatus = j.refineStatus;

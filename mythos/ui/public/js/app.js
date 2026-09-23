@@ -8,7 +8,8 @@
 // covered. It turns a 401 on any /api/… call into a visible condition instead
 // of the null every call site already swallows.
 import './net-guard.js';
-import { subscribe, visionQuery, registerReplyHandler, sendMessage, utterance } from './ws.js';
+import { subscribe, visionQuery, registerReplyHandler, sendMessage, utterance, reconnectAfterUnlock } from './ws.js';
+import { createHudReadyReporter } from './hud-ready.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
 import { mountCoreOrb } from './neural-map/core-orb.js';
@@ -16,6 +17,7 @@ import { createOverlayManager } from './overlay/overlay-manager.js';
 import { mountWidgets } from './widgets/widget-host.js';
 import { mountConfirmModal } from './confirm/confirm-modal.js';
 import { createVoiceLoop } from './voice/voice-loop.js';
+import { voiceConfiguration } from './voice/voice-config.js';
 import { createOperatorPlayback } from './voice/operator-playback.js';
 import { mountDesktopTask } from './desktop-task.js';
 import { decideVoiceTransport } from './voice/voice-transport.js';
@@ -91,7 +93,18 @@ mountComponentBanner(document.getElementById('status-banner-root'), {
 // here (before the HUD builds) but NON-BLOCKING: it asks GET /api/pin/status
 // and only paints an overlay if a PIN is actually configured. With no PIN
 // configured — the default — nothing changes at all. See pin/pin-lock-screen.js.
-const pinLockScreen = mountPinLockScreen(document.getElementById('pin-root'));
+const pinLockScreen = mountPinLockScreen(document.getElementById('pin-root'), { onUnlock: () => {
+  reconnectAfterUnlock();
+  refreshVoiceConfiguration().then(() => { if (!isGateClosed(pinLockScreen.lockState())) ensureWakeWord(); });
+}, onLockState: () => publishHudReady() });
+
+// BUG-433: tell the server whether this HUD can actually PLAY proactive speech.
+// Rule and report both live in hud-ready.js (pure, therefore testable). A
+// playback hint, never an authentication claim — the server decides what the socket IS.
+const publishHudReady = createHudReadyReporter({
+  send: sendMessage,
+  readState: () => ({ voiceConfigLoaded, lockState: pinLockScreen.lockState() }),
+});
 
 // D5: Track brain availability from entity-state broadcasts.
 // When entity reports offline/degraded, voice loop skips transcription to save API calls.
@@ -108,63 +121,33 @@ subscribe(['entity-state'], (msg) => {
   _brainOnline = isEntityAlive(state);
 });
 
-// BUG-020: VAD tuning fetched once at boot. Voice initializes lazily (first
-// mic click), so this almost always resolves first; if it hasn't, ensureVoice()
-// just falls back to voice-loop.js's built-in defaults — never blocks first use.
-let _vadOverrides = null;
-fetch('/api/config/vad')
-  .then((r) => (r.ok ? r.json() : null))
-  .then((cfg) => { if (cfg) _vadOverrides = cfg; })
-  .catch(() => {});
-
-// Wake-word ("hey jarvis") config, fetched once at boot alongside VAD tuning
-// above. armOnce (below) lazily imports wakeword.js only when enabled AND the
-// models are actually present on disk.
-//
-// The PROMISE is kept, not just the resolved value, and ensureWakeWord() awaits
-// it. It used to read a bare `_wakewordCfg` snapshot: armOnce() unsubscribed
-// itself BEFORE calling ensureWakeWord(), which returned silently when the
-// fetch had not landed yet — so a fast first click (or any fetch failure, which
-// this .catch swallowed) killed wake word for the whole page with no caption, no
-// log and no retry, while every other voice feature kept working. That is
-// indistinguishable from "the wake word doesn't work" from the operator's chair.
-// Unlike the VAD fetch above, a miss here is not recoverable by falling back to
-// defaults — there is nothing to fall back to — so it must be reported.
-let _wakewordCfg = null;
-let _wakewordCfgError = null;
-const _wakewordCfgReady = fetch('/api/config/wakeword')
-  .then((r) => {
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return r.json();
-  })
-  .then((cfg) => { _wakewordCfg = cfg; return cfg; })
-  .catch((err) => {
-    _wakewordCfgError = (err && err.message) || String(err);
-    return null;
-  });
-
-// Gemini Live speech-to-speech (VOICE_S2S_ENABLED, server/routes/config.js),
-// fetched once at boot like the two above. Stays FALSE unless the server says
-// otherwise — a fetch that fails, 404s, or never resolves leaves the mature
-// batch-STT path (voice-loop.js) in charge, which is the honest default
-// (schema.js defaults VOICE_S2S_ENABLED to false). Until this fetch existed
-// the client had no way to learn the flag at all, so voice/s2s-bridge.js —
-// complete and protocol-correct — had no consumer.
-let _s2sEnabled = false;
-let _operatorEnabled = false, operatorPlayback = null;
-// Slice 3: screen share rides the same fetch. Null unless the server explicitly
-// reports it enabled — the fail-closed default matters more here than for the
-// other flags, since the failure mode is streaming the desktop unasked.
+// PIN-protected settings refresh after unlock. Every construction path waits
+// for current facts so a fast click cannot freeze pre-unlock VAD defaults.
+let _vadOverrides = null, _wakewordCfg = null, _wakewordCfgError = null;
+let _s2sEnabled = false, _operatorEnabled = false, operatorPlayback = null, disposeDesktopTask = null;
 let _screenShareCfg = null;
-const voiceConfigReady = fetch('/api/config/s2s')
-  .then((r) => (r.ok ? r.json() : null))
-  .then((cfg) => {
-    if (cfg && cfg.enabled) _s2sEnabled = true;
-    _operatorEnabled = Boolean(cfg && cfg.operatorEnabled);
-    if (_operatorEnabled) mountDesktopTask();
-    if (cfg && cfg.screenShare && cfg.screenShare.enabled) _screenShareCfg = cfg.screenShare;
-  })
-  .catch(() => {});
+let voiceConfigReady, _wakewordCfgReady, voiceConfigLoaded = false;
+voiceConfiguration.subscribe(({ vad, wakeword, s2s }) => {
+  voiceConfigLoaded = true;
+  _vadOverrides = vad.value;
+  _wakewordCfg = wakeword.value; _wakewordCfgError = wakeword.error;
+  _s2sEnabled = Boolean(s2s.value && s2s.value.enabled);
+  _operatorEnabled = Boolean(s2s.value && s2s.value.operatorEnabled);
+  _screenShareCfg = s2s.value?.screenShare?.enabled ? s2s.value.screenShare : null;
+  if (_operatorEnabled && !disposeDesktopTask) disposeDesktopTask = mountDesktopTask();
+  if (!_operatorEnabled && disposeDesktopTask) { disposeDesktopTask.close(); disposeDesktopTask = null; }
+  publishHudReady(); // BUG-433: readiness just went UP.
+});
+function refreshVoiceConfiguration() {
+  // Refresh all authenticated facts after PIN success, not just the caption.
+  voiceConfigLoaded = false;
+  // BUG-433: and here it goes DOWN. A refresh starting inside the greeting's
+  // delay window would otherwise leave it armed for a client that cannot play.
+  publishHudReady();
+  voiceConfigReady = _wakewordCfgReady = voiceConfiguration.refresh();
+  return voiceConfigReady;
+}
+refreshVoiceConfiguration();
 
 // overlays
 const overlays = createOverlayManager(document.getElementById('overlay-root'), {
@@ -220,7 +203,9 @@ const compose = createComposeBar({
   onActivity: (level) => { orb.setActivity(level); hud.setActivity(level); },
   onSubmitText: sendTextMessage,
   onCamToggle: () => ensureCamera().toggle(),
-  onMicSettings: () => {
+  onMicSettings: async () => {
+    await voiceConfigReady;
+    if (isGateClosed(pinLockScreen.lockState())) return;
     // Ensure the voice loop exists so its setMicDevice/getMicDevice are live,
     // then open the panel with them threaded through the overlay payload. The
     // panel works even if voice is idle — it owns its own diagnostic AudioContext.
@@ -525,7 +510,9 @@ const GESTURE_ACTIONS = {
 // Vision Q&A reply reuses the voice loop's own chunk-queue/barge-in playback
 // machinery (beginTurn/onExternalChunk/deliverExternalReply) so a "what do
 // you see" answer is spoken exactly like a voice reply, chunk-by-chunk.
-function describeScene(text) {
+async function describeScene(text) {
+  await voiceConfigReady;
+  if (isGateClosed(pinLockScreen.lockState())) return;
   if (!camera || !camera.isActive()) { mic.setCaption('Camera is off — click the camera icon first.', 'error'); return; }
   const image = camera.captureFrame();
   if (!image) { mic.setCaption('Could not capture a frame.', 'error'); return; }
@@ -625,10 +612,9 @@ subscribe(['camera-power-request'], async (msg) => {
   }
 });
 
-// Chrome gesture policy: SpeechRecognition/AudioContext need a user gesture, so
-// the loop object is constructed on the FIRST pointerdown (any click) — but
-// listening still starts only when the user explicitly clicks the mic or orb.
-const armOnce = () => {
+// The first permitted pointerdown prepares voice after configuration settles.
+// Construction acquires no microphone; explicit start still owns capture.
+const armOnce = async () => {
   // Clicking into the PIN lock screen is a pointerdown too — do NOT arm the
   // mic or start always-on wake-word listening behind a locked HUD. Stay
   // subscribed so the first real click after unlocking arms as usual.
@@ -639,6 +625,8 @@ const armOnce = () => {
   // that same window). isGateClosed() treats 'unknown' the same as 'locked'
   // so a pointerdown landing during that round trip can't permanently arm
   // the mic behind a HUD that then paints locked a moment later.
+  if (isGateClosed(pinLockScreen.lockState())) return;
+  await voiceConfigReady;
   if (isGateClosed(pinLockScreen.lockState())) return;
   document.removeEventListener('pointerdown', armOnce);
   ensureVoice();
@@ -1022,13 +1010,23 @@ subscribe(['job'], (msg) => {
 // chunk-queue/barge-in path as voice replies and vision answers. The orb
 // flashes so the user knows MYTHOS is speaking on its own initiative.
 subscribe(['proactive-speech'], (msg) => {
+  // BUG-433 (2026-09-18): both drops below were bare `return`s, which is why the
+  // 2026-09-16 investigation had to reason from two hypotheses about which one
+  // fired — a path that discards audio and records nothing destroys the only
+  // evidence of itself. They now name the branch and re-publish readiness.
+  const drop = (why) => {
+    console.warn('[proactive-drop]', why, msg.reqId || '');
+    publishHudReady();
+  };
+  // Do not construct a permanently mistuned loop while auth facts are pending.
+  if (!voiceConfigLoaded) return drop('voice-config-not-loaded');
   // Cortex keeps ticking while locked — do not read build results, goal
   // titles, or error text aloud over a locked HUD (pin.css's "nothing may be
   // ... read over the top of a locked HUD" claim). Dropped here, before a
   // reply handler is even registered, so the matching speech-chunk/done
   // broadcasts land with no handler and are silently ignored (see ws.js's
   // registerReplyHandler comment) rather than played later.
-  if (isGateClosed(pinLockScreen.lockState())) return;
+  if (isGateClosed(pinLockScreen.lockState())) return drop('pin-' + pinLockScreen.lockState());
   const v = ensureVoice();
   const session = v.beginTurn(msg.reqId); // reqId known upfront — barge-in can cancel this turn's TTS synthesis too (Item B)
   mic.setCaption(msg.text || msg.speak || '', 'reply');
@@ -1057,10 +1055,11 @@ subscribe(['navigate'], (msg) => {
 });
 
 // OCR-result — Slice 2 (Electron shell): Ctrl+Alt+X pressed anywhere → server
-// ran screen_read_text → text arrives here. Caption the first line and copy
-// the full text to the clipboard (best-effort: clipboard write needs a focused
-// document, and the whole point of the hotkey is that the HUD is NOT focused —
-// a rejected promise just means the caption is the only surface this time).
+// ran screen_read_text → text arrives here. Caption the first line. The
+// clipboard copy and the native toast happen in the Electron main process
+// (electron/ocr-result.js, BUG-268 D4): a renderer clipboard write needs a
+// focused document, and the whole point of the hotkey is that the HUD is NOT
+// focused, so for a year this surface was a caption nobody was looking at.
 subscribe(['ocr-result'], (msg) => {
   // BUG-268 instrumentation, boundary 3 of 3 (see electron/main.js's OCR-grab
   // callback for the read-in-order guide). Logged BEFORE the gate check and
@@ -1085,9 +1084,9 @@ subscribe(['ocr-result'], (msg) => {
   const text = String(p.text || '');
   const firstLine = text.split('\n').map((l) => l.trim()).filter(Boolean)[0] || '(no text found)';
   mic.setCaption('📋 ' + firstLine, 'info');
-  if (text && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
-    Promise.resolve(navigator.clipboard.writeText(text)).catch(() => { /* unfocused doc — caption only */ });
-  }
+  // BUG-268 D4 (2026-09-16): no clipboard write here any more. It rejected on
+  // an unfocused document — the state the hotkey is always used in — so the
+  // Electron main process owns the clipboard and the toast (electron/ocr-result.js).
 });
 
 // Close-panel — server-initiated request from the close_panel effector

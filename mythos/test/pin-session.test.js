@@ -87,13 +87,13 @@ function httpPostJson(port, pathName, obj, headers) {
   });
 }
 
-// Extracts the `mythos_token` value from a Set-Cookie response header, the
+// Extracts the `mythos_pin` value from a Set-Cookie response header, the
 // same cookie name extractToken() (server/index.js) already parses.
 function extractSessionCookie(setCookieHeader) {
   const arr = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
   for (const line of arr) {
     if (!line) continue;
-    const m = /mythos_token=([^;]+)/.exec(line);
+    const m = /mythos_pin=([^;]+)/.exec(line);
     if (m) return decodeURIComponent(m[1]);
   }
   return null;
@@ -178,9 +178,9 @@ describe('PIN session (Track B1): enforcement ON + a PIN configured — the real
       const verifyRes = await httpPostJson(port, '/api/pin/verify', { pin: '4242' });
       assert.equal(verifyRes.status, 200);
       const cookie = extractSessionCookie(verifyRes.headers['set-cookie']);
-      assert.ok(cookie, 'expected /api/pin/verify to set a mythos_token session cookie on success');
+      assert.ok(cookie, 'expected /api/pin/verify to set a mythos_pin session cookie on success');
 
-      const allowed = await httpGet(port, '/api/status', { Cookie: `mythos_token=${cookie}` });
+      const allowed = await httpGet(port, '/api/status', { Cookie: `mythos_pin=${cookie}` });
       assert.equal(allowed.status, 200);
     } finally {
       await server.stop();
@@ -200,7 +200,7 @@ describe('PIN session (Track B1): enforcement ON + a PIN configured — the real
       assert.ok(cookie);
 
       const accepted = await new Promise((resolve) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Cookie: `mythos_token=${cookie}` } });
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Cookie: `mythos_pin=${cookie}` } });
         ws.on('open', () => { ws.close(); resolve('opened'); });
         ws.on('unexpected-response', () => resolve('rejected'));
         ws.on('error', () => resolve('rejected'));
@@ -219,7 +219,7 @@ describe('PIN session (Track B1): enforcement ON + a PIN configured — the real
     await server.ready;
     const { port } = server.httpServer.address();
     try {
-      const res = await httpGet(port, '/api/status', { Cookie: 'mythos_token=not-a-real-session-token' });
+      const res = await httpGet(port, '/api/status', { Cookie: 'mythos_pin=not-a-real-session-token' });
       assert.equal(res.status, 401);
     } finally {
       await server.stop();
@@ -323,7 +323,7 @@ describe('PIN session (Track B1) + H1: BOTH layers configured — neither alone 
     const { port } = server.httpServer.address();
     try {
       const cookie = await getSessionCookie(port);
-      const res = await httpGet(port, '/api/status', { Cookie: `mythos_token=${cookie}` });
+      const res = await httpGet(port, '/api/status', { Cookie: `mythos_pin=${cookie}` });
       assert.equal(res.status, 401, `a live PIN session alone must not grant access once a bearer token is configured; got ${res.status}`);
     } finally {
       await server.stop();
@@ -341,7 +341,7 @@ describe('PIN session (Track B1) + H1: BOTH layers configured — neither alone 
       const cookie = await getSessionCookie(port);
       const res = await httpGet(port, '/api/status', {
         Authorization: `Bearer ${AUTH_TOKEN}`,
-        Cookie: `mythos_token=${cookie}`,
+        Cookie: `mythos_pin=${cookie}`,
       });
       assert.equal(res.status, 200, `bearer (header) + PIN session (cookie) together must be accepted; got ${res.status}`);
     } finally {
@@ -379,7 +379,7 @@ describe('PIN session (Track B1) + H1: BOTH layers configured — neither alone 
     try {
       const cookie = await getSessionCookie(port);
       const accepted = await new Promise((resolve) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${AUTH_TOKEN}`, { headers: { Cookie: `mythos_token=${cookie}` } });
+        const ws = new WebSocket(`ws://127.0.0.1:${port}/ws?token=${AUTH_TOKEN}`, { headers: { Cookie: `mythos_pin=${cookie}` } });
         ws.on('open', () => { ws.close(); resolve('opened'); });
         ws.on('unexpected-response', () => resolve('rejected'));
         ws.on('error', () => resolve('rejected'));

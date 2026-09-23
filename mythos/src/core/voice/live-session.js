@@ -15,6 +15,8 @@
 
 const WebSocket = require('ws');
 const { createEchoFilter } = require('./echo-filter');
+const { createGoAwayGate } = require('./goaway-gate'); // BUG-436
+const { createNoticeQueueFromEnv, injectionFields } = require('./notice-queue'); // BUG-432 — null unless VOICE_SERIALIZE_NOTICES=true; mechanism, bounds, flags and the log payload live in that file
 
 const WS_URL = 'wss://generativelanguage.googleapis.com/ws/' +
   'google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
@@ -167,7 +169,7 @@ function createLiveSession(deps) {
     systemInstruction,      // string — full RULES + persona (Phase 6)
     functionDeclarations,   // [] from live-tools.js, or a () => [] rebuilt per open — see currentFunctionDeclarations
     onToolCall,             // async (calls[], {sendToolResponse}) => void  (Phase 3)
-    onAudioOut,             // (base64Pcm24k) => void
+    onAudioOut, onEchoCheck, // audio sink; numeric transcript verdict ({ ratio, matched })
     onTranscript,           // ({role:'user'|'assistant', text, final}) => void
     onState,                // ({state, reason}) => void
     onTurnComplete,         // ({userText, assistantText}) => void
@@ -234,7 +236,7 @@ function createLiveSession(deps) {
   let idleTimer = null, maxTimer = null;
   let turnStallTimer = null;     // BUG-131, see TURN_STALL_MS
   let userText = '', assistantText = '';
-  let closedByUs = false;
+  let closedByUs = false; let socketGeneration = 0; let lastFlushedFrames = 0; // BUG-432: generation scopes a release to the socket that earned it; lastFlushedFrames tells resume() whether the operator's buffered speech already owns the floor.
   let idleRotationsWithoutSpeech = 0;
   // Audio captured while the socket is down between rotations — see sendAudio.
   // 512KB of base64 is roughly 12 seconds of 16kHz mono PCM16, comfortably more
@@ -295,6 +297,11 @@ function createLiveSession(deps) {
   // second shape was invisible until 2026-08-19 — see the sc.interrupted branch.
   let turnInterrupts = 0;
   let turnStartedAt = 0;
+  // BUG-436: see goaway-gate.js — a goAway mid-reply used to close the socket on the same tick and cut the answer.
+  let turnToolCallOpen = false;
+  const goAwayGate = createGoAwayGate({ closeNow: (reason) => close(reason, { final: false }), isTurnInFlight: () => turnToolCallOpen || turnAudioParts > 0 || turnTextParts > 0, logger });
+  // BUG-432: turnSystemInitiated is a term in inFlight AND used to be set inside sendText, so a queue reading it would have held the first notice against a turn that notice had itself just claimed to start. It moves with the frame now — set in sendNoticeFrame, when one actually goes out.
+  const noticeQueue = createNoticeQueueFromEnv({ inFlight: () => turnSystemInitiated || turnToolCallOpen || turnAudioParts > 0 || turnTextParts > 0, send: (text, meta) => sendNoticeFrame(text, meta), logger, onUndelivered: (text, meta, reason) => logger.warn('live.notice-undelivered', { site: (meta && meta.site) || 'unattributed', reason, chars: String(text).length }) });
   // Audio-chunk starvation, per turn — see the inlineData branch. A chunk holds
   // ~100ms of 24kHz PCM; 250ms is comfortably past "the previous chunk has
   // finished playing and the room is now silent", without firing on ordinary
@@ -364,7 +371,7 @@ function createLiveSession(deps) {
 
   function setState(next, reason) {
     if (state === next) return;
-    state = next;
+    state = next; if (noticeQueue && next !== 'open') noticeQueue.suspend(next); // BUG-432: ANY departure from open suspends delivery. close() is not the choke point -- an unsolicited drop never calls it.
     if (onState) onState({ state, reason: reason || null });
     if (bus && typeof bus.emit === 'function') bus.emit('voice.live.state', { state, reason: reason || null });
   }
@@ -559,7 +566,7 @@ function createLiveSession(deps) {
     closedByUs = false;
     return new Promise((resolve) => {
       let settled = false;
-      try { ws = openSocket(`${WS_URL}?key=${key}`); }
+      try { socketGeneration += 1; ws = openSocket(`${WS_URL}?key=${key}`); }
       catch (err) { setState('closed', err.message); return resolve(false); }
 
       ws.on('open', () => sendRaw({ setup: buildSetup() }));
@@ -583,7 +590,7 @@ function createLiveSession(deps) {
           if (maxTimer.unref) maxTimer.unref();
           // After setState('open'), so the frames go out on the live socket
           // rather than back into the buffer they came from.
-          flushPendingAudio();
+          flushPendingAudio(); if (noticeQueue) noticeQueue.resume({ generation: socketGeneration, audioFlushed: lastFlushedFrames > 0 }); // BUG-432
           resolve(true);
         }
         handleFrame(msg);
@@ -638,9 +645,7 @@ function createLiveSession(deps) {
         // BUG-272 V3: the filter fired ZERO times across 72 turns and nothing
         // could say why — match() collapses every non-match to null, so a
         // near-miss at 0.59 and "MYTHOS had said nothing at all" produced the
-        // same silence. inspect() returns the whole decision; one echo-check
-        // line per inputTranscription makes the answer readable from the log
-        // instead of inferable a day later.
+        // same silence. inspect() records one verdict per inputTranscription.
         //
         // Every field is a number, a boolean or a fixed enum. The privacy
         // invariant (a log line never carries transcript text) is binding and
@@ -659,6 +664,7 @@ function createLiveSession(deps) {
           msSinceAssistantAudio: lastAssistantAudioAt ? Date.now() - lastAssistantAudioAt : null,
         });
         const echoRatio = echoCheck.matched ? echoCheck.ratio : null;
+        if (onEchoCheck) onEchoCheck({ ratio: echoCheck.ratio, matched: echoCheck.matched });
         if (echoRatio !== null) {
           // The ratio only, never the text — transcripts are operator
           // speech, the log is not. Kept alongside echo-check because
@@ -778,7 +784,7 @@ function createLiveSession(deps) {
         if (bus && typeof bus.emit === 'function') bus.emit('voice.live.interrupted', {});
       }
       if (sc.turnComplete) {
-        disarmTurnStall(); // BUG-131 — the turn landed, stalled or not
+        disarmTurnStall(); turnToolCallOpen = false; goAwayGate.turnComplete(); // BUG-436 releases a held goAway here. BUG-131 — the turn landed, stalled or not
         // BUG-271: the utterance ended, but it stays an echo reference for
         // the rest of its 3s window — speaker bleed arrives after the speech
         // finishes (the batch path's post-playback ECHO_GUARD_MS).
@@ -854,7 +860,7 @@ function createLiveSession(deps) {
         // silent. Detected before the counters reset, and handed to the caller
         // (this session demonstrably cannot speak it itself).
         const shownText = (turn.assistantText || turnPartText).trim();
-        const wasSilent = !!shownText && turnAudioParts === 0;
+        const wasSilent = !!shownText && turnAudioParts === 0, silentInterrupts = turnInterrupts;
         turnTextParts = 0; turnThoughtParts = 0; turnAudioParts = 0;
         turnReasoningStrips = 0; turnPartText = ''; turnAudioIn = 0;
         turnInterrupts = 0; turnStartedAt = Date.now();
@@ -907,14 +913,15 @@ function createLiveSession(deps) {
           }
         }
         // Consumed: the next turn is operator-initiated until sendText says otherwise.
-        turnSystemInitiated = false;
+        // BUG-432: and one held notice goes now — AFTER the flag is cleared, or inFlight would still be true and the queue would hold it again.
+        turnSystemInitiated = false; if (noticeQueue) noticeQueue.release({ generation: socketGeneration });
         if (wasSilent) {
           logger.warn('live.turn-silent', { turnId: turnCounter, chars: shownText.length });
           if (bus && typeof bus.emit === 'function') {
             bus.emit('health.anomaly', { kind: 'live-turn-silent', turnId: turnCounter });
           }
           if (onSilentTurn) {
-            try { onSilentTurn({ turnId: turnCounter, text: shownText }); }
+            try { onSilentTurn({ turnId: turnCounter, text: shownText, interrupts: silentInterrupts }); }
             catch (err) { logger.warn('live.silent-turn-handler-failed', { error: err.message }); }
           }
         }
@@ -926,7 +933,7 @@ function createLiveSession(deps) {
     // BUG-131 — calling a tool is a response, just not a spoken one. Disarmed on
     // the FRAME, outside the onToolCall guard: whether this process happens to
     // have a tool handler wired says nothing about whether Gemini answered.
-    if (msg.toolCall) disarmTurnStall();
+    if (msg.toolCall) { disarmTurnStall(); turnToolCallOpen = true; } // BUG-436: waiting on our toolResponse = a turn in flight
     if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls) && onToolCall) {
       Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse, sendText }))
         .catch((err) => logger.warn('live.toolcall-failed', { error: err.message }));
@@ -941,12 +948,9 @@ function createLiveSession(deps) {
         resumeHandle = msg.sessionResumptionUpdate.newHandle;
       }
     }
-    if (msg.goAway) {
-      // Server is about to hang up. Same non-final close as idle/max above —
-      // one reconnect path (the ws.on('close') branch), not a second one.
-      logger.info('live.goaway', { timeLeft: msg.goAway.timeLeft });
-      close('goaway', { final: false });
-    }
+    // Server is about to hang up. BUG-436: the gate decides WHEN — now if idle, at turnComplete if a reply is
+    // in flight — and always through the same non-final close() as idle/max, so the reconnect path stays one.
+    if (msg.goAway) goAwayGate.arrive(msg.goAway.timeLeft);
     if (msg.usageMetadata && spend && typeof spend.recordCall === 'function') {
       // Honest spend: real counts from the API, never estimated (AD-5).
       spend.recordCall({
@@ -1006,12 +1010,12 @@ function createLiveSession(deps) {
   // Called once the reconnected session reports setupComplete. Order is
   // preserved: these frames are the operator's speech and arrived in this order.
   function flushPendingAudio() {
-    if (!pendingAudio.length && !pendingAudioDropped) return;
+    if (!pendingAudio.length && !pendingAudioDropped) { lastFlushedFrames = 0; return; }
     const frames = pendingAudio;
     const dropped = pendingAudioDropped;
     pendingAudio = [];
     pendingAudioBytes = 0;
-    pendingAudioDropped = 0;
+    pendingAudioDropped = 0; lastFlushedFrames = frames.length;
     for (const frame of frames) {
       turnAudioIn += 1;
       if (!sendRaw({ realtimeInput: { audio: { mimeType: 'audio/pcm;rate=16000', data: frame } } })) break;
@@ -1125,25 +1129,19 @@ function createLiveSession(deps) {
   // Q2: the text itself is NOT logged. These strings carry tool results, message
   // bodies and whatever the operator typed. A site and a length attribute a turn;
   // the content already lives in the audit vault under its own rules.
-  function sendText(text, meta) {
-    if (state !== 'open') return false;
+  // The frame itself: everything that must happen AT the moment a text frame reaches the wire, so a queued notice carries the same effects as an immediate one and live.text-injected still timestamps "spoken now". Folded hard on purpose — this file sits at its ratchet ceiling, which is the same constraint that folded BUG-432's original wiring.
+  function sendNoticeFrame(text, meta) {
     const m = meta || {};
-    const fromOperator = m.operator === true;
-    // Mark the turn this provokes as ours, so the half-blind transcript check
-    // does not accuse the operator of having spoken unheard (see
-    // turnSystemInitiated's declaration). Set before the send, not after: the
-    // reply can begin arriving synchronously on a fake socket in tests.
+    // turnSystemInitiated marks the turn this provokes as ours, so the half-blind transcript check does not accuse the operator of speaking unheard. Set BEFORE the send (a reply can arrive synchronously on a fake socket) and RESTORED to its PRIOR value on refusal — a frame the socket rejected started no turn. Restored rather than forced false because a genuinely in-flight system turn may already have set it. BUG-432 measured that phantom moving the half-blind check onto the replacement session's first real turn.
+    // The log moved to AFTER sendRaw and carries `accepted`: it used to be written first, so every refused frame was recorded as injected — in the very field BUG-432's own measurement is counted from.
+    const fromOperator = m.operator === true; const prior = turnSystemInitiated;
     if (!fromOperator) turnSystemInitiated = true;
-    logger.info('live.text-injected', {
-      site: m.site || 'unattributed',
-      operator: fromOperator,
-      tool: m.tool || null,
-      claim: m.claim || null,
-      chars: String(text).length,
-      turnId: turnCounter,
-    });
-    return sendRaw({ realtimeInput: { text: String(text) } });
+    const ok = sendRaw({ realtimeInput: { text: String(text) } }); if (ok === false && !fromOperator) turnSystemInitiated = prior;
+    logger.info('live.text-injected', injectionFields(m, text, turnCounter, ok !== false));
+    return ok;
   }
+  // One door, still one door (BUG-273 D3). Returns 'sent' | 'queued' | false with the queue on, the old boolean with it off: three outcomes, three values, so sendSystemNotice can tell "held until this turn ends" from "the socket refused it".
+  function sendText(text, meta) { if (state !== 'open') return false; return noticeQueue ? noticeQueue.offer(text, meta) : sendNoticeFrame(text, meta); }
 
   function sendToolResponse(functionResponses) {
     return sendRaw({ toolResponse: { functionResponses } });
@@ -1168,7 +1166,7 @@ function createLiveSession(deps) {
     if (maxTimer) clearTimeout(maxTimer);
     // BUG-131: a closed session owes no reply, so a pending stall timer would
     // only ever fire a false anomaly about a turn nobody is waiting on.
-    disarmTurnStall();
+    disarmTurnStall(); goAwayGate.cancel(); if (noticeQueue) noticeQueue.cancel({ final }); // BUG-436: a pending goAway hold dies with the socket it was holding. BUG-432: a FINAL close hands held notices back; a rotation keeps them for the new socket.
     // Null out `ws` BEFORE closing the old socket, not after: a non-final
     // close's own 'close' handler can synchronously call reconnect()->open()
     // (fake sockets emit 'close' synchronously; real ones may coalesce too),

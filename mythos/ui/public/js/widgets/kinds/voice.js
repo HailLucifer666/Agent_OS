@@ -1,3 +1,4 @@
+import { voiceConfiguration } from '../../voice/voice-config.js';
 // voice.js — the voice subsystem's live posture: which engines the browser
 // actually has, whether speech-to-speech is enabled server-side, and what the
 // voice loop is doing right now.
@@ -165,32 +166,12 @@ export function mountVoice(el, ctx) {
   let disposed = false;
   bag.add(() => { disposed = true; });
 
-  // The threshold is a server fact; without it a peak score cannot be judged.
-  fetch('/api/config/wakeword')
-    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-    .then((cfg) => {
-      if (disposed) return;
-      if (cfg && typeof cfg.threshold === 'number') wakewordThreshold = cfg.threshold;
-      paintWakeword();
-    })
-    .catch(() => { /* keep the documented default; never block the row */ });
-
-  // S2S availability is a real server fact — /api/config/s2s exposes only the
-  // boolean, never the key or model id (see server/routes/config.js).
-  fetch('/api/config/s2s')
-    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
-    .then((cfg) => {
-      if (disposed) return;
-      applyS2sResult(rows, cfg || null);
-      paintRows();
-    })
-    .catch(() => {
-      if (disposed) return;
-      // The route was unreachable, so we never learned the setting. Distinct
-      // from "disabled" and must not be reported as it.
-      applyS2sResult(rows, null);
-      paintRows();
-    });
+  bag.add(voiceConfiguration.subscribe(({ wakeword, s2s }) => {
+    if (disposed) return;
+    if (typeof wakeword.value?.threshold === 'number') wakewordThreshold = wakeword.value.threshold;
+    applyS2sResult(rows, s2s.value);
+    paintWakeword();
+  }));
 
   return () => bag.run();
 }

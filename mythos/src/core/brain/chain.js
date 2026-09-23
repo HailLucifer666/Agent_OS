@@ -5,6 +5,11 @@
 // that and degrade honestly — this module never retries forever on its own.
 const registry = require('./registry');
 const zcode = require('../../../providers/zcode');
+// BUG-418: a buyer holding an Anthropic or OpenAI key had to route through
+// OpenRouter and pay its margin to use a key they already owned. Both are inert
+// without their key, exactly like every other lane here.
+const openai = require('../../../providers/openai');
+const anthropic = require('../../../providers/anthropic');
 const nim = require('../../../providers/nim');
 const nim2 = nim.createNimProvider('nim2', 'NIM_API_KEY_2');
 const groq = require('../../../providers/groq');
@@ -15,10 +20,14 @@ const google = require('../../../providers/google');
 const ollama = require('../../../providers/ollama');
 
 const { createBreaker } = require('../immune/breakers');
+// BUG-419: the verdict a REAL completion returns about an account, kept instead
+// of thrown away. The liveness probe reads a free /models catalog and therefore
+// cannot see a 402.
+const providerHealth = require('./provider-health');
 const { createLogger } = require('../logger');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
-const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter, google, ollama };
+const LANES = { zcode, nim, nim2, groq, mistral, cerebras, openrouter, google, ollama, openai, anthropic };
 
 // BUG-336 (2026-08-24): provider-fault identity. Pure so tests need no
 // providers or network. Priority: explicit kind > numeric status > libuv
@@ -45,6 +54,8 @@ var proseFallbackLogAt = {}; // lane -> last Date.now() we logged a prose fallba
 const COOLDOWN_MS = Number(process.env.CHAIN_COOLDOWN_MS) || 60000;
 const ATTEMPT_TIMEOUT_MS = Number(process.env.CHAIN_ATTEMPT_TIMEOUT_MS) || 30000;
 const cooldowns = new Map(); // "lane:model" -> until-timestamp
+const wholeLaneTimeoutStreaks = new Map();
+const WHOLE_LANE_TIMEOUT_STREAK_LIMIT = 3;
 
 function laneKey(lane, model) {
   return `${lane}:${model}`;
@@ -307,20 +318,40 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
       });
       return;
     }
-    const names = deferredTimeoutCooldowns.map(function (c) { return c.lane + ':' + c.model; });
-    console.warn('[brain chain] whole-lane-timeout: ' + names.length + ' attempt(s) all timed out at the '
+    // BUG-426: C3 grants two shared-outage exemptions, not infinite amnesty.
+    // Kill switch: CHAIN_WHOLE_LANE_TIMEOUT_STREAK_LIMIT=Infinity restores C3.
+    // A real outage can bench hot pairs for 60s after recovery; breakers recover.
+    const limit = (config && config.CHAIN_WHOLE_LANE_TIMEOUT_STREAK_LIMIT) || Number(process.env.CHAIN_WHOLE_LANE_TIMEOUT_STREAK_LIMIT) || WHOLE_LANE_TIMEOUT_STREAK_LIMIT;
+    let forcedCooldowns = 0;
+    const names = [];
+    deferredTimeoutCooldowns.forEach(function (c) {
+      const key = laneKey(c.lane, c.model), streak = (wholeLaneTimeoutStreaks.get(key) || 0) + 1;
+      if (streak >= limit) {
+        wholeLaneTimeoutStreaks.delete(key); forcedCooldowns++;
+        markCooldown(c.lane, c.model, cooldownMs);
+        if (c.breaker) c.breaker.recordFailure();
+      } else { wholeLaneTimeoutStreaks.set(key, streak); names.push(key); }
+    });
+    // Review 2026-09-10: the walk where every pair hits the limit is the one that
+    // matters, and it used to return here before the warn and the anomaly — a
+    // lane benched in lockstep left no line anywhere. Both branches now report.
+    const forcedNote = forcedCooldowns ? '; ' + forcedCooldowns + ' pair(s) at the '
+      + limit + '-walk streak limit were cooled and their breakers tripped (BUG-426)' : '';
+    console.warn('[brain chain] whole-lane-timeout: ' + (names.length + forcedCooldowns) + ' attempt(s) all timed out at the '
       + 'per-attempt ceiling (' + attemptTimeoutMs + 'ms), nothing answered, and no provider failed for a '
-      + 'reason that names it — treating this as a local/network fault and NOT cooling down: '
-      + JSON.stringify(names.slice(0, 8)));
+      + 'reason that names it — ' + (names.length ? 'treating this as a local/network fault and NOT cooling down: '
+      + JSON.stringify(names.slice(0, 8)) : 'streak limit reached') + forcedNote);
     if (bus && typeof bus.emit === 'function') {
       try {
         bus.emit('health.anomaly', {
           kind: 'chain-whole-lane-timeout',
           reason: 'every ' + effectiveKind + ' attempt timed out at the ' + attemptTimeoutMs
             + 'ms per-attempt ceiling and nothing answered, which is one shared cause rather than '
-            + names.length + ' provider outages — cooldowns were not taken',
+            + (names.length + forcedCooldowns) + ' provider outages — '
+            + (names.length ? 'cooldowns were not taken' : 'no pair left exempt') + forcedNote,
           target: effectiveKind,
-          attempts: names.length,
+          attempts: names.length + forcedCooldowns,
+          forcedCooldowns: forcedCooldowns,
           attemptTimeoutMs: attemptTimeoutMs,
         });
       } catch (_) { /* telemetry must never break the chain */ }
@@ -390,6 +421,8 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
       }
       const e = new Error('aborted'); e.name = 'AbortError'; throw e;
     }
+    if (providerHealth.failureFor(lane)) { reportSkip(lane, model, 'account-benched'); continue; }
+    if (providerHealth.modelFailureFor(lane, model)) { reportSkip(lane, model, 'model-benched'); continue; }
     if (isCooling(lane, model)) { reportSkip(lane, model, 'cooldown'); continue; }
     // Skip lanes whose provider isn't configured (e.g. GROQ_API_KEY not set).
     if (LANES[lane] && typeof LANES[lane].isAvailable === 'function' && !LANES[lane].isAvailable()) continue;
@@ -447,6 +480,13 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
         // backoff to its base delay, so a recovered provider returns to the head
         // of the lane on its own. No hand-edit, no restart.
         if (breaker) breaker.recordSuccess();
+        // BUG-419: an answer is proof the ACCOUNT is fine, so any recorded
+        // account-level refusal is out of date now — cleared immediately rather
+        // than left to expire, so an operator who has just added billing does
+        // not wait out a TTL.
+        providerHealth.recordSuccess(lane);
+        providerHealth.recordModelSuccess(lane, model);
+        wholeLaneTimeoutStreaks.delete(laneKey(lane, model));
         // BUG-273 C3: an answer here means any earlier timeout in this run was the
         // provider's own slowness, not a shared local fault — so the deferred
         // cooldowns are taken. Settled before the return, or a successful call
@@ -467,7 +507,23 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
       errors.push(`${lane}:${model}: ${err.message}`);
       reportAttemptEnd({ ok: false, timedOut: attemptTimedOut, error: String(err && err.message || err).slice(0, 200) });
       // Error discrimination: only cooldown on rate-limit (429) or network errors.
-      // Auth failures (401/403) won't recover in 60s — let isAvailable() handle them.
+      //
+      // BUG-419 (2026-09-09) — THE LINE BELOW USED TO SAY "Auth failures
+      // (401/403) won't recover in 60s — let isAvailable() handle them", AND
+      // NOTHING HANDLED THEM. `isAvailable()` is `chainFor('text').length > 0`,
+      // which resolves through registry.isProviderAlive, which for cerebras is
+      // "a key is set AND the /models catalog listed this id". A catalog listing
+      // is free and answers 200 on an unbilled account; the 402 only comes from
+      // /chat/completions. So the refusal was never seen by anything, 402 was
+      // not classified at all (classifyProviderError knows 429, 5xx and network
+      // only), no cooldown and no breaker tick were taken, and cerebras stayed
+      // the last cloud rung of every lane while refusing every call — with nine
+      // dated source comments recording the fact and nothing MYTHOS could say.
+      // A confident comment deferring to a mechanism that does not exist is how
+      // it survived. providerHealth is that mechanism, now built.
+      providerHealth.recordFailure(lane, err);
+      providerHealth.recordModelFailure(lane, model, err, undefined, bus);
+      if (!attemptTimedOut && !(err && err.name === 'AbortError')) wholeLaneTimeoutStreaks.delete(laneKey(lane, model));
       // Bad-request (400) means the provider is healthy, the request was wrong — don't
       // penalize the provider. Caller-abort is not a provider fault either.
       // BUG-336: typed identity first (err.kind/err.status/err.code attached
@@ -534,9 +590,9 @@ module.exports = {
   complete,
   isAvailable,
   _internal: {
-    cooldowns, markCooldown, expand, toOllamaVisionMessages,
+    cooldowns, wholeLaneTimeoutStreaks, markCooldown, expand, toOllamaVisionMessages,
     classifyProviderError: classifyProviderError,
-    _resetCooldowns: () => cooldowns.clear(), LANES,
+    _resetCooldowns: () => { cooldowns.clear(); wholeLaneTimeoutStreaks.clear(); }, LANES,
     // B1 test seams. breakers is null until the flag has been read, so a getter
     // rather than the value — capturing it at export time would always be null.
     getBreakers: () => breakers,

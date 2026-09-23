@@ -88,18 +88,46 @@ describe('attachMythos', () => {
     assert.ok(true);
   });
 
-  it('fails loudly when the server wants a token and none was given', async () => {
+  // BUG-413 (2026-09-09): this test used to pass only on machines WITHOUT a
+  // User-scope MYTHOS_AUTH_TOKEN. attachMythos read `opts.token || env`, so the
+  // explicit '' below fell through to the host's token and the attach succeeded.
+  // The fixture now sets the env var deliberately, so the assertion is about the
+  // contract ("explicit empty means none") rather than about the host.
+  // Probe, run 2026-09-09 with MYTHOS_AUTH_TOKEN set in the shell: restoring the
+  // `||` fallback fails (a) with "Missing expected rejection" and leaves (b)
+  // green; deleting the env fallback entirely fails (b) with the rejection.
+  it('fails loudly when the server wants a token and none was given — (a) explicit empty ignores the host env', async () => {
     // Otherwise this surfaces much later as a puzzling WS 401 in the middle of a
     // harness, pointing at the tool rather than at the missing flag.
     const { server, port } = await fakeServer((req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true, uptime: 3, authRequired: true }));
     });
+    const saved = process.env.MYTHOS_AUTH_TOKEN;
+    process.env.MYTHOS_AUTH_TOKEN = 'host-token-that-must-not-be-used';
     try {
       await assert.rejects(
         () => lib.attachMythos({ port, token: '' }),
         /requires MYTHOS_AUTH_TOKEN/);
     } finally {
+      if (saved === undefined) delete process.env.MYTHOS_AUTH_TOKEN; else process.env.MYTHOS_AUTH_TOKEN = saved;
+      server.close();
+    }
+  });
+
+  it('an OMITTED token still falls back to MYTHOS_AUTH_TOKEN in the environment — (b) the adjacent case that must keep passing', async () => {
+    const { server, port } = await fakeServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, uptime: 3, authRequired: true }));
+    });
+    const saved = process.env.MYTHOS_AUTH_TOKEN;
+    process.env.MYTHOS_AUTH_TOKEN = 'from-the-environment';
+    try {
+      const handle = await lib.attachMythos({ port });
+      assert.equal(handle.attached, true);
+      assert.equal(handle.token, 'from-the-environment');
+    } finally {
+      if (saved === undefined) delete process.env.MYTHOS_AUTH_TOKEN; else process.env.MYTHOS_AUTH_TOKEN = saved;
       server.close();
     }
   });

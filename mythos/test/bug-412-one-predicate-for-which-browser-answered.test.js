@@ -133,24 +133,61 @@ describe('BUG-412 — one predicate for "is what answered what was asked?"', () 
   // PRODUCER. A false green of the purest kind — the fix's own new field could
   // be deleted from the branch that needed it most and every test stayed green.
   //
-  // launchPersistentContext cannot be driven here without launching a real
-  // browser, so this is a source-shape check — but a DERIVED one. It extracts
-  // the channels launchLocal actually asks playwright for and the channels it
-  // records, then compares the two sets. That catches a deleted assignment AND
-  // the worse shape: recording 'chrome' on the msedge branch.
-  test('launchLocal RECORDS every channel it asks playwright for, and pairs them correctly', () => {
+  // REWRITTEN 2026-09-09 (BUG-415), and the reason matters more than the change.
+  //
+  // The original form read launchLocal's SOURCE and compared the literal
+  // `channel: 'x'` strings it asked playwright for against the literal
+  // `launchedChannel = 'x'` strings it recorded. That was the best available
+  // check while the ladder was two hardcoded branches. BUG-415 replaced the
+  // ladder with a DERIVED plan (planLocalLaunch), so the body now contains zero
+  // channel literals and assigns `launchedChannel = attempt.name` from a
+  // variable — and this guard went from strong to structurally blind in one
+  // commit. That is /kee class 14, the false green, and the fix is NOT to relax
+  // the assertion until it passes again.
+  //
+  // Instead the same invariant is asserted against the thing that now holds it.
+  // The question was never "do two regexes agree"; it was "does the identity
+  // MYTHOS reports equal the browser it actually started" (gate E). planLocalLaunch
+  // returns that pairing directly, so it can be checked for real — every attempt's
+  // recorded name must be recoverable from the launch options themselves, by the
+  // same two resolvers the rest of the system uses. Strictly stronger than the
+  // regex: it would catch a plan that asked for msedge and named it chrome, which
+  // textual order-matching could not.
+  test('every launch attempt names the browser its own options would actually start', () => {
+    const attempts = browserAgent.planLocalLaunch(
+      path.join('C:', 'fake', 'MYTHOS', 'chrome-debug-profile'), {});
+    assert.ok(attempts.length >= 1,
+      'the plan must be non-empty on a dev machine — this guard is worthless against an empty list');
+    for (const attempt of attempts) {
+      if (attempt.options.channel) {
+        assert.equal(bt.browserNameForChannel(attempt.options.channel), attempt.name,
+          `attempt "${attempt.name}" asks playwright for channel "${attempt.options.channel}", `
+          + 'which resolves to a different browser — that mislabelling is this whole ticket');
+      } else {
+        assert.equal(bt.identifyBrowserByExecutable(attempt.options.executablePath), attempt.name,
+          `attempt "${attempt.name}" launches ${attempt.options.executablePath}, which is not that browser`);
+      }
+    }
+  });
+
+  // The other half of the original guard, kept as a source-shape check because
+  // launchPersistentContext still cannot be driven here without a real browser.
+  // Probe (e) deleted `launchedChannel = 'msedge'` from the old fallback and
+  // reddened nothing — bug-106's test stubs ensureOnline/getStatus, so it
+  // asserts the CONSUMER while nothing asserted the PRODUCER. Narrowed to the
+  // one thing the derived test above cannot see: that the identity is taken from
+  // the attempt that succeeded, and not from a name chosen anywhere else.
+  test('launchLocal records the identity of the attempt that actually started', () => {
     const src = require('node:fs').readFileSync(
       path.join(__dirname, '..', 'adapters', 'browser-agent', 'index.js'), 'utf8');
     const body = src.slice(src.indexOf('async function launchLocal'), src.indexOf('async function ensureOnline'));
     assert.ok(body.length > 200, 'launchLocal must be findable — this guard is worthless if the slice is empty');
-
-    const asked = [...body.matchAll(/channel:\s*'([^']+)'/g)].map((m) => m[1]);
-    const recorded = [...body.matchAll(/launchedChannel\s*=\s*'([^']+)'/g)].map((m) => m[1]);
-    assert.ok(asked.length >= 2, 'launchLocal tries chrome then falls back to msedge');
-    assert.deepEqual(recorded, asked,
-      'every channel launchLocal asks for must be recorded, IN THE SAME ORDER — a missing '
-      + 'assignment loses the identity, and a mismatched pair reports the wrong browser, '
-      + 'which is the defect this whole ticket is about');
+    const assignments = [...body.matchAll(/launchedChannel\s*=\s*([^;\n]+)/g)]
+      .map((m) => m[1].trim())
+      .filter((v) => v !== 'null');
+    assert.deepEqual(assignments, ['attempt.name'],
+      'exactly one non-null assignment, and it must come from the attempt that succeeded — '
+      + 'a literal here is an identity taken from an assumption, which is the defect BUG-410 fixed');
   });
 
   // (g) — same story. Probe (g) replaced the delegation body with `return null`

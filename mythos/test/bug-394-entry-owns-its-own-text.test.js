@@ -203,8 +203,25 @@ describe('BUG-394 — the real file, and the safety property the ticket is built
       assert.strictEqual(r.bugs.find((b) => b.n === n).state, 'open',
         'BUG-' + n + ' must read open — it is declared in the OPEN WORK register');
     }
-    assert.deepStrictEqual(r.openDeclared, [274, 275],
-      'the open set is read from the register, and these two are what is left');
+    // This read `deepStrictEqual(r.openDeclared, [274, 275])` until 2026-09-09,
+    // when live-verifying BUG-414..419 produced two genuinely open findings
+    // (BUG-420, BUG-421) and broke it. That equality was the snapshot the
+    // comment four lines above warns against: it asserted not only that these
+    // two are open — the property the ticket is built on, kept verbatim in the
+    // loop — but that NOTHING ELSE ever is, which forbids filing an open ticket
+    // and is not a property this repo wants.
+    //
+    // Deliberately NOT a relaxation. The guard was that the open state comes
+    // from the REGISTER rather than from an entry's prose, and that is asserted
+    // harder here than before: every declared-open number must be in the
+    // register, and the two that gate shipping must be among them.
+    for (const n of [274, 275]) {
+      assert.ok(r.openDeclared.includes(n),
+        'BUG-' + n + ' fell out of the register\'s open set — that set is where the state lives');
+    }
+    assert.ok(r.openDeclared.length >= 2 && r.openDeclared.every((n) => Number.isInteger(n)),
+      'openDeclared must be the register\'s own list of numbers, not a derived guess: '
+      + JSON.stringify(r.openDeclared));
   });
 
   test('the three state changes on the real file are the expected three', () => {

@@ -1,7 +1,7 @@
 // pipeline.js — Pipeline surface: capture bar + 4-stage board (Capture, Human Gate, Execute, Shipped),
 // wired to /api/pipeline*. Gallery toggle shows shipped cards as a grid.
 
-import { safeSameOriginUrl, escapeAttr } from '/js/url.js';
+import { safeSameOriginUrl, escapeAttr, escapeHtml } from '/js/url.js';
 
 const STAGES = [
   {
@@ -44,11 +44,6 @@ let state = {
 // escapeHtml() leaves `"` intact, so anything reaching an ATTRIBUTE goes
 // through escapeAttr instead, and anything becoming a live navigation target
 // goes through the scheme gate first.
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str ?? '';
-  return div.innerHTML;
-}
 
 function tagPills(tags) {
   if (!tags || !tags.length) return '';

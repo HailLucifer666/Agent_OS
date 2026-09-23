@@ -85,6 +85,18 @@ drain causes `{type:"desktop-speech-drained",speechId}`; server delivery alone
 does not release final task narration. A 15-second missing receipt produces an
 explicit failure, never proof that the operator heard speech.
 
-The initial executor supports YouTube open/third-video/pause/resume/next only.
+The initial executor supports YouTube open, playback of an observed result
+1 through 20, and pause/resume/next only. An ordinal addresses the Nth card of
+the single observed list; a missing or ambiguous list blocks rather than
+choosing a different card.
+
+That list is the whole region, not the viewport (BUG-417). Every non-ad card is
+ranked, and one below the fold is reported with a null `ref` plus its `visible`
+flag and `top` offset. The controller scrolls down at most four times to bring a
+requested card into view, re-observing each time and stopping early once the
+list stops growing — then blocks with a reason rather than clicking something
+else. A null `ref` can never be clicked: `actOnNode` resolves refs from the
+observation's node map, which only ever holds visible elements, and separately
+refuses any target whose rect lies outside the viewport.
 Unsupported browser operations refuse rather than silently switching to a CDP
 profile. Global physical-input detection and nested frames are later gates.

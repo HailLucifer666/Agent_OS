@@ -11,15 +11,26 @@
 // convention other extracted route files already use (routes/forge.js,
 // routes/checkpoints.js) for an unwired optional dependency.
 //
-// Track B1: a successful /api/pin/verify now issues a real server-side
-// session (src/core/security/pin-session.js) and hands it back as the
-// mythos_token cookie — the SAME cookie name server/index.js's
-// extractToken()/tokenOk() already check, so this is the PIN screen
-// becoming actual access control rather than a new parallel mechanism.
-// pinSession is optional here too (mirrors pinLock): if it's ever absent,
+// Track B1: a successful /api/pin/verify issues a real server-side session
+// (src/core/security/pin-session.js) and hands it back as a cookie, so the PIN
+// screen is actual access control rather than an overlay that paints itself
+// away. pinSession is optional here (mirrors pinLock): if it is ever absent,
 // verify still works exactly as before, just without issuing a session.
+//
+// BUG-442 (2026-09-18): that cookie was `mythos_token` — the SAME name
+// routes/auth.js uses for the bearer token. Two credentials proving two
+// different things in one envelope, and the PIN's hard 30-minute Max-Age then
+// looked to the operator like an expired ACCESS TOKEN. The name now comes from
+// server/credentials.js, which owns both and lets neither be the other.
 
-const PIN_SESSION_COOKIE = 'mythos_token';
+const { PIN_COOKIE } = require('../credentials');
+
+// The cookie options are built in one place because the Max-Age is now derived
+// from the store's own expiry on BOTH the issue and the renewal path — two
+// places computing it separately is how they drifted apart the first time.
+function pinCookieOptions(req, maxAgeMs) {
+  return { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: maxAgeMs, path: '/' };
+}
 
 function mountPinRoutes(app, deps) {
   const pinLock = deps && deps.pinLock;
@@ -71,16 +82,10 @@ function mountPinRoutes(app, deps) {
     }
     if (pinSession && typeof pinSession.issue === 'function') {
       const token = pinSession.issue();
-      res.cookie(PIN_SESSION_COOKIE, token, {
-        httpOnly: true,
-        sameSite: 'strict',
-        secure: req.secure,
-        maxAge: pinSession.ttlMs,
-        path: '/',
-      });
+      res.cookie(PIN_COOKIE, token, pinCookieOptions(req, pinSession.ttlMs));
     }
     res.json({ ok: true });
   });
 }
 
-module.exports = { mountPinRoutes };
+module.exports = { mountPinRoutes, pinCookieOptions };

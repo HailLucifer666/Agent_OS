@@ -1,5 +1,4 @@
 'use strict';
-
 const path = require('path');
 
 // MYTHOS Phase 0 config schema
@@ -100,7 +99,7 @@ const SCHEMA = {
   // US-leaning female; a British voice is the audible mismatch. Paired with
   // voice-loop.js's PREFERRED_VOICES order — test/voice-identity-consistent.test.js
   // pins the two together.
-  VOICE_TTS_VOICE:          { type: 'string', default: 'en-US-AvaNeural' },
+  VOICE_TTS_VOICE:          { type: 'string', default: 'en-US-AvaNeural' }, VOICE_SETTINGS_WARNINGS_ENABLED: { type: 'bool', default: true }, // false restores pre-BUG-429 speech.
 
   // Which engine speaks the NON-Live paths (boot greeting, proactive speech,
   // batch replies). 'edge' = edge-tts (~900ms/sentence, free, unofficial
@@ -111,7 +110,7 @@ const SCHEMA = {
   VOICE_TTS_PROVIDER:       { type: 'string', default: 'edge' },
   // Non-streaming TTS model. gemini-2.5-flash-preview-tts measured ~3.9s/sentence;
   // gemini-3.1-flash-tts-preview measured ~17.6s and is NOT a sane default.
-  GEMINI_TTS_MODEL:         { type: 'string', default: 'gemini-2.5-flash-preview-tts' },
+  GEMINI_TTS_MODEL:         { type: 'string', default: 'gemini-3.1-flash-tts-preview' }, // re-measured 2026-09-11; see providers/gemini-tts.js
 
   // ORDERED TTS chain, comma-separated, same convention as the brain's CHAIN_*.
   // Resolved ONCE per session and sticky: the boot greeting, proactive speech and
@@ -707,8 +706,9 @@ const SCHEMA = {
   // live session fails. Flipping back to false is a total, zero-code rollback
   // (V2 §16). See .env.example for the full story on each key, including the
   // voice choice.
+  LIVE_VOICE_HONESTY_ENABLED: { type: 'bool', default: true },
   VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
-
+  VOICE_ECHO_VERDICT_TO_CLIENT: { type: 'bool', default: true }, // BUG-428 kill switch.
   // BUG-251: inject Semantic/user-facts.md into the Live session instruction so
   // the spoken path knows what the vault knows. Default ON — the amnesia it
   // fixes was operator-visible. Setting it false restores the pre-fix frame

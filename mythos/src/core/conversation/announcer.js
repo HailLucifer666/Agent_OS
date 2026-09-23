@@ -122,12 +122,13 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
     // so the 2026-08-22 artifact the visual gate rejected with six issues was
     // announced as "Completed and verified, Sir." completionForJob applies the
     // same allowlist the ship path and job_status use, from the job record.
-    var completion = completionStatusLib.completionForJob(p);
+    var completion = completionStatusLib.completionForJob(config?.LIVE_VOICE_HONESTY_ENABLED === false ? { ...p, laneFallback: false } : p);
     if (completion.status === 'needs-work') {
       var reasonBits = [];
       if (p.reviewVerdict === 'reject' && Array.isArray(p.reviewIssues) && p.reviewIssues.length > 0) {
         reasonBits.push('the review found issues: ' + p.reviewIssues.slice(0, 3).join('; ')); // Limit to first 3 issues
       }
+      if (p.laneFallback && config?.LIVE_VOICE_HONESTY_ENABLED !== false) reasonBits.push('the requested model was unavailable, so a fallback model produced it');
       if (p.engine === 'brain-fallback' || p.engine === 'fallback') {
         reasonBits.push('it was produced by the fallback engine, not the real one, so it is not confirmed working');
       }
@@ -199,12 +200,14 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
   // one condition is what W6 spent a wave undoing. A guard test now derives the real
   // emitted kinds from source and fails on any future phantom.
   var SERIOUS_KINDS = {
-    'provider-down': true, 'tick-error': true,
+    'config-settings-ignored': true, 'config-settings-unreadable': true,
+    'provider-down': true, 'tick-error': true, 'browser-automation-offline': true,
     'effector-flapping': true, 'memory-growth': true,
     'identity-boundaries-malformed': true
   };
 
   function isSerious(p) {
+    if (config.VOICE_SETTINGS_WARNINGS_ENABLED === false && /^config-settings-(ignored|unreadable)$/.test(p.kind || '')) return false;
     if (p.severity === 'critical') return true;
     if (p.kind && SERIOUS_KINDS[p.kind]) return true;
     return false;
@@ -272,7 +275,7 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
     lastSpokenAt[kind] = clock();
   }
 
-  function onHealthAnomaly(event) {
+  function onHealthAnomaly(event, collectText) {
     var p = event.payload;
     if (!p) return;
     if (!isSerious(p)) return;
@@ -294,10 +297,33 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
 
     var text = ('Heads up — I have hit a problem: ' + describeCondition(p) + '.' +
       honestCauseClause(p)).slice(0, 300);
-    if (!DRYRUN) speak(text);
+    if (!DRYRUN && !collectText) speak(text);
     bus.emit('conversation.announced', { key: key, text: text, kind: 'anomaly' });
     noteSpoken(kind);
     markAnnounced(kind);
+    return DRYRUN ? null : text;
+  }
+
+  // BUG-429: these anomalies fire before this subscriber exists. Retain the
+  // boot diagnosis, then join the first dashboard greeting at delivery time.
+  // One Live injection avoids adding another self-interruption (BUG-432).
+  function settingsAnomalies(diagnostics) {
+    const d = diagnostics || {};
+    const rows = [];
+    if (d.settingsError) rows.push({ kind: 'config-settings-unreadable', reason: 'The saved settings could not be read; defaults are in use' });
+    const names = (d.settingsUnknown || []).filter((name) => /^[A-Za-z0-9_]{1,64}$/.test(name));
+    if (names.length || (d.settingsDropped || []).length) rows.push({
+      kind: 'config-settings-ignored', target: names.slice(0, 12).join(', ') || 'saved settings',
+      reason: names.length ? 'No such MYTHOS setting' : 'One or more saved settings have invalid names or values',
+    });
+    return rows;
+  }
+  function hasSettingsWarnings(diagnostics) {
+    return !DRYRUN && config.VOICE_SETTINGS_WARNINGS_ENABLED !== false && settingsAnomalies(diagnostics).length > 0;
+  }
+  function appendSettingsWarnings(text, diagnostics) {
+    const notes = settingsAnomalies(diagnostics).map((payload) => onHealthAnomaly({ payload }, true)).filter(Boolean);
+    return [text, ...notes].filter(Boolean).join(' ');
   }
 
   // health.diagnosed carries severity from the diagnostician (anomaly → diagnose
@@ -344,6 +370,7 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
   // than each caller inventing its own Map/timestamp) means one dedup
   // window covers every greeting-shaped source.
   return { start: start, stop: stop, isRecent: isRecent, markAnnounced: markAnnounced,
+    hasSettingsWarnings, appendSettingsWarnings,
     // exposed for tests, like immune/explainer.js's _onHealed
     _onHealthAnomaly: onHealthAnomaly };
 }

@@ -673,7 +673,15 @@ describe('Wave 1: partial-success turns get a per-tool corrective clause for unb
     const agent = createVoiceAgent({ brain, leash, dispatch, bus, config: {} });
     const result = await agent.handleUtterance({ text: 'send the email and open that page', ctx: {} });
 
-    assert.match(result.say, /I sent the email\. I opened the page for you\./, 'the model\'s text is not deleted, only corrected');
+    // BUG-441 D3 (operator decision 2026-09-16, "also suppress-before"): this
+    // assertion used to read `/I sent the email\. I opened the page for you\./`
+    // — "the model's text is not deleted, only corrected". On the text->TTS
+    // path the false sentence would then be READ ALOUD and corrected after.
+    // Now the flagged sentence is replaced by the correction; the true
+    // sentence about the tool that succeeded stays.
+    assert.match(result.say, /I sent the email\./, 'the true sentence about the succeeded tool stays');
+    assert.doesNotMatch(result.say, /I opened the page for you/,
+      'BUG-441 D3: the false sentence is replaced, not spoken and then corrected');
     assert.match(result.say, /open_web did not succeed/, 'the failed tool must be named');
     assert.match(result.say, /no browser session available/, 'the real reason must reach the operator');
     assert.doesNotMatch(result.say, /gmail_send did not succeed/, 'the tool that actually succeeded must not be scolded');
@@ -698,6 +706,38 @@ describe('Wave 1: partial-success turns get a per-tool corrective clause for unb
     const result = await agent.handleUtterance({ text: 'send the email', ctx: {} });
 
     assert.match(result.say, /gmail_send did not succeed — no delivery confirmation received/);
+  });
+
+  it('BUG-441: an unverified browser_click is re-derived here too, and the false "I clicked" is replaced', async () => {
+    // 2026-09-11: browser_click x2 returned ok + unverified:true ("clicked ...
+    // from page script because it never became visibly actionable"). On THIS
+    // path OUTCOME_CLAIMED_TOOLS decides whether an unverified result forces
+    // the corrective pass at all, and it listed ui_click but no other click
+    // tool — so this exact outcome could never be re-derived here. browser_click
+    // is hub-registered, not in the bare CATALOG, so a hub supplies it as
+    // production does. Mutation 2026-09-16: remove browser_click from
+    // OUTCOME_CLAIMED_TOOLS -> no corrective pass runs, finalSay stays "Clicking
+    // it.", and this test fails on the SECOND assertion (no clause is ever
+    // produced). The first assertion alone would pass vacuously — which is why
+    // it is not the only one.
+    const reason = 'clicked "Play" from page script because it never became visibly actionable';
+    const firstReply = {
+      say: 'Clicking it.',
+      actions: [{ tool: 'browser_click', args: { selector: 'button.play' } }],
+      needs_result: false,
+    };
+    const correctiveReply = { say: 'I clicked the play button for you.', actions: [], needs_result: false };
+    const brain = makeBrain(firstReply, correctiveReply);
+    const leash = { check: () => ({ allow: true, requireConfirm: false, tier: 0 }) };
+    const dispatch = async () => ({ ok: true, unverified: true, reason, result: {} });
+    const hub = { catalog: () => [{ name: 'browser_click', description: 'click an element', params: { selector: 'string' } }] };
+
+    const agent = createVoiceAgent({ brain, leash, dispatch, bus: { emit: () => {} }, config: {}, hub });
+    const result = await agent.handleUtterance({ text: 'click play', ctx: {} });
+
+    assert.doesNotMatch(result.say, /I clicked the play button/, 'BUG-441 D3: the false sentence is replaced, not spoken');
+    assert.match(result.say, /browser_click did not succeed — clicked "Play" from page script/,
+      'the tool and its honest reason must reach the operator');
   });
 
   it('does not append anything when the corrective pass already admits the failure honestly', async () => {

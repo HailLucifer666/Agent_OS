@@ -46,8 +46,17 @@ function ensureWakeWordBody() {
 
 describe('wake-word config race (defect 2)', () => {
   it('keeps the config fetch PROMISE, not just its resolved value', () => {
-    assert.match(APP_JS, /const _wakewordCfgReady = fetch\('\/api\/config\/wakeword'\)/,
-      'the fetch must be retained as an awaitable — a bare snapshot is what broke');
+    // The loader now owns all three authenticated requests so PIN unlock can
+    // replace the initial unauthorized snapshot. The consumer must retain each
+    // fresh promise, including the initial no-PIN load, rather than only a value.
+    assert.match(APP_JS, /voiceConfigReady\s*=\s*_wakewordCfgReady\s*=\s*voiceConfiguration\.refresh\(\)/,
+      'every shared refresh must replace the awaitable wake-word promise');
+    assert.match(APP_JS, /^refreshVoiceConfiguration\(\);/m,
+      'no-PIN boot still requires an initial fetch without waiting for unlock');
+    assert.match(APP_JS, /onUnlock:\s*\(\)\s*=>\s*\{[\s\S]{0,180}refreshVoiceConfiguration\(\)\.then\(/,
+      'successful PIN exchange must refresh previously unauthorized facts before arming');
+    assert.match(APP_JS, /_wakewordCfg\s*=\s*wakeword\.value;\s*_wakewordCfgError\s*=\s*wakeword\.error/,
+      'shared refresh must replace both the config and its previous failure');
   });
 
   it('ensureWakeWord awaits that promise before deciding anything', () => {

@@ -56,6 +56,7 @@ const PROBE_AFTER_FAILURES = 3;
 const AUTH_PROBE_PATH = '/api/config/vad';
 let unauthorized = false;
 let probeInFlight = false;
+let authGeneration = 0, retryAfterUnlock = false;
 
 // Resolves to 'unauthorized' | 'ok' | 'unreachable'. Never throws: a client-side
 // diagnostic that can itself fail is not a diagnostic.
@@ -75,8 +76,9 @@ async function probeAuth() {
 async function diagnoseIfRefused() {
   if (unauthorized || probeInFlight || consecutiveFailures < PROBE_AFTER_FAILURES) return;
   probeInFlight = true;
+  const generation = authGeneration;
   try {
-    if (await probeAuth() === 'unauthorized') {
+    if (await probeAuth() === 'unauthorized' && generation === authGeneration) {
       unauthorized = true;
       backoffMs = UNAUTHORIZED_RETRY_MS;
       setState('unauthorized');
@@ -139,6 +141,8 @@ function connect() {
   setState('connecting');
 
   socket.addEventListener('open', () => {
+    authGeneration += 1;
+    retryAfterUnlock = false;
     connecting = false;
     backoffMs = 500;
     consecutiveFailures = 0;
@@ -170,7 +174,8 @@ function connect() {
     socket = null;
     consecutiveFailures += 1;
     setState(unauthorized ? 'unauthorized' : 'closed');
-    scheduleReconnect();
+    if (retryAfterUnlock) { retryAfterUnlock = false; connect(); }
+    else scheduleReconnect();
     // BUG-298, fire-and-forget: the reconnect above is already scheduled and a
     // slow probe must not delay it. If the probe comes back 401 the NEXT
     // schedule uses the long interval, which is the whole point.
@@ -178,6 +183,14 @@ function connect() {
   });
 
   socket.addEventListener('error', () => { if (socket) socket.close(); });
+}
+
+// The PIN response has installed the session cookie. Reuse connect's existing
+// OPEN/CONNECTING guard rather than waiting for an unauthorized backoff timer.
+export function reconnectAfterUnlock() {
+  authGeneration += 1; // A pre-unlock refusal cannot overwrite the new session.
+  retryAfterUnlock = Boolean(socket && socket.readyState === WebSocket.CONNECTING);
+  connect();
 }
 
 function sendMessage(payload) {

@@ -11,7 +11,11 @@ function createDesktopRuntime({ goals, effectors, leash, memory, config, bus, lo
   const signals = new Map();
   const owners = new Map();
   let bridge = null;
-  const controller = createDesktopController({ goals, executeTool: async (tool, args, ctx) => {
+  // BUG-421: the logger is passed through so reveal() can emit desktop.reveal.
+  // Without this line the log statement in the controller would exist and never
+  // run, which is the one shape of coverage this repo keeps finding: a mechanism
+  // that reads as evidence and produces none.
+  const controller = createDesktopController({ goals, logger, executeTool: async (tool, args, ctx) => {
     if (!connections.has(ctx.connectionId) || ctx.signal?.aborted) return { ok: false, result: 'Operator connection is no longer active', notExecuted: true };
     const goal = goals.get(ctx.goalId);
     if (goal?.execution?.owner !== 'desktop' || goal.execution.state !== 'running') return { ok: false, result: 'Desktop task does not own execution', notExecuted: true };

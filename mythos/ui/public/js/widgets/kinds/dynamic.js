@@ -1,3 +1,4 @@
+import { escapeHtml, escapeAttr } from '../../url.js';
 // widgets/kinds/dynamic.js — Item 11 "Generative UI": renders LLM-composed
 // widgets from a strict declarative spec. The brain (spawn_widget effector,
 // src/core/effectors/from-widgets.js) sends DATA only — never markup — and
@@ -173,9 +174,3 @@ function renderFooter(footer) {
   return '<div class="dynamic-widget-footer text-faint">' + escapeHtml(footer) + '</div>';
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function escapeAttr(s) {
-  return escapeHtml(s).replace(/"/g, '&quot;');
-}

@@ -209,3 +209,6 @@ mythos/.tmp-file-walk-test/
 
 # Project-local test, browser, package and audit scratch state; never publish.
 .cache/
+
+# Project-local TAP captures from a full `node --test` run; never committed.
+mythos/.tmp-test/

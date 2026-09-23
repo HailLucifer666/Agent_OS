@@ -7,6 +7,10 @@ const groq = require('../../../providers/groq');
 const mistral = require('../../../providers/mistral');
 
 const { BRAIN_TABLES } = require('./lanes.default');
+// BUG-419: every probe in this file reads a free catalog endpoint, so none of
+// them can see an account that refuses to bill. This holds what a real
+// completion said.
+const providerHealth = require('./provider-health');
 
 const NIM_URL = process.env.NIM_API_URL || 'https://integrate.api.nvidia.com/v1';
 const GROQ_URL = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1';
@@ -173,12 +177,38 @@ function parseOverride(env) {
 // alone, so four retired OpenRouter `:free` slugs (and cerebras models absent
 // from the account) counted as alive and burned a full chain attempt each.
 function isProviderAlive(provider, model, c) {
+  // BUG-419 (2026-09-09), and it is the same lesson as the paragraph above one
+  // layer down. Every branch below asks a CATALOG question — is a key set, does
+  // /models list this id — and a catalog listing is free. Cerebras answers 200
+  // there on an unbilled account and `402 Payment Required` on every completion,
+  // so this function reported it alive and it held the last cloud rung of every
+  // lane while refusing every call. What a real completion said is the only
+  // answer to "can this account actually be used", and now it outranks the probe.
+  //
+  // Narrow on purpose: 401/402 per account, 403/404 per model, until success/TTL
+  // clears them. A 429 or a 5xx must NOT reach here — those are transient and
+  // already handled by chain.js's cooldown and breaker, and holding a provider
+  // down for a quota that resets in a minute would remove a working rung. The
+  // boundary is enforced in provider-health.js and tested from both sides.
+  // NIM is a catalog family; the chain expands it to separately entitled keys.
+  if (provider === 'nim') return c.nimModels.includes(model) && [
+    ['nim', process.env.NIM_API_KEY], ['nim2', process.env.NIM_API_KEY_2],
+  ].some(([lane, key]) => key && key.trim() && !providerHealth.failureFor(lane) && !providerHealth.modelFailureFor(lane, model));
+  if (providerHealth.failureFor(provider)) return false;
+  if (providerHealth.modelFailureFor(provider, model)) return false;
   switch (provider) {
-    case 'nim':        return c.nimModels.includes(model) && nimKeys().length > 0;
     case 'groq':       return c.groqAlive;
     case 'mistral':    return c.mistralAlive;
     case 'ollama':     return c.ollamaModels.includes(model);
     case 'zcode':      return !!process.env.ZCODE_API_KEY;
+    // BUG-418. Key presence only, and that is deliberate rather than an
+    // oversight: both are PAID APIs, so a /models catalog probe on every
+    // registry refresh would be a billable request every five minutes on a
+    // buyer's account for no benefit. The account-health record above is what
+    // catches a bad key or an unpaid account, from the first real call, which
+    // is the same door BUG-419 opened for cerebras.
+    case 'openai':     return !!process.env.OPENAI_API_KEY;
+    case 'anthropic':  return !!process.env.ANTHROPIC_API_KEY;
     case 'cerebras':   return !!process.env.CEREBRAS_API_KEY && c.cerebrasModels.includes(model);
     case 'google':     return !!process.env.GOOGLE_API_KEY && c.googleModels.includes(model);
     case 'openrouter': return !!process.env.OPENROUTER_API_KEY && c.openrouterAlive;
@@ -247,6 +277,15 @@ async function getStatus() {
     cerebras:   { configured: !!process.env.CEREBRAS_API_KEY, aliveModels: c.cerebrasModels.length },
     google:     { configured: !!process.env.GOOGLE_API_KEY, aliveModels: c.googleModels.length },
     openrouter: { configured: !!process.env.OPENROUTER_API_KEY, alive: c.openrouterAlive },
+    openai:     { configured: !!process.env.OPENAI_API_KEY },
+    anthropic:  { configured: !!process.env.ANTHROPIC_API_KEY },
+    // BUG-419: what a REAL call last said about each account, which is the one
+    // thing every field above is structurally unable to report — they all read
+    // free catalog endpoints. Empty object means nothing has refused, which is
+    // the healthy state and reads as such. This is what puts the 402 in front of
+    // the operator: read_status returns probes.getStatus(), which returns this.
+    accountFailures: providerHealth.snapshot(),
+    modelFailures: providerHealth.modelSnapshot(),
     // Observability only — checked 2026-08-14, `chains` has NO consumer in src/
     // or ui/. It is here so an operator reading provider status can see which
     // models a lane would actually walk. Nothing depends on its shape, so adding

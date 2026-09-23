@@ -37,6 +37,8 @@
 // different remedies, and this file pins both.
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+// 2026-09-10: these controls pin routing, not external provider availability.
+require('node:test').mock.method(globalThis, 'fetch', async () => { throw new Error('offline routing fixture'); });
 
 const { buildTools } = require('../src/core/effectors/from-dashboard');
 
@@ -82,7 +84,7 @@ describe('BUG-273 D2 — type:"web" with a PROSE query gets a remedy, not a bare
     assert.equal(res.ok, false);
     const reason = String(res.result);
     assert.match(reason, /browser_navigate/, 'unchanged: a domain means browse');
-    assert.match(reason, /https:\/\/openai\.com/, 'unchanged: the exact url to pass');
+    assert.match(res.remedy.args.url, /https:\/\/openai\.com/, 'unchanged: the exact url to pass');
     assert.doesNotMatch(reason, /type:"search"/,
       'the two remedies must stay distinct — a domain is not a search query');
   });

@@ -21,6 +21,108 @@ the first external user exists).
 
 *Historical. Rewritten every session until 2026-09-07; superseded by `RESUME.md`.*
 
+### 2026-09-09 (fourth pass) — the six findings are closed AND live-verified.
+
+**The position now lives in `RESUME.md`; this is the archive entry for the
+verification pass.** The third-pass block asked for an attended live session
+and listed what a good and a bad result would look like for each ticket. That
+session happened. Five of six passed against real hardware, the sixth has no
+key on this machine, and the pass produced two new findings and one defect of
+its own. Full numbers are in each BUGS.md entry; the short version:
+
+| ticket | live result |
+|---|---|
+| BUG-414 | PASS. Real pc-child, the operator's own Brave (pid 12400): `unverified:false`, oracle `window-title`, observed "YouTube - Brave", 893ms over three polls. The unnamed OS-default route still needs Electron, so the run used `browserName:"brave"` — same oracle, different handoff. |
+| BUG-415 | PASS. `launchLocal` -> true in 1147ms, `launchedChannel` brave, seven brave.exe under `MYTHOS/brave-debug-profile`, zero chrome.exe, closed with no survivors. Note what this machine CANNOT distinguish: brave is also first in `BROWSER_SEARCH_ORDER`, so only the unit test separates "the resolver was asked" from "the order agreed". |
+| BUG-416 | PASS, 8/8, through a freshly compiled C# host over a real named pipe. Identity survives kill-and-reconnect; a duplicate id is refused with the first client untouched; protocol 1 and a malformed id are refused at the host. |
+| BUG-417 | PASS on a real YouTube search page. Six results ranked at first paint against two visible; result six clickable after four scrolls; the videoId never moved. |
+| BUG-418 | Degradation half only. No key exists here, so the wire is untested and stays untested. |
+| BUG-419 | PASS. A real 402 in 284ms took cerebras from 6 of 8 lanes to 0, with the remedy in plain English on `read_status`. |
+
+**THE PASS FOUND A DEFECT ITS OWN FIX HAD CREATED, which is the argument for
+doing this at all.** BUG-415 made Brave the first launch attempt; the pidfile
+lookup filtered on chrome/msedge, so `.browser-agent.pid` was never written and
+`Start Agent OS.bat`'s orphan reap was silently disarmed for the default
+browser — BUG-029's symptom, reintroduced. Nothing in 7,534 tests could see it;
+one real launch showed `"browserPid":null` beside seven running processes. Fixed
+by DELETING the query in favour of `browser-process.processesForProfile`, which
+already did it correctly and guards harder. Same run found the host config
+advertising `protocol: 1` after the handshake moved to 2.
+
+**And Gate A caught my own ticket again.** BUG-419 said "Cerebras returns 402 on
+every lane". Measured per model: `gpt-oss-120b` 402, `gemma-4-31b` **404**, both
+listed alive by the free catalog. Only the 402 is recorded, deliberately — a 404
+is per-model, and killing a provider for one bad model id would remove working
+rungs — so three lanes keep a rung that cannot succeed. Filed as BUG-420.
+BUG-417's budget turned out to have zero margin (result six revealed on the
+fourth of four permitted scrolls, against a grammar that accepts twenty):
+BUG-421. Both are declared in the OPEN WORK register rather than left in prose.
+
+**What is still not verified, stated plainly.** No golden-path run — five green
+component verifications are not one green end-to-end run, and the streak is 0.
+No real Brave with the extension attached, and the INSTALLED native host
+predates the BUG-416 fix, so it must be rebuilt and the extension reloaded
+before Stage 1 can be judged at all. `RESUME.md` carries both as the next
+actions.
+**What shipped, and the one thing worth reading in each entry.**
+
+| ticket | the finding that was not in the ticket |
+|---|---|
+| BUG-414 | The filed cause was DISPROVED by measuring. Selection was never broken -- 33 of 108 `open_web` calls correctly passed `browser:true`. The real defect: none of those 33 was ever verified. The proposed rename would have made it worse. |
+| BUG-415 | The resolver already answered "brave" and `launchLocal` was the one site that never asked it. Edge is not installed here, so the hardcoded ladder was silently starting Chrome. |
+| BUG-416 | The first pass could not have worked: the C# host rebuilds `hello` from a four-field allowlist and stripped `instanceId`. Every unit test stayed green; only the compiled-host test saw it. |
+| BUG-417 | A probe SURVIVED because the fixture matched an ad selector by substring, and separately a mutation LEAKED into the working tree and was caught only by the full suite. |
+| BUG-418 | Two probes were WEAK -- they added a path without removing the one under test -- so they "survived" a guard that was fine. |
+| BUG-419 | The liveness probe reads a free `/models` catalog, so it cannot see a 402. `chain.js` deferred auth failures to `isAvailable()`, which resolves through that same catalog: a comment naming a mechanism that did not exist. |
+
+**Two standing hazards this session measured, both now in memory.** A phantom
+single failure -- `Unable to deserialize cloned data`, no test named, always
+exactly 1 -- appeared four times from `node --test` worker IPC while direct runs
+were clean; it twice wrote a RED baseline into ROADMAP.md through
+`sync-test-count --write`. Record baselines by piping an inspected TAP run into
+that script instead. And a mutation driver can leak: scan both files for every
+probe's replacement text afterwards, because a hash-clean restore report is not
+proof.
+
+**Still open, and now the largest items on the board:** decision D2b (how the
+desktop operator grows past YouTube -- the plan recommends a brain-authored step
+plan verified by the existing controller), the research loop, Gmail re-auth
+(`node scripts/google-auth.js`, operator action, 64 `invalid_grant` failures),
+and D4 research providers. The 42-prompt storm the operator remembers was the
+autonomous cortex loop on 2026-08-20, already suppressed. Permissions were
+never the cause.
+
+Still unverified, and not claimed: nothing here was tested against the packaged
+app. The 0.1.11 installer in `dist/` postdates the cortex fix by two weeks, but
+the extraction that would prove it carries the commit did not run, and
+`%LOCALAPPDATA%\Programs\agent-os` is currently empty, so there is no installed
+build to measure. Attended Brave playback and restart recovery remain open.
+
+### 2026-09-08 — Brave second-video workflow is under live qualification.
+
+Voice startup repair is pushed as `284eead42c0a6b8e4b5cf5da06e90e64245cd632`.
+The operator confirmed normal spoken replies, then reported second-video failure.
+Observed ordinal selection now supports positions 1 through 20; the full suite
+passed 7,422 tests and a wrong-index mutation failed the intended assertion.
+The supplied Brave extension was registered and the installed backend now reports
+operator mode enabled. Backend restart exposed missing extension reconnection;
+repair and attended playback proof are the immediate next work. No stage gate
+advances on these code or configuration checks. See BUGS.md for current evidence.
+
+### 2026-09-08 — PIN-unlock voice startup repaired on the installed 0.1.11 app.
+
+Protected voice settings were fetched before PIN entry and cached as unavailable.
+The HUD now refreshes VAD, wake-word and S2S facts after successful unlock, updates
+the voice widget, waits before constructing voice and promptly reconnects its
+authenticated WebSocket. No audio threshold or account setting changed. The
+installed UI was backed up and hash-verified after patching; the operator confirmed
+a spoken answer to "Hey Jarvis, what time is it?" without reloading after PIN entry.
+The full suite passed 7,416 tests with no failures or skips. See BUGS.md's PIN-unlock
+evidence for browser reproduction, mutations, installed hashes and live limits.
+Gmail reauthorization remains separate. Continue the Windows Operator extension
+setup and attended workflow qualification below; this startup repair does not
+close those stage gates.
+
 ### 2026-09-07 — Windows Operator is the active implementation priority.
 
 The operator approved the Windows Operator plan after the ticket campaign. Start

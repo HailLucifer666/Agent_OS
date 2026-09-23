@@ -26,7 +26,7 @@
 
 import { trapFocus } from '../a11y/focus-trap.js';
 import { deriveAuthGate, interpretExchangeResponse, validateTokenInput } from './auth-gate-state.js';
-import { clearUnauthorized, onUnauthorized, setTokenRequired } from './auth-state.js';
+import { advanceRecoveryGeneration, clearUnauthorized, onUnauthorized, setTokenRequired } from './auth-state.js';
 
 // The PIN overlay lives in its own root at a lower z-index. If both were ever
 // live at once they would fight for focus, so the token gate — which must be
@@ -150,6 +150,11 @@ export function mountAuthGate(root, opts) {
       submit.disabled = false;
       if (state.authenticated) {
         clearUnauthorized();
+        // BUG-442: the token is re-established, so 401s still in flight from
+        // before this moment must not re-open the prompt that was just
+        // satisfied. (The reload below usually beats them, but not always —
+        // and "usually" is not a mechanism.)
+        advanceRecoveryGeneration();
         message.textContent = 'Connected — reloading…';
         // A full reload rather than re-driving every module: most of the HUD
         // fetches once at boot with no retry path (app.js's VAD/wake-word

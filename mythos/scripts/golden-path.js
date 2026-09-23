@@ -55,7 +55,19 @@ const VERDICT = { PASS: 'PASS', FAIL: 'FAIL', UNVERIFIED: 'UNVERIFIED', PREREQ: 
 // with `oracle: 'media'` additionally requires the OS media session to report
 // playback afterwards — the tool's own ok is not enough for the step that
 // actually starts the video.
+//
+// A NAMED BROWSER IS ITS OWN STEP, ADDED 2026-09-11 AFTER THIS SCRIPT MISSED A
+// REGRESSION IT SHOULD HAVE OWNED. On 2026-09-10 a guard shipped that refused
+// `open_web` whenever the operator named a browser; the spoken request "open
+// YouTube in Brave" then opened nothing at all. Every turn below says "Open
+// YouTube" with no browser named, so a run of this script would have passed
+// while the product was broken. An instrument that cannot fail on the way the
+// operator actually talks is not a gate. `nameBrowser` marks the step and the
+// tools that may legitimately serve it are the debug pair, because the operator
+// decided (2026-09-10) that a named browser means the browser MYTHOS drives.
 const STEPS = [
+  { id: 'open-named', text: 'Open YouTube in Brave.', nameBrowser: true,
+    anyOf: ['browser_launch_debug', 'browser_navigate'] },
   { id: 'open', text: 'Open YouTube and play the third video in the results.',
     anyOf: ['open_web', 'browser_navigate', 'browser_click', 'browser_press_key'], oracle: 'media' },
   { id: 'pause', text: 'Pause the video.',

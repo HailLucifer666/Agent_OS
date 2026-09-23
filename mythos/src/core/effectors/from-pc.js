@@ -73,7 +73,18 @@ async function delegate(cmdObj) {
   try {
     const resp = await pcChild.sendCommand(cmdObj);
     if (resp.ok) return ok(resp.result);
-    const why = resp.error || 'PC automation command failed.';
+    // BUG-443 (2026-09-18). This read `resp.error` raw, and pc-child can answer
+    // with a STRUCTURED error — an object. Two lines later withWindowList() does
+    // `String(text || '')`, so the object became the literal "[object Object]"
+    // here, at the boundary, and every caller downstream faithfully carried that
+    // string to the operator. The 2026-09-16 Audit row blaming app_reply was
+    // this: "Could not type the reply into whatsapp: [object Object]".
+    //
+    // Normalising at the boundary rather than at each caller also fixes the
+    // quieter half — isStaleWindowTarget() below matches a regex, and a regex
+    // never matches an object, so BUG-405's dead-pid recovery could not fire on
+    // a structured failure at all.
+    const why = reasonText(resp.error || 'PC automation command failed.');
     // BUG-405: every pid-taking tool passes through here; see ./window-recovery.js.
     // Skips list_windows itself so the recovery cannot recurse.
     return fail(cmdObj && cmdObj.pid && cmdObj.cmd !== 'list_windows'
@@ -460,34 +471,7 @@ async function focus_window({ pid }) {
   return res;
 }
 
-async function close_window({ pid }) {
-  if (!pid) return fail('PID is required.');
-  var res = await delegate({ cmd: 'close_window', pid });
-
-  // BUG-103: the PowerShell handler used to return `@{closed=$false; note=…}` on
-  // a graceful-close timeout — a hashtable, so the dispatcher recorded ok:true
-  // for a window that was still open (the 2026-08-05 Brave incident). The
-  // handler is honest now; this is the Node-side backstop, because a plain
-  // `ok:true` on a world-changing action is exactly what the evidence contract
-  // forbids (src/core/CLAUDE.md).
-  if (res.ok && res.result && res.result.closed === false) {
-    return fail(String(res.result.note || 'The window did not close and is still open.')
-      + ' Nothing was closed — the window is still open.');
-  }
-
-  // A vanished pid is the other half of the same incident (Chrome had already
-  // exited, or the pid was a non-windowed child of a multi-process browser).
-  // Say what to do next instead of returning a bare PowerShell error.
-  if (!res.ok && /cannot find/i.test(String(res.result || ''))) {
-    return fail('That pid no longer exists, so nothing was closed. ' + String(res.result));
-  }
-
-  // AUDIT FIX: a closed pid must not linger as the ui_type/ui_click default —
-  // Windows recycles PIDs, so a stale value could target an unrelated process.
-  // Only on a REAL close: a failed close leaves the window (and the pid) valid.
-  if (res.ok) implicitTarget.forgetIf(pid);
-  return res;
-}
+const close_window = require('./close-window-guard').makeCloseWindow({ delegate, fail, implicitTarget });
 
 async function media_key({ key }) {
   if (!key) return fail('Key name is required (play_pause, next_track, prev_track, volume_up, volume_down, volume_mute).');
@@ -1267,7 +1251,12 @@ const { click_at, clickAtRaw } = makeClickAt({
 
 function reasonOf(res) {
   const r = res && res.result;
-  if (r && typeof r === 'object' && r.error) return String(r.error);
+  // BUG-443 (2026-09-18): `String(r.error)` here had the same flaw the ticket
+  // was filed for — an `error` that is itself an object renders as
+  // "[object Object]", and this string is spoken. A private normalizer that
+  // reimplements two of the shared one's four branches is how the class keeps
+  // coming back; use the shared one.
+  if (r && typeof r === 'object' && r.error) return reasonText(r.error);
   return typeof r === 'string' ? r : 'screen OCR failed';
 }
 

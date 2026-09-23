@@ -45,9 +45,16 @@ describe('BUG-400 — unauthorizedHint names the credential that is actually mis
   it('combined: demands both, and pins each to its own channel', () => {
     const h = unauthorizedHint({ hasToken: true, pinRequired: true });
     assert.match(h, /BOTH/);
-    assert.match(h, /Authorization: Bearer <token> or \?token=/,
-      'the bearer channel — a browser cannot set a header on a WS upgrade, so this matters');
-    assert.match(h, /mythos_token cookie from POST \/api\/pin\/verify/, 'the PIN channel');
+    // BUG-442 (2026-09-18): the bearer may now also arrive on its own cookie,
+    // because the PIN session no longer occupies that name. The header and
+    // query channels still matter and are still named — a browser cannot set a
+    // header on a WS upgrade — so this widens rather than replaces.
+    assert.match(h, /Authorization: Bearer <token>, \?token=, or the mythos_token cookie/,
+      'the bearer channels, all three of them');
+    // BUG-442 (2026-09-18): the PIN session moved to its own cookie. Naming the
+    // old one here would send an operator looking for a credential under a name
+    // nothing issues any more — the hint's whole job is to be followable.
+    assert.match(h, /mythos_pin cookie from POST \/api\/pin\/verify/, 'the PIN channel');
   });
 
   it('neither configured: still returns a sentence rather than throwing', () => {

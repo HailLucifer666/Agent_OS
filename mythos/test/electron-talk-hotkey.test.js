@@ -52,9 +52,15 @@ describe('Electron push-to-talk hotkey', () => {
   });
 
   it('releases the OS-wide claim on quit', () => {
-    assert.match(MAIN, /will-quit/);
-    assert.match(MAIN, /globalShortcut\.unregisterAll\(\)/,
-      'a global accelerator left registered stays unavailable to other apps');
+    // RE-POINTED 2026-09-18 (BUG-437). This used to assert `/will-quit/` against
+    // the whole file. That handler is gone — every quit now ends in the quit
+    // sequence's app.exit(), which does not emit will-quit, so keeping it would
+    // have been a release that never ran. Worse, the bare /will-quit/ match
+    // would still have PASSED against the comment recording its deletion: a
+    // green check structurally unable to see the thing it was guarding.
+    assert.match(MAIN, /cleanup: \(\) => globalShortcut\.unregisterAll\(\)/,
+      'a global accelerator left registered stays unavailable to other apps — the release must be wired '
+      + 'into the quit sequence, which is the only thing that now runs on the way out');
   });
 
   it('routes the hotkey through toggleVoice, not at the mic directly', () => {

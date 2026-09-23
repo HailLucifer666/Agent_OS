@@ -298,7 +298,7 @@ function createBuildEngine(deps) {
       return engineFailed(offline);
     }
     try {
-      var reply = await engine.runTask(full, {
+      var laneFallback = false, reply = await engine.runTask(full, {
         cwd: dir,
         // autoApprove is DELIBERATELY ABSENT, which selects dsh's read-only
         // sandbox. OUTPUT_CONTRACT says "Do NOT create, write or modify any
@@ -307,7 +307,7 @@ function createBuildEngine(deps) {
         // the sandbox itself refuses, so the contract is enforced rather than
         // requested. The scratch dir stays as a second line of defence.
         timeoutMs: o.timeoutMs || textBuildTimeoutMs(),
-        maxPromptChars: 24000,
+        maxPromptChars: 24000, onModelSelected: selected => { laneFallback = !!selected.rejected?.length; },
       });
       if (!reply || !String(reply).trim()) {
         // The adapter already rejects exit-0-with-empty-stdout, so reaching this
@@ -316,7 +316,7 @@ function createBuildEngine(deps) {
         offline = { offline: true, engine: 'dsh', error: 'the build engine returned an empty reply' };
         return engineFailed(offline);
       }
-      return { content: stripWholeReplyFence(reply), engine: 'dsh', offline: false, aborted: false };
+      return { content: stripWholeReplyFence(reply), engine: 'dsh', offline: false, aborted: false, laneFallback };
     } catch (err) {
       var msg = String((err && err.message) || err);
       if (bus) bus.emit('health.anomaly', { kind: 'build-engine-failed', engine: 'dsh', error: msg });

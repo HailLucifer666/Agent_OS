@@ -252,7 +252,7 @@ test('a PIN-session token is NOT a node credential — only MYTHOS_AUTH_TOKEN is
       }, (res) => {
         res.resume();
         const setCookie = [].concat(res.headers['set-cookie'] || []);
-        const m = /mythos_token=([^;]+)/.exec(setCookie.join(';'));
+        const m = /mythos_pin=([^;]+)/.exec(setCookie.join(';'));
         res.on('end', () => resolve(m ? decodeURIComponent(m[1]) : null));
       });
       req.on('error', reject);
@@ -260,7 +260,18 @@ test('a PIN-session token is NOT a node credential — only MYTHOS_AUTH_TOKEN is
     });
     assert.ok(pinToken, 'precondition failed: no PIN session was minted, so this test proves nothing');
 
-    // That token is a valid credential for ordinary requests...
+    // CHANGED 2026-09-18 BY BUG-442, and the change is the point.
+    //
+    // This used to assert 'opened' here: a PIN session token, presented alone
+    // by a browser, authenticated an ordinary client EVEN THOUGH a bearer token
+    // was configured. That was the substitution BUG-442 removed — tokenOk()
+    // accepted a PIN session instead of the bearer whenever PIN enforcement was
+    // off, contradicting the four-combination policy written above it. A proof
+    // of standing at the machine is not a proof of knowing the secret.
+    //
+    // So the browser is refused too now, and this half is kept rather than
+    // deleted because it is what distinguishes "the node door is shut" from
+    // "every door is shut for some unrelated reason".
     const asHudOutcome = await new Promise((resolve) => {
       // Same host:port as the node dial below — the ONLY difference is that a
       // browser sends an Origin, which is precisely the distinction under test.
@@ -273,9 +284,18 @@ test('a PIN-session token is NOT a node credential — only MYTHOS_AUTH_TOKEN is
       ws.on('unexpected-response', (req, res) => resolve(res.statusCode));
       ws.on('error', () => resolve('error'));
     });
-    assert.equal(asHudOutcome, 'opened', 'precondition: a PIN session must still work for a normal browser client');
+    assert.equal(asHudOutcome, 401,
+      'BUG-442: with a bearer token configured, a PIN session alone authorizes nothing — not even a browser');
 
-    // ...but must NOT open the no-Origin/non-loopback node door.
+    // ...and it must certainly not open the no-Origin/non-loopback node door.
+    //
+    // GATE F, stated rather than left silent: the node branch's own
+    // authTokenMatches() check is now REDUNDANT with tokenOk() in every
+    // configuration, because tokenOk() no longer accepts a PIN session in place
+    // of a bearer. It is deliberately KEPT — it is the check that makes the
+    // node door's rule local and readable instead of inherited, and a security
+    // boundary that depends on a distant function continuing to behave is the
+    // kind that quietly stops holding. This assertion still pins it.
     const asNodeOutcome = await upgradeOutcome(ip, port, `?token=${encodeURIComponent(pinToken)}`);
     assert.equal(asNodeOutcome, 401, 'a PIN session must not authenticate a remote voice node');
   } finally {

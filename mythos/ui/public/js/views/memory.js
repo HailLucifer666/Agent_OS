@@ -1,3 +1,4 @@
+import { escapeHtml } from '../url.js';
 // memory.js — browse 5 stores (episodic, semantic, skills, identity, audit).
 // Spec Full Code, adapted only to the P9 panel mount contract (render(mount) is
 // invoked inside an overlay panel body instead of a routed view mount).
@@ -27,10 +28,6 @@ export async function render(mount) {
       // xss-safe: all interpolated fields escaped
       list.innerHTML = `<div class="text-faint">Failed to load ${escapeHtml(store)}: ${escapeHtml(err && err.message ? err.message : err)}</div>`;
     }
-  }
-
-  function escapeHtml(str) {
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   mount.querySelector('#memory-tabs').addEventListener('click', (e) => {

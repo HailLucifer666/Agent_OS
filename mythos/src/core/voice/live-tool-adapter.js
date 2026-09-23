@@ -302,7 +302,7 @@ function createLiveToolAdapter(deps) {
     cua_click: true,
     browser_click: true,
   };
-  const executedSignatures = new Set();
+  const executedSignatures = new Set(); const routeMemory = require('./browser-route-guard').createRouteMemory({ browserOnline: deps.browserOnline }); // BUG-435: a route is remembered at the dispatch site, not here, and the named-browser refusal needs to know whether the debug browser is ALREADY attached — undefined here means the guard reads the real adapter itself. The guard's header says why both matter.
 
   // BUG-272 T2: cross-turn suppression for calls whose LAST outcome was a failure
   // or came back unverified.
@@ -427,7 +427,7 @@ function createLiveToolAdapter(deps) {
       abortedInFlight: !dispatchOk && Boolean(outcome && outcome.effectMayHaveLanded),
       abortReason: (outcome && typeof outcome.reason === 'string' && outcome.reason) || null,
       result,
-      rawError,
+      rawError, remedy: outcome && outcome.remedy,
       reason: isUnverified ? String(outcome.reason || 'no confirmation available') : null,
       // BUG-273 B2: the independently-established step, when the effector named
       // one. Read straight off the outcome like `reason` — effectors/evidence.js
@@ -637,6 +637,7 @@ function createLiveToolAdapter(deps) {
         }});
         continue;
       }
+      const routeConflict = routeMemory.check(call.name, call.args || {}); if (routeConflict) { logger.info('live.browser-route-conflict', { tool: call.name, priorTool: routeConflict.priorTool, priorRoute: routeConflict.priorRoute }); responses.push({ id: call.id, name: call.name, response: routeConflict.response }); continue; } // BUG-435: one real-browser route per turn — the 2026-09-10 09:37 turn ran open_web browser:true AND browser_launch_debug and opened two Brave windows. One line: this file is at its size-ratchet ceiling; mechanism and bounds in browser-route-guard.js.
       const decision = { tool: call.name, args: call.args || {} };
       if (suggestedProcedures.matches(skillRef, call.name, decision.args)) decision.skillRef = skillRef;
       let verdict;
@@ -692,7 +693,7 @@ function createLiveToolAdapter(deps) {
       // the same [SYSTEM] sendText channel resolveLiveConfirm already uses.
       // BUG-300: one call site, ahead of both dispatch paths below, so a note can
       // never reach the effector unstamped by going down the slow branch.
-      stampProvenanceIfUnbacked(decision);
+      stampProvenanceIfUnbacked(decision); routeMemory.note(call.name, call.args || {}); const startedAt = (deps.now || Date.now)();
 
       if (SLOW_TOOLS[call.name]) {
         commitAction(pendingAck(call.name, call.id));
@@ -701,8 +702,8 @@ function createLiveToolAdapter(deps) {
         }});
         // Deliberately not awaited: the whole point is that the turn does not wait.
         dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id })
-          .then((outcome) => reportLateOutcome(call.name, outcome, call.id))
-          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id));
+          .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
+          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
         continue;
       }
 
@@ -722,8 +723,8 @@ function createLiveToolAdapter(deps) {
             status: 'started', message: STARTED_MESSAGE,
           }});
           pending
-            .then((outcome) => reportLateOutcome(call.name, outcome, call.id))
-            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id));
+            .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
+            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
           continue;
         }
         if (settled.error) throw settled.error;
@@ -751,7 +752,7 @@ function createLiveToolAdapter(deps) {
           // unverified/started branches; `summary` stays the bare reason so the
           // audit/episodic record is not polluted with prompt text.
           response = {
-            status: 'failed',
+            status: 'failed', ...(ev.remedy ? { remedy: ev.remedy } : {}),
             error: reason.slice(0, 500),
             message: failedNarration(call.name, reason.slice(0, 500)),
           };
@@ -811,6 +812,7 @@ function createLiveToolAdapter(deps) {
         } });
       }
     }
+    for (const row of responses) if (row.name === 'web_search' && recentActionLedger.searchStormDetected()) row.response.message = (row.response.message ? row.response.message + ' ' : '') + 'four searches in two minutes and nothing read — web_fetch one result or tell the operator you cannot find it';
     if (responses.length) sendToolResponse(responses);
   }
 
@@ -818,7 +820,7 @@ function createLiveToolAdapter(deps) {
   // Pushes straight to liveTurnActions rather than through commitAction: this
   // arrival is EXPECTED, so it must not raise the late-for-turn anomaly that
   // exists to catch accidental misattribution.
-  function reportLateOutcome(toolName, outcome, traceId) {
+  function reportLateOutcome(toolName, outcome, traceId, startedAt) {
     const ev = evaluateOutcome(outcome);
     let verdict;
     // BUG-116: the closing instruction is what the model is allowed to SAY about
@@ -878,7 +880,8 @@ function createLiveToolAdapter(deps) {
       evidence: evidenceFor(toolName, ev.result) };
     liveTurnActions.push(lateEntry);
     recentActionLedger.record(lateEntry);
-    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName,
+    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName, remedy: ev.remedy,
+      speech: require('./action-outcome-summary').lateOutcomeSpeech(toolName, { ...ev, rawError: sanitizeResultError(ev.rawError) }, (deps.now || Date.now)() - startedAt),
       claim: ev.abortedInFlight ? 'aborted-in-flight'
         : (!ev.dispatchOk ? 'failed' : (ev.unverified ? (ev.confirmedStep ? 'unverified-partial' : 'unverified') : 'ok')) });
   }
@@ -917,22 +920,25 @@ function createLiveToolAdapter(deps) {
   function sendSystemNotice(verdict, instruction, meta) {
     const liveSession = getLiveSession ? getLiveSession() : null;
     const m = meta || {};
-    if (!liveSession || !liveSession.isOpen()) {
+    const message = `${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}${m.remedy ? " Structured remedy: " + JSON.stringify({ remedy: m.remedy }) : ""}`;
+    const open = !!liveSession && liveSession.isOpen();
+    const delivered = open && liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null, claim: m.claim || null }) !== false;
+    if (!delivered) {
       // Logged on the way out too: "the outcome never reached the model" and "the
       // model was told and said nothing" are different failures that used to look
       // identical from here, and the audit records only the former.
       logger.info('live.system-notice', { site: m.site || 'unknown', tool: m.tool || null,
-        delivered: false, reason: 'no open live session' });
+        delivered: false, reason: open ? 'live send rejected' : 'no open live session' });
+      if (m.speech && deps.config?.LIVE_VOICE_HONESTY_ENABLED !== false && deps.speakWhenClosed) {
+        Promise.resolve().then(() => deps.speakWhenClosed(m.speech)).catch(err => logger.warn('live.late-outcome.tts-failed', { error: sanitize(err) }));
+      }
       return false; // best-effort, same as confirms
     }
-    const message = `${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}`;
     // The delivered line is written by live-session.sendText itself, which is the
     // ONE door every injection in the process goes through — including seven in
     // server/index.js this module cannot see. Logging here as well would give the
     // adapter's injections two lines and the others one, which is a worse log than
     // no log: the counts would not mean the same thing.
-    liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null,
-      claim: m.claim || null });
     return true;
   }
 
@@ -1248,7 +1254,7 @@ function createLiveToolAdapter(deps) {
       // BUG-357: the detector also sees the bounded recent-turn ledger; ledger
       // first so a CURRENT-turn row wins any Map collision below.
       const knownActions = [...recentActionLedger.forClaims(), ...actionsThisTurn];
-      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims());
+      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims(), { voiceHonesty: deps.config?.LIVE_VOICE_HONESTY_ENABLED !== false });
       const statusByTool = new Map(knownActions.map((a) => [a.tool, a.status || actionStatus(a)]));
       for (const claim of unbackedClaims) {
         // A3: name the actual tool and its real status. `tool`/`target` stay the
@@ -1359,7 +1365,7 @@ function createLiveToolAdapter(deps) {
         detectUnsourcedRankedEntities(assistantText, actionsThisTurn, recentActionLedger.forClaims()),
         { claim: 'unsourced-ranked-entity', tool: 'unsourced-ranking',
           site: 'bug275-h3-unsourced-ranking', notice: unsourcedRankingNotice,
-          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) });
+          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) }); require('./promoted-rank-anomaly').reportPromotedRanks({ bus, assistantText, actionsThisTurn, recentActions: recentActionLedger.forClaims() }); // BUG-275 H1, folded onto the line above because this file is AT its size ratchet: a name given a rank its source never gave it. Deliberately NOT through reportTurnAudit — operator decision 2026-09-10; every path through that helper speaks aloud, and why this one must not is in promoted-rank-anomaly.js.
 
       // BUG-275 H2: the operator disputes a claim and the reply EXPLAINS it
       // rather than re-checking — the DIG-IN twin of row 7 above. Its evidence
@@ -1376,7 +1382,7 @@ function createLiveToolAdapter(deps) {
     // lifetime as liveTurnActions above, so it is cleared right here instead
     // of lazily on next use — a set that only resets when something happens
     // to read it is a set that might never reset at all.
-    executedSignatures.clear();
+    executedSignatures.clear(); routeMemory.clear();
 
     if (userText) historyAppend('user', userText);
     if (assistantText) historyAppend('assistant', assistantText);

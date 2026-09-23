@@ -161,12 +161,23 @@ describe('tool-capability — do not declare what this machine cannot do', () =>
     assert.equal(checkToolCapability('phone_screenshot', withDevice).ok, true);
   });
 
-  it('withholds browser_* with no CDP, but NEVER the launcher that would fix it', () => {
+  it('declares browser_* with no CDP but names the step, and NEVER gates the launcher', () => {
+    // The deadlock this test's old title named was real and ONE STEP TOO NARROW,
+    // which is what BUG-435 cost on 2026-09-10: the launcher was reachable, the
+    // model used it correctly, and every tool the launch existed to enable had
+    // already been withheld for the life of the socket. Declarations rebuild only
+    // in buildSetup(), so "withheld at setup" means "withheld all session".
     const snap = buildCapabilitySnapshot({ config: {}, adapters: { browser: noAdapters } });
-    assert.equal(checkToolCapability('browser_click', snap).ok, false);
+    const click = checkToolCapability('browser_click', snap);
+    assert.equal(click.ok, true, 'a gate a step in this session can clear must not withhold the tool');
+    assert.match(click.needs, /browser_launch_debug can start one/,
+      'declared is only honest if the required step is carried to the model');
     assert.equal(checkToolCapability('browser_launch_debug', snap).ok, true,
       'gating the launcher on a browser being available is a deadlock, and BUG-099 is on record about remedies that cannot be reached');
     assert.equal(checkToolCapability('browser_switch', snap).ok, true);
+    // The bound: a gate NOTHING in the session can clear is still a refusal.
+    assert.equal(checkToolCapability('gmail_unread', snap).ok, false,
+      'selfHealing is a property of the browser rule, not a softening of the mechanism');
   });
 
   it('an adapter it cannot ask is AVAILABLE, not withheld', () => {

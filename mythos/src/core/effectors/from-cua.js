@@ -21,6 +21,7 @@
 
 const { effectorFromTool } = require('./adapter');
 const cuaDriver = require('../../../adapters/cua-driver');
+const { reasonText } = require('../util/reason-text');
 
 function ok(result) { return { ok: true, result: result }; }
 function fail(result) { return { ok: false, result: result }; }
@@ -39,8 +40,12 @@ function cuaErrText(result, fallback) {
       .map(function (c) { return c.text; });
     if (texts.length) return texts.join(' ').slice(0, 300);
   }
-  if (result.error) return String(result.error);
-  if (result.message) return String(result.message);
+  // BUG-443 (2026-09-18): both were String(), so a structured error or message
+  // rendered as the literal "[object Object]" — the same defect the ticket was
+  // filed for, in a second private normalizer. reasonText() handles the object
+  // case and the empty-object case that would otherwise trail off mid-sentence.
+  if (result.error) return reasonText(result.error);
+  if (result.message) return reasonText(result.message);
   try {
     var s = JSON.stringify(result);
     return s ? s.slice(0, 300) : (fallback || 'unknown cua-driver error');
@@ -235,13 +240,67 @@ function cacheClickLabel(key, label) {
 // element_index (or null if nothing resolves there anymore).
 async function resolveClickedLabel(p) {
   var stateRes = await cua_get_window_state({ pid: p.pid, window_id: p.window_id });
-  if (!stateRes.ok) return { ok: false, label: null };
+  // BUG-439: `errText` and `found` added so the stale-index path below can say
+  // WHY the refresh failed and whether the index still exists at all. Callers
+  // that only read ok/label are unchanged.
+  if (!stateRes.ok) return { ok: false, found: false, label: null, errText: String(stateRes.result || '') };
   var sc = (stateRes.result && typeof stateRes.result === 'object' && stateRes.result.structuredContent) || {};
   var elements = sc.elements || [];
   var match = elements.filter(function (e) { return e && Number(e.element_index) === Number(p.element_index); })[0];
-  if (!match) return { ok: true, label: null };
+  if (!match) return { ok: true, found: false, label: null };
   var label = match.label !== undefined ? match.label : match.name;
-  return { ok: true, label: label === undefined ? null : label };
+  return { ok: true, found: true, label: label === undefined ? null : label };
+}
+
+// BUG-439 (2026-09-11 11:12Z, attended session). cua_click failed twice with
+// the driver's text "Element 100 not in cache for hwnd=329782. Call
+// get_window_state first." The model HAD called cua_get_window_state — 3 s
+// earlier, in a separate Live batch, and that call took 14.3 s — so the click
+// went out 11.4 s before the tree it depended on landed. Nothing orders calls
+// across batches, and the driver's advice is unactionable from the model's
+// side (it did, and cannot know when the result arrives).
+//
+// So on this shape cua_click refreshes the window state ONCE itself and then
+// FAILS with what element_index resolves to now. The refresh warms the driver's
+// cache, so the model's next cua_click with the same index needs no separate
+// cua_get_window_state. It does NOT click again by itself: after a refresh,
+// index N may be a different control, and cua-driver's index-stability
+// contract is documented nowhere in this repo — without it no automatic retry
+// is safe (2026-09-16 review). The model decides, with the fresh label in front
+// of it. The foreground-escalation retry is skipped for this shape: a stale
+// index is deterministic, and the incident's second click hit the same wall.
+//
+// ponytail: string match — the driver has no error code (adapters/cua-driver
+// returns MCP {content, isError}); the regex is the only handle it gives us.
+var STALE_INDEX_RE = /not in cache/i;
+function staleIndexText(r) {
+  if (!r || r.ok || r.timedOut) return null;
+  var text = cuaErrText(r.result, '');
+  return STALE_INDEX_RE.test(text) ? text : null;
+}
+
+//
+// Each refusal carries the next call as a structured `remedy` (BUG-425) beside
+// the prose (src/core/CLAUDE.md "Refusals": the message is the channel the
+// model reads, the structure is what it can copy without re-typing arguments).
+async function refreshAfterStaleIndex(p, driverText) {
+  var remedy = require('./evidence').remedy;
+  var fresh = await resolveClickedLabel(p);
+  var where = {};
+  if (p.pid !== undefined && p.pid !== null) where.pid = p.pid;
+  if (p.window_id !== undefined && p.window_id !== null) where.window_id = p.window_id;
+  var head = 'cua_click: element_index ' + p.element_index + ' was stale — the driver said "' + driverText + '". This click was NOT made. ';
+  if (!fresh.ok) {
+    return { ok: false, result: head + 'The window state refresh also failed: ' + (fresh.errText || 'unknown cua-driver error') +
+      ' Call cua_get_window_state yourself, then cua_click with an element_index from that tree.', remedy: remedy('cua_get_window_state', where, 'the refresh inside cua_click failed; read the tree yourself before clicking again') };
+  }
+  if (!fresh.found) {
+    return { ok: false, result: head + 'The window state has been refreshed: no element ' + p.element_index +
+      ' exists in the refreshed tree. Call cua_get_window_state and pick a new element_index from it.', remedy: remedy('cua_get_window_state', where, 'element_index ' + p.element_index + ' no longer exists; pick a new one from the fresh tree') };
+  }
+  var label = fresh.label === null ? '' : String(fresh.label);
+  return { ok: false, result: head + 'The window state has been refreshed and is now cached: element_index ' + p.element_index +
+    ' now resolves to "' + label + '". If that is the control you meant, call cua_click again with the same arguments; otherwise call cua_get_window_state and pick a new element_index.', remedy: remedy('cua_click', Object.assign({ element_index: p.element_index }, where), 'the driver cache is warm now; element_index ' + p.element_index + ' resolves to "' + label + '" — call again only if that is the control you meant') };
 }
 
 // Element-addressed click — the load-bearing tool. element_index points into
@@ -280,10 +339,14 @@ async function cua_click(params) {
   // guaranteed double-fire rather than a recovery. `timedOut` is how the adapter
   // tells the two apart - before it existed both arrived as a bare ok:false and
   // this line answered a timeout by clicking again.
-  if ((!r || !r.ok) && !(r && r.timedOut) && p.foreground !== false) {
+  // BUG-439: a stale-index refusal skips this escalation too — see
+  // refreshAfterStaleIndex above for why a second click is the wrong answer.
+  if ((!r || !r.ok) && !(r && r.timedOut) && !staleIndexText(r) && p.foreground !== false) {
     // Retry in foreground delivery mode — Chromium sometimes drops background clicks.
     r = await cuaDriver.invoke('click', Object.assign({}, clickArgs, { delivery_mode: 'foreground' }));
   }
+  var stale = staleIndexText(r);
+  if (stale) return refreshAfterStaleIndex(p, stale);
   if (!r || !r.ok) {
     var guidanceWindows = await fetchAndCacheWindows();
     return fail(cuaErrText(r && r.result, 'cua-driver click failed') + (guidanceWindows ? ' ' + formatWindowList(guidanceWindows) : ''));

@@ -8,7 +8,7 @@ function buildTools({ controller } = {}) {
     return controller[method](args, { connectionId: ctx && ctx.connectionId, requestId: ctx && ctx.requestId });
   };
   return [
-    { name: 'desktop_task_start', description: 'Start an observed desktop task. Stage 1 supports YouTube third-result playback and pause/resume/next only. A started response is NOT completion; use desktop_task_status for observed evidence.',
+    { name: 'desktop_task_start', description: 'Start an observed desktop task. Stage 1 supports YouTube result 1 through 20 from a single observed list and pause/resume/next only. Missing or ambiguous results block without guessing. A started response is NOT completion; use desktop_task_status for observed evidence.',
       params: { request: 'string — explicit operator desktop request' }, danger: false, needs_result: true,
       fn: (args, ctx) => invoke('start', args, ctx) },
     { name: 'desktop_task_status', description: 'Read a desktop task execution record, its current state and independent evidence. Blocked or unknown outcomes are not completion.',

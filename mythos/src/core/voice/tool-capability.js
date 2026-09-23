@@ -70,6 +70,51 @@ const RULES = [
     // unreachable remedy.
     except: (name) => name === 'browser_launch_debug' || name === 'browser_switch',
     requires: (snap) => snap.browserOnline,
+    // SELF-HEALING — the deadlock the `except` above spotted is ONE STEP WIDER
+    // than the two tools it exempts, and that gap cost an attended run.
+    //
+    // MEASURED, 2026-09-10 attended session (mythos-server.log, boot 19:38:29Z):
+    //   19:40:41  live-tools.unavailable count:20 tools:["browser_navigate",
+    //             "browser_snapshot","browser_click", …]
+    //   19:41:28  browser_launch_debug called
+    //   19:41:30  browser-agent connected via CDP  contexts:1
+    //   19:41:32  late-outcome browser_launch_debug claim:ok
+    //   19:42:09  think_deeply → FAILED · 19:42:56 list_windows · 19:43:03 open_web
+    // The launcher worked. The model then had no navigate tool for the rest of
+    // the session, because buildSetup() rebuilds declarations only when a setup
+    // frame goes out — once per socket — so the list stayed frozen at the state
+    // it had before the browser existed. It improvised, which is the failure
+    // mode this file's own header says withholding is meant to prevent:
+    // "wrongly withholding a working tool is worse than declaring a failing one".
+    //
+    // WHY THIS RULE AND NOT THE OTHER FOUR. The set is derived from the reason,
+    // not listed: withhold only for a condition NOTHING in the session can
+    // remove. gmail/calendar need an OAuth triple minted by a script; phone needs
+    // a cable; desktop-operator needs a config flag and an extension install.
+    // None of those can change mid-session. This one can, twice over — the model
+    // holds browser_launch_debug, and every browser effector calls requireOnline()
+    // (from-browser.js, BUG-011), which connects or launches on demand and
+    // otherwise reports OFFLINE honestly. So a declared browser tool called with
+    // no browser either works or fails with the truth. It never no-ops.
+    //
+    // NOT MARKED, and this is now MEASURED rather than deferred (2026-09-11).
+    // Three files export a function called requireOnline() and only one of them
+    // brings anything up — the shared name is the trap:
+    //   from-browser.js:32  async; calls ensureOnline() -> CDP connect, then
+    //                       launchLocal. Genuinely self-healing. Probed with the
+    //                       adapter stubbed OFFLINE: the call order was
+    //                       getStatus, getStatus, ensureOnline, getStatus, and it
+    //                       returned ok:false with the cause and the remedy.
+    //   from-cua.js:74      `return cuaDriver.getStatus().state === 'ONLINE'`.
+    //                       A pure predicate; callers do `if (!requireOnline())
+    //                       return offlineFail()`. Starts nothing.
+    //   from-pc.js:60       reads pcChild.getStatus() and returns fail(...).
+    //                       Starts nothing.
+    // So cua_* and the pc-child family stay withheld, correctly: no declared tool
+    // and no effector can clear their gate inside a session. If either ever gains
+    // a real bring-up, mark it here — the check is the one run above, not a grep
+    // for the function name, which matches all three.
+    selfHealing: true,
     reason: 'no debuggable browser is attached (CDP endpoint unreachable) — browser_launch_debug can start one',
   },
   {
@@ -136,7 +181,17 @@ function buildCapabilitySnapshot({ config, adapters } = {}) {
   };
 }
 
-// checkToolCapability(name, snapshot) -> {ok:true} | {ok:false, rule, reason}
+// checkToolCapability(name, snapshot)
+//   -> {ok:true}                       available now
+//   -> {ok:true, rule, needs}          DECLARED, but a step is required first
+//   -> {ok:false, rule, reason}        withheld: this machine cannot do it
+//
+// The middle answer exists because "cannot" and "not yet" were being collapsed,
+// and collapsing them cost the whole browser surface for a session (see the
+// browser rule's measurement). `needs` is NOT dropped — it is louder than the
+// old behaviour, not quieter: the tool is declared AND the model is told in its
+// system instruction what to do first. Silently declaring it would be the
+// failure this file was written to stop.
 function checkToolCapability(name, snapshot) {
   const toolName = String(name || '');
   const snap = snapshot || {};
@@ -147,6 +202,7 @@ function checkToolCapability(name, snapshot) {
     // reason may be a string or a function of the snapshot. Strings stay strings
     // so the other four rules are untouched by BUG-375.
     const reason = typeof rule.reason === 'function' ? rule.reason(snap) : rule.reason;
+    if (rule.selfHealing) return { ok: true, rule: rule.id, needs: reason };
     return { ok: false, rule: rule.id, reason: reason };
   }
   return { ok: true };

@@ -8,6 +8,12 @@ const vm = require('node:vm');
 function load(file, context, name) {
   const source = fs.readFileSync(path.join(__dirname, '../ui/public/js', file), 'utf8')
     .replace(/^import .*;\r?$/gm, '').replace(/export (?=(?:async )?function)/g, '');
+  // The import lines are stripped above, so whatever they supplied must be
+  // supplied here. E1 (2026-09-16): audit.js and overlay-manager.js now import
+  // escapeHtml/escapeAttr from url.js instead of carrying local copies; these
+  // stubs mirror url.js (hud-escape-html.test.js pins the real ones).
+  context.escapeHtml ??= (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  context.escapeAttr ??= (s) => context.escapeHtml(s).replace(/"/g, '&quot;');
   vm.createContext(context);
   vm.runInContext(source + '\nthis.entry = ' + name, context);
   return context.entry;

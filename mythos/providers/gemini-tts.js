@@ -14,6 +14,22 @@
 //   edge-tts                        ~900ms/sentence   free, unofficial endpoint
 //   gemini-2.5-flash-preview-tts   ~3.9s/sentence    metered
 //   gemini-3.1-flash-tts-preview   ~17.6s/sentence   metered  <- do not default to this
+//
+// RE-MEASURED 2026-09-11, and the ordering REVERSED. Same sentence, three
+// samples each, alternating so a warm/cold effect could not land on one model:
+//   gemini-2.5-flash-preview-tts   median 6382ms   [6162, 6382, 21015]
+//   gemini-3.1-flash-tts-preview   median 5589ms   [4445, 5589, 5992]
+// The 3.1 model is now both faster AND far steadier — the older one produced a
+// 21-second outlier in three attempts, which in a voice path is a turn the
+// operator hears nothing during. So DEFAULT_MODEL moved to 3.1 below.
+//
+// BOTH measurements are kept. The July numbers were not wrong when taken; a
+// preview model changed under us, which is the argument for re-measuring rather
+// than for trusting either figure indefinitely. One sample did NOT trigger this
+// change — the first 2026-09-11 sample showed 5.5s vs 8.4s and was deliberately
+// not acted on, because a single sample against a recorded contrary measurement
+// is how a stale number gets replaced by a lucky one.
+//
 // So this is OFF by default. edge-tts stays the default for latency; this is opt-in
 // via VOICE_TTS_PROVIDER=gemini for voice consistency, and it is also the path that
 // avoids edge-tts's personal/hobby-only labelling. Whether either is licensed for a
@@ -24,7 +40,9 @@
 // wraps it in a WAV container and callers must ship mime 'audio/wav' — the client
 // already supports a per-chunk mime (the reminder alert tone is a real WAV).
 
-const DEFAULT_MODEL = 'gemini-2.5-flash-preview-tts';
+// Moved off gemini-2.5-flash-preview-tts 2026-09-11 on the re-measurement above.
+// GEMINI_TTS_MODEL still overrides, so reverting is an env var and not a deploy.
+const DEFAULT_MODEL = 'gemini-3.1-flash-tts-preview';
 const DEFAULT_VOICE = 'Aoede';
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const HEALTH_CACHE_MS = 10000;
