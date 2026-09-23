@@ -1332,24 +1332,13 @@ async function main() {
 
   // D-07: full graceful shutdown sequence — server-close (step 0, registered
   // separately via registerStopServer above) -> stop-loops -> episodic-flush
-  // -> checkpoint-write -> audit-flush -> exit 0, with SHUTDOWN_MS as the
-  // hard-exit(1) backstop if any step hangs. `memory` is closure-captured
-  // here (same pattern stopRunningLoops relies on for cortex/immune/etc.) and
-  // is populated by the 'memory' boot step before lifecycle.boot() resolves.
-  lifecycle.registerShutdownStep('stop-loops', stopRunningLoops);
-  lifecycle.registerShutdownStep('reflection-final-pass', function() {
-    // P4: one last learning pass over the session's conversations. Bounded by
-    // the brain's own timeouts; skips silently when brain is offline.
-    if (reflection) return reflection.runNow('shutdown');
-  });
-  lifecycle.registerShutdownStep('episodic-flush', function() {
-    if (memory) return memory.working.flushToEpisodic();
-  });
-  lifecycle.registerShutdownStep('checkpoint-write', function() {
-    if (memory) return memory.checkpoints.save(memory.working.snapshot());
-  });
-  lifecycle.registerShutdownStep('audit-flush', function() {
-    if (memory) return memory.audit.write({ tool: 'lifecycle', tier: 0, decision: 'shutdown', outcome: 'ok' });
+  // -> checkpoint-write -> audit-flush -> reflection-final-pass LAST, all
+  // under one deadline with SHUTDOWN_MS as the hard-exit(1) backstop. BUG-437
+  // (2026-09-23): the order, and why reflection moved from second to last, is in
+  // src/core/lifecycle/shutdown-steps.js. `memory` and `reflection` are read
+  // late through getters: both are populated by boot steps that run after this.
+  require('./core/lifecycle/shutdown-steps').registerCoreShutdownSteps(lifecycle, {
+    stopRunningLoops, getMemory: () => memory, getReflection: () => reflection,
   });
 
   // Register signal handlers — the ONE path that drives shutdown on SIGINT/SIGTERM

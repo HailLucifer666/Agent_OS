@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7929,
+      "value": 7937,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5767,7 +5767,7 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[PARTIAL 2026-09-23: the X quit leaves no process and the shell waits 6.7 s; the server hangs on its reflection (LLM) step and is hard-killed at 6 s, so checkpoint and flushes never run; tray and in-app quits not exercised] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open.",
+          "evidence": "[CODED 2026-09-23, server half: the saving steps (episodic-flush, checkpoint-write, audit-flush) now run BEFORE reflection, every step under one deadline with a timeout that moves on, one shared shutdown for repeated signals, reflection fenced after its deadline; a forked-IPC quit of the real server ran every step clean in 37 ms and wrote the checkpoint during the quit. Found and handed to BUG-422: the process then crashes 0xC0000409 ~4 s after exit(0), on the pre-change build too, with a Kokoro synthesis cut at shutdown. Earlier: the X quit leaves no process and the shell waits 6.7 s; tray and in-app quits not exercised] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open.",
           "source": "electron/main.js"
         }
       },

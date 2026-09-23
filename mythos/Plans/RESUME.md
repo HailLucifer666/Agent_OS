@@ -31,7 +31,8 @@ the repo at `~/.claude/plans/file-d-agen-20os-agent-os-main-agent-os-linked-hoar
 | state | tickets |
 |---|---|
 | **Coded, attended session owed** | 444, 452 (startup/access); **445** (browser targets); **446** (spoken D10 half only — headless boot passed) |
-| **Open, next** | Wave 2: 437, 450, 422 |
+| **Coded, attended shutdown session owed** | **437** (server half headless-verified; three-way quit owed) |
+| **Open, next** | Wave 2: 450, 422 (422 also owns the 0xC0000409 at exit found by the 437 probe) |
 
 ## The golden path
 
@@ -77,7 +78,8 @@ printed, and the voice adapter bounds results as a structure. Its proof owed is 
 PR: Goals.md never activates an unaccepted commitment, autonomous work is gated on
 status and budget where it executes, commitments are listed only when asked. A headless
 seeded-vault boot reproduced the incident on the old build (4 steps ran) and showed 0 on
-the new. Next: **Wave 2** — 437 (quit saves first), 450 (TTS circuit), 422 (Kokoro child).
+the new. Then the BUG-437 PR: the saving steps run before reflection, under one deadline. Next:
+**450** (TTS circuit state), then **422** (Kokoro out of process; it also owns the exit crash).
 
 Tracker note for the next ledger pass: BUG-406 is open but has no OPEN WORK
 register bullet, so the register lists 17 names while the index counts 18 open.
