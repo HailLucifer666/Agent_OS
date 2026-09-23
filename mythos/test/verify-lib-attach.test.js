@@ -13,10 +13,30 @@
 // ones about it LYING — reporting a pass it did not earn. Two such bugs were
 // found while building it and both are pinned below: the double-`ok` false green,
 // and the disabled-hatch echo being mistaken for a result.
+//
+// THIS FILE ITSELF USED TO VANISH (2026-09-23). Roughly one run in three it
+// died with `Unable to deserialize cloned data due to invalid or unsupported
+// version` and no test named, and its later tests dropped out of the count
+// (7903 -> 7891 in one full run). Not a flake: attachMythos's status line
+// `🔌  attached to MYTHOS on port N` went to stdout, which under `node --test`
+// is the runner's binary report channel, and Node 26.1's parser misreads text
+// that follows a frame in the same pipe read as a negative frame length. The
+// full byte-level account is on log() in scripts/verify-lib.js. Measured
+// standalone, long-form TEMP: 6 of 15 runs failed before the fix, 0 of 30 after.
+// The first describe block pins it, and sits first so that a regression reports
+// there before a sibling test's write can take the file down again.
+//
+// Mutation probes, 2026-09-23, each applied to scripts/verify-lib.js, confirmed
+// applied, run against this file, restored from a copy and checked by sha256:
+//   (1) delete the NODE_TEST_CONTEXT gate in log()  -> fails (a) and (b); (c) green
+//   (2) make log() silent everywhere                -> fails (c); (a) and (b) green
+//   (3) add a raw console.log inside attachMythos   -> fails (b); (a) and (c) green
+// Probe (3) is why (b) exists: (a) guards the helper, (b) guards the whole path.
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const { execFile } = require('node:child_process');
 
 const lib = require('../scripts/verify-lib.js');
 const sweep = require('../scripts/verify-packaged.js');
@@ -28,6 +48,64 @@ function fakeServer(handler) {
     server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
   });
 }
+
+// Run attachMythos in a fresh node process whose stdout THIS test holds, so a
+// write can be observed without it ever touching this file's report channel.
+function attachInChild(port, env) {
+  const script = `require(${JSON.stringify(require.resolve('../scripts/verify-lib.js'))})`
+    + '.attachMythos({ port: Number(process.argv[1]), token: "" })'
+    + '.then(() => process.exit(0), (e) => { console.error(e.message); process.exit(2); });';
+  return new Promise((resolve, reject) => {
+    execFile(process.execPath, ['-e', script, String(port)], { env, timeout: 15000, windowsHide: true },
+      (err, stdout, stderr) => (err ? reject(new Error(`attach child failed: ${err.message}\n${stderr}`)) : resolve(stdout)));
+  });
+}
+
+describe('stdout is the test runner\'s report channel — verify-lib must stay off it under test', () => {
+  it('(a) log() writes nothing to stdout inside a node --test child', () => {
+    assert.ok(process.env.NODE_TEST_CONTEXT,
+      'premise: node --test sets NODE_TEST_CONTEXT in each file\'s process — without it the gate in log() is inert');
+    const writes = [];
+    const realWrite = process.stdout.write;
+    // Synchronous on purpose. Nothing can yield between patch and restore, so
+    // none of the runner's own frames can be captured — or swallowed — here.
+    process.stdout.write = (chunk) => { writes.push(String(chunk)); return true; };
+    try {
+      lib.log('🔌', 'attached to MYTHOS on port 0');
+    } finally {
+      process.stdout.write = realWrite;
+    }
+    assert.deepEqual(writes, [], 'a raw line on this stdout is parsed by the runner as a frame header');
+  });
+
+  it('(b) attachMythos end to end in a real process writes nothing to stdout under the runner', async () => {
+    const { server, port } = await fakeServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, uptime: 1, authRequired: false }));
+    });
+    try {
+      const stdout = await attachInChild(port, { ...process.env, NODE_TEST_CONTEXT: 'child-v8' });
+      assert.equal(stdout, '');
+    } finally {
+      server.close();
+    }
+  });
+
+  it('(c) the adjacent case that must keep passing: outside the runner a human still sees the status line', async () => {
+    const { server, port } = await fakeServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, uptime: 1, authRequired: false }));
+    });
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    try {
+      const stdout = await attachInChild(port, env);
+      assert.match(stdout, new RegExp(`attached to MYTHOS on port ${port}`));
+    } finally {
+      server.close();
+    }
+  });
+});
 
 describe('parseHarnessTarget', () => {
   it('defaults to booting, not attaching', () => {
