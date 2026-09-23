@@ -194,7 +194,7 @@ function createLiveSession(deps) {
     // clear EVERY connection's mic-suspend gate on ANY one connection's blind
     // turn. A direct per-session callback is the established fix for exactly
     // this shape here, not a connectionId added to the bus payload.
-    onSuspendedTurnAnomaly,
+    onSuspendedTurnAnomaly, onNoticeUndelivered, // BUG-436: (text, meta, reason, cls) => void — an item a FINAL close could not deliver; see notice-queue.js createUndeliveredHandler.
 
     // Test-only seam: the wire protocol is frozen, the transport constructor is
     // not. Defaults to the real 'ws' WebSocket against the real endpoint.
@@ -301,7 +301,7 @@ function createLiveSession(deps) {
   let turnToolCallOpen = false;
   const goAwayGate = createGoAwayGate({ closeNow: (reason) => close(reason, { final: false }), isTurnInFlight: () => turnToolCallOpen || turnAudioParts > 0 || turnTextParts > 0, logger });
   // BUG-432: turnSystemInitiated is a term in inFlight AND used to be set inside sendText, so a queue reading it would have held the first notice against a turn that notice had itself just claimed to start. It moves with the frame now — set in sendNoticeFrame, when one actually goes out.
-  const noticeQueue = createNoticeQueueFromEnv({ inFlight: () => turnSystemInitiated || turnToolCallOpen || turnAudioParts > 0 || turnTextParts > 0, send: (text, meta) => sendNoticeFrame(text, meta), logger, onUndelivered: (text, meta, reason) => logger.warn('live.notice-undelivered', { site: (meta && meta.site) || 'unattributed', reason, chars: String(text).length }) });
+  const noticeQueue = createNoticeQueueFromEnv({ inFlight: () => turnSystemInitiated || turnToolCallOpen || turnAudioParts > 0 || turnTextParts > 0, send: (text, meta) => sendNoticeFrame(text, meta), logger, onUndelivered: (text, meta, reason, cls) => { logger.warn('live.notice-undelivered', { site: (meta && meta.site) || 'unattributed', reason, cls, chars: String(text).length }); if (typeof onNoticeUndelivered === 'function') onNoticeUndelivered(text, meta, reason, cls); } });
   // Audio-chunk starvation, per turn — see the inlineData branch. A chunk holds
   // ~100ms of 24kHz PCM; 250ms is comfortably past "the previous chunk has
   // finished playing and the room is now silent", without firing on ordinary
@@ -566,12 +566,12 @@ function createLiveSession(deps) {
     closedByUs = false;
     return new Promise((resolve) => {
       let settled = false;
-      try { socketGeneration += 1; ws = openSocket(`${WS_URL}?key=${key}`); }
+      const gen = ++socketGeneration; try { ws = openSocket(`${WS_URL}?key=${key}`); } // gen: THIS socket's generation, so its frames receipt only what was sent on it (BUG-436)
       catch (err) { setState('closed', err.message); return resolve(false); }
 
       ws.on('open', () => sendRaw({ setup: buildSetup() }));
       ws.on('message', (raw) => {
-        let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
+        let msg; try { msg = JSON.parse(raw.toString()); } catch { return; } if (noticeQueue) noticeQueue.ack({ generation: gen }); // BUG-436: a receipt, BEFORE this frame's own handling sends anything
         if (msg.setupComplete && !settled) {
           settled = true;
           setState('open');
@@ -617,7 +617,7 @@ function createLiveSession(deps) {
 
   async function reconnect() {
     if (breakers && typeof breakers.fail === 'function') breakers.fail(BREAKER);
-    const ok = await open();
+    const ok = await open(); if (!ok && noticeQueue) noticeQueue.cancel({ final: true }); // BUG-436: a rotation that cannot reconnect is over — hand held answers back instead of keeping them for a session that may never come
     if (!ok && bus && typeof bus.emit === 'function') {
       bus.emit('health.anomaly', { kind: 'live-reconnect-failed', reason: 'session-resume', turnId: turnCounter });
     }
@@ -1140,8 +1140,9 @@ function createLiveSession(deps) {
     logger.info('live.text-injected', injectionFields(m, text, turnCounter, ok !== false));
     return ok;
   }
-  // One door, still one door (BUG-273 D3). Returns 'sent' | 'queued' | false with the queue on, the old boolean with it off: three outcomes, three values, so sendSystemNotice can tell "held until this turn ends" from "the socket refused it".
-  function sendText(text, meta) { if (state !== 'open') return false; return noticeQueue ? noticeQueue.offer(text, meta) : sendNoticeFrame(text, meta); }
+  // One door, still one door (BUG-273 D3). Returns 'sent' | 'queued' | false with the queue on, the old boolean with it off: three outcomes, three values, so sendSystemNotice can tell "held until this turn ends" from "the socket refused it". BUG-436: while ROTATING (reconnecting/opening) the queue accepts too — a result that finishes mid-rotation is held for the replacement socket instead of being refused here and spoken over TTS outside Live.
+  function acceptsNotices() { return !!noticeQueue && (state === 'reconnecting' || state === 'opening'); } // a final close settles to 'closed', so no closedByUs term is needed
+  function sendText(text, meta) { if (state !== 'open' && !acceptsNotices()) return false; return noticeQueue ? noticeQueue.offer(text, meta) : sendNoticeFrame(text, meta); }
 
   function sendToolResponse(functionResponses) {
     return sendRaw({ toolResponse: { functionResponses } });
@@ -1190,7 +1191,7 @@ function createLiveSession(deps) {
   }
 
   return { open, close, sendAudio, sendVideoFrame, sendText, sendToolResponse,
-           getState: () => state, isOpen: () => state === 'open' };
+           getState: () => state, isOpen: () => state === 'open', acceptsNotices };
 }
 
 module.exports = {

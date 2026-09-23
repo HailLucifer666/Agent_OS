@@ -877,7 +877,7 @@ function createLiveToolAdapter(deps) {
       evidence: evidenceFor(toolName, ev.result) };
     liveTurnActions.push(lateEntry);
     recentActionLedger.record(lateEntry);
-    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName, remedy: ev.remedy,
+    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName, remedy: ev.remedy, receiptKey: traceId || null,
       speech: require('./action-outcome-summary').lateOutcomeSpeech(toolName, { ...ev, rawError: sanitizeResultError(ev.rawError) }, (deps.now || Date.now)() - startedAt),
       claim: ev.abortedInFlight ? 'aborted-in-flight'
         : (!ev.dispatchOk ? 'failed' : (ev.unverified ? (ev.confirmedStep ? 'unverified-partial' : 'unverified') : 'ok')) });
@@ -918,8 +918,8 @@ function createLiveToolAdapter(deps) {
     const liveSession = getLiveSession ? getLiveSession() : null;
     const m = meta || {};
     const message = `${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}${m.remedy ? " Structured remedy: " + JSON.stringify({ remedy: m.remedy }) : ""}`;
-    const open = !!liveSession && liveSession.isOpen();
-    const delivered = open && liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null, claim: m.claim || null }) !== false;
+    const open = !!liveSession && (liveSession.isOpen() || (typeof liveSession.acceptsNotices === 'function' && liveSession.acceptsNotices())); // BUG-436: a ROTATING session holds the answer for its replacement; treating it as closed spoke the answer over TTS outside Live
+    const delivered = open && liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null, claim: m.claim || null, speech: m.speech || null, receiptKey: m.receiptKey || null }) !== false;
     if (!delivered) {
       // Logged on the way out too: "the outcome never reached the model" and "the
       // model was told and said nothing" are different failures that used to look
@@ -1027,7 +1027,7 @@ function createLiveToolAdapter(deps) {
     // sendSystemNotice's guard and its wire format. Two doors meant the injection
     // log could only ever cover one of them — and an incomplete log of what starts
     // a turn is worse than none, because the gaps read as "nothing happened".
-    sendSystemNotice(verdict, instruction, { site: 'confirm-resolved', tool: pending.name,
+    sendSystemNotice(verdict, instruction, { site: 'confirm-resolved', tool: pending.name, receiptKey: 'confirm:' + confirmId,
       claim: accepted ? (unverified ? 'unverified' : (ok ? 'ok' : 'failed')) : 'rejected' });
   }
 

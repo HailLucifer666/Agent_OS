@@ -2876,6 +2876,8 @@ function createServer(deps) {
           // using Live, which is now the default whenever a Google key exists.
           config: liveConfigNow(), bus, logger, spend, breakers: geminiLiveBreakers,
           createSocket: createLiveSocket, // test-only seam; undefined in production
+          // BUG-436: an answer still held when the session FINALLY closes goes into the history and, if it has a spoken form, out over TTS — see createUndeliveredHandler.
+          onNoticeUndelivered: require('../src/core/voice/notice-queue').createUndeliveredHandler({ historyAppend, speak: (text) => proactiveSpeak(text, ws, { skipLive: true }).catch((err) => logger.warn('proactive.speak-failed', { error: err.message })), logger }),
           // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
           // buildSetup() calls it fresh on every open()/reconnect so the local
           // time (and anything else composed here) never goes stale across a
