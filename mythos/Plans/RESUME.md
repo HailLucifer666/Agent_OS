@@ -30,8 +30,8 @@ the repo at `~/.claude/plans/file-d-agen-20os-agent-os-main-agent-os-linked-hoar
 
 | state | tickets |
 |---|---|
-| **Coded, attended session owed** | 444, 452 (startup/access); **445** (browser targets) |
-| **Open, next** | **446**, then Wave 2 (437, 450, 422) |
+| **Coded, attended session owed** | 444, 452 (startup/access); **445** (browser targets); **446** (spoken D10 half only — headless boot passed) |
+| **Open, next** | Wave 2: 437, 450, 422 |
 
 ## The golden path
 
@@ -73,8 +73,11 @@ removal, CI green on `ec2efd93`; the session's permission check blocked the agen
 merging, so the operator merges), then the BUG-445 PR. BUG-445 is CODED: `browser_snapshot`
 returns a bounded, paged, main-first list whose accepted refs are exactly the refs it
 printed, and the voice adapter bounds results as a structure. Its proof owed is one
-`golden-path.js` line and an attended "play the third / sixth video". Then **446**
-(status and budget as hard gates at execution).
+`golden-path.js` line and an attended "play the third / sixth video". Then the BUG-446
+PR: Goals.md never activates an unaccepted commitment, autonomous work is gated on
+status and budget where it executes, commitments are listed only when asked. A headless
+seeded-vault boot reproduced the incident on the old build (4 steps ran) and showed 0 on
+the new. Next: **Wave 2** — 437 (quit saves first), 450 (TTS circuit), 422 (Kokoro child).
 
 Tracker note for the next ledger pass: BUG-406 is open but has no OPEN WORK
 register bullet, so the register lists 17 names while the index counts 18 open.

@@ -605,7 +605,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-443 | fixed | currently verified | [FIXED 2026-09-18 `2e707594`] app_reply failed with "Could not type the reply into slack: [object Object] Nothing was sent." (Audit 10:41:31Z). TWO origins, not the one this row named: from-pc.js delegate() read resp.error raw and window-recovery.js stringified it a line later (where the row was actually made), and from-app-reply.js rendered its own failures with String() because its local pc() helper bypasses from-pc. A sweep found two more private normalizers (reasonOf, from-cua) — seven recorded instances of this class. All route through util/reason-text.js; a derived guard fails on any NEW whole-failure-value stringification rather than counting known ones. Consumers: app_reply spoken failure text; the claim-check ledger reason. Remaining evidence: none, and no live run required — a pure string transformation with no device, timing or platform dependence. | mythos/src/core/effectors/from-app-reply.js; mythos/src/core/effectors/from-pc.js; mythos/src/core/effectors/from-cua.js; tests: bug-443-app-reply-keeps-the-reason.test.js, bug-443-no-unclassified-reason-stringify.test.js |
 | BUG-444 | coded | blocked | [CODED 2026-09-23 with the PIN removal] The sign-in cookie is now a random session id (mythos_session); auth-sessions.js stores its SHA-256 and a token fingerprint beside config.json, never in the vault; the raw-token mythos_token cookie is cleared, never read; per-browser logout closes that session's sockets; rotation ends all sessions; a corrupt store fails closed. Red-first test and 12 mutation probes in the entry. Remaining evidence: attended remote sign-in, sign-out and rotation from a second device. | mythos/test/bug-444-session-cookie-is-not-the-token.test.js; mythos/server/auth-sessions.js; mythos/server/credentials.js |
 | BUG-445 | coded | blocked | [CODED 2026-09-23] browser_snapshot now returns a bounded, paged list built by snapshot-view.js — dialog and search box first, then main in page order, links to one target merged into one item — and the tools accept exactly the refs printed on pages the model has read; a ref from a page that has since changed address is refused. The voice adapter bounds results as a structure (model-result.js): binary fields never reach the model as text, arrays lose items from the end without renumbering. Red-first test and 12 mutation probes in the entry. Remaining evidence: attended "play the third video" and "play the sixth video" on the real page, with the intended video id in the URL and playback advancing. | mythos/test/bug-445-snapshot-view-shows-what-it-accepts.test.js; mythos/src/core/effectors/snapshot-view.js; mythos/src/core/voice/model-result.js |
-| BUG-446 | open | currently reproduced | [FILED 2026-09-23 from the attended run] Five paused "Commitment" goals from 2026-09-11, over budget (e.g. 36,566 of 20,000 tokens), made 9 tool calls at boot including a tier-2 launch_app brave, with the HUD PIN-locked and nobody speaking; budget-exhausted was healed 9 ms after it fired. Consumers: cortex goal execution, immune healer, commitment-goal creation. Remaining evidence: none; operator decision owed on commitment expiry. | mythos/src/core (cortex goal selection, immune healer budget-exhausted playbook); vault/Goals/goal-f3daf200*.json, goal-21999a3d*.json |
+| BUG-446 | coded | blocked | [CODED 2026-09-23] Premise corrected by measurement: the goals were PROPOSED commitments, not paused ones — writeBack() lists every user-service goal in Goals.md unchecked and the next boot's sync() set every unchecked row active; the "healed 9 ms later" was the budget-pause playbook applied. Repaired: sync() never activates an unchecked row (tick -> done, untick of a done row -> active); autonomous work is gated at the shared dispatch on goal status and budget, with one action reserved before it starts, and a cortex-raised confirm carries its origin so a late accept is re-checked; plan() checks the budget before any branch; open commitments are listed only when asked (commitment_list) and can be dismissed (commitment_dismiss) without being marked done. Red-first test and 14 mutation probes. Headless seeded-vault boot 2026-09-23: old build 4 Audit rows and proposed 1 -> 0; fixed build 0 rows and proposed 1 -> 1; a ticked row becomes done. Remaining evidence: the spoken D10 half (ask, dismiss, unrelated turn). | mythos/test/bug-446-autonomy-runs-only-active-goals-with-budget.test.js; mythos/src/core/goals/execution-gate.js; mythos/src/core/effectors/goals.js |
 | BUG-447 | open | currently reproduced | [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed "because a Live conversation is in progress". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live. | mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js |
 | BUG-448 | open | currently reproduced | [FILED 2026-09-23 from the attended run] "Opening a new Notepad window right now" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction "that Notepad window didn't actually open" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app. | mythos/src/core/voice/claim-check.js |
 | BUG-449 | open | currently reproduced | [FILED 2026-09-23 from the attended run; seen once] The output transcription began "call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…" — a function call rendered as speech and never dispatched; the same reply said "I'm searching … now". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection. | mythos/src/core/voice/live-session.js (outputTranscription handling) |
@@ -2311,9 +2311,9 @@ So the model can only ever address the first result. Every other click is a gues
 
 **Not verified.** Nothing here has run against real YouTube. The fixture is the grammar measured on 2026-09-23 with placeholder titles. Per `src/core/CLAUDE.md` rule 5, a `golden-path.js` line before and after is owed with the attended browser-targets session, and that session closes this ticket.
 
-## BUG-446 — paused, over-budget "commitment" goals from 12 days earlier executed at boot with real side effects, while the HUD was PIN-locked (filed 2026-09-23)
+## BUG-446 — paused, over-budget "commitment" goals from 12 days earlier executed at boot with real side effects, while the HUD was PIN-locked (CODED 2026-09-23; filed 2026-09-23)
 
-**Status:** 🐞 OPEN, HIGH — an autonomy and safety defect: actions on the operator's desktop that nobody asked for today. Measured; not worked.
+**Status:** 🔧 CODED 2026-09-23, HIGH — an autonomy and safety defect. The premise is corrected and the repair is below. It closes on a headless boot against a seeded vault.
 
 **Evidence (boot 2026-09-23 13:37:56, HUD PIN-locked, nobody speaking).** Between 13:38:27 and 13:38:58 the cortex made **9 tool calls across 5 goals**: `web_search` ×3, `whatsapp_contacts` ×2, `open_web` ×3 (YouTube "Star Trek", "live chess tournament", a search) and **`launch_app {"name":"brave"}` at tier 2**. The Brave window was real — MYTHOS itself later listed it among running windows. Two of the five goals, read from the vault:
 
@@ -2333,6 +2333,78 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 **Direction.** Execution must honour status and budget as hard gates; `budget-exhausted` must not be healed by anything short of an operator action; commitment goals need an expiry tied to the conversation that created them.
 
 **Attribution:** attended run 2026-09-23; goal files read from `%APPDATA%\MYTHOS\vault\Goals\`.
+
+### Repair (CODED 2026-09-23)
+
+**Premise corrections, measured (Gate A).**
+
+- **The goals were `proposed`, not `paused`.** `goals.ready` at 08:08:12.535Z logged `proposed:210, paused:9`, and after the 08:11:01Z restart `proposed:205, paused:14`. All five incident goals had unchecked Goals.md rows, and four had `updatedAt` 08:08:12.609–.625, a single batch.
+  - The mechanism: a commitment is created `proposed` and documented inert (`from-calendar.js`). `writeBack()` appends every user-service goal to Goals.md unchecked. At the next boot, `sync()` set every mapped unchecked row `active` unless it was paused.
+  - Goals.md was last written 09-16 16:26 local, after that day's boot, which is why 09-15 and 09-16 did not fire.
+- **"The stop was healed 9 ms later" is refuted.** Audit `aud-b320b320a705` is the budget-pause playbook **applied**.
+- **What survived.** Nothing checked status or budget at the moment an autonomous action ran:
+  - a second action was allowed at .751, and exhaustion was recorded at .757;
+  - `plan()`'s pending-step branch skipped the budget;
+  - a confirm the cortex raised and the operator accepted later was never re-checked.
+
+**What changed.**
+
+1. **`effectors/goals.js` `sync()`: a checkbox records what the operator did.** A ticked row becomes `done` from any status. Unticking a `done` row reopens it as `active`. Any other unchecked row is left alone. A row the operator types is still created `active`.
+2. **`goals/execution-gate.js` (new), called from `dispatch-action.js` before `invoke()`.** For autonomous origin, meaning the cortex's ticks and a confirm the cortex raised:
+   - the goal must be `active`;
+   - tokens spent must be under budget, and actions spent **plus actions in flight** must be under budget;
+   - one action is reserved before the action starts and released once, after the debit or on a throw;
+   - a budget the gate cannot read is refused;
+   - the only goal-less autonomous call allowed is `mull()`'s `propose_goal`.
+   Refusals are `action.blocked` events plus an audit row with `decision: 'blocked'`. Voice, reminders (whose anchor goal is `proposed` by design), the dashboard and hotkeys pass untouched, which is why this is not in the leash.
+3. **The confirm record carries its origin.** The cortex's confirm record now includes `origin: 'autonomous'`, and `server/index.js` forwards it to dispatch, so a late accept is re-checked where it runs.
+4. **`goals/index.js` `plan()` checks the budget before any branch.** That covers the pending step, the procedural skill and the brain.
+5. **D10, operator decision: commitments are listed when asked and never pushed.**
+   - `read_status` no longer carries `openCommitments`.
+   - `commitment_list` (T0) lists the undismissed ones.
+   - `commitment_dismiss` (T1) persists `dismissedAt` on the record, never marks it done, and never deletes it.
+
+**Sub-claim map.**
+
+| claim | evidence | repair | test | live oracle |
+|---|---|---|---|---|
+| paused goals executed | refuted: they were proposed | sync rule | (1a) (1b) (1f) | `goals.ready` proposed count unchanged across two boots |
+| over-budget goals executed | 36,566 of 20,000 | gate at dispatch; plan() budget first | (2c) (3a) | zero cortex Audit rows for a seeded over-budget goal |
+| the stop was healed 9 ms later | refuted: Audit `aud-b320b320a705` | — | — | — |
+| a second action ran at the edge | .751 vs .757 | reservation | (2d) | — |
+| a late accept runs regardless | read from source | origin in the confirm record | (2e) (2o) (2s) | — |
+| "right now" said 12 days ago is replayed | goal dates | never activated; listed only when asked; dismissable | (1a) (4a)–(4d) | ask "what did you promise" |
+
+**Proof.** Red first against a9fbc9d7: (1a), (2a)–(2e), (2o), (2s), (3a) and (4a)–(4d) failed for their stated reasons. Fourteen mutation probes, each applied, restored sha256-identical and each reddening a named test; the table is in the test file. The writer map names every write that can set `active` (desktop controller ×2, `effectors/goals.js` ×6, crash recovery ×1) and fails when one is added. Its own adjacent test proves it counts a status set from a variable, the shape the old `sync()` used.
+
+**Not covered.**
+
+- Commitment **expiry** is moot under D10, because an unaccepted commitment never runs.
+- **Whether autonomy should run while nobody is at the HUD** is still an operator decision. The PIN lock was the only "unattended" signal, and it is gone.
+- The clipboard nag at 14:08:06 came from `mull()`'s "a question you asked that the operator never answered" rule, a proactive-speech path. It belongs with BUG-447.
+
+**Headless boot, measured 2026-09-23.** The real `src/main.js` was booted twice per build against a seeded temp vault, 45 s per boot (`.cache/bug446/seeded-boot.js`, gitignored). Every seeded step is a harmless `list_goals` read, so a gate failure shows up as an Audit row and nothing else. The seed:
+
+- a proposed over-budget commitment with an unchecked row;
+- an ACTIVE over-budget commitment, the one shape crash recovery lets through, because `monitor.js` skips `Commitment:` goals (BUG-342);
+- an over-budget active goal;
+- a healthy active goal.
+
+| | old code (`a9fbc9d7`) | fixed |
+|---|---|---|
+| `goals.ready` proposed, boot 1 then boot 2 | 1 then **0** (activated, then ran) | 1 then **1** |
+| Audit rows for the seeded goals | **4**: both over-budget commitments ran a step | **0** |
+| total actions spent | 11 then 13 | 11 then 11 |
+| active over-budget commitment | ran one step, then paused | paused `budget-exhausted` by `plan()` before any step |
+
+That is the incident's mechanism reproduced live on the old build and gone on the new one. Then the proposed commitment's row was **ticked** in Goals.md and MYTHOS booted once: the goal is `done` and the row stays `[x]`.
+
+Found by the probe: crash recovery pauses every active goal at boot **except** commitments, so the commitments `sync()` activated were exactly the goals that survived to run. The gate at execution is what covers that shape from now on.
+
+**Not verified.**
+
+- The spoken half of D10: asking "what did you promise" lists it; dismissing it removes it; an unrelated turn does not mention it. That needs a voice session.
+- The late-confirm refusal was proven only through the real server in a test (2s), not in a live session.
 
 ## BUG-447 — system-initiated speech crowds out the live conversation: heal announcements are spoken into it, in log vocabulary, and the operator's question loses (filed 2026-09-23)
 
@@ -22420,6 +22492,10 @@ those records remain owed (this section is the index until then).
   2026-09-23 while the HUD was PIN-locked: 9 tool calls across 5 goals, including a tier-2
   launch_app brave. The budget-exhausted stop was healed 9 ms after it fired. A promise of
   "right now" carries no expiry. Filed 2026-09-23. Full entry above.
+  **CODED 2026-09-23:** they were proposed commitments that sync() activated; sync() no longer activates
+  an unchecked row, autonomous work is gated on status and budget where it executes, and commitments
+  are listed only when asked. Headless seeded-vault boot passed (old build ran 4 steps, fixed ran 0);
+  the spoken D10 half is pending.
 
 - BUG-447 - system-initiated speech crowds out the live conversation: 15 of 51 turns were
   started by the system, 15 were interrupted, and heal announcements were spoken in log

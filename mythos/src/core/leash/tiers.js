@@ -71,6 +71,8 @@ const TIER_TABLE = {
   'timer_add':             0,  // Task 5 (step 5) — same class as reminder_add above; a
                                // relative-time reminder additionally flagged to ring alertSound
   'reminder_list':         0,  // read-only — lists pending reminders
+  'commitment_list':       0,  // BUG-446 / D10 — read-only: MYTHOS's own open commitments, when asked
+  'commitment_dismiss':    1,  // BUG-446 / D10 — local write on MYTHOS's own ledger; marks nothing done
   'use_skill':             0,  // read-only — loads a skill's guidance text from disk
   'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
   'recall_memory':         0,  // read-only — searches existing memory (recallHybrid), writes nothing

@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 7903,
+      "value": 7929,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -368,14 +368,14 @@
       "measuredAt": "2026-09-23"
     },
     "registered": {
-      "value": 186,
+      "value": 188,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
       "measuredAt": "2026-09-23"
     },
     "voiceReachable": {
-      "value": 125,
+      "value": 127,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
@@ -1280,7 +1280,9 @@
         "propose_goal",
         "list_goals",
         "toggle_goal",
-        "delete_goal"
+        "delete_goal",
+        "commitment_list",
+        "commitment_dismiss"
       ],
       "ok": 330,
       "f": 3,
@@ -5887,14 +5889,14 @@
       {
         "n": 446,
         "shape": "entry",
-        "state": "open",
-        "title": "paused, over-budget \"commitment\" goals from 12 days earlier executed at boot with real side effects, while the HUD was PIN-locked (filed 2026-09-23)",
+        "state": "coded",
+        "title": "paused, over-budget \"commitment\" goals from 12 days earlier executed at boot with real side effects, while the HUD was PIN-locked (CODED 2026-09-23; filed 2026-09-23)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN, HIGH — an autonomy and safety defect: actions on the operator's desktop that nobody asked for today. Measured; not worked. **Evidence (boot 2026-09-23 13:37:56, HUD PIN-locked, nobody speaking).** Between 13:38:27 and 13:38:58 the cortex made **9 tool calls across 5 goals**: `web_search` ×3, `whatsapp_contacts` ×2, `open_web` ×3 (YouTube \"Star Trek\", \"live chess tournament\", a search) and **`launch_app {\"name\":\"brave\"}` at tier 2**. The Brave window was real — MYTHOS itself later listed it among running windows. Two of the five goals, read from the vault: - `goal-f3daf200` — *\"Commitment: Let me get us back on YouTube and find a live chess tournament for you right now\"*, created **2026-09-11**, status **`paused`**, budget 20,000 tokens, **spent 36,566**. - `goal-21999a3d` — *\"Commitment: I'll get that search going for live today's news\"*, created **2026-09-11**, stat…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-23, HIGH — an autonomy and safety defect. The premise is corrected and the repair is below. It closes on a headless boot against a seeded vault. **Evidence (boot 2026-09-23 13:37:56, HUD PIN-locked, nobody speaking).** Between 13:38:27 and 13:38:58 the cortex made **9 tool calls across 5 goals**: `web_search` ×3, `whatsapp_contacts` ×2, `open_web` ×3 (YouTube \"Star Trek\", \"live chess tournament\", a search) and **`launch_app {\"name\":\"brave\"}` at tier 2**. The Brave window was real — MYTHOS itself later listed it among running windows. Two of the five goals, read from the vault: - `goal-f3daf200` — *\"Commitment: Let me get us back on YouTube and find a live chess tournament for you right now\"*, created **2026-09-11**, status **`paused`**, budget 20,000 tokens, **spent 36,566**. - `goal-21999a3d` — *\"Commitment: I'll get that search going for live today's news\"*…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-23 from the attended run] Five paused \"Commitment\" goals from 2026-09-11, over budget (e.g. 36,566 of 20,000 tokens), made 9 tool calls at boot including a tier-2 launch_app brave, with the HUD PIN-locked and nobody speaking; budget-exhausted was healed 9 ms after it fired. Consumers: cortex goal execution, immune healer, commitment-goal creation. Remaining evidence: none; operator decision owed on commitment expiry.",
-          "source": "mythos/src/core (cortex goal selection, immune healer budget-exhausted playbook); vault/Goals/goal-f3daf200*.json, goal-21999a3d*.json"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-23] Premise corrected by measurement: the goals were PROPOSED commitments, not paused ones — writeBack() lists every user-service goal in Goals.md unchecked and the next boot's sync() set every unchecked row active; the \"healed 9 ms later\" was the budget-pause playbook applied. Repaired: sync() never activates an unchecked row (tick -> done, untick of a done row -> active); autonomous work is gated at the shared dispatch on goal status and budget, with one action reserved before it starts, and a cortex-raised confirm carries its origin so a late accept is re-checked; plan() checks the budget before any branch; open commitments are listed only when asked (commitment_list) and can be dismissed (commitment_dismiss) without being marked done. Red-first test and 14 mutation probes. Headless seeded-vault boot 2026-09-23: old build 4 Audit rows and proposed 1 -> 0; fixed build 0 rows and proposed 1 -> 1; a ticked row becomes done. Remaining evidence: the spoken D10 half (ask, dismiss, unrelated turn).",
+          "source": "mythos/test/bug-446-autonomy-runs-only-active-goals-with-budget.test.js; mythos/src/core/goals/execution-gate.js; mythos/src/core/effectors/goals.js"
         }
       },
       {
@@ -5983,8 +5985,8 @@
     "counts": {
       "verified": 89,
       "fixed": 182,
-      "open": 18,
-      "coded": 9,
+      "open": 17,
+      "coded": 10,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
@@ -6001,7 +6003,6 @@
       439,
       444,
       445,
-      446,
       447,
       448,
       449,

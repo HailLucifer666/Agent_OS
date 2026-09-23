@@ -96,7 +96,12 @@ const PROSE_BASELINE = {
     "c23975ac085b0403",
     "6724cb9544588cf0",
     "19bc0806640b90b2",
-    "1adc7b106a487c93",
+    // 2026-09-23, BUG-446 (D10): was "1adc7b106a487c93". A SWAP, not an addition —
+    // still 18 sites. Measured with a copy of adviceStrings: from line ~635 the lexer
+    // is out of step with this whole file, and read_status sits INSIDE one of its
+    // mis-lexed backtick spans (lines ~712-795), so removing openCommitments from
+    // read_status rehashes that span. No new advice was written.
+    "90e572638d572dc9",
     "e09870975d9f1611",
     "da227a0c1b53dbd5",
     "8e0298bb1ac1d826",

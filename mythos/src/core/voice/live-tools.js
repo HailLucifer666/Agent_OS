@@ -120,6 +120,7 @@ const DEFAULT_ALLOWLIST = [
   // just as much to a pair where one tool's description mandates the other:
   // naming an unreachable tool is not a remedy, it is a dead end with a hint.
   'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
+  'commitment_list','commitment_dismiss', // BUG-446 / D10: the only way to ask what MYTHOS promised
   'timer_add','timer_cancel',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
   // spotify_previous was missing while spotify_next was present — "go back" /

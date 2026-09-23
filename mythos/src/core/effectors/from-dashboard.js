@@ -30,9 +30,6 @@ const { visionThink } = require('./vision-call');
 const evidence = require('./evidence');
 // BUG-407: open_web(browser:true)'s hand-off, including the named-browser route.
 const externalRoute = require('./open-external-route');
-// BUG-113: surface open spoken commitments in read_status so "where are we
-// on X" is answerable from state instead of memory.
-const { listOpenCommitments } = require('./from-calendar');
 // C1: job_status is the pull-side counterpart of the announcer's push-side
 // fix — same defect (a review-failed or fallback-engine build reading as
 // "done"), arriving by voice query instead of by proactive speech.
@@ -88,7 +85,6 @@ function buildTools(ctx) {
   // rather than exercising the real one. Undefined in production — visionThink
   // defaults to the real registry.chainFor.
   const visionChainFor = ctx.visionChainFor;
-  const goals = ctx.goals; // BUG-113: raw GoalSystem, optional — commitment ledger read in read_status
   // A4: identity module, optional — read_status surfaces its current persona
   // levels (same accessor persona_status uses, effectors/from-persona.js) so
   // "what's my humor level set at" is answerable without a separate tool.
@@ -719,10 +715,10 @@ function buildTools(ctx) {
     try {
       const status = probes ? await probes.getStatus() : null;
       const jobs = buildRunner.listJobs().slice(-5);
-      // BUG-113: open commitments ("I'll check X") the operator can ask about
-      // later — best-effort, never blocks status on a ledger read failure.
-      let openCommitments = [];
-      try { openCommitments = listOpenCommitments(goals) || []; } catch (_) {}
+      // BUG-446 / D10 (2026-09-23): open commitments are NOT carried here any more.
+      // read_status answers "how are things", and every answer to that dragged in
+      // the unaccepted promises MYTHOS made itself. They are listed when asked for, by
+      // commitment_list (from-calendar.js), and can be dismissed there.
       // A4: report the persona store's actual current levels — never a
       // fabricated/default set. null when identity isn't available at all,
       // never a stand-in numbers object.
@@ -730,7 +726,7 @@ function buildTools(ctx) {
       if (identity && typeof identity.getPersonaLevels === 'function') {
         try { persona = identity.getPersonaLevels(); } catch (_) {}
       }
-      return ok({ status, recentJobs: jobs, openCommitments, persona });
+      return ok({ status, recentJobs: jobs, persona });
     } catch (err) {
       return fail(err.message);
     }

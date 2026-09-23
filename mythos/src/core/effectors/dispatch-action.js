@@ -41,6 +41,7 @@ function humanizeArgs(args) {
 // Wave 0) so effectors' own catch blocks can share it instead of re-deriving
 // the same fallback ad hoc.
 const { reasonText } = require('../util/reason-text');
+const executionGate = require('../goals/execution-gate');
 
 // REVIEW-of-a0c82fe (2026-08-24): hub.invoke now ENFORCES the caller signal
 // (GAP-ANALYSIS-2026-08-24 H1), so this dispatcher's default ACTION_TIMEOUT_MS
@@ -83,13 +84,41 @@ async function dispatchAction(decision, ctx) {
     }
   }
 
+  // 1.5 BUG-446: autonomous work runs only for an ACTIVE goal with budget left,
+  // checked here — where it executes — with one action reserved before invoke()
+  // is awaited. Why here and not in the leash or at the seven status writers:
+  // goals/execution-gate.js. Non-autonomous callers pass straight through.
+  const gate = executionGate.admit(decision, ctx, goals);
+  if (!gate.admitted) {
+    bus.emit('action.blocked', Object.assign({}, decision, { reason: gate.reason, goalId: goalId, detail: gate.detail }));
+    if (memory && memory.audit && typeof memory.audit.write === 'function') {
+      try {
+        memory.audit.write({ tool: decision.tool, tier: tier, decision: 'blocked', outcome: 'fail',
+          reason: gate.reason + (gate.detail && gate.detail.status ? ' (status ' + gate.detail.status + ')' : ''),
+          goalId: goalId, actor: ctx.channel || 'cortex', traceId: ctx.traceId || null });
+      } catch (_) { /* the refusal stands whether or not its record could be written */ }
+    }
+    return { ok: false, result: gate.message, notExecuted: true, reason: gate.reason };
+  }
+
   // 2. Dispatch
   // BUG-398 row 13: `channel` rides along so an effector can tell WHICH surface
   // is calling it. The audit line below has always recorded it (as `actor`);
   // the effector itself could not see it, which is how think_deeply came to tell
   // a voice turn that IT had just used a budget the background loop consumed.
-  const result = await effectors.invoke(decision.tool, decision.args,
-    { signal: signal, bus: bus, goalId: goalId, channel: ctx.channel || null, connectionId: ctx.connectionId || null, requestId: ctx.requestId ?? undefined });
+  let result;
+  try {
+    result = await effectors.invoke(decision.tool, decision.args,
+      { signal: signal, bus: bus, goalId: goalId, channel: ctx.channel || null, connectionId: ctx.connectionId || null, requestId: ctx.requestId ?? undefined });
+  } catch (err) {
+    // Work that started is charged once, and its reservation is released, so a
+    // throw can neither leak capacity nor run free.
+    if (gate.reserved && goalId && goals && typeof goals.debitBudget === 'function') {
+      try { goals.debitBudget(goalId, { tokens: spentTokens, actions: 1 }); } catch (_) {}
+    }
+    gate.release();
+    throw err;
+  }
 
   // REMEDIATION P2-12: the one per-turn correlation id already threaded
   // through by callers (the voice WS message's reqId, a confirm's confirmId,
@@ -117,10 +146,12 @@ async function dispatchAction(decision, ctx) {
     } catch (_) { /* persistence is best-effort */ }
   }
 
-  // 4. Budget debit
+  // 4. Budget debit — then settle the reservation, in that order, so there is no
+  // instant where the action is counted neither as spent nor as in flight.
   if (goalId && goals && typeof goals.debitBudget === 'function') {
     goals.debitBudget(goalId, { tokens: spentTokens, actions: 1 });
   }
+  gate.release();
 
 
   // 4.5 V2 (Phase 4): close the execution→learning loop.

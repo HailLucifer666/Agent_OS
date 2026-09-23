@@ -88,10 +88,23 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
         map.push({ goalId: goal.id, text: row.text, created: row.created });
         changed = true;
       } else {
+        // BUG-446 (2026-09-23): a checkbox records what the OPERATOR did, and an
+        // unchecked box is not a request. This used to set every mapped unchecked
+        // row 'active' unless it was paused — and writeBack() appends every
+        // user-service goal unchecked, including the 'proposed' commitments minted
+        // from MYTHOS's own sentences, so each boot activated them. Measured: 210
+        // proposed at one boot, 205 at the next, and 12-day-old "right now"
+        // promises ran real tools with nobody speaking. The rule now:
+        //   ticked                -> done, from any status (the operator did it);
+        //   unticked, was done    -> active (the operator reopened it);
+        //   unticked, otherwise   -> unchanged: a proposed goal stays proposed,
+        //                            paused stays paused, active stays active.
+        // A row the operator TYPES is still created active, above.
         var goal2 = goalSystem.get(goalId);
-        var wantStatus = row.done ? 'done' : 'active';
-        if (goal2 && goal2.status !== wantStatus && goal2.status !== 'paused') {
-          goalSystem.update(goalId, { status: wantStatus });
+        if (goal2 && row.done && goal2.status !== 'done') {
+          goalSystem.update(goalId, { status: 'done' });
+        } else if (goal2 && !row.done && goal2.status === 'done') {
+          goalSystem.update(goalId, { status: 'active', reason: 'Goals.md:reopened' });
         }
       }
     }

@@ -40,6 +40,10 @@ function buildHarness({ tool, invokeResult }) {
   const goals = {
     getActive: () => null, hasActive: () => false,
     arbitrate: () => ({ id: 'goal-1' }),
+    // BUG-446 (2026-09-23): the cortex's autonomous dispatch now checks the goal
+    // it runs for (goals/execution-gate.js). This fake describes the ACTIVE goal
+    // arbitrate() returns, the way the real goal system would.
+    get: (id) => ({ id, status: 'active', budget: { tokens: 20000, actions: 25 }, spent: { tokens: 0, actions: 0 } }),
     plan: async () => ({ tool, args: { route: 'goals' } }),
     debitBudget: () => {}
   };
