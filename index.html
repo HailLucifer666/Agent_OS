@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8291,
+      "value": 8306,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6024,14 +6024,15 @@
         "n": 457,
         "shape": "entry",
         "state": "open",
-        "title": "a late tool result reaches Gemini in the operator's slot, and the model says aloud \"user transcription failed, but I am still responding\" (filed 2026-09-24)",
+        "title": "a late tool result reaches Gemini in the operator's slot, and the model says aloud \"user transcription failed, but I am still responding\" (filed 2026-09-24; CODED 2026-09-24)",
         "detail": {
-          "cause": "Live has no system channel (BUG-117), so a late result is user-role text with no speech behind it. The model rationalises a user message that is not speech, and sometimes does so out loud."
+          "cause": "Live has no system channel (BUG-117), so a late result is user-role text with no speech behind it. The model rationalises a user message that is not speech, and sometimes does so out loud.",
+          "fix": "New `src/core/voice/held-reply.js`. A call still running at the ack deadline is held for the rest of `TOOL_RESULT_HOLD_MAX_MS` (12 s, the tested bound), then answered with its real result as a tool response. That is the path the model is built for: no user-role text, so no speech-less \"user\" message to rationalise, and no new turn cutting the old one. The chime (BUG-456) still covers the silent hold. The operator chose \"hold, with a safety net\" on 2026-09-24: -"
         },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-24 from the attended run] Spoken twice in one session; the phrase is not in the code. Remaining evidence: a count per session and a repair.",
-          "source": "mythos/src/core/voice/live-tool-adapter.js (sendSystemNotice late-outcome)"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-24] A call that outruns the 1.5 s ack deadline is no longer answered \"started\" with its result pushed in later as user-role text: its reply is HELD (up to 12 s) and sent as a real tool response. Measured live first on the configured model, 16 capped sessions on the operator-confirmed free tier: held 5 s and 12 s, 6 of 6 clean. Exploratory: new input during a hold makes Google cancel the call, and the model once invented the result. So, the operator's choice, a safety net: typed words release the hold first; a cancellation tells the model at once that the result is unknown (3 of 3 live: no invented value); a rotation-refused reply and anything past 12 s take today's path. Remaining evidence: an attended run, counting live.tool-held ends and the phrase.",
+          "source": "mythos/src/core/voice/held-reply.js; mythos/src/core/voice/live-tool-adapter.js; mythos/test/bug-457-held-reply.test.js"
         }
       },
       {

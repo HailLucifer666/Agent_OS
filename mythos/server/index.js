@@ -3690,13 +3690,13 @@ function createServer(deps) {
           // (which is what an unlabelled call does) silently exempts the turn from the
           // half-blind-transcript check, i.e. from the one monitor that notices when
           // the operator was not heard.
-          liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
+          if (liveAdapter) liveAdapter.releaseHeldReplies(); liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true }); // BUG-457: release held replies first, or the typed words cancel the call
           send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
         } else {
           const typedText = String(msg.text || '');
           liveForSpeech().then((live) => {
             if (live && live.isOpen()) {
-              live.sendText(typedText, { site: 'operator-typed', operator: true });
+              if (liveAdapter) liveAdapter.releaseHeldReplies(); live.sendText(typedText, { site: 'operator-typed', operator: true }); // BUG-457
               send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
             } else {
               queueTurn(function() { return handleUtterance(msg); });
@@ -3998,7 +3998,7 @@ function createServer(deps) {
       }
       else if (msg.type === 'live-close') { clientLiveRequested = false; if (liveSession) liveSession.close('client-request'); }
       else if (msg.type === 'live-text') {
-        if (liveSession) liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
+        if (liveSession) { if (liveAdapter) liveAdapter.releaseHeldReplies(); liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true }); } // BUG-457
       }
     });
 

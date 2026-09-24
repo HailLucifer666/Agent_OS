@@ -64,6 +64,7 @@ function harness(opts) {
     summarizeActionsForResult,
     getLiveSession: () => ({ isOpen: () => true, sendText: (t) => injected.push(t) }),
     toolAckDeadlineMs: o.deadlineMs === undefined ? 20 : o.deadlineMs,
+    toolResultHoldMaxMs: 0, // BUG-457 (2026-09-24): replies are now held up to 12 s; this pins the late path, now the fallback (past the hold, a cancellation, typed words). 0 selects it.
   });
   return { adapter, injected, anomalies, episodic, history };
 }

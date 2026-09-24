@@ -936,7 +936,7 @@ function createLiveSession(deps) {
     // have a tool handler wired says nothing about whether Gemini answered.
     if (msg.toolCall) { disarmTurnStall(); turnToolCallOpen = true; } // BUG-436: waiting on our toolResponse = a turn in flight
     if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls) && onToolCall) {
-      Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse, sendText, userTextSoFar: userText.trim(), typedTextSoFar: typedText.trim() })) // BUG-461: this turn's echo-accepted spoken words and typed words, both server-owned
+      Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse: ((g) => (r) => g === socketGeneration && sendToolResponse(r))(socketGeneration), sendText, userTextSoFar: userText.trim(), typedTextSoFar: typedText.trim() })) // BUG-461: this turn's echo-accepted spoken words and typed words, both server-owned. BUG-457: the reply door is pinned to THIS socket — a reply held across a rotation returns false instead of reaching a socket that never issued the id
         .catch((err) => logger.warn('live.toolcall-failed', { error: err.message }));
     }
     if (msg.toolCallCancellation && bus && typeof bus.emit === 'function') {

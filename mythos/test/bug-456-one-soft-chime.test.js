@@ -213,6 +213,7 @@ describe('BUG-456 — the server and the bridge are wired to it', () => {
       historyAppend: () => {}, reflection: null, summarizeActionsForResult: () => null,
       getLiveSession: () => ({ isOpen: () => true, sendText: () => true, sendToolResponse: () => true }),
       toolAckDeadlineMs: 10,
+      toolResultHoldMaxMs: 0, // BUG-457 (2026-09-24): replies are now held up to 12 s; this pins the late path, now the fallback (past the hold, a cancellation, typed words). 0 selects it.
       onToolWait: (e) => waits.push(e),
     });
     const sent = [];

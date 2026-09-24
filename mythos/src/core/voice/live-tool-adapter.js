@@ -58,6 +58,7 @@ const {
 const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger');
 const { isAssertionOnUnintelligibleInput } = require('./fragment-guard'); // BUG-299 / BUG-460
 const { createAuthorityGate } = require('./authority-gate'); // BUG-461 / BUG-464: ask before acting on words that did not ask
+const { createHeldReplies, TOOL_RESULT_HOLD_MAX_MS, cancelledNotice } = require('./held-reply'); // BUG-457: hold a slow reply instead of injecting it as user text
 // BUG-398 R5a: the five claim sentences moved to their own module when adding a
 // fifth pushed this file past the size ratchet's ceiling. Pure text, no closure
 // use — the comments explaining each one moved with it, verbatim, because they
@@ -83,6 +84,7 @@ function createLiveToolAdapter(deps) {
     goals,                          // BUG-113: raw GoalSystem, optional — commitment ledger only
     toolAckDeadlineMs,              // BUG-128: test seam only — see TOOL_ACK_DEADLINE_MS
     onToolWait,                     // BUG-456: ({ callId, pending }) — the HUD's one soft chime (ui/public/js/voice/wait-chime.js)
+    toolResultHoldMaxMs,            // BUG-457: test seam only — see held-reply.js TOOL_RESULT_HOLD_MAX_MS; 0 selects today's path
   } = deps;
   // BUG-456: a call answered "started" begins a silent wait; its late result ends it. Advisory only — never breaks dispatch.
   const toolWait = (callId, pending) => { if (typeof onToolWait === 'function') { try { onToolWait({ callId: String(callId), pending }); } catch (_) { /* advisory */ } } };
@@ -179,14 +181,17 @@ function createLiveToolAdapter(deps) {
   // the ids it asked about, and re-issued the whole batch. BUG-120's dedup is
   // keyed on call.id by design, so fresh ids sail straight past it.
   //
-  // The general fix is to stop letting ANY call outlive its turn unanswered:
-  // whatever has not resolved by this deadline gets the same status:'started'
-  // reply SLOW_TOOLS gets, and its real outcome arrives later on the same
-  // [SYSTEM] channel. SLOW_TOOLS stays because it acks instantly — the model is
+  // The general fix is to stop letting ANY call outlive its turn unanswered.
+  // Since BUG-457 a call unresolved at this deadline is held for its real reply
+  // (the model waits for it); past the hold it gets SLOW_TOOLS' status:'started'
+  // and a late [SYSTEM] notice, as before. SLOW_TOOLS stays because it acks instantly — the model is
   // told "say what you are doing" without the operator hearing 1.5s of silence
   // first. This is the net underneath it, not a replacement for it.
   const TOOL_ACK_DEADLINE_MS = Number.isFinite(toolAckDeadlineMs) ? toolAckDeadlineMs : 1500;
   const DEADLINE_EXCEEDED = Symbol('tool-ack-deadline-exceeded');
+  // BUG-457: past the deadline the reply is HELD for the rest of this budget, then today's path. A cancellation (the operator spoke) ends the hold early — see held-reply.js.
+  const HOLD_BUDGET_MS = Math.max(0, (Number.isFinite(toolResultHoldMaxMs) ? toolResultHoldMaxMs : TOOL_RESULT_HOLD_MAX_MS) - TOOL_ACK_DEADLINE_MS);
+  const heldReplies = createHeldReplies(); if (bus && typeof bus.subscribe === 'function') bus.subscribe('voice.live.toolcancel', (e) => heldReplies.cancel(e && e.payload && e.payload.ids));
 
   // Settle to {outcome} | {error} | DEADLINE_EXCEEDED. The timer is cleared on
   // the fast path so a resolved dispatch never holds the event loop open for
@@ -493,7 +498,7 @@ function createLiveToolAdapter(deps) {
     // hash next to the ids makes "same batch, different ids, 28 seconds apart"
     // readable straight from the log instead of reconstructable from the audit.
     logBatch(calls);
-    const myGeneration = turnGeneration;
+    const myGeneration = turnGeneration; const heldAnswered = []; // BUG-457: held calls answered in this batch, re-routed if the session refuses the reply
     function commitAction(entry) {
       recentActionLedger.record(entry); // BUG-357, before the check below: late arrivals are exactly the cross-turn facts kept
       // Late arrival after this turn already completed — do not misattribute
@@ -717,24 +722,30 @@ function createLiveToolAdapter(deps) {
       }
 
       try {
-        // BUG-128: await, but not without a bound. Anything still running at
-        // TOOL_ACK_DEADLINE_MS is answered now and reconciled later, exactly
-        // like a SLOW_TOOLS call — the model never reaches turnComplete with an
-        // unanswered call id, which is the only reason it re-issues a batch.
+        // BUG-128: await, but not without a bound. Since BUG-457 (2026-09-24) a call
+        // still running at TOOL_ACK_DEADLINE_MS is HELD (held-reply.js) and answered
+        // with its real result; only past the hold, on a cancellation or on typed
+        // words is it answered "started" and reconciled later, like a SLOW_TOOLS call.
         const pending = dispatchAction(decision, {
           tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent,
         });
-        const settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
+        let settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
         if (settled === DEADLINE_EXCEEDED) {
           logger.info('live.tool-ack-deadline', { tool: call.name, callId: call.id, deadlineMs: TOOL_ACK_DEADLINE_MS });
-          commitAction(pendingAck(call.name, call.id));
-          responses.push({ id: call.id, name: call.name, response: {
-            status: 'started', message: STARTED_MESSAGE,
-          }}); toolWait(call.id, true);
-          pending
-            .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
-            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
-          continue;
+          toolWait(call.id, true); // BUG-456: the chime covers the silent hold
+          const started = { id: call.id, name: call.name, response: { status: 'started', message: STARTED_MESSAGE } };
+          const kept = HOLD_BUDGET_MS > 0 ? await heldReplies.hold(call.id, pending, HOLD_BUDGET_MS, { onRelease: () => { responses.push(started); sendToolResponse(responses.splice(0)); } }) : { kind: 'hold-max', heldMs: 0 };
+          if (HOLD_BUDGET_MS > 0) logger.info('live.tool-held', { tool: call.name, callId: call.id, heldMs: kept.heldMs, end: kept.kind }); // BUG-457
+          if (kept.kind === 'outcome' || kept.kind === 'error') { settled = kept; heldAnswered.push({ name: call.name, id: call.id, kept, startedAt }); toolWait(call.id, false); } // a real toolResponse follows below, not an injection
+          else {
+            commitAction(pendingAck(call.name, call.id));
+            if (kept.kind === 'hold-max') responses.push(started); // 'released' already sent it; a cancelled id needs no reply
+            if (kept.kind === 'cancelled') sendSystemNotice(cancelledNotice(call.name), '', { site: 'held-call-cancelled', tool: call.name }); // the net: live, the model once invented a cancelled call's result
+            pending
+              .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
+              .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
+            continue;
+          }
         }
         if (settled.error) throw settled.error;
         const outcome = settled.outcome;
@@ -822,7 +833,7 @@ function createLiveToolAdapter(deps) {
       }
     }
     for (const row of responses) if (row.name === 'web_search' && recentActionLedger.searchStormDetected()) row.response.message = (row.response.message ? row.response.message + ' ' : '') + 'four searches in two minutes and nothing read — web_fetch one result or tell the operator you cannot find it';
-    if (responses.length) sendToolResponse(responses);
+    if (responses.length && sendToolResponse(responses) === false) for (const a of heldAnswered) reportLateOutcome(a.name, a.kept.kind === 'error' ? { ok: false, result: sanitize(a.kept.error) } : a.kept.outcome, a.id, a.startedAt); // BUG-457: a rotation refused the held reply (pinned door); deliver it today's way, never lose it
   }
 
   // WAVE 3 — deliver a slow tool's real outcome after its turn has ended.
@@ -1427,6 +1438,7 @@ function createLiveToolAdapter(deps) {
 
   return {
     handleLiveToolCalls,
+    releaseHeldReplies: () => heldReplies.releaseAll(), // BUG-457: server calls this before any typed text goes out
     resolveLiveConfirm,
     onLiveTurnComplete,
     // test-only introspection — never used by production wiring
