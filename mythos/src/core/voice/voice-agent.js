@@ -4,6 +4,7 @@
 const { tierOf } = require('../leash/tiers');
 const { truncateAtSentenceBoundary } = require('../effectors/voice');
 const { detectUnbackedClaims, replaceUnbackedClaims } = require('./claim-check');
+const { dayKey } = require('../util/day-key');
 
 // voice-agent.js — the voice tool-calling brain. CA of NOVA
 // app/lib/voice/voice-agent.js: persona + tool catalog + history ->
@@ -317,7 +318,11 @@ function buildSystemContext(capabilityDigest) {
 
 function buildPrompt({ text, history, toolResults, corrective, originalSay, memoryContext, catalog, capabilityDigest }) {
   const now = new Date();
-  const sysDate = now.toISOString().slice(0, 10);
+  // LOCAL calendar date of the same `now`, to match sysTime's local wall clock.
+  // toISOString() is UTC: on a UTC+5:30 machine it printed yesterday's date
+  // beside today's time from 00:00 to 05:30 (BUG-454). Pass `now` explicitly —
+  // a second clock read (or Intl .format() with no argument) can disagree.
+  const sysDate = dayKey(now);
   const sysTime = now.toLocaleTimeString('en-US', { hour12: false });
   const parts = [
     RULES,
