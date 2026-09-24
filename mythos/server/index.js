@@ -2856,6 +2856,7 @@ function createServer(deps) {
           // Fix-plan 2.3: the schema key the .env.example doc points at —
           // without this the documented dial silently did nothing.
           toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS, config,
+          onToolWait: ({ callId, pending }) => send({ type: 'live-tool-wait', callId, pending: pending === true }), // BUG-456: ids and a boolean only; the HUD plays one soft chime
         });
         liveAdaptersByConnection.set(connectionId, liveAdapter);
       }
@@ -3740,6 +3741,7 @@ function createServer(deps) {
       // diagnosis a server-side record of every suspend/clear instead of only
       // inferring it after the fact from a blind turn.
       else if (msg.type === 'voice-unheard') { const entry = unheardTracker.unheard(msg); logger.info('live.unheard-report', { remembered: !!entry, chars: entry ? entry.text.length : 0, turnId: entry ? entry.turnId : null }); } // BUG-447: positions only; the text comes from this server's own transcript
+      else if (msg.type === 'voice-wait-chime') { logger.info('voice.wait-chime', { waitedMs: Number.isFinite(msg.waitedMs) ? Math.round(msg.waitedMs) : null }); } // BUG-456: when the chime played (first SOUND, not first answer); one number, nothing else from the message
       else if (msg.type === 'voice-gate-recording') { gateRecordingSink.handle(msg).catch(() => {}); } // BUG-406: the mic-gate recorder's windows; the sink itself is off unless VOICE_GATE_RECORDER=true
       else if (msg.type === 'voice-capture-suspend') {
         // BUG-271: the own-voice-release transition also carries the ring/gate

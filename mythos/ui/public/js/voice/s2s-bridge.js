@@ -38,6 +38,7 @@
 import { sendMessage, onBroadcast, offBroadcast } from '../ws.js';
 import { createPcmPlayer } from './pcm-player.js';
 import { createOwnVoiceClock } from './own-voice-clock.js';
+import { attachWaitChime } from './wait-chime.js';
 import { openMicWithFallback } from './mic-device.js';
 import { createBargeInPolicy } from './barge-in-policy.js';
 import { createBargeInBackstop, rmsFromPcm16 } from './barge-in-backstop.js';
@@ -67,7 +68,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   let stream = null;
   let audioCtx = null;
   let captureNode = null;
-  let player = null;
+  let player = null; let waitChime = null; // BUG-456: attached in start(), detached in stop()
   let screenCapture = null;   // Slice 3 screen share, null unless opted in
 
   // Client-side barge-in backstop (V2 spine §1002-1005). The server's
@@ -1036,7 +1037,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     onBroadcast('live-state', onLiveStateMsg);
     onBroadcast('live-transcript', onTranscriptMsg);
     onBroadcast('live-echo-check', onEchoCheckMsg);
-    onBroadcast('live-watchdog-clear', onWatchdogClearMsg);
+    onBroadcast('live-watchdog-clear', onWatchdogClearMsg); if (!waitChime) waitChime = attachWaitChime({ onBroadcast, offBroadcast, getPlayer: () => player, report: (waitedMs) => send({ type: 'voice-wait-chime', waitedMs }) }); // BUG-456: one soft chime in a silent tool wait
 
     sendMessage({ type: 'live-open' });
     armOpenAckTimer();   // BUG-147: silence from here on becomes a visible refusal
@@ -1285,7 +1286,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (onTranscriptMsg) { offBroadcast('live-transcript', onTranscriptMsg); onTranscriptMsg = null; }
     if (onEchoCheckMsg) { offBroadcast('live-echo-check', onEchoCheckMsg); onEchoCheckMsg = null; }
     if (onWatchdogClearMsg) { offBroadcast('live-watchdog-clear', onWatchdogClearMsg); onWatchdogClearMsg = null; }
-    if (onTurnCompleteMsg) { offBroadcast('live-turn-complete', onTurnCompleteMsg); onTurnCompleteMsg = null; }
+    if (onTurnCompleteMsg) { offBroadcast('live-turn-complete', onTurnCompleteMsg); onTurnCompleteMsg = null; } if (waitChime) { waitChime.detach(); waitChime = null; }
     // A suppression must not survive the session that armed it — nor may a cut.
     endAudioOutSuppression('session-stopped');
     unheard.endTurn();

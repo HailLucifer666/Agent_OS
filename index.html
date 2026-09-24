@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8275,
+      "value": 8291,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6010,14 +6010,14 @@
         "n": 456,
         "shape": "entry",
         "state": "open",
-        "title": "every tool slower than 1.5 s leaves a silent gap, and its late result cuts the turn it lands in (filed 2026-09-24)",
+        "title": "every tool slower than 1.5 s leaves a silent gap, and its late result cuts the turn it lands in (filed 2026-09-24; CODED 2026-09-24, silent-gap half)",
         "detail": {
           "cause": "The ack tells the model to wait, and the model says nothing while it waits — not even \"let me check\". The injected result is new user-role input (Live has no system channel, BUG-117), which Gemini treats as a barge-in on whatever it had started."
         },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-24 from the attended run] Seven ack-then-silent turns and six injections each followed by an interruption within 0.1 s. Remaining evidence: time to first audio before and after a repair.",
-          "source": "mythos/src/core/voice/live-tool-adapter.js (TOOL_ACK_DEADLINE_MS, reportLateOutcome)"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-24, silent-gap half] One soft chime, the operator's choice: a call answered \"started\" (slow-tool or ack-deadline path) begins a wait; after 600 ms with no assistant audio the HUD plays one short soft tone through the reply's own player, so the own-voice gate holds the mic for it; never twice, never over speech, never after the result or answer audio. Measured first: 9 of 10 deadline acks on 09-24 produced no audio, and the result landed 0.25 to 4.7 s after the ack. The \"cuts the turn\" half is BUG-457's: 8 of 9 of those cuts hit a turn with no audio yet. Remaining evidence: an attended run, where voice.wait-chime lines give time to first sound apart from time to first answer.",
+          "source": "mythos/ui/public/js/voice/wait-chime.js; mythos/src/core/voice/live-tool-adapter.js; mythos/test/bug-456-one-soft-chime.test.js"
         }
       },
       {

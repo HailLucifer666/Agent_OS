@@ -82,7 +82,10 @@ function createLiveToolAdapter(deps) {
     sanitizeErrorForClient,
     goals,                          // BUG-113: raw GoalSystem, optional — commitment ledger only
     toolAckDeadlineMs,              // BUG-128: test seam only — see TOOL_ACK_DEADLINE_MS
+    onToolWait,                     // BUG-456: ({ callId, pending }) — the HUD's one soft chime (ui/public/js/voice/wait-chime.js)
   } = deps;
+  // BUG-456: a call answered "started" begins a silent wait; its late result ends it. Advisory only — never breaks dispatch.
+  const toolWait = (callId, pending) => { if (typeof onToolWait === 'function') { try { onToolWait({ callId: String(callId), pending }); } catch (_) { /* advisory */ } } };
 
   if (!leash || typeof leash.check !== 'function') throw new Error('createLiveToolAdapter requires leash');
   if (typeof dispatchAction !== 'function') throw new Error('createLiveToolAdapter requires dispatchAction(decision, ctx)');
@@ -705,7 +708,7 @@ function createLiveToolAdapter(deps) {
         commitAction(pendingAck(call.name, call.id));
         responses.push({ id: call.id, name: call.name, response: {
           status: 'started', message: STARTED_MESSAGE,
-        }});
+        }}); toolWait(call.id, true);
         // Deliberately not awaited: the whole point is that the turn does not wait.
         dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent })
           .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
@@ -727,7 +730,7 @@ function createLiveToolAdapter(deps) {
           commitAction(pendingAck(call.name, call.id));
           responses.push({ id: call.id, name: call.name, response: {
             status: 'started', message: STARTED_MESSAGE,
-          }});
+          }}); toolWait(call.id, true);
           pending
             .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
             .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
@@ -827,6 +830,7 @@ function createLiveToolAdapter(deps) {
   // arrival is EXPECTED, so it must not raise the late-for-turn anomaly that
   // exists to catch accidental misattribution.
   function reportLateOutcome(toolName, outcome, traceId, startedAt) {
+    toolWait(traceId, false); // BUG-456: the wait is over whatever the outcome — the chime must not play after the result
     const ev = evaluateOutcome(outcome);
     let verdict;
     // BUG-116: the closing instruction is what the model is allowed to SAY about
