@@ -465,9 +465,9 @@
       "tools": [
         "think_deeply"
       ],
-      "ok": 78,
-      "f": 27,
-      "note": "Deep reasoning. Both 'failures' are the new rate-limit refusing correctly after it was reached ten times in one conversation.",
+      "ok": 80,
+      "f": 28,
+      "note": "LIVE 2026-09-25: fallback worked: NIM on cooldown, then Groq on the third attempt. It was overused: called for \"you said good evening\", and the operator's \"don't use think_deeply\" preference is outside the Live facts tail (BUG-472). Deep reasoning. Both 'failures' are the new rate-limit refusing correctly after it was reached ten times in one conversation.",
       "ev": "\"Deep reasoning was used 8s ago and is rate-limited for another 53s. Nothing is wrong. Answer this yourself now.\"  (BUG-287, shipped 2026-08-20 23:27, observed working in the final session)"
     },
     {
@@ -499,7 +499,7 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Detects anomalies and applies playbooks. 2026-09-23: it healed budget-exhausted in 9 ms so over-budget goals kept acting (BUG-446), spoke heal lines into the live conversation in log vocabulary (BUG-447), and recorded a wrong lesson from a symptom (BUG-451).",
+      "note": "LIVE 2026-09-25: internal diagnostics stayed unspoken during Live (3 of 3). The needs-the-operator Gmail line was the new plain sentence, with the steps in the Anomalies list. Detects anomalies and applies playbooks. 2026-09-23: it healed budget-exhausted in 9 ms so over-budget goals kept acting (BUG-446), spoke heal lines into the live conversation in log vocabulary (BUG-447), and recorded a wrong lesson from a symptom (BUG-451).",
       "ev": "MEASURED 2026-09-23 (attended run): budget-exhausted goal-21999a3d at 13:38:31.747, healed 13:38:31.756, the goal acted again at 13:38:32; six heal announcements injected into Live; recurring-failure lesson \"browser_click on specific element refs fails repeatedly\" written at 14:11:23. Earlier (2026-08-27, BUG-379): no playbook ever looped; the common outcome was no-match.",
       "ok": 0,
       "f": 0
@@ -507,10 +507,10 @@
     {
       "c": "cog",
       "n": "honesty guard",
-      "s": "ok",
+      "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Catches its own false claims and retracts them out loud. The retraction works; the false first claim is the defect.",
+      "note": "LIVE 2026-09-25: 3 retractions, 2 of them of TRUE actions: a browser_tabs close that succeeded (window-control category) and a delivered-but-unverified click_at that MYTHOS had already spoken hedged. Each retraction also started an unprompted line (BUG-448). Catches its own false claims and retracts them out loud. The retraction works; the false first claim is the defect.",
       "ev": "\"My apologies. I said I sent the Gmail link, but it did not actually happen.\"\n\"I did NOT log that event. I mistakenly claimed that action had happened.\"",
       "ok": 0,
       "f": 0
@@ -529,13 +529,13 @@
     {
       "c": "mem",
       "n": "remember",
-      "s": "ok",
+      "s": "warn",
       "tools": [
         "remember"
       ],
       "ok": 61,
       "f": 0,
-      "note": "Durable fact writes. Never failed once across 29 vault days.",
+      "note": "LIVE 2026-09-25: the consent lock held an unasked save (not-requested). But MYTHOS never read the text back, so a standing instruction the operator wanted kept was cancelled, after it had said \"I'll keep that in mind\" (BUG-464 residual). Durable fact writes. Never failed once across 29 vault days.",
       "ev": "48 ok / 0 fail"
     },
     {
@@ -624,9 +624,9 @@
         "list_incidents",
         "incident_status"
       ],
-      "note": "Logging is perfect. The backlog it produces is not being drained.",
+      "note": "LIVE 2026-09-25: log_incident recorded the operator's report of the false tab-close retraction on the first call. Logging is perfect. The backlog it produces is not being drained.",
       "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN",
-      "ok": 224,
+      "ok": 226,
       "f": 0
     },
     {
@@ -649,9 +649,9 @@
       "tools": [
         "screen_look"
       ],
-      "ok": 78,
+      "ok": 84,
       "f": 14,
-      "note": "Vision over the screen. GREEN WITH CAVEAT: every recorded failure is historical and 26 consecutive calls have succeeded. The caveat is the free-tier daily cap.",
+      "note": "LIVE 2026-09-25: found the requested video every time, in 3.5 to 4.6 s. All 6 results still arrived as injected text (it is on SLOW_TOOLS) and cut MYTHOS mid-sentence (BUG-457 residual). Vision over the screen. GREEN WITH CAVEAT: every recorded failure is historical and 26 consecutive calls have succeeded. The caveat is the free-tier daily cap.",
       "ev": "RE-MEASURED 2026-08-27 (Track D-3) against the live vault: 52 ok / 11 fail, not 49/11 -- and ALL ELEVEN FAILURES FALL BETWEEN 2026-08-06 AND 2026-08-18. Newest failure 2026-08-18T11:38:48; newest success 2026-08-24T20:12:01. Since 2026-08-19 there have been 26 look calls (screen_look + camera_look) across five separate days with 26 ok and 0 fail. Cause of the historical failures and why they stopped: B1 (2026-08-14) fixed two things -- an attempt hitting its own per-attempt timeout now feeds the cooldown decision (it previously matched none of the 429/5xx/network arms), and per-(provider,model) breakers escalate with x2 backoff so an all-day outage is skipped for minutes rather than re-paid every few minutes. The vision lane head is now google/gemini-3.5-flash-lite with NIM demoted to position 3; the 8s-per-look precedent the work order cites was NIM at position 0. Caveat, per the no-spend decision: google free tier caps at 10/day, so a heavy day still falls through to mistral."
     },
     {
@@ -673,7 +673,7 @@
       "tools": [
         "capture_screenshot"
       ],
-      "ok": 26,
+      "ok": 29,
       "f": 0,
       "note": "Never failed.",
       "ev": "18 ok / 0 fail"
@@ -686,8 +686,8 @@
         "see_and_click"
       ],
       "ok": 4,
-      "f": 17,
-      "note": "Find a named thing on screen and click it. Cannot locate elements; the text it reads back is fragmented.",
+      "f": 18,
+      "note": "LIVE 2026-09-25: could not find \"Tyga, Ariana Grande – Zoom Zoom\" seconds after screen_look read it. An en dash in the vision answer is the likely text mismatch (BUG-471). Find a named thing on screen and click it. Cannot locate elements; the text it reads back is fragmented.",
       "ev": "1 ok / 5 fail over the last three days.\n\"I cannot see 'Video call' on screen. What I can read: MYTHOS | File Edit View | Window | WhatsApp | VOICE | unavailable | 21:12 ...\""
     },
     {
@@ -718,7 +718,7 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "The primary spoken path, and it works — but 2026-09-23: 15 of 51 turns were system-initiated and 15 interrupted (BUG-447), it spoke raw tool-call syntax once (BUG-449), and one 18 s silence came from the model with the server healthy (BUG-436).",
+      "note": "LIVE 2026-09-25: 37 turns, 12 of them system-initiated, mostly started by injected notices. Three 10 s no-reply stalls and a 9.6 s gap inside one reply were model-side, with a healthy loop. goAway was held until the reply ended, and the rotation was clean. The primary spoken path, and it works — but 2026-09-23: 15 of 51 turns were system-initiated and 15 interrupted (BUG-447), it spoke raw tool-call syntax once (BUG-449), and one 18 s silence came from the model with the server healthy (BUG-436).",
       "ev": "MEASURED 2026-09-23 (attended run, 13:53-14:13): 51 voice turns across three Live generations; injections late-outcome 8, proactive-speak 6, corrections 3; one goAway rotated cleanly; live.turn-stalled once with no loop stall. Earlier (08-20): a two-hour session, 367 voice-live actions, 502 turns.",
       "ok": 0,
       "f": 0
@@ -729,7 +729,7 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Four engines in a failover chain, retried from the top on every sentence. 2026-09-23: Gemini 429 on every call and Kokoro timing out, so proactive audio lagged its text by up to 51 s (BUG-450). Kokoro's in-process worker is the prime suspect for the server crash (BUG-422).",
+      "note": "LIVE 2026-09-25: gemini-tts returned 429 (the free daily quota was used up) and failed over to kokoro. The boot greeting spoke 34 s after it was scheduled. Four engines in a failover chain, retried from the top on every sentence. 2026-09-23: Gemini 429 on every call and Kokoro timing out, so proactive audio lagged its text by up to 51 s (BUG-450). Kokoro's in-process worker is the prime suspect for the server crash (BUG-422).",
       "ev": "MEASURED 2026-09-23 (attended run): tts.provider-failed 10x (gemini-tts 429 quota; kokoro synthesize timed out), speech.lock-ceiling 8x, the boot greeting's text at 13:42:15 and its audio at 13:43:06. edge-tts carried every spoken line. Earlier (2026-08-27, BUG-380): kokoro had no weights and cost up to 15 s once per process.",
       "ok": 0,
       "f": 0
@@ -751,7 +751,7 @@
       "s": "warn",
       "tools": [],
       "kind": "subsystem",
-      "note": "Replies in Bengali and Hindi were good. Transcription of the operator was not.",
+      "note": "LIVE 2026-09-25: English was transcribed as Spanish twice (\"¿Puedes echar un vistazo a mi pantalla ahora?\", \"¿Hola, hay usted?\"). The model understood the audio and answered in English, but the authority gate reads the transcript (BUG-447). Replies in Bengali and Hindi were good. Transcription of the operator was not.",
       "ev": "Bengali speech came back as Korean and Portuguese fragments: \"코다\", \"É. Que tu cobrou, não, Jadavpur\"",
       "ok": 0,
       "f": 0
@@ -759,10 +759,10 @@
     {
       "c": "voice",
       "n": "barge-in",
-      "s": "warn",
+      "s": "fail",
       "tools": [],
       "kind": "subsystem",
-      "note": "Interruption handling shipped and was accepted by ear. Stays warn: it genuinely needs a live acoustic session. But the number the whole path was tuned against was measuring the operator, not the room.",
+      "note": "LIVE 2026-09-25: talking over MYTHOS did not stop it. The backstop never attempted on any of 41 holds (bargeVetoed=0), although the operator's voice reached 0.157 against a 0.035 floor; Gemini heard the operator only when playback ended (BUG-469). Interruption handling shipped and was accepted by ear. Stays warn: it genuinely needs a live acoustic session. But the number the whole path was tuned against was measuring the operator, not the room.",
       "ev": "MEASURED 2026-08-28 (BUG-388, Track E) from 731 voice.capture-suspend records across 20 sessions in mythos-server.log, and it corrects a premise this node and the plan were both carrying. bleedPeak is documented as \"loudest level seen while MYTHOS was provably speaking\" and is learned inside the 500ms protected window, on the written reasoning that \"the assistant's own onset is by construction the loudest thing present\". That is false: MYTHOS reaches the mic through the speakers and is then attenuated 15-20dB by AEC (probe-aec-routes.js measures the Gemini Live residual at 0.0069-0.0141) while the operator arrives direct, so whenever both are present the OPERATOR is the louder one. Of 31 upward moves of bleedPeak above 0.05, TWENTY-TWO landed on a value exactly equal to that hold's own peakRms -- the operator. Every session opens at 0.0043-0.0347 (the real room, agreeing with the probe) and then ratchets to 0.05-0.33 and never decays: 2026-08-24 read 0.1606 for 110 consecutive holds off one frame. The uncontaminated control is 2026-08-26, which ended at 0.0313 while the operator peaked at 0.1402. WHY IT MATTERED: this was diagnosed on 2026-08-19 and deferred because \"the learned floor is dormant, so consequence today is nil\" -- but a consumer existed. verify-voice-session.js called bleedPeak \"the ungagged oracle\" and concluded \"Echo cancellation is not removing it\", a hardware verdict drawn from the operator's own voice, and that conclusion is why an acoustic rework sits in the plan as \"the only fix that removes the trade\". FIXED: the protected window now decides once, at the transition out of IDLE, whether it may attribute anything to MYTHOS -- compared against the STATIC floor, never the learned one, so a poisoned peak cannot raise the bar for detecting the next contamination. The verifier reports the number and refuses the inference. NOT CLOSED: this changes no runtime behaviour (the learned floor is dormant either way) and closes no Track E node -- what it removes is a false reading that was steering the live session's agenda. An operator who starts speaking INSIDE the 500ms window is still learned from; that needs a per-frame source signal the client does not have. 10 assertions, 10 mutations all caught.",
       "ok": 0,
       "f": 0
@@ -770,13 +770,13 @@
     {
       "c": "voice",
       "n": "resume-after-barge-in",
-      "s": "fail",
+      "s": "warn",
       "tools": [
         "resume_interrupted_answer"
       ],
-      "note": "After a barge-in and \"go ahead\", returns the part of the answer the room did not hear, once. Read-only.",
+      "note": "LIVE 2026-09-25: the 09-24 misfire is fixed (f7620761). One live call at 02:15:32 returned the unheard tail of the answer the room heard last, not an older one. Whether the model reaches for it on \"go on\" is still thin evidence. After a barge-in and \"go ahead\", returns the part of the answer the room did not hear, once. Read-only.",
       "ev": "LIVE 2026-09-24: it misfired. Called on \"hold on\" (transcribed as French), it returned the unheard end of an OLDER answer, because the interrupted answer produced no report and nothing discarded the older one; MYTHOS then said \"Notepad should still be open\". When Gemini itself cuts a turn, the model resumed correctly without the tool. Repair direction: a remainder belongs to the latest answer or is discarded, and the tool serves only HUD-side cuts (BUG-447).",
-      "ok": 1,
+      "ok": 2,
       "f": 0
     },
     {
@@ -786,7 +786,7 @@
       "tools": [
         "list_windows"
       ],
-      "ok": 132,
+      "ok": 133,
       "f": 1,
       "note": "Window enumeration. The recovery step every other desktop tool points at.",
       "ev": "88 ok / 1 fail"
@@ -810,7 +810,7 @@
       "tools": [
         "focus_window"
       ],
-      "ok": 42,
+      "ok": 43,
       "f": 8,
       "note": "DISPOSITION CLOSED 2026-08-28, and it stays warn on purpose: the escalation ladder is exhausted, Windows refuses deliberately, and no fourth rung may be added. Every failure now names a recovery.",
       "ev": "DISPOSITION 2026-08-28 (Track C-2, BUG-385). THE PREVIOUS NOTE HERE WAS WRONG ABOUT ITS OWN EVIDENCE. It read \"Five of six failures are stale PIDs it created itself. One is a genuine OS refusal.\" Re-derived from the union of both vault roots, the six failures are THREE classes, not two: 3 stale pid (\"Cannot focus PID 18832: ... That pid no longer exists, so nothing was focused. Call list_windows again\"), 2 no-main-window (\"Process 4420 has no main window.\"), 1 foreground-lock (\"...blocked by the OS foreground-lock; tried thread-attach, lock-timeout override and minimize/restore\"). Two corrections: the count is 3/2/1, and \"stale PIDs it created itself\" is false for at least one — the model asked to focus PID 1, which focus_window never handed out. THE DISPOSITION: the ladder (thread-attach, then a foreground-lock-timeout override that is restored in a finally so it never leaks a machine-wide setting, then minimize/restore) is exhausted. Root CLAUDE.md records that the question of whether the denial reproduces in real voice-driven use was CLOSED on 2026-08-17 and the answer is yes; the alternatives are unreliable or user-hostile. A test now asserts the ladder has EXACTLY three rungs, that the refusal names all three, and that the saved timeout is restored inside a finally. ONE REAL GAP FIXED: of the three failure classes, no-main-window was the only one that told the caller nothing to do next, so the model retries the same pid. It now names list_windows, for the same reason the stale-pid failure does — list_windows enumerates WINDOWED processes, so a pid missing from it settles the question. STAYS WARN because it genuinely fails sometimes, for a reason nobody can fix; the failures are honest, not absent."
@@ -851,9 +851,9 @@
         "drag",
         "scroll_at"
       ],
-      "ok": 20,
+      "ok": 23,
       "f": 9,
-      "note": "OPEN after 2026-08-27 triage. Needs a MEASURED desktop run against a fixed target script, not a code change. 10 calls is too small to mean anything.",
+      "note": "LIVE 2026-09-25: click_at was delivered three times and honestly reported unverified; it landed on title text, not the video. Each carried a descriptive expect (\"Video starts playing\") that can never verify (BUG-471). OPEN after 2026-08-27 triage. Needs a MEASURED desktop run against a fixed target script, not a code change. 10 calls is too small to mean anything.",
       "ev": "TRIAGED 2026-08-27 (Track D-6), NOT FIXED, and the work order says why: \"needs a MEASURED run against a fixed target script, not a code change. The ladder went 2 rungs to 5 on 08-20 and 10 calls is too small to mean anything.\" Measured: 5 ok / 5 fail across 4 distinct failure reasons, newest failure 2026-08-01 — nearly a month old, and 10 calls total. A 50% rate over 10 samples has a confidence interval wide enough to contain almost anything, so both \"it is broken\" and \"it is fine\" are unsupported. Any code change here would be tuning against noise. Needs the operator at a desktop with a fixed target script; the harness in scripts/verify-dark-nodes.js deliberately does not attempt it, because clicking real windows is not something a test run should do unattended."
     },
     {
@@ -947,7 +947,7 @@
       "note": "create_folder, move_file, copy_file, rename_file, delete_file, read_file, list_folder, open_folder. EXERCISED 2026-08-27: 7 of 8 verified against the real filesystem.",
       "ev": "MEASURED 2026-08-27 (BUG-382 / Track D-5) by scripts/verify-dark-nodes.js --group=fileops, in a real temp sandbox, with the FILESYSTEM as the oracle rather than each tool's own ok flag: create_folder (directory exists on disk), copy_file (copy present with identical bytes), rename_file (old name gone, new name present), move_file (file at destination), read_file (returned the real bytes), list_folder (listed the sandbox), delete_file (file removed from disk) — 7 pass, 0 fail. open_folder is a DISPOSITION: it needs a desktop shell, and running it would pop a real Explorer window on the operator's screen rather than measure anything. This node was dark because nobody had ever called these tools, not because they were broken.",
       "ok": 9,
-      "f": 5
+      "f": 6
     },
     {
       "c": "web",
@@ -1010,9 +1010,9 @@
         "browser_launch_debug",
         "browser_switch"
       ],
-      "ok": 304,
-      "f": 45,
-      "note": "Golden path BROKEN 2026-09-23 (BUG-445): only the FIRST result on a page can be selected. Launch, navigate and \"play the first video\" work; \"play the third video\" cannot.",
+      "ok": 307,
+      "f": 46,
+      "note": "LIVE 2026-09-25: browser_launch_debug, browser_navigate (YouTube) and browser_tabs close worked. browser_snapshot refused with \"A desktop-owned task is required for extension browser control\" while the debug browser was attached over CDP. Golden path BROKEN 2026-09-23 (BUG-445): only the FIRST result on a page can be selected. Launch, navigate and \"play the first video\" work; \"play the third video\" cannot.",
       "ev": "MEASURED 2026-09-23 (attended run). truncateForModel() cuts every tool result to 4,000 chars before the Live model sees it; a YouTube snapshot is ~8,650 and the header spends ~3,400, so across four snapshots only video 1 (at ~3,300) was inside the cut and videos 2-6 sat at 4,100-7,900. The model guessed references (f5e1557 against the real f5e1558; f5e1537 and f5e1718 never existed), played the wrong video, and 5 of 13 browser_click calls failed. Same class as BUG-397 on the desktop path. Earlier note (2026-08-27 D-6): browser_launch_debug is sound; on 2026-09-23 the model launched it itself when the port was unreachable."
     },
     {
@@ -1048,8 +1048,8 @@
         "gmail_read"
       ],
       "ok": 101,
-      "f": 136,
-      "note": "gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
+      "f": 137,
+      "note": "LIVE 2026-09-25: still red: the refresh token is expired. The spoken explanation is now one plain sentence, and the steps show in the HUD Anomalies list. gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
       "ev": "LIVE-VERIFIED 2026-08-28 (Track A, BUG-387) — the first time this node has been checked against the provider rather than against its own history. `node mythos/scripts/verify-google-grant.js` reports INVALID: the refresh token minted no access token and Gmail refused. The real effector agrees, which is the two-routes-one-answer cross-check: calling gmail_unread through the registered tool returns \"invalid_grant: Token has been expired or revoked.\" So this row is correct and stays red. THE CODE AROUND IT IS NOT AT FAULT, measured rather than assumed: from-gmail classifies invalid_grant as TERMINAL and its remedy text names the literal command plus the 7-day Testing-publishing-status trap; hub.js latches the terminal result per tool so the provider is not hammered — the 88 recorded failures fall into 60 bursts, nearly all of size ONE, i.e. one attempt per process rather than a retry storm; gmail-sensor raises health.anomaly with needsOperator:true; and explainer.js speaks the whole remedy aloud, verbatim, including `node scripts/google-auth.js`. Nine test files already cover that chain, two of them asserting the SPOKEN text contains the command. WHAT WAS ACTUALLY BROKEN was the one thing an operator would check: `doctor` reported \"OK Gmail / Calendar sensors — configured\" for three weeks while all of the above was failing, because it tests that three strings are PRESENT in .env and presence is not validity. Fixed under BUG-387: doctor now says validity is unchecked and names the verifier. A CORRECTION worth recording: from the episodic `summary` field it looked as though MYTHOS had announced this nine times over eight days and never said what to do — that was WRONG, `summary` truncates at ~100 characters and `detail.text` carries the full remedy. Only the 2026-08-18 utterance is genuinely deficient and it predates the BUG-273 C2 / BUG-278 fixes that repaired exactly it. NEEDS THE OPERATOR: run `node mythos/scripts/google-auth.js`, put the new GOOGLE_REFRESH_TOKEN in mythos/.env, then confirm with `node mythos/scripts/verify-google-grant.js` — which is the point of the new script, since before it there was no way to tell whether the three minutes had worked."
     },
     {
@@ -1274,13 +1274,13 @@
     {
       "c": "build",
       "n": "use_skill",
-      "s": "ok",
+      "s": "warn",
       "tools": [
         "use_skill"
       ],
-      "ok": 22,
+      "ok": 24,
       "f": 2,
-      "note": "Loads a skill playbook on demand. CLOSED 2026-08-27 as a disposition: the two failures are a month old, the loader was fixed, and the message was always honest.",
+      "note": "LIVE 2026-09-25: the voice model loaded unrelated skills (ponytail, systematic-debugging) after a one-line correction, and spoke tool internals, including a skill it never loaded (\"taste-frontend skill done\") (BUG-472). Loads a skill playbook on demand. CLOSED 2026-08-27 as a disposition: the two failures are a month old, the loader was fixed, and the message was always honest.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), and D-6 predicted this outcome: \"if they are genuinely absent the message is already honest and this is a disposition\". Measured: 20 ok / 2 fail, and BOTH failures are 2026-07-27. One is a correct refusal (\"A skill name is required\"). The other — \"Skill 'ui-ux-pro-max' not found. Available skills: taste-frontend, ponytail, karpathy-guidelines, caveman\" — is honest by construction: it names what IS resolvable, which is exactly what a caller needs. The underlying cause was a loader searching one root, since fixed with multi-root plus MYTHOS_SKILLS_DIR. Zero failures in the month since."
     },
     {
@@ -1296,9 +1296,9 @@
         "commitment_list",
         "commitment_dismiss"
       ],
-      "ok": 310,
+      "ok": 312,
       "f": 3,
-      "note": "Read, create, propose and toggle work at the data layer, but EXECUTION does not respect status or budget: on 2026-09-23 paused, over-budget commitment goals from 2026-09-11 acted at boot, including a tier-2 launch_app (BUG-446).",
+      "note": "LIVE 2026-09-25: the HUD showed \"14 ACTIVE\" and the greeting said \"fourteen goals humming\", while the goal system held 0 active and 14 paused. stats() counts every unticked goal as active (BUG-470). Read, create, propose and toggle work at the data layer, but EXECUTION does not respect status or budget: on 2026-09-23 paused, over-budget commitment goals from 2026-09-11 acted at boot, including a tier-2 launch_app (BUG-446).",
       "ev": "MEASURED 2026-09-23 (attended run): boot logged active=0 paused=9, then 9 cortex tool calls across 5 goals in 31 s with the HUD PIN-locked, e.g. goal-f3daf200 (\"find a live chess tournament for you right now\", created 2026-09-11, paused, 36,566 of 20,000 tokens) ran open_web and launch_app brave. Earlier: list_goals 60/0, propose_goal 37/1, create_goal 8/0; BUG-290 fixed 2026-08-21, not live-verified."
     },
     {
@@ -1312,7 +1312,7 @@
         "reminder_approve_action",
         "calendar_upcoming"
       ],
-      "ok": 98,
+      "ok": 99,
       "f": 4,
       "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
@@ -1510,7 +1510,7 @@
       ],
       "note": "read_status, read_system_specs, system_status, job_status. 2 of 4 verified 2026-08-28: read_status and job_status reach through to the build engine, which a harness cannot supply.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. read_system_specs PASSES on a real oracle: its answer must agree with node's own os.cpus()/platform. That is the point of the tool — BUG-273 records that it exists so the model reads real numbers instead of screenshotting a dashboard to read them off it — so \"it returned something\" would have been the wrong check. system_status also passes (2.2 KB of real payload). read_status and job_status are n/a, not failing: both call buildRunner.listJobs(), and createBuildRunner requires the build engine or a brain lane, neither of which a harness may conjure under the no-spend decision. With it absent they report a failure rather than throwing, which is the honest degradation. Worth recording so nobody re-derives it: the first version of the harness passed buildRunner:null and wrote the resulting message up as a product problem — main.js constructs buildRunner unconditionally and a brain always exists, so null never reaches these in production.",
-      "ok": 204,
+      "ok": 207,
       "f": 0
     },
     {
@@ -1611,9 +1611,9 @@
         "get_weather",
         "get_directions"
       ],
-      "note": "Historical get_time/get_weather/get_directions checks passed. Latest weather failure was a timeout; location ambiguity remains a separate content gate.",
+      "note": "LIVE 2026-09-25: get_time answered \"2:12 AM\" correctly, and get_weather fed the greeting. The same session still said \"this evening\" at 2 AM once, from the model, not the tool. Historical get_time/get_weather/get_directions checks passed. Latest weather failure was a timeout; location ambiguity remains a separate content gate.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. This node reached the acceptance contract, so it is the strongest of the four promotions. get_time is not merely \"ok:true\": the answer must carry THIS process's current year, and passing timezone:\"Asia/Tokyo\" must actually change it — a tool returning a plausible date is precisely what a self-report cannot rule out, and the mutation that returned a fixed 1999 date was caught. get_weather and get_directions answered over their free lanes (346 and 143 bytes); their CONTENT is not verified against a second source and the harness says so rather than implying it did. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back. Campaign 2026-09-07: latest recorded weather failure was an upstream timeout, preceded by successful calls. A fresh Bangalore query returned Bangalore Town, Sindh, Pakistan; this is not proof of the intended city. No capability downgrade was inferred from a single failure, and content accuracy remains unverified.",
-      "ok": 190,
+      "ok": 192,
       "f": 10
     },
     {
@@ -5764,7 +5764,7 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CPU STRAND CODED 2026-09-25: the two CPU-bound stalls of 09-24 (1.27 s and 1.16 s, each during recall_memory) were episodic.get() re-reading the whole month for every vector hit. Reproduced on a copy of the vault: 8 hits, 1.4-1.5 s of CPU in one tick. One newest-first walk now resolves a search's hits: 2 ms for the same 8] [LIVE 2026-09-24] goAway held twice; no stall on browser launch; one 1.9 s low-CPU stall unattributed. [BLOCKING HALF CODED 2026-09-23: every synchronous child-process call reachable after boot is now async and still bounded — the browser process queries and taskkill, the default-browser registry read, the setup page's WSL probe, and the Piper / edge-tts probes that re-ran on every crash-restart — with a derived guard over the rest; attended qualification with the stall profiler owed] [DELIVERY HALF CODED 2026-09-23 with BUG-432: a result that finishes while the voice connection is reconnecting is held for the replacement connection and delivered there once, instead of being spoken over plain TTS outside Live; the blocking half (synchronous child-process calls) is still open] [PROFILER RUN 2026-09-23: an 18 s silence had NO loop stall (model-side); a 3 s zero-CPU freeze ended as the debug-browser launch's execFileSync returned, and the profiler named nothing (likely blind to a destructured import — unconfirmed); one non-deferred goAway rotated cleanly] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code.",
+          "evidence": "[LIVE 2026-09-25: two loop stalls, both named by the tracer: boot 2464 ms, and 02:10:33 2670 ms with 328 ms CPU (the zero-CPU kind), last sync call a Lessons/*.md read. Three 10 s silences and a 9.6 s mid-reply audio gap were model-side. The goAway was held and rotated cleanly] [CPU STRAND CODED 2026-09-25: the two CPU-bound stalls of 09-24 (1.27 s and 1.16 s, each during recall_memory) were episodic.get() re-reading the whole month for every vector hit. Reproduced on a copy of the vault: 8 hits, 1.4-1.5 s of CPU in one tick. One newest-first walk now resolves a search's hits: 2 ms for the same 8] [LIVE 2026-09-24] goAway held twice; no stall on browser launch; one 1.9 s low-CPU stall unattributed. [BLOCKING HALF CODED 2026-09-23: every synchronous child-process call reachable after boot is now async and still bounded — the browser process queries and taskkill, the default-browser registry read, the setup page's WSL probe, and the Piper / edge-tts probes that re-ran on every crash-restart — with a derived guard over the rest; attended qualification with the stall profiler owed] [DELIVERY HALF CODED 2026-09-23 with BUG-432: a result that finishes while the voice connection is reconnecting is held for the replacement connection and delivered there once, instead of being spoken over plain TTS outside Live; the blocking half (synchronous child-process calls) is still open] [PROFILER RUN 2026-09-23: an 18 s silence had NO loop stall (model-side); a 3 s zero-CPU freeze ended as the debug-browser launch's execFileSync returned, and the profiler named nothing (likely blind to a destructured import — unconfirmed); one non-deferred goAway rotated cleanly] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code.",
           "source": "mythos/src/core/loop-lag.js"
         }
       },
@@ -5921,7 +5921,7 @@
         },
         "campaign": {
           "disposition": "currently reproduced",
-          "evidence": "[NEEDS-YOU LINE CODED 2026-09-25: an internal diagnostic is re-checked before every spoken chunk, so a line queued before voice mode opened can no longer play over a conversation (09-24: requested 14:49:58, played 14:51:12); and what needs the operator is spoken as one plain sentence, with the steps shown in the HUD's Anomalies list (operator decision)] [RESUME MISFIRE CODED 2026-09-25: a stored remainder is retired whenever a newer answer that carried audio ends, so \"hold on\" can no longer get words from two answers back. The replay of 15:06:56 to 15:08:07 reproduced the same 50 characters on the old code] [LIVE 2026-09-24] Heals silent and greeting right. Needs-operator line spoken verbatim; resume tool returned an older answer; French transcription reproduced. [PARTLY CODED 2026-09-23: successful heals and crash recoveries are no longer spoken — immune/announcer.js, their only speaker, is deleted (operator decision D5), and a derived map names every listener to heals so a new speaker cannot slip in; the greeting now knows a returning operator from a first boot. Resume after a barge-in CODED 2026-09-24: the HUD reports where playback was cut, the server takes the unheard sentences from its own transcript, and a read-only tool hands them to the model once when the operator asks it to go on — nothing is injected. Still open: the Spanish transcription (no audio of the session was kept, so it cannot be reproduced), and failed-action reporting plus holding actionable speech until the answer ends, which ride on BUG-432's answer lane] [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed \"because a Live conversation is in progress\". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live.",
+          "evidence": "[LIVE 2026-09-25: the Gmail line was the new plain sentence; 3 diagnostics stayed unspoken during Live; resume returned the latest heard answer's tail. Still open: English transcribed as Spanish twice more; 12 of 37 turns system-initiated, mostly from injected notices] [NEEDS-YOU LINE CODED 2026-09-25: an internal diagnostic is re-checked before every spoken chunk, so a line queued before voice mode opened can no longer play over a conversation (09-24: requested 14:49:58, played 14:51:12); and what needs the operator is spoken as one plain sentence, with the steps shown in the HUD's Anomalies list (operator decision)] [RESUME MISFIRE CODED 2026-09-25: a stored remainder is retired whenever a newer answer that carried audio ends, so \"hold on\" can no longer get words from two answers back. The replay of 15:06:56 to 15:08:07 reproduced the same 50 characters on the old code] [LIVE 2026-09-24] Heals silent and greeting right. Needs-operator line spoken verbatim; resume tool returned an older answer; French transcription reproduced. [PARTLY CODED 2026-09-23: successful heals and crash recoveries are no longer spoken — immune/announcer.js, their only speaker, is deleted (operator decision D5), and a derived map names every listener to heals so a new speaker cannot slip in; the greeting now knows a returning operator from a first boot. Resume after a barge-in CODED 2026-09-24: the HUD reports where playback was cut, the server takes the unheard sentences from its own transcript, and a read-only tool hands them to the model once when the operator asks it to go on — nothing is injected. Still open: the Spanish transcription (no audio of the session was kept, so it cannot be reproduced), and failed-action reporting plus holding actionable speech until the answer ends, which ride on BUG-432's answer lane] [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed \"because a Live conversation is in progress\". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live.",
           "source": "mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js"
         }
       },
@@ -5931,10 +5931,10 @@
         "state": "open",
         "title": "the claim checker's `window-control` category retracts a true \"opening a Notepad window\", because its backing tools do not include `launch_app` (CODED 2026-09-23; filed 2026-09-23)",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-09-23 — repair below; an attended speech session is owed. Same class as BUG-434, F1b, BUG-398 row 4 and BUG-441. **Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **The filed case held; the class did not.** *\"Open Notepad\"*: `launch_app` ok at 15:03:50, *\"I've launched Notepad for you\"* at 15:03:57, and no correction followed. At 15:11:53, after `browser_press_key(\"k\")` succeeded, *\"I've sent the keystroke to play it for you\"* drew `ad4-correction-retract` (`claimed-action-not-taken`) and the model began *\"My apologies, Sir. To be clear, I did…\"* — a true action retracted, in a playback category whose backing tools do not include `browser_press_key`. That is the sixth instance of this class. ### Repair (CODED 2026-09-23) **The filed mechanism was half the story.** Group…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-23 — repair below; an attended speech session is owed. Same class as BUG-434, F1b, BUG-398 row 4 and BUG-441. **Attended session 2026-09-25 (build fee97e18 = PR #121 on #118, launched from source with `VOICE_GATE_RECORDER=true` and `LOOP_LAG_TRACE=true`; timeline in `.cache/windows-operator/attended-2026-09-25/`, mic-gate recorder windows in the worktree's `.cache/voice-gate-recorder/`, both gitignored; 37 turns, times local).** Three retractions, two of them of true actions: - **02:15:02.** \"Closing the first tab…\" was retracted as `claimed-action-not-taken` (window-control), although `browser_tabs` close returned ok in 78 ms and the operator confirmed the tab closed. `browser_tabs` does not back the window-control category. - **02:17:41 and 02:17:46.** A hedged \"I clicked on that spot… can't confirm it started playing\" was retracted because `click_at` was u…",
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-24, residual] Keystroke claims now belong to a key-press category backed by a delivered key; a key press never backs a message. Replayed over 09-23/24 first. [LIVE 2026-09-24] Notepad case held; a keystroke claim was falsely retracted, same class. [CODED 2026-09-23] Two causes, not one: category matches whose words overlap are now ONE action judged together (a backed match excuses the others unless their own tool failed this turn), and a slow tool's \"started\" row no longer counts as pending once the same call has returned — that stale row had removed the opening category from the judgement entirely. Not \"any launch backs any panel\": a sentence only window-control matches is still judged by its own tools. [FILED 2026-09-23 from the attended run] \"Opening a new Notepad window right now\" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction \"that Notepad window didn't actually open\" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app.",
+          "evidence": "[LIVE 2026-09-25: 3 retractions, 2 of true actions: a successful browser_tabs close (window-control), and a delivered-but-unverified click_at spoken hedged. One fragment correction after \"Okay.\" (operator asked whether they said it)] [CODED 2026-09-24, residual] Keystroke claims now belong to a key-press category backed by a delivered key; a key press never backs a message. Replayed over 09-23/24 first. [LIVE 2026-09-24] Notepad case held; a keystroke claim was falsely retracted, same class. [CODED 2026-09-23] Two causes, not one: category matches whose words overlap are now ONE action judged together (a backed match excuses the others unless their own tool failed this turn), and a slow tool's \"started\" row no longer counts as pending once the same call has returned — that stale row had removed the opening category from the judgement entirely. Not \"any launch backs any panel\": a sentence only window-control matches is still judged by its own tools. [FILED 2026-09-23 from the attended run] \"Opening a new Notepad window right now\" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction \"that Notepad window didn't actually open\" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app.",
           "source": "mythos/src/core/voice/claim-check.js"
         }
       },
@@ -6000,10 +6000,10 @@
         "state": "open",
         "title": "MYTHOS hears itself: the echo filter never has a copy of its own words, and the mic gate's ceiling reopens the microphone while it is still speaking (filed 2026-09-24; CODED 2026-09-24, mic half)",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs), mic half — the own-voice watchdog now judges on the playback clock, so a long reply no longer reopens the mic while it is still playing. The echo half was measured and is deliberately unchanged (below). Live check owed: an attended session with `VOICE_GATE_RECORDER=true`. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** `live.echo-check` reported `reason=no-reference`, `referenceWords=0` on all 12 checks of 2026-09-24 and all 46 of 2026-09-23 — the filter meant to recognise MYTHOS's own words coming back through the microphone had nothing to compare against at any check. At 14:53:35.879 the own-voice gate released on its ceiling…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs), mic half — the own-voice watchdog now judges on the playback clock, so a long reply no longer reopens the mic while it is still playing. The echo half was measured and is deliberately unchanged (below). Live check owed: an attended session with `VOICE_GATE_RECORDER=true`. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Attended session 2026-09-25 (build fee97e18 = PR #121 on #118, launched from source with `VOICE_GATE_RECORDER=true` and `LOOP_LAG_TRACE=true`; timeline in `.cache/windows-operator/attended-2026-09-25/`, mic-gate recorder windows in the worktree's `.cache/voice-gate-recorder/`, both gitignored; 37 turns, times local).** **The…",
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-24, mic half] The own-voice watchdog judged on the ARRIVAL clock, and Live streams faster than real time: 20 of 50 holds on 09-24 reopened the mic while a long reply (43-94 chunks) was still playing, none of the 20 replies under 43 chunks did, and no barge-in was refused in any of them. It now waits while the player is still speaking on a moving clock; a frozen clock is judged at once; the 8 s and 30 s constants are unchanged. The echo half was measured and deliberately NOT changed: a copy kept to playback end would have caught no echo in 44 scored turns and dropped the operator's real \"further\". Remaining evidence: an attended session with VOICE_GATE_RECORDER=true, where ceiling releases should fall to near zero and own-voice-ended lines should carry playbackWaits.",
+          "evidence": "[LIVE 2026-09-25: the mic half held. 41 of 41 holds released at the real end of playback (own-voice-ended), none on a ceiling or the cap; the playback clock extended 8 of them. It was 20 of 50 reopened mid-reply on 09-24. Talking over MYTHOS is a separate defect, BUG-469] [CODED 2026-09-24, mic half] The own-voice watchdog judged on the ARRIVAL clock, and Live streams faster than real time: 20 of 50 holds on 09-24 reopened the mic while a long reply (43-94 chunks) was still playing, none of the 20 replies under 43 chunks did, and no barge-in was refused in any of them. It now waits while the player is still speaking on a moving clock; a frozen clock is judged at once; the 8 s and 30 s constants are unchanged. The echo half was measured and deliberately NOT changed: a copy kept to playback end would have caught no echo in 44 scored turns and dropped the operator's real \"further\". Remaining evidence: an attended session with VOICE_GATE_RECORDER=true, where ceiling releases should fall to near zero and own-voice-ended lines should carry playbackWaits.",
           "source": "mythos/ui/public/js/voice/own-voice-clock.js; mythos/ui/public/js/voice/s2s-bridge.js; mythos/test/bug-455-mic-waits-for-playback.test.js"
         }
       },
@@ -6017,7 +6017,7 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-24, silent-gap half] One soft chime, the operator's choice: a call answered \"started\" (slow-tool or ack-deadline path) begins a wait; after 600 ms with no assistant audio the HUD plays one short soft tone through the reply's own player, so the own-voice gate holds the mic for it; never twice, never over speech, never after the result or answer audio. Measured first: 9 of 10 deadline acks on 09-24 produced no audio, and the result landed 0.25 to 4.7 s after the ack. The \"cuts the turn\" half is BUG-457's: 8 of 9 of those cuts hit a turn with no audio yet. Remaining evidence: an attended run, where voice.wait-chime lines give time to first sound apart from time to first answer.",
+          "evidence": "[LIVE 2026-09-25: 11 chimes, each 601 to 615 ms into a silent wait, never logged during speech. Heard-by-ear not confirmed in the session] [CODED 2026-09-24, silent-gap half] One soft chime, the operator's choice: a call answered \"started\" (slow-tool or ack-deadline path) begins a wait; after 600 ms with no assistant audio the HUD plays one short soft tone through the reply's own player, so the own-voice gate holds the mic for it; never twice, never over speech, never after the result or answer audio. Measured first: 9 of 10 deadline acks on 09-24 produced no audio, and the result landed 0.25 to 4.7 s after the ack. The \"cuts the turn\" half is BUG-457's: 8 of 9 of those cuts hit a turn with no audio yet. Remaining evidence: an attended run, where voice.wait-chime lines give time to first sound apart from time to first answer.",
           "source": "mythos/ui/public/js/voice/wait-chime.js; mythos/src/core/voice/live-tool-adapter.js; mythos/test/bug-456-one-soft-chime.test.js"
         }
       },
@@ -6032,7 +6032,7 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-24] A call that outruns the 1.5 s ack deadline is no longer answered \"started\" with its result pushed in later as user-role text: its reply is HELD (up to 12 s) and sent as a real tool response. Measured live first on the configured model, 16 capped sessions on the operator-confirmed free tier: held 5 s and 12 s, 6 of 6 clean. Exploratory: new input during a hold makes Google cancel the call, and the model once invented the result. So, the operator's choice, a safety net: typed words release the hold first; a cancellation tells the model at once that the result is unknown (3 of 3 live: no invented value); a rotation-refused reply and anything past 12 s take today's path. Remaining evidence: an attended run, counting live.tool-held ends and the phrase.",
+          "evidence": "[LIVE 2026-09-25: 7 held replies, all end=outcome, 35 ms to 4.6 s; no \"user transcription failed\". Two residuals: a turn the operator's speech closed during the call got the result twice (tool response plus a late-for-turn notice); SLOW_TOOLS screen_look still injected as text and cut MYTHOS mid-sentence (6 of 6)] [CODED 2026-09-24] A call that outruns the 1.5 s ack deadline is no longer answered \"started\" with its result pushed in later as user-role text: its reply is HELD (up to 12 s) and sent as a real tool response. Measured live first on the configured model, 16 capped sessions on the operator-confirmed free tier: held 5 s and 12 s, 6 of 6 clean. Exploratory: new input during a hold makes Google cancel the call, and the model once invented the result. So, the operator's choice, a safety net: typed words release the hold first; a cancellation tells the model at once that the result is unknown (3 of 3 live: no invented value); a rotation-refused reply and anything past 12 s take today's path. Remaining evidence: an attended run, counting live.tool-held ends and the phrase.",
           "source": "mythos/src/core/voice/held-reply.js; mythos/src/core/voice/live-tool-adapter.js; mythos/test/bug-457-held-reply.test.js"
         }
       },
@@ -6042,10 +6042,10 @@
         "state": "open",
         "title": "the reasoning lane counts an empty answer as a success, so no fallback model is tried (filed 2026-09-24; CODED 2026-09-24)",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs) — an empty or non-text reply is its own outcome and the walk moves on; a stream cut after text is never joined to another model; the finish reason is recorded. Live check owed: an attended think_deeply that meets an empty reply. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** `deepthink.call ok:false chars:0` at 14:59:21.941 (369 ms) and 15:01:07.462 (402 ms), each with `deepthink.attempt ok:true` and `attemptsTried:1` — provider `nim`, model `nvidia/nemotron-3-super-120b-a12b`. Two of the session's four calls. MYTHOS told the operator plainly that the reasoning model had failed and answered by itself, which is the right behaviou…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs) — an empty or non-text reply is its own outcome and the walk moves on; a stream cut after text is never joined to another model; the finish reason is recorded. Live check owed: an attended think_deeply that meets an empty reply. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Attended session 2026-09-25 (build fee97e18 = PR #121 on #118, launched from source with `VOICE_GATE_RECORDER=true` and `LOOP_LAG_TRACE=true`; timeline in `.cache/windows-operator/attended-2026-09-25/`, mic-gate recorder windows in the worktree's `.cache/voice-gate-recorder/`, both gitignored; 37 turns, times local).** At 02:16:40, `think_deeply` found NIM on cooldown a…",
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-24] An empty or non-text reply is its own attempt outcome and the walk moves on, with no success, cooldown or breaker tick recorded; a stream cut after text stops the walk instead of appending another model; openai-compat reports finish_reason into the attempt record. Reproduced headlessly first (7 of 14 red on the old code). Remaining evidence: an attended think_deeply that meets an empty reply.",
+          "evidence": "[LIVE 2026-09-25: think_deeply fell through a cooled-down NIM route to Groq on its third attempt (1532 ms, 254 chars)] [CODED 2026-09-24] An empty or non-text reply is its own attempt outcome and the walk moves on, with no success, cooldown or breaker tick recorded; a stream cut after text stops the walk instead of appending another model; openai-compat reports finish_reason into the attempt record. Reproduced headlessly first (7 of 14 red on the old code). Remaining evidence: an attended think_deeply that meets an empty reply.",
           "source": "mythos/test/bug-458-empty-answer-is-not-success.test.js; mythos/src/core/brain/chain.js"
         }
       },
@@ -6080,11 +6080,12 @@
         "shape": "entry",
         "state": "open",
         "title": "background noise was transcribed as a command, and MYTHOS acted on it (filed 2026-09-24; CODED 2026-09-24)",
-        "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs) — a click, a typing action or a key press that the leash allows only because a person is connected now runs only when the operator's own words ask for it. Otherwise MYTHOS asks one short question, and a plain yes runs exactly that call. Attended check owed. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** At 15:11:13 the input transcript read *\"Yep, can you play\"*. The model took a snapshot and clicked a video (`browser_click f2e308`, 15:11:24). The operator: *\"I didn't say anything. I didn't say anything. It's the background noise\"*, then *\"Did I ask you to play the cafe ambience video? I didn't.\"* The operator also logged an inc…",
+        "detail": {
+          "limits": "At 02:19:42 \"Yes, refresh the web page\" (transcribed \"Yes, we face the web page.\") was not taken as a yes (`authority-proposal-dropped reason=other-speech`). F5 never ran, while MYTHOS said \"F5 it is then\". A yes followed by a restatement of the same request must count as a yes."
+        },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-24] A trusted click, type or key press runs only on operator words that ask for it; otherwise MYTHOS asks and a plain yes runs exactly that call. Replayed first: the click was a turn later than filed, under an objection, and a second instance exists (09-23). Remaining evidence: an attended noise case and a golden-path line.",
+          "evidence": "[LIVE 2026-09-25: two short commands held and asked about; a plain \"no\" cancelled one. Residual: \"Yes, refresh the web page\" was not taken as a yes (dropped as other-speech), so F5 never ran while MYTHOS said \"F5 it is then\"] [CODED 2026-09-24] A trusted click, type or key press runs only on operator words that ask for it; otherwise MYTHOS asks and a plain yes runs exactly that call. Replayed first: the click was a turn later than filed, under an objection, and a second instance exists (09-23). Remaining evidence: an attended noise case and a golden-path line.",
           "source": "mythos/test/bug-461-464-ask-before-acting.test.js; mythos/src/core/voice/operator-authority.js; mythos/src/core/voice/authority-gate.js; mythos/src/core/leash/confirm.js"
         }
       },
@@ -6094,10 +6095,10 @@
         "state": "open",
         "title": "browser_click reported success when nothing opened, and MYTHOS said the video was starting (filed 2026-09-24; CODED 2026-09-24)",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs) — every browser action now reads the page before AND after and is verified only by the change it was for; a click that changes nothing is unverified with the next step named; a ref cannot be spent on a different tab. Live check owed: the golden path, which can now fail steps that used to pass on the hollow proof. Filed 2026-09-24 from the attended run (build bd4df360). **Correction (2026-09-24, measured after the fix, from the vault record rather than this ticket).** The headline click DID navigate. `Episodic/2026-09-24.jsonl` records `browser_click {\"ref\":\"f2e308\"}` at 15:11:24 with its own after-state at `https://www.youtube.com/watch?v=Gvx-DAzR-4k&list=RDGvx-DAzR-4k&start_radio=1`. The title had not yet updated, and there was a paused `\u003cvideo>` with no duration. By the `k` press at 15:11:46 the page was back on the results url,…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs) — every browser action now reads the page before AND after and is verified only by the change it was for; a click that changes nothing is unverified with the next step named; a ref cannot be spent on a different tab. Live check owed: the golden path, which can now fail steps that used to pass on the hollow proof. Filed 2026-09-24 from the attended run (build bd4df360). **Attended session 2026-09-25 (build fee97e18 = PR #121 on #118, launched from source with `VOICE_GATE_RECORDER=true` and `LOOP_LAG_TRACE=true`; timeline in `.cache/windows-operator/attended-2026-09-25/`, mic-gate recorder windows in the worktree's `.cache/voice-gate-recorder/`, both gitignored; 37 turns, times local).** `click_at` reported unverified three times, and MYTHOS said so hedged (BUG-441's path, reached live at 02:17:41 and 02:18:10). The clicks hit the t…",
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-24] Browser actions are judged on the page before and after, against what each is for; the old capsule called any after-state proof. Thirteen paths covered, a ref pinned to its tab, values never echoed. Reproduced headlessly first. Remaining evidence: the golden path; the 15:11:33 playback claim is handed to BUG-448/460.",
+          "evidence": "[LIVE 2026-09-25: click_at unverified three times, reported and spoken hedged; the clicks hit the title text, not the video (BUG-471). browser_snapshot refused with \"A desktop-owned task is required for extension browser control\" while the debug browser was attached over CDP] [CODED 2026-09-24] Browser actions are judged on the page before and after, against what each is for; the old capsule called any after-state proof. Thirteen paths covered, a ref pinned to its tab, values never echoed. Reproduced headlessly first. Remaining evidence: the golden path; the 15:11:33 playback claim is handed to BUG-448/460.",
           "source": "mythos/test/bug-462-browser-action-proves-its-effect.test.js; mythos/src/core/effectors/browser-effect.js; mythos/src/core/effectors/from-browser.js"
         }
       },
@@ -6111,7 +6112,7 @@
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[CODED 2026-09-25] Traced, read-only, on the live vault. The carrier was an ordinary fact in the Live frame's kept tail, written on 09-23 by the background note-taker (memory/index.js step 3b) from one day of bug testing: \"currently working on ... bugs 439, 441, 442\". The \"upon boot\" notes reached no prompt at all. Operator decisions: the note-taker is OFF unless MEMORY_AUTO_USER_FACTS=true; startup notes go to the boot greeting only. The vault is not edited, so the 09-23 fact stays until the operator removes it. Remaining evidence: an attended run.",
+          "evidence": "[LIVE 2026-09-25: the greeting followed the startup notes with real counts; no reply raised bugs or goals unprompted in 37 turns. Its \"fourteen goals\" is BUG-470. Fact 343 not yet removed. A second automatic writer (identity reflection) updated the profile twice: decision owed] [CODED 2026-09-25] Traced, read-only, on the live vault. The carrier was an ordinary fact in the Live frame's kept tail, written on 09-23 by the background note-taker (memory/index.js step 3b) from one day of bug testing: \"currently working on ... bugs 439, 441, 442\". The \"upon boot\" notes reached no prompt at all. Operator decisions: the note-taker is OFF unless MEMORY_AUTO_USER_FACTS=true; startup notes go to the boot greeting only. The vault is not edited, so the 09-23 fact stays until the operator removes it. Remaining evidence: an attended run.",
           "source": "mythos/src/core/memory/startup-facts.js; mythos/src/core/memory/index.js; mythos/server/index.js; mythos/test/bug-463-startup-notes-and-auto-facts.test.js"
         }
       },
@@ -6121,10 +6122,10 @@
         "state": "open",
         "title": "a permanent memory was saved without the operator asking (filed 2026-09-24; CODED 2026-09-24, one route open)",
         "detail": {},
-        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs). The `remember` tool writes permanent memory only when the operator asked in their own words, or said yes after the exact text was read back to them. A second route stays open by decision (see below). Attended check owed. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** At 14:53:37 `remember(\"User has not been feeling well and needs to rest …\")` ran after the operator described being ill the day before. No \"remember\" or \"note that\" was said, and RULES' MEMORY RULE requires an explicit ask. At 14:55:27 the operator: *\"You don't have to remember that. I was just testing\"*, followed by `forget_fact`. A later `remember` at 14:55:56 wa…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs). The `remember` tool writes permanent memory only when the operator asked in their own words, or said yes after the exact text was read back to them. A second route stays open by decision (see below). Attended check owed. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Attended session 2026-09-25 (build fee97e18 = PR #121 on #118, launched from source with `VOICE_GATE_RECORDER=true` and `LOOP_LAG_TRACE=true`; timeline in `.cache/windows-operator/attended-2026-09-25/`, mic-gate recorder windows in the worktree's `.cache/voice-gate-recorder/`, both gitignored; 37 turns, times local).** **The lock held.** `remember` at 02:14:13 was held as `not…",
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[3b ROUTE CLOSED 2026-09-25 by the operator's decision: the background note-taker writes no user-facts unless MEMORY_AUTO_USER_FACTS=true (BUG-463)] [CODED 2026-09-24] remember writes only with a server-minted consent token: the operator's explicit ask, or a yes to the exact text read back. Counted across 13 days: 2 unrequested saves of 10. The background summariser (memory/index.js 3b) still writes user-facts unasked: decision owed. Remaining evidence: an attended save both ways.",
+          "evidence": "[LIVE 2026-09-25: the lock held an unasked remember (not-requested). Residuals: MYTHOS never read the text back, so the save was cancelled after it had said \"I'll keep that in mind for next time\", and the cancel notice produced an unprompted line] [3b ROUTE CLOSED 2026-09-25 by the operator's decision: the background note-taker writes no user-facts unless MEMORY_AUTO_USER_FACTS=true (BUG-463)] [CODED 2026-09-24] remember writes only with a server-minted consent token: the operator's explicit ask, or a yes to the exact text read back. Counted across 13 days: 2 unrequested saves of 10. The background summariser (memory/index.js 3b) still writes user-facts unasked: decision owed. Remaining evidence: an attended save both ways.",
           "source": "mythos/test/bug-461-464-ask-before-acting.test.js; mythos/src/core/leash/consent.js; mythos/src/core/effectors/from-memory.js; mythos/src/core/voice/operator-authority.js"
         }
       },
@@ -6154,18 +6155,70 @@
           "evidence": "[FILED 2026-09-24 from the attended run] With YOUTUBE_MODE=newtab (set in this machine's desktop config) open_web type:\"youtube\" returns a newtab card, which has no surface under Electron; nothing played and it reported unverified, not failed. Remaining evidence: the same request after a repair.",
           "source": "mythos/src/core/effectors/from-dashboard.js (youtube newtab branch); electron/media-window.js"
         }
+      },
+      {
+        "n": 469,
+        "shape": "entry",
+        "state": "open",
+        "title": "talking over MYTHOS does not stop it: during an own-voice hold the barge-in backstop never even attempts (filed 2026-09-25)",
+        "detail": {},
+        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-25 from the attended run (build fee97e18). Evidence from `.cache/windows-operator/attended-2026-09-25/` and the mic-gate recorder windows (gitignored, this machine only); times are local. **Evidence.** From 02:15:14 to 02:15:22 MYTHOS spoke, and the own-voice gate held the mic for 8.2 s. The operator talked over it (\"it's working flawlessly… log it\", said, by their count, four times). The recorder window for that hold shows 19 frames above the 0.035 bleed floor while the gate held and the player was speaking, with a peak of 0.157 and a run of five consecutive 100 ms frames above 0.05. `bargeVetoed` was 0 on that hold and on all 41 holds of the session: the backstop never even reached the policy. Gemini heard the operator only when the hold ended at the real end of playback (`live.interrupted` 02:15:23.057). The operator, at 02:15:41: \"I said this for t…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "[FILED 2026-09-25 from the attended run] Talking over MYTHOS does not stop it. During an 8.2 s hold the recorder shows 19 frames above the 0.035 bleed floor (peak 0.157, a 500 ms run above 0.05), bargeVetoed=0 on all 41 holds, and Gemini heard the operator only when playback ended. Remaining evidence: why the backstop never attempts at these levels.",
+          "source": "mythos/ui/public/js/voice/barge-in-backstop.js; mythos/ui/public/js/voice/barge-in-policy.js; mythos/ui/public/js/voice/s2s-bridge.js"
+        }
+      },
+      {
+        "n": 470,
+        "shape": "entry",
+        "state": "open",
+        "title": "\"active goals\" counts paused goals: the HUD said \"14 ACTIVE\" and the greeting \"Fourteen goals humming in the background\" with none active (filed 2026-09-25)",
+        "detail": {},
+        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-25 from the attended run (build fee97e18). Evidence from `.cache/windows-operator/attended-2026-09-25/` and the mic-gate recorder windows (gitignored, this machine only); times are local. **Evidence.** - At boot the goal system logged `goals.ready active=0`, with 14 paused, 211 proposed and 17 done. - The HUD's GOALS node read \"14 ACTIVE\". - The boot greeting (02:08:14) said \"Fourteen goals humming in the background\". **Mechanism, read from source.** `effectors/goals.js` `stats()` returns `active` as every Goals.md item that is not ticked (`!g.done`), so a paused goal counts as active; the goal system's own status says paused. `briefing.js`'s goals fact (\"Goals: N active\") and its \"On your plate\" line both read `stats().active`, and so does the HUD. One name, two predicates. **Direction.** Count `active` from the goal system's status, or call the Goals…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "[FILED 2026-09-25 from the attended run] The HUD showed \"14 ACTIVE\" goals and the greeting said \"Fourteen goals humming\" while the goal system held 0 active and 14 paused. The goals effector counts every unticked Goals.md item as active. Remaining evidence: none; a counting fix.",
+          "source": "mythos/src/core/effectors/goals.js; mythos/src/core/conversation/briefing.js"
+        }
+      },
+      {
+        "n": 471,
+        "shape": "entry",
+        "state": "open",
+        "title": "clicking what MYTHOS read on screen misses the video: title-text coordinates, \"expect\" descriptions that can never verify, and a dash that breaks the text match (filed 2026-09-25)",
+        "detail": {},
+        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-25 from the attended run (build fee97e18). Evidence from `.cache/windows-operator/attended-2026-09-25/` and the mic-gate recorder windows (gitignored, this machine only); times are local. **Evidence.** - **The clicks.** From 02:17:21 to 02:19:05, asked to play the fourth YouTube video, `screen_look` found \"Xiaomi made an iPhone Duo\". `click_at` then went to (834,186) and twice to (661,296). Each was delivered and reported unverified; the screen changed on the second only. The operator was asked whether the video started; not confirmed. - **The expectations.** Each click carried `expect: \"Video starts playing\"` or \"Playing video…\", which are descriptions, not text that appears on screen. verify() matches text, so these can never pass. - **The text match.** At 02:22:11 `see_and_click(\"Tyga, Ariana Grande – Zoom Zoom\")` failed with \"I cannot see … on scre…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "[FILED 2026-09-25 from the attended run] Clicking what MYTHOS read on screen misses. click_at landed on title text three times, and each expect was a description, which can never verify. see_and_click could not find a title screen_look had just read (an en dash is the likely mismatch). Remaining evidence: the thumbnail position and the OCR text for that title.",
+          "source": "mythos/src/core/effectors (see_and_click, click_at verify)"
+        }
+      },
+      {
+        "n": 472,
+        "shape": "entry",
+        "state": "open",
+        "title": "the voice model loads unrelated skills, narrates tool internals, and reaches for think_deeply on trivial turns (filed 2026-09-25)",
+        "detail": {},
+        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-25 from the attended run (build fee97e18). Evidence from `.cache/windows-operator/attended-2026-09-25/` and the mic-gate recorder windows (gitignored, this machine only); times are local. **Evidence.** - **Unrelated skills.** After the operator said \"you said good evening\", the model called `use_skill(\"ponytail\")` (02:12:46) and `use_skill(\"systematic-debugging\")` (02:12:49). It then tried `read_file(\"vault/skills/systematic-debugging.md\")`, which returned ENOENT (02:13:17). - **Spoken internals.** \"Oh, and by the way, I've loaded the sy…\" (02:13:07). \"taking a snapshot to lock in the element reference before clicking. taste-frontend skill done.\" (02:17:01); no `taste-frontend` call was made. - **think_deeply overuse.** It called `think_deeply` for \"you said good evening\" (02:12:44), and again 5 s later, when it was rate-limited. The operator's saved p…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "[FILED 2026-09-25 from the attended run] The voice model loaded unrelated skills (ponytail, systematic-debugging), spoke tool internals including a skill it never loaded (\"taste-frontend skill done\"), and used think_deeply for \"you said good evening\". The operator's saved \"don't use think_deeply\" preference is outside the Live facts tail. Remaining evidence: a count across sessions.",
+          "source": "mythos/src/core/voice (Live system instruction, use_skill declaration)"
+        }
       }
     ],
     "counts": {
       "verified": 89,
       "fixed": 182,
-      "open": 30,
+      "open": 34,
       "coded": 9,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 313,
+    "total": 317,
     "openDeclared": [
       274,
       275,
@@ -6196,7 +6249,11 @@
       463,
       464,
       467,
-      468
+      468,
+      469,
+      470,
+      471,
+      472
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
