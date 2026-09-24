@@ -154,6 +154,16 @@ describe('control-field survival across bus -> diagnostician -> healer -> explai
         'any control keyed on one is inert: ' + dropped.join(', ') +
         '. This is BUG-278 exactly. Forward them from healer.js and assert it ' +
         'here, not on a hand-built payload.');
+      // 2026-09-25 (BUG-447): the KEY arriving is not the VALUE arriving. A probe that
+      // changed healer.js's forward to `sayToOperator: null` passed the check above,
+      // because the key was still there. Each sentinel must come out as it went in.
+      // One documented exception: healer.js (Q8) deliberately does not forward the
+      // anomaly's `detail` — in the verdict, `detail` means what the heal action did.
+      const VALUE_WAIVERS = { detail: 'healer.js Q8: the verdict carries its own detail, not the anomaly\'s' };
+      const lostValues = fields.filter((f) => f in anomaly && !(f in VALUE_WAIVERS) && delivered[f] !== anomaly[f]);
+      assert.deepEqual(lostValues, [],
+        'these fields arrive with a different value than the anomaly sent, so a control keyed on one '
+        + 'reads the wrong thing: ' + lostValues.map((f) => f + '=' + JSON.stringify(delivered[f])).join(', '));
     } finally {
       rig.stop();
     }

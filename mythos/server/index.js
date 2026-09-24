@@ -2118,8 +2118,11 @@ function createServer(deps) {
         idx++;
       }
       let proactiveSynthesized = 0;
+      // BUG-447: a caller's isCurrent() is re-asked before each chunk and after each
+      // synthesis; a no aborts the rest through the same controller a barge-in uses.
+      const stale = () => { if (!ctrl.signal.aborted && opts?.isCurrent && !opts.isCurrent()) { ctrl.abort(); logger.info('proactive.withdrawn', { reqId, sent: idx }); } return ctrl.signal.aborted; };
       for (let i = 0; i < textChunks.length; i++) {
-        if (ctrl.signal.aborted) break;
+        if (stale()) break;
         let audioB64 = null;
         let chunkMime;
         if (ttsUp) {
@@ -2132,7 +2135,7 @@ function createServer(deps) {
           }
         }
         if (audioB64) proactiveSynthesized++;
-        if (ctrl.signal.aborted) break;
+        if (stale()) break;
         sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] }, targetWs);
         idx++;
       }
@@ -2252,18 +2255,19 @@ function createServer(deps) {
     // critical health speech is untouched, and the anomaly still reaches the HUD,
     // the log and the audit either way — this drops one spoken interruption, not
     // the record of it.
-    if (e.payload.internalDiagnostic) {
-      const ws = lastActiveWs;
-      const live = (ws && typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
-      if (live && live.isOpen()) {
-        logger.info('immune-explain.not-spoken-during-live', {
-          kind: e.payload.kind || null,
-          reason: 'a Live conversation is in progress — the anomaly is in the log, the audit and the HUD',
-        });
-        return;
-      }
+    const liveConversationOpen = () => { const ws = lastActiveWs; const live = (ws && typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null; return !!(live && live.isOpen()); };
+    if (e.payload.internalDiagnostic && liveConversationOpen()) {
+      logger.info('immune-explain.not-spoken-during-live', {
+        kind: e.payload.kind || null,
+        reason: 'a Live conversation is in progress — the anomaly is in the log, the audit and the HUD',
+      });
+      return;
     }
-    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
+    // BUG-447 (2026-09-25): checked again before every chunk, not only here. On 09-24 a
+    // line requested at 14:49:58, before voice mode opened, played at 14:51:12 over the
+    // operator's turn: the TTS chain took 73 s. isCurrent withdraws what is still unspoken.
+    const opts = e.payload.internalDiagnostic ? { isCurrent: () => !liveConversationOpen() } : undefined;
+    proactiveSpeak(e.payload.text, undefined, opts).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // ---- Boot greeting (JARVIS-style) ----
