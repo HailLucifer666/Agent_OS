@@ -14,13 +14,17 @@ golden path holds 10 consecutive PASS lines across two cold boots for a week.
 own file). Waves: 0 baseline · 1 access, browser targets, autonomy · 2 shutdown, TTS,
 native crash · 3 speech · 4 qualification and memory.
 
-**A chain of PRs is waiting for the OPERATOR to merge, in this order.** Each targets
-`main` and builds on the one before; the session's permission check refuses
-`gh pr merge`, so the agent cannot. CI ran green on each head it had finished on (#109's e2e job timed out once on the CI machine's media query, the same route passed on #110, and a re-run was green):
-#102 PIN removal + BUG-444/452 · #103 BUG-445 · #105 BUG-446 · #106 BUG-437 ·
-#107 BUG-450 · #108 BUG-422 · #109 BUG-447 · #110 BUG-432 + 436 delivery · #111 BUG-448 · #112 BUG-449 · #113 BUG-275 · #114 BUG-436 blocking half · #115 BUG-451 · #116 BUG-406 recorder · #117 BUG-274 options note · then the BUG-447 resume-after-barge-in PR. Eleven superseded PRs
-(#95 … #82) are also still open — their content is in main; closing them is the
-operator's call.
+**One PR is waiting for the OPERATOR to merge: #118.** On 2026-09-24 the operator
+folded the 16-PR chain into it. Its branch carries all 16 fixes as separate commits,
+in this order: PIN removal + BUG-444/452 · 445 · 446 · 437 · 450 · 422 · 447 · 432 +
+436 delivery · 448 · 449 · 275 · 436 blocking half · 451 · 406 recorder · 274 options
+note · 447 resume after a barge-in. Merge it with "Create a merge commit", never
+squash; the session's permission check refuses `gh pr merge`. #102–#117 are closed
+as folded in. Closed the same day, branches kept: the eleven superseded PRs and
+#86/#87 (content already in main), the stale feature PRs #36/#79/#80, and four
+dependency bumps (to be taken later as one batch, tested with a real build and boot).
+Still open beside #118: #101 (BUG-453 gate fix) and #104 (verify-lib glitch fix).
+Rebase both after #118 merges, because their README counts will conflict.
 
 | state | tickets |
 |---|---|
@@ -65,8 +69,7 @@ manual dispatch: once, on a final commit.
 
 ## Operator decisions owed
 
-- **Merge the PR chain above, in order.**
-- **Close the eleven superseded PRs?**
+- **Merge #118** (above), then #101 and #104 once they are rebased.
 - **Three vault records state BUG-451's false cause** (a Lesson, a Note, a Semantic consolidation; paths in the entry): remove, quarantine or keep? The planner no longer reads the guess as an instruction either way.
 - **Should autonomy run while nobody is at the HUD?** The PIN lock was the only
   signal for "unattended"; it no longer exists.
