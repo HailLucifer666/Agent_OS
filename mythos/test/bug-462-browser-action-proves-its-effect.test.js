@@ -392,8 +392,10 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
   // pairing: the real f2e308 click navigated and was right to back "clicked"), is
   // not caught. Not widened here: the plan's rule for that module is to replay
   // every spoken line in Episodic 09-23/24 before changing a detector, and a
-  // widened verb pattern retracts true sentences too. When that work lands, this
-  // assertion is the one to flip (0 -> 1).
+  // widened verb pattern retracts true sentences too. REPLAYED 2026-09-24 over
+  // Episodic 09-23/24 (BUG-448 residual): the gap hid no false claim — its only
+  // instance was the f2e308 click, which navigated. So it stays pinned, not widened.
+  // When that changes, this assertion is the one to flip (0 -> 1).
   it("KNOWN GAP: \"I've also clicked\" is not matched by the claim detector yet", async () => {
     const outcome = await load(statefulPage()).browser_click({ ref: 'e1' });
     const { adapter, anomalies } = adapterReturning(outcome);

@@ -56,6 +56,7 @@ const {
 // BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
 // the file-size ratchet; full rationale in that module.
 const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger');
+const { isAssertionOnUnintelligibleInput } = require('./fragment-guard'); // BUG-299 / BUG-460
 // BUG-398 R5a: the five claim sentences moved to their own module when adding a
 // fifth pushed this file past the size ratchet's ceiling. Pure text, no closure
 // use — the comments explaining each one moved with it, verbatim, because they
@@ -431,6 +432,9 @@ function createLiveToolAdapter(deps) {
       // sets both on the same object.
       confirmedStep: isUnverified && typeof outcome.confirmedStep === 'string' && outcome.confirmedStep
         ? outcome.confirmedStep : null,
+      // BUG-460: an ORACLE proved the effect, not merely "returned ok" — what
+      // fragment-guard.js accepts as proof the operator was understood.
+      verified: require('../effectors/evidence').isVerified(outcome),
     };
   }
 
@@ -785,7 +789,7 @@ function createLiveToolAdapter(deps) {
         // BUG-297: confirmedStep travels too, so the late-for-turn re-narration can
         // tell a partial hand-off from a wholly unproven outcome exactly as the other
         // three paths do.
-        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified,
+        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, verified: ev.verified,
           abortedInFlight: ev.abortedInFlight, confirmedStep: ev.confirmedStep, summary,
           // BUG-398 row 2. `ok` here is EVIDENCE-level ("proven"), while the
           // Audit row's `outcome` is DISPATCH-level ("the effector returned
@@ -871,7 +875,7 @@ function createLiveToolAdapter(deps) {
     // session — more breaches than calls. A digest on the awaited path only
     // would go quietly missing on exactly the slow lookups most likely to be
     // narrated from memory.
-    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified,
+    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified, verified: ev.verified,
       abortedInFlight: ev.abortedInFlight, summary: verdict,
       dispatchOk: ev.dispatchOk, traceId: traceId || null,
       evidence: evidenceFor(toolName, ev.result) };
@@ -1019,7 +1023,8 @@ function createLiveToolAdapter(deps) {
     // the audit, not just the model, so a socket that closed while the human was
     // deciding must not erase what happened. reportLateOutcome already ordered
     // it this way.
-    const resolvedEntry = { tool: pending.name, ok: ok && !unverified, unverified, summary: verdict };
+    const resolvedEntry = { tool: pending.name, ok: ok && !unverified, unverified, summary: verdict,
+      verified: require('../effectors/evidence').isVerified(outcome) };
     liveTurnActions.push(resolvedEntry);
     recentActionLedger.record(resolvedEntry);
 
@@ -1102,20 +1107,7 @@ function createLiveToolAdapter(deps) {
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
   // shape handleUtterance already uses, so recall/audit stay consistent
   // whether a turn came through the batch or Live path.
-  // BUG-299's classifier, kept separate and thresholds named, because every number
-  // in it is a judgement call that a later reader will want to argue with.
-  //
-  // FRAGMENT: a single token, no internal whitespace, short. "आदिए" is four
-  // characters. Deliberately measured in code points rather than words — the
-  // operator speaks Bengali, Hindi and English, and a word count is meaningless
-  // for scripts this STT segments badly.
-  //
-  // SUBSTANTIVE: long enough that it cannot be an acknowledgement. "Okay, Sir."
-  // and "ঠিক আছে।" are 10 and 9; the fabricated match report was 63. 40 sits well
-  // clear of both, and erring high is the safe direction — a missed correction
-  // leaves the existing behaviour, a false one interrupts a working turn.
-  const FRAGMENT_MAX_CHARS = 8;
-  const SUBSTANTIVE_MIN_CHARS = 40;
+  // BUG-299's classifier and its named thresholds live in fragment-guard.js.
 
   // BUG-300 — the DURABLE half of the same fabrication. MYTHOS did not only say
   // "মোহনবাগান জিতে গেছে"; it said "আমি নোট করে রাখলাম" and wrote it down. A spoken
@@ -1169,17 +1161,6 @@ function createLiveToolAdapter(deps) {
     decision.args = Object.assign({}, decision.args, { text: text + UNBACKED_NOTE_STAMP });
   }
 
-  function isAssertionOnUnintelligibleInput(userText, assistantText) {
-    const heard = String(userText || '').trim();
-    // An EMPTY transcript is not a fragment. MYTHOS speaks unprompted on
-    // proactive and entity-initiated turns, and treating those as garbled would
-    // fire this correction on every one of them.
-    if (!heard) return false;
-    if (heard.length > FRAGMENT_MAX_CHARS) return false;
-    if (/\s/.test(heard)) return false;
-    return String(assistantText).trim().length >= SUBSTANTIVE_MIN_CHARS;
-  }
-
   function onLiveTurnComplete({ userText, assistantText, turnId }) {
     // B3 — before any of this turn's ORDINARY handling (history append,
     // episodic write, reflection), a spoken "no" cancels whatever is pending.
@@ -1222,7 +1203,7 @@ function createLiveToolAdapter(deps) {
     // model: live-session.js's invariant that a log line carries no transcript
     // text is binding here too, and quoting the garbage at the model only invites
     // it to interpret the garbage.
-    if (assistantText && isAssertionOnUnintelligibleInput(userText, assistantText)) {
+    if (assistantText && isAssertionOnUnintelligibleInput(userText, assistantText, actionsThisTurn)) {
       if (bus && typeof bus.emit === 'function') {
         bus.emit('health.anomaly', {
           kind: 'assertion-on-unintelligible-input',
