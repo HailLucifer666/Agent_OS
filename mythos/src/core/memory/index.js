@@ -252,11 +252,17 @@ function createMemory({ config, bus, logger, brain }) {
         // vecIndexes partition name to the real store it's backed by.
         for (const storeName of ['episodic', 'semantic', 'documents']) {
           const hits = vecIndexes[storeName].search(q, limit);
+          const store = RECALL_STORES[storeName];
+          // BUG-436: one walk for all of this store's hits. Per-hit get() re-read
+          // the whole month of Episodic each time — 8 hits, 1.4 s of blocked loop.
+          let batch = null;
+          if (typeof store.getMany === 'function') {
+            try { batch = store.getMany(hits.filter((h) => h.score >= VECTOR_MIN_SCORE).map((h) => h.ref)); } catch { /* falls back to get() below */ }
+          }
           for (const h of hits) {
             if (h.score < VECTOR_MIN_SCORE) continue;
-            const store = RECALL_STORES[storeName];
             let rec = null;
-            try { rec = store.get(h.ref); } catch { /* pruned/archived ref */ }
+            try { rec = batch ? (batch.get(h.ref) || null) : store.get(h.ref); } catch { /* pruned/archived ref */ }
             if (!rec) continue;
             const record = rec.record || rec;
             // FIX G: keyword-path exclusion happens inside episodic.recall() —
