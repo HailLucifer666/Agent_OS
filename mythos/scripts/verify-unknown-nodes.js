@@ -687,7 +687,7 @@ async function groupProcedures(sandbox) {
   // one call. Whether a model calls it on "go ahead" is only visible attended.
   const unheard = require(path.join(MYTHOS_ROOT, 'src/core/voice/unheard-answer'));
   const conn = 'harness-connection';
-  const tracker = unheard.createUnheardTracker({ remember: (e) => unheard.rememberUnheard(conn, e) });
+  const tracker = unheard.createUnheardTracker({ remember: (e) => unheard.rememberUnheard(conn, e), forget: () => unheard.forgetUnheard(conn) }); // wired as server/index.js wires it (forget required since 2026-09-25)
   tracker.audio(Buffer.alloc(48000, 0).toString('base64')); // 1 s of 24 kHz 16-bit PCM
   tracker.turnEnd({ assistantText: 'First part was heard. Second part was not.', turnId: 1 });
   tracker.unheard({ cutMs: 700, turnMs: 1000 });

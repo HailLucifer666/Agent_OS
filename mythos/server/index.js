@@ -2791,7 +2791,7 @@ function createServer(deps) {
     let liveSession = null;
     let liveAdapter = null;
     // BUG-447: where each Live answer's audio was cut, so "go ahead" can resume what the room did not hear.
-    const unheardTracker = unheardAnswer.createUnheardTracker({ remember: (entry) => unheardAnswer.rememberUnheard(connectionId, entry) });
+    const unheardTracker = unheardAnswer.createUnheardTracker({ remember: (entry) => unheardAnswer.rememberUnheard(connectionId, entry), forget: () => unheardAnswer.forgetUnheard(connectionId) }); // BUG-447: a heard answer retires an older remainder
     // BUG-433: the HUD registers its onBroadcast('live-audio-out') handler inside
     // s2s-bridge start() (:1031) and only then sends live-open (:1039), so the
     // message is a faithful proxy for "this client can play Live audio" — and

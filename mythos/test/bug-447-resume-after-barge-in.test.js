@@ -70,7 +70,7 @@ test('(c) playback that came back mid-turn bounds the resumed part at the senten
 
 test('(d) the tracker measures the turn from the audio it forwarded, and refuses a report on a different timeline', () => {
   const remembered = [];
-  const t = ua.createUnheardTracker({ remember: (e) => remembered.push(e), now: () => 1000 });
+  const t = ua.createUnheardTracker({ remember: (e) => remembered.push(e), forget: () => {}, now: () => 1000 }); // forget: required since 2026-09-25 (bug-447-resume-is-the-latest-answer)
   assert.equal(t.unheard({ cutMs: 100, turnMs: 100 }), null, 'no turn has ended yet');
   for (let i = 0; i < 90; i++) t.audio(pcmChunk(100)); // 9 s
   t.turnEnd({ assistantText: ANSWER, turnId: 7 });
@@ -93,7 +93,7 @@ test('(d) the tracker measures the turn from the audio it forwarded, and refuses
 
 test('(e) a long remainder is bounded and says so', () => {
   const remembered = [];
-  const t = ua.createUnheardTracker({ remember: (e) => remembered.push(e) });
+  const t = ua.createUnheardTracker({ remember: (e) => remembered.push(e), forget: () => {} });
   const long = 'Word '.repeat(1000).trim() + '.';
   t.audio(pcmChunk(1000));
   t.turnEnd({ assistantText: long, turnId: 1 });
