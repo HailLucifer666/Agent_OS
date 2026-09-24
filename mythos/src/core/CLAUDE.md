@@ -137,8 +137,9 @@ file adds the invariants specific to this layer.
   forward `consent`, and model arguments never can. So the autonomous loop,
   the engagement executor and any new caller cannot write permanent memory
   through the tool. Only `authority-gate.js` mints (test-pinned). The
-  background summariser in `memory/index.js` (step 3b) still writes
-  `user-facts` directly: decision owed, pinned as a known gap.
+  background summariser in `memory/index.js` (step 3b) writes `user-facts`
+  only when `MEMORY_AUTO_USER_FACTS=true`: off by default since 2026-09-25,
+  on the operator's decision (BUG-463). Do not turn it back on by default.
 
 ## Dispatch (`effectors/dispatch-action.js`)
 

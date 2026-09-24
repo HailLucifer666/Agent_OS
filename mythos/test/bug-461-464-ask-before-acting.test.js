@@ -665,17 +665,15 @@ describe('derived sets and forward guards', () => {
 });
 
 describe('known gaps, pinned with the reason', () => {
-  it('KNOWN GAP (decision owed): the background summariser still writes user-facts with no request', () => {
+  it('DECIDED 2026-09-25 (was a known gap): the background summariser writes user-facts only when MEMORY_AUTO_USER_FACTS=true', () => {
     // memory/index.js step 3b asks the memory lane to "Extract durable facts about
-    // the user" from recent conversations and writes each to user-facts at
-    // confidence 0.7 with no sources. It ran on this machine on 2026-09-24 (the
-    // user-facts header carries exactly that signature), and "The operator
-    // really enjoys playing jazz piano" (BUG-080) came in through it. The
-    // operator's "lock it" (2026-09-24) was asked about the remember case only,
-    // so this door is left open and named instead of closed unasked. When it is
-    // decided, flip this.
+    // the user" and writes each to user-facts with no request. It was pinned here as
+    // an open door on 2026-09-24, "when it is decided, flip this". The operator
+    // decided on 2026-09-25 (BUG-463): off by default. The behaviour is pinned end to
+    // end in test/bug-463-startup-notes-and-auto-facts.test.js (f)-(h); this keeps
+    // the write itself gated in the source.
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'core', 'memory', 'index.js'), 'utf8');
-    assert.match(src, /semantic\.write\('user-facts', \[fact\], \{ confidence: 0\.7, append: true \}\)/);
+    assert.match(src, /if \(process\.env\.MEMORY_AUTO_USER_FACTS !== 'true'\) \{[\s\S]{0,400}\} else try \{/);
   });
 
   it('KNOWN GAP: a click proposal has no words to check, so "presented" means MYTHOS asked an action question', () => {

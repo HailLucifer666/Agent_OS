@@ -620,8 +620,8 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-460 | coded | blocked | [CODED 2026-09-24] The fragment correction is excused only by an oracle-verified action this turn; a plain ok (remember, write_note) is not evidence of what was heard. Replayed over 09-23/24 first: one false, one true, one unchanged. Remaining evidence: an attended one-word command. | mythos/test/bug-448-460-a-claim-is-judged-by-what-it-claims.test.js; mythos/src/core/voice/fragment-guard.js; mythos/src/core/voice/live-tool-adapter.js |
 | BUG-461 | coded | blocked | [CODED 2026-09-24] A trusted click, type or key press runs only on operator words that ask for it; otherwise MYTHOS asks and a plain yes runs exactly that call. Replayed first: the click was a turn later than filed, under an objection, and a second instance exists (09-23). Remaining evidence: an attended noise case and a golden-path line. | mythos/test/bug-461-464-ask-before-acting.test.js; mythos/src/core/voice/operator-authority.js; mythos/src/core/voice/authority-gate.js; mythos/src/core/leash/confirm.js |
 | BUG-462 | coded | blocked | [CODED 2026-09-24] Browser actions are judged on the page before and after, against what each is for; the old capsule called any after-state proof. Thirteen paths covered, a ref pinned to its tab, values never echoed. Reproduced headlessly first. Remaining evidence: the golden path; the 15:11:33 playback claim is handed to BUG-448/460. | mythos/test/bug-462-browser-action-proves-its-effect.test.js; mythos/src/core/effectors/browser-effect.js; mythos/src/core/effectors/from-browser.js |
-| BUG-463 | open | currently reproduced | [FILED 2026-09-24 from the attended run] Quoted twice plus the operator's objection. Remaining evidence: which context block carries it. | mythos/src/core/voice (Live system instruction); mythos/src/core/memory/reflection |
-| BUG-464 | coded | blocked | [CODED 2026-09-24] remember writes only with a server-minted consent token: the operator's explicit ask, or a yes to the exact text read back. Counted across 13 days: 2 unrequested saves of 10. The background summariser (memory/index.js 3b) still writes user-facts unasked: decision owed. Remaining evidence: an attended save both ways. | mythos/test/bug-461-464-ask-before-acting.test.js; mythos/src/core/leash/consent.js; mythos/src/core/effectors/from-memory.js; mythos/src/core/voice/operator-authority.js |
+| BUG-463 | coded | blocked | [CODED 2026-09-25] Traced, read-only, on the live vault. The carrier was an ordinary fact in the Live frame's kept tail, written on 09-23 by the background note-taker (memory/index.js step 3b) from one day of bug testing: "currently working on ... bugs 439, 441, 442". The "upon boot" notes reached no prompt at all. Operator decisions: the note-taker is OFF unless MEMORY_AUTO_USER_FACTS=true; startup notes go to the boot greeting only. The vault is not edited, so the 09-23 fact stays until the operator removes it. Remaining evidence: an attended run. | mythos/src/core/memory/startup-facts.js; mythos/src/core/memory/index.js; mythos/server/index.js; mythos/test/bug-463-startup-notes-and-auto-facts.test.js |
+| BUG-464 | coded | blocked | [3b ROUTE CLOSED 2026-09-25 by the operator's decision: the background note-taker writes no user-facts unless MEMORY_AUTO_USER_FACTS=true (BUG-463)] [CODED 2026-09-24] remember writes only with a server-minted consent token: the operator's explicit ask, or a yes to the exact text read back. Counted across 13 days: 2 unrequested saves of 10. The background summariser (memory/index.js 3b) still writes user-facts unasked: decision owed. Remaining evidence: an attended save both ways. | mythos/test/bug-461-464-ask-before-acting.test.js; mythos/src/core/leash/consent.js; mythos/src/core/effectors/from-memory.js; mythos/src/core/voice/operator-authority.js |
 | BUG-467 | coded | blocked | [CODED 2026-09-24] MODEL_BILLING_POLICY=free-only: one route decision (provider + model + effective endpoint + mode) consulted by chainFor after CHAIN_* overrides, by chain.complete at every attempt, and by the Live open, the three speech providers, embeddings, generate_image, dsh model selection and MCP key hand-over. Fragility, not a live bug: no premium key on the operator machine. Remaining evidence: one real boot with the flag set, after the operator console check of free-tier billing. | mythos/test/free-only-route-policy.test.js; mythos/src/core/brain/route-policy.js |
 | BUG-468 | open | currently reproduced | [FILED 2026-09-24 from the attended run] With YOUTUBE_MODE=newtab (set in this machine's desktop config) open_web type:"youtube" returns a newtab card, which has no surface under Electron; nothing played and it reported unverified, not failed. Remaining evidence: the same request after a repair. | mythos/src/core/effectors/from-dashboard.js (youtube newtab branch); electron/media-window.js |
 | BUG-406 | open | blocked | [RECORDER CODED 2026-09-23; study and repair OPEN by decision D9] VOICE_GATE_RECORDER=true now records, around every gate release, the mic level, both gates, whether and how far ahead the player is speaking, and both audio clocks — numbers only, never audio or words — under the repo's .cache/. The acoustic study, a replay harness, any change to the gate and the p95 250 ms target are the next round's work. [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
@@ -3145,13 +3145,63 @@ Around them:
 
 **Attribution:** attended run 2026-09-24.
 
-## BUG-463 — MYTHOS steers ordinary conversation back to bugs and goals (filed 2026-09-24)
+## BUG-463 — MYTHOS steers ordinary conversation back to bugs and goals (filed 2026-09-24; CODED 2026-09-25)
 
-**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+**Status:** 🔧 CODED 2026-09-25 (branch fix/rev4-28-bugs) — the carrier is traced, and both of the operator's decisions are coded. Live check owed: an attended run. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
 
 **Evidence.** At 14:56:23: *"Anything else on your mind right now? Perhaps about those bugs you were working on."* At 14:57:11 the operator: *"Every time I tell you something, why do you circle back to, you know, bugs, goals? If I have bugs to be solved, I will."* Earlier (14:51:35) its recollection of the day before led with *"system updates, maybe that landing page design, and you were keeping tabs on some bugs"*.
 
 **Mechanism, not traced.** BUG-446 (D10) removed open commitments from unrelated turns. The remaining source is likely the operator profile or reflection-learned context describing the operator as someone working on bugs.
+
+**Traced (2026-09-25, read-only; the vault was not edited).** Every channel that reaches the voice model was measured against the live vault:
+
+- **OPERATOR FACTS in the Live setup frame** (`server/index.js`, `LIVE_FACTS_MAX_CHARS` 8000, which keeps the newest facts). The frame gets 96 of the file's 365 facts, indices 269 to 364. Four of them mention bugs or goals. The one that fits the 14:56:23 line is 343: *"The user is currently working on a project involving bug tracking and testing (e.g., bugs 439, 441, 442)"*. That line is in every voice session, and is rebuilt on every open and rotation.
+- **Where fact 343 came from.** The background note-taker in `memory/index.js`, step 3b, "Extract durable facts about the user", reads recent conversation summaries and writes without asking. The file's header carries its signature (confidence 0.7, no sources). Its input on 09-23 was the operator's own "So the next is for the bug 439" and MYTHOS's replies reading "BUG-442" and "bugs … 442, 441" off the operator's screen (13:55:50, 14:07:51). Its prompt says "Only include facts that will still be true tomorrow".
+- **The three "upon boot" / "upon startup" notes** (facts 17, 18 and 20) reached **no** prompt: they are cut from the Live frame, and a semantic recall snippet carries only a topic's first three facts. The question put to the operator on 2026-09-24 assumed the opposite. It was corrected before any code was written, and the operator decided again.
+- **Recall.** The 14:51:35 recollection ("you were keeping tabs on some bugs") followed `recall_memory {"query":"yesterday"}` at 14:51:18, and 09-23 really was a bug-testing day. That is a true memory, not a defect. MYTHOS's own status summaries (`Semantic/consolidated-*.md`: "4 active goals and 160 incidents logged") are also recallable. They are not changed here.
+- **The identity files.** The 10 learned preferences `persona()` folds in carry nothing about bugs; the profile carries "expects literal incident logging".
+- **09-23.** The two diversions there (13:55:50 and 14:07:51) came from the screen reading itself.
+
+**Decisions (operator, 2026-09-25).** (1) The background note-taker is turned off: a setting, off by default. (2) Notes saved for startup go to the boot greeting only.
+
+**Fix.**
+
+- Step 3b writes `user-facts` only when `MEMORY_AUTO_USER_FACTS=true`. Only the exact value `true` turns it on. Otherwise it emits `memory.consolidate-skip {reason: auto-user-facts-off}` and makes no model call. It is documented in `.env.example`. This also closes the route BUG-464 left open by decision.
+- New `src/core/memory/startup-facts.js`: a note is startup-only when it names the moment with its preposition ("upon boot", "on startup", "at start-up"). Checked against the operator's 365 facts, exactly the three startup notes match. The Live frame drops them before the tail cap, so they no longer take its space, on every open and rotation. A semantic recall snippet drops them. The boot greeting, once per process, receives them as standing instructions after the fact list. `GREETING_FACT_DISCIPLINE` still limits what may be stated, and the clause says to leave out what is not listed rather than guess.
+- `src/core/CLAUDE.md` and BUG-464's known-gap test are updated.
+
+**Bounds.**
+
+- Fact 343 stays in the vault. The vault is not edited, and with the note-taker off, no newer facts push it out of the frame. It goes when the operator says "forget the note about bugs 439" (`forget_fact`), or edits the file.
+- The Gmail note ("Only read unread Gmail once upon boot or when explicitly asked. Do not repeat the email list …") also governed chat. It is now the greeting's alone, as the operator chose.
+- Known edges of the pattern: "works at Startup Labs" would read as startup-only; "each time you start" is not matched and stays an ordinary fact.
+- MYTHOS's recallable status summaries are unchanged.
+- The greeting has no incident count to report, so an instruction asking for one is left out rather than answered.
+
+**Proof (2026-09-25, `test/bug-463-startup-notes-and-auto-facts.test.js`, 8 tests).**
+
+- The pattern: the startup phrasings match, and six ordinary facts containing "boot" or "startup" do not.
+- The real server's Live setup frame, first open and again after a reconnect: ordinary facts in, startup notes out.
+- The real boot greeting prompt gets them, after the discipline and under its limit; no startup notes means no clause.
+- A real semantic recall snippet drops them, and the vault file's hash is unchanged.
+- A real `createMemory` consolidation: off by default, it writes nothing and asks no model. Before the fix it wrote "The user is currently working on bugs 439, 441 and 442." `true` restores it exactly, and "1", "yes" and "TRUE " do not.
+
+Negative control, `server/index.js`, `memory/index.js`, `semantic.js` and `briefing.js` at 4b367227, with the new module present: 5 of 8 red. Twelve probes, each applied once and diffed, restored from a copy and hash-verified, each red:
+
+- the frame keeping the notes;
+- the greeting not given them;
+- the clause landing before the discipline;
+- the clause losing its limit;
+- an empty clause still added;
+- the snippet keeping them;
+- the pattern losing its preposition;
+- the pattern missing "upon startup";
+- the gate inverted;
+- any value turning it on;
+- the skip going silent;
+- and a fixture probe (no user-facts topic).
+
+BUG-464's "KNOWN GAP (decision owed)" test is flipped to the decided disposition, as it asked to be. The first full run was 8331 tests, 8330 pass, 1 fail: `consolidate-gate-and-diagnostics` asserted that a successful consolidation emits no skip at all, and the note-taker's new off-skip is one. Classified as the decided behaviour; the test now requires exactly that one skip, with a dated note. Full suite after that (2026-09-25, worktree on 4b367227 plus this change, long-form TEMP, ports 4999/5099, `node --test --test-reporter=tap`): 8331 tests, 8331 pass, 0 fail, 0 cancelled, 0 skipped, exit 0 (8323 at 4b367227 plus these 8). NOT verified live: an attended run, and chat after the operator removes fact 343.
 
 **Attribution:** attended run 2026-09-24.
 
@@ -3177,7 +3227,7 @@ Every save was labelled `voice-explicit`, asked or not. The vault keeps only the
 
 Negation (the operator's own 14:55:27 "You don't have to remember that"), quotation, hypotheticals, recollection ("I remember when…") and a bare "remember that" all get the read-back. So does a number the operator never said. The label now says which kind of consent it was (`voice-explicit` or `operator-approved`). The typed/batch path (voice-agent.js) uses the same rule and the same lock. With these rules the 6 requested saves above proceed, and the other 4 ask.
 
-**Not closed, by decision (DECISION OWED).** `memory/index.js` step 3b still asks the memory lane to "Extract durable facts about the user" from recent conversation, and writes them to `user-facts` directly. No request is involved, and it does not use the tool. It ran on this machine on 2026-09-24: `user-facts.md`'s metadata header carries its exact signature (confidence 0.7, no sources). "The operator really enjoys playing jazz piano" (BUG-080) came in that way. The operator's "lock it" was asked about the `remember` case only, so this route is named and pinned by a test rather than closed unasked. Also not changed: `note_take` and `write_note` (a different store; the 09-23 14:11:40 unrequested note is the adjacent instance), and `forget_fact`.
+**Closed 2026-09-25 by the operator's decision (BUG-463):** step 3b now writes no `user-facts` unless `MEMORY_AUTO_USER_FACTS=true`. The paragraph below is the record from before the decision. **Not closed then, by decision (DECISION OWED).** `memory/index.js` step 3b still asks the memory lane to "Extract durable facts about the user" from recent conversation, and writes them to `user-facts` directly. No request is involved, and it does not use the tool. It ran on this machine on 2026-09-24: `user-facts.md`'s metadata header carries its exact signature (confidence 0.7, no sources). "The operator really enjoys playing jazz piano" (BUG-080) came in that way. The operator's "lock it" was asked about the `remember` case only, so this route is named and pinned by a test rather than closed unasked. Also not changed: `note_take` and `write_note` (a different store; the 09-23 14:11:40 unrequested note is the adjacent instance), and `forget_fact`.
 
 Proof: see BUG-461, shared.
 
@@ -23353,7 +23403,7 @@ those records remain owed (this section is the index until then).
 
 - BUG-462 - browser_click reported success on a YouTube result that never opened, and MYTHOS told the operator the video was starting. CODED 2026-09-24: every browser action is judged before/after against its purpose, and a no-change click is unverified. The headline click turned out to have navigated; the false 15:11:33 playback claim is handed to BUG-448/460; golden path owed. Filed 2026-09-24 from the attended run. Full entry above.
 
-- BUG-463 - MYTHOS keeps steering ordinary conversation back to bugs and goals; the operator objected. The source is not traced yet. Filed 2026-09-24 from the attended run. Full entry above.
+- BUG-463 - MYTHOS keeps steering ordinary conversation back to bugs and goals; the operator objected. CODED 2026-09-25: traced to a 09-23 "currently working on bugs 439, 441, 442" fact written by the background note-taker, which is now off unless MEMORY_AUTO_USER_FACTS=true; notes saved for startup go to the boot greeting only; the vault is not edited, so that fact stays until the operator removes it. Filed 2026-09-24 from the attended run. Full entry above.
 
 - BUG-464 - a permanent memory ("not feeling well") was saved without the operator asking, against the memory rule. CODED 2026-09-24: remember needs the operator's explicit ask or a yes to the exact text read back; the background summariser still writes unasked, decision owed; attended check owed. Filed 2026-09-24 from the attended run. Full entry above.
 

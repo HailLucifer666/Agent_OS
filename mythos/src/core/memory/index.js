@@ -377,7 +377,17 @@ function createMemory({ config, bus, logger, brain }) {
         // above because conversations have different structure (user said / entity
         // replied) and warrant a different extraction prompt. Results land in
         // Semantic/user-facts.md, recalled by the server's recall-before-respond.
-        try {
+        //
+        // BUG-463 (2026-09-25, operator decision "turn it off"): OFF unless
+        // MEMORY_AUTO_USER_FACTS=true. On 09-23 this turned one day of bug testing into
+        // "The user is currently working on ... bugs 439, 441, 442", which then rode
+        // into every voice session as a durable fact, and MYTHOS kept steering chat
+        // back to bugs. Its prompt already said "only facts still true tomorrow". Also
+        // the write BUG-464 left open: it saved facts about the operator nobody asked
+        // for. The operator's own `remember` requests are untouched (BUG-464's lock).
+        if (process.env.MEMORY_AUTO_USER_FACTS !== 'true') {
+          bus.emit('memory.consolidate-skip', { reason: 'auto-user-facts-off', detail: 'MEMORY_AUTO_USER_FACTS is not "true": no user-facts are written from conversation' });
+        } else try {
           const convos = episodic.recall('', { kind: 'conversation', limit: 20, windowDays: 1 });
           // Only distill if there are NEW conversations since last consolidation
           // (avoid re-processing the same turns every cycle). Heuristic: need at

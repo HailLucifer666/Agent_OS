@@ -21,7 +21,8 @@ const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = r
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
-const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause } = require('../src/core/conversation/briefing');
+const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause, startupInstructionsClause } = require('../src/core/conversation/briefing');
+const { isStartupOnlyFact, startupOnlyFacts } = require('../src/core/memory/startup-facts'); // BUG-463
 const { TOOL_RESPONSE_DISCIPLINE } = require('../src/core/voice/narration-claims');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
@@ -312,7 +313,8 @@ function createServer(deps) {
       if (config.LIVE_MEMORY_INJECT !== false) {
         const semantic = memory && memory.semantic;
         const factsTopic = (semantic && typeof semantic.topic === 'function') ? semantic.topic('user-facts') : null;
-        const facts = factsTopic && Array.isArray(factsTopic.facts) ? factsTopic.facts : [];
+        // BUG-463: a note saved for startup ("Upon boot, ...") goes to the boot greeting only; this frame is rebuilt on every open and rotation.
+        const facts = (factsTopic && Array.isArray(factsTopic.facts) ? factsTopic.facts : []).filter((f) => !isStartupOnlyFact(f));
         if (facts.length) {
           const header = 'OPERATOR FACTS (as of session-start — durable memory, may have changed since; ' +
             'use recall_memory for anything not here):';
@@ -2461,6 +2463,7 @@ function createServer(deps) {
               greetingRelationshipClause(previousBootAt) + // BUG-447: a first meeting is not the hundredth
               (config.LIVE_VOICE_HONESTY_ENABLED === false ? '' : GREETING_FACT_DISCIPLINE) + 'Facts you may use:\n- ' +
               facts.join('\n- ') + '\n' +
+              startupInstructionsClause(startupOnlyFacts(memory && memory.semantic)) + // BUG-463: the operator's notes for startup, here only
               'If a "Last time we spoke" fact is present, open by picking up that thread in half a sentence, ' +
               'the way someone resumes a conversation rather than starting one.\n' +
               'Reply with ONLY the spoken greeting: one to three short sentences, plain natural speech, no markdown, no quotes.',
