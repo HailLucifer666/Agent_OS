@@ -1874,7 +1874,7 @@ marked fixed.
 
 
 
-Still genuinely open, and NOT the regression: deleting `browserName` outright once BUG-407's tests are re-pointed, and widening the prose ratchet to `src/core/voice/`. A third is added by the repair: `remedy-prose-ratchet.test.js`'s from-dashboard.js entry is not a string but a mis-lexed span covering most of the file, so every edit to that file rehashes it and no rewording can ever remove it. That scanner needs a real lexer or per-property scoping.
+Still genuinely open, and NOT the regression: deleting `browserName` outright once BUG-407's tests are re-pointed, and widening the prose ratchet to `src/core/voice/`. A third is added by the repair: `remedy-prose-ratchet.test.js`'s from-dashboard.js entry is not a string but a mis-lexed span covering most of the file, so every edit to that file rehashes it and no rewording can ever remove it. That scanner needs a real lexer or per-property scoping. **Lexer item CLOSED 2026-09-24:** the scanner now skips regex literals and walks `${...}` as code (the cause was a quote inside a regex: the backtick in `` /[;&|`$()<>^]/ `` and the apostrophe in `don'?t`), and a new test blanks every span it finds and asks V8 to compile the rest, so a lexer out of step with any scanned file is red. Six files had been out of step, not two; the baseline was re-recorded once, 96 sites to 90, with open_web's description now counted as its own site. Details and mutations are in the test file.
 
 **REGRESSED 2026-09-10 18:21Z, REPAIRED 2026-09-11.** The guard above refused `open_web` whenever a browser was named, and the model then had nowhere to go:
 
