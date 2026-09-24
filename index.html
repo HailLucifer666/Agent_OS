@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8262,
+      "value": 8275,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5350,7 +5350,7 @@
         "state": "open",
         "title": "the half-duplex gate held the operator's microphone for 40% of a conversation, and 92 seconds of that ended in a timeout rather than in actual echo (🔴 DIAGNOSED 2026-09-03, deliberately NOT fixed here)",
         "detail": {},
-        "excerpt": "**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. The **recorder** the closing note asks for is CODED 2026-09-23 (next section); the study and the repair are not. ### The recorder (CODED 2026-09-23 — decision D9: recorder this round, study next round) The entry's own conclusion was that scalar release summaries cannot establish acoustic ground truth, and that the next step needs synchronised microphone and playback evidence around each release. That instrument now exists, behind `VOICE_GATE_RECORDER=true` (off by default, documented in `.env.example`). - **HUD** (`ui/public/js/voice/gate-recorder.js`): a ring buffer of the last 30 s, at most one sample per 50 ms, each holding the mic frame's RMS, the media gate and the own-voice hold, whether the player says it is speaking, how far ahead of its clock the player has audio queued (new `playhead()` in `pc…",
+        "excerpt": "**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. The **recorder** the closing note asks for is CODED 2026-09-23 (next section); the study and the repair are not. **2026-09-24 — BUG-455 changed the idle ceiling's CLOCK, not its constants or thresholds.** The 8 s idle window restarted only on arriving audio, and Live streams faster than real time, so on 09-24 20 of 50 holds ended on it while a long reply was still playing. It now waits while the player is still speaking on a moving clock. The operator chose on 2026-09-24 to make that change before this study, on the evidence in BUG-455. Everything this entry defers is still deferred: the recorded corpus, the replay harness and any change to the gate's levels or ceilings. ### The recorder (CODED 2026-09-23 — decision D9: recorder this round, study next round) The entry's own conclusion was that scalar re…",
         "campaign": {
           "disposition": "blocked",
           "evidence": "[RECORDER CODED 2026-09-23; study and repair OPEN by decision D9] VOICE_GATE_RECORDER=true now records, around every gate release, the mic level, both gates, whether and how far ahead the player is speaking, and both audio clocks — numbers only, never audio or words — under the repo's .cache/. The acoustic study, a replay harness, any change to the gate and the p95 250 ms target are the next round's work. [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room.",
@@ -5997,13 +5997,13 @@
         "n": 455,
         "shape": "entry",
         "state": "open",
-        "title": "MYTHOS hears itself: the echo filter never has a copy of its own words, and the mic gate's ceiling reopens the microphone while it is still speaking (filed 2026-09-24)",
+        "title": "MYTHOS hears itself: the echo filter never has a copy of its own words, and the mic gate's ceiling reopens the microphone while it is still speaking (filed 2026-09-24; CODED 2026-09-24, mic half)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** `live.echo-check` reported `reason=no-reference`, `referenceWords=0` on all 12 checks of 2026-09-24 and all 46 of 2026-09-23 — the filter meant to recognise MYTHOS's own words coming back through the microphone had nothing to compare against at any check. At 14:53:35.879 the own-voice gate released on its ceiling (`own-voice-ceiling-near-field-energy`, held 13.3 s, peakRms 0.0444 against bleedPeak 0.0127) while the reply was still playing; 115 ms later Gemini cut the turn at 72 audio parts, and the next input transcript was the single word \"November\". Ceiling releases in 23 minutes: near-field-energy 3, no-evidence-of…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs), mic half — the own-voice watchdog now judges on the playback clock, so a long reply no longer reopens the mic while it is still playing. The echo half was measured and is deliberately unchanged (below). Live check owed: an attended session with `VOICE_GATE_RECORDER=true`. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** `live.echo-check` reported `reason=no-reference`, `referenceWords=0` on all 12 checks of 2026-09-24 and all 46 of 2026-09-23 — the filter meant to recognise MYTHOS's own words coming back through the microphone had nothing to compare against at any check. At 14:53:35.879 the own-voice gate released on its ceiling…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-24 from the attended run] Echo check had zero reference words at every check on 2026-09-23 and 2026-09-24; the mic gate ceiling released mid-reply and Gemini cut the turn. Remaining evidence: a gate recording around a release.",
-          "source": "mythos/src/core/voice/live-session.js (echoFilter); mythos/ui/public/js/voice/s2s-bridge.js (own-voice gate)"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-24, mic half] The own-voice watchdog judged on the ARRIVAL clock, and Live streams faster than real time: 20 of 50 holds on 09-24 reopened the mic while a long reply (43-94 chunks) was still playing, none of the 20 replies under 43 chunks did, and no barge-in was refused in any of them. It now waits while the player is still speaking on a moving clock; a frozen clock is judged at once; the 8 s and 30 s constants are unchanged. The echo half was measured and deliberately NOT changed: a copy kept to playback end would have caught no echo in 44 scored turns and dropped the operator's real \"further\". Remaining evidence: an attended session with VOICE_GATE_RECORDER=true, where ceiling releases should fall to near zero and own-voice-ended lines should carry playbackWaits.",
+          "source": "mythos/ui/public/js/voice/own-voice-clock.js; mythos/ui/public/js/voice/s2s-bridge.js; mythos/test/bug-455-mic-waits-for-playback.test.js"
         }
       },
       {

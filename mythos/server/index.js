@@ -3774,7 +3774,7 @@ function createServer(deps) {
         // actually sends and fails if any would be dropped. Third occurrence is where
         // patching instances stops and the assertion gets written.
         for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms',
-          'bargeVetoed', 'bargeVetoTier', 'bleedFloor',
+          'bargeVetoed', 'bargeVetoTier', 'bleedFloor', 'playbackWaits', 'playbackStalled', // BUG-455: the watchdog now waits on playback
           // BUG-274: the policy's own veto reason and the level it refused. bargeVetoTier
           // alone names the blocked BACKSTOP tier, which is the same string whichever of
           // the four policy causes fired — and those causes want opposite fixes. The
