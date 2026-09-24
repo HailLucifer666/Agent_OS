@@ -474,6 +474,12 @@ function parseParam(name, spec) {
   return { schema, optional };
 }
 
+// The cap toDeclaration has always applied to a description. Named, and reported
+// by buildFunctionDeclarations when it bites (BUG-459): the cut used to be silent,
+// and measured 2026-09-24 it was dropping the last sentence of think_deeply
+// ("answer the question yourself instead of retrying") on every Live session.
+const DESCRIPTION_MAX_CHARS = 1024;
+
 function toDeclaration(entry, procedureGuidance = false) {
   const properties = {};
   const required = [];
@@ -485,7 +491,7 @@ function toDeclaration(entry, procedureGuidance = false) {
   }
   const decl = {
     name: entry.name,
-    description: String(entry.description || entry.name).slice(0, 1024),
+    description: String(entry.description || entry.name).slice(0, DESCRIPTION_MAX_CHARS),
   };
   if (procedureGuidance && entry.name !== 'suggest_procedures') properties.skillRef = {
     type: 'string', description: 'Optional: skillRef returned by suggest_procedures, only when this action follows one of its steps. Never authorization; resolve current targets.'
@@ -529,7 +535,7 @@ function buildFunctionDeclarations(hub, opts) {
     }
   }
 
-  const declared = [], withheld = [], unavailable = [], needsSetup = [];
+  const declared = [], withheld = [], unavailable = [], needsSetup = [], truncated = [];
   for (const entry of catalog) {
     if (!entry || !entry.name) continue;
     if (!allow.has(entry.name)) { withheld.push(entry.name); continue; }
@@ -541,6 +547,7 @@ function buildFunctionDeclarations(hub, opts) {
       // left the model with a launcher and nothing to launch FOR.
       if (cap.needs) needsSetup.push({ name: entry.name, rule: cap.rule, reason: cap.needs });
     }
+    if (String(entry.description || '').length > DESCRIPTION_MAX_CHARS) truncated.push(entry.name);
     declared.push(toDeclaration(entry, allow.has('suggest_procedures') && catalog.some(e => e.name === 'suggest_procedures')));
   }
   // AD-5 in spirit: a silent cap reads as full coverage. Say what was withheld.
@@ -563,7 +570,11 @@ function buildFunctionDeclarations(hub, opts) {
     options.log(`live-tools: declared ${needsSetup.length} tool(s) that NEED A STEP FIRST — `
       + needsSetup.map((u) => `${u.name} (${u.reason})`).join('; '));
   }
-  return { declarations: declared, withheld, unavailable, needsSetup };
+  if (options.log && truncated.length) {
+    options.log(`live-tools: WARNING — ${truncated.length} description(s) longer than ${DESCRIPTION_MAX_CHARS} chars `
+      + `were CUT, so the model never reads their ending: ${truncated.join(', ')}`);
+  }
+  return { declarations: declared, withheld, unavailable, needsSetup, truncated };
 }
 
 module.exports = {
@@ -572,5 +583,5 @@ module.exports = {
   VOICE_ALLOWLIST_EXEMPT,
   ACT_TOOL_READ_COUNTERPARTS,
   findMissingReadCounterparts,
-  _internal: { parseParam, toDeclaration },
+  _internal: { parseParam, toDeclaration, DESCRIPTION_MAX_CHARS },
 };
