@@ -119,7 +119,10 @@ function createOpenAICompatProvider(config) {
     return full;
   }
 
-  return { name, chat, isAvailable, getStatus, getModel };
+  // getBaseURL is exported for brain/route-policy.js: a billing decision has to
+  // be made about the host this request will actually reach, and this function
+  // is the only place that knows it after baseURLGetter and env overrides.
+  return { name, chat, isAvailable, getStatus, getModel, getBaseURL };
 }
 
 module.exports = { createOpenAICompatProvider };

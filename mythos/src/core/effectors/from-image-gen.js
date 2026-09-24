@@ -52,8 +52,11 @@ const fs = require('fs');
 const { effectorFromTool } = require('./adapter');
 const validate = require('./forge-validate');
 
+const routePolicy = require('../brain/route-policy');
+
 const IMAGES_REL = 'builds/images';
 const IMAGE_MODEL = 'gemini-3.1-flash-image';
+const IMAGE_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 function ok(result) { return { ok: true, result }; }
 function fail(reason) { return { ok: false, result: reason }; }
@@ -97,8 +100,14 @@ function buildTools(ctx) {
     if (!apiKey) {
       return fail('Image generation is unavailable (GOOGLE_API_KEY is not configured).');
     }
+    // Wave 0c (2026-09-24): IMAGE_MODEL has NO free tier — Google's pricing page
+    // lists it "Not available" there, read that day. With MODEL_BILLING_POLICY=
+    // free-only this tool refuses before any request, and says why; with the
+    // policy unset it behaves exactly as before.
+    const billing = routePolicy.decide({ provider: 'google', model: IMAGE_MODEL, endpoint: IMAGE_BASE, mode: 'image' });
+    if (!billing.allowed) return fail('Image generation is unavailable: ' + billing.reason + '.');
     try {
-      const url = 'https://generativelanguage.googleapis.com/v1beta/models/' + IMAGE_MODEL +
+      const url = IMAGE_BASE + '/' + IMAGE_MODEL +
         ':generateContent?key=' + encodeURIComponent(apiKey);
       const res = await fetch(url, {
         method: 'POST',

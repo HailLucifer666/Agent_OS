@@ -42,6 +42,8 @@
 
 // Moved off gemini-2.5-flash-preview-tts 2026-09-11 on the re-measurement above.
 // GEMINI_TTS_MODEL still overrides, so reverting is an env var and not a deploy.
+const routePolicy = require('../src/core/brain/route-policy');
+
 const DEFAULT_MODEL = 'gemini-3.1-flash-tts-preview';
 const DEFAULT_VOICE = 'Aoede';
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -106,6 +108,8 @@ async function synthesize({ text, voice, model, signal }) {
 
   const useModel = model || process.env.GEMINI_TTS_MODEL || DEFAULT_MODEL;
   const useVoice = voice || process.env.GEMINI_LIVE_VOICE || DEFAULT_VOICE;
+  // Wave 0c: the model is caller- and env-settable; judged before the request.
+  routePolicy.assertAllowed({ provider: 'google', model: useModel, endpoint: BASE, mode: 'tts' });
 
   const res = await fetch(`${BASE}/${useModel}:generateContent?key=${key}`, {
     method: 'POST',

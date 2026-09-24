@@ -618,8 +618,16 @@ const SCHEMA = {
   MISTRAL_EMBED_MODEL:         { type: 'string', default: 'mistral-embed' },
   GROQ_STT_MODEL:              { type: 'string', default: 'whisper-large-v3-turbo' },
 
+  // Wave 0c (2026-09-24) — which model routes MYTHOS may call, by what they
+  // cost. '' / 'any' = every configured route (BYO premium included, today's
+  // behaviour). 'free-only' = only routes src/core/brain/route-policy.js
+  // classifies as free or local; paid and unclassified routes are refused by
+  // name. An unknown value fails boot here; the policy module also fails CLOSED
+  // on one, so a typo can never quietly re-enable paid routes.
+  MODEL_BILLING_POLICY:        { type: 'string', default: '', enum: ['', 'any', 'free-only'] },
+
   // Provider URL overrides (default to the official endpoints)
-  NIM_API_URL:                 { type: 'string', default: 'https://integrate.api.nvidia.com/v1' },
+  NIM_API_URL:                { type: 'string', default: 'https://integrate.api.nvidia.com/v1' },
   GROQ_API_URL:                { type: 'string', default: 'https://api.groq.com/openai/v1' },
   MISTRAL_API_URL:             { type: 'string', default: 'https://api.mistral.ai/v1' },
   CEREBRAS_API_URL:            { type: 'string', default: 'https://api.cerebras.ai/v1' },

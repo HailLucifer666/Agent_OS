@@ -45,6 +45,7 @@
 // boundary is the operator's decision to list the server in MCP_SERVERS at all.
 
 const { spawn } = require('child_process');
+const routePolicy = require('../../src/core/brain/route-policy');
 
 // Protocol version this client implements. Servers negotiate down; a server
 // that refuses is reported honestly rather than being coerced.
@@ -218,10 +219,27 @@ function createClient(spec) {
     client._connecting = (async function() {
       if (!client.command) return fail('no command configured for server ' + client.name);
 
+      // Wave 0c (2026-09-24): nothing here can see what an MCP server does with a
+      // key it is handed, so under MODEL_BILLING_POLICY=free-only a server is
+      // never given one that exists only to reach a paid-only provider. A server
+      // CONFIGURED to need one is refused by name rather than started without it,
+      // so the operator hears why instead of debugging a half-working server.
+      var freeOnly = routePolicy.currentPolicy().mode === routePolicy.POLICY_FREE_ONLY;
+      var paidKeys = freeOnly ? routePolicy.paidOnlyKeyEnvs() : [];
+      var askedPaid = Object.keys(client.serverEnv || {}).filter(function(k) {
+        var v = String(client.serverEnv[k]);
+        return paidKeys.indexOf(k) !== -1 || paidKeys.some(function(p) { return v.indexOf('${' + p + '}') !== -1; });
+      });
+      if (askedPaid.length) {
+        return fail('MCP server ' + client.name + ' is configured to receive ' + askedPaid.join(', ')
+          + ', a key for a paid-only provider; MODEL_BILLING_POLICY=free-only refuses to hand it over');
+      }
+
       var childEnv = Object.assign({}, client.env || process.env);
       Object.keys(client.serverEnv || {}).forEach(function(k) {
         childEnv[k] = expandEnvValue(client.serverEnv[k], process.env);
       });
+      paidKeys.forEach(function(k) { delete childEnv[k]; });
 
       client.status = 'STARTING';
       client.lastError = null;

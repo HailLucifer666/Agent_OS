@@ -1,5 +1,11 @@
 // openrouter.js — OpenRouter chat streaming provider (Phase 2).
 
+// Fixed on purpose: chat has never honoured OPENROUTER_API_URL (only
+// registry.js's catalog probe reads it). Named so getBaseURL below reports the
+// host chat really calls, for brain/route-policy.js.
+const BASE_URL = 'https://openrouter.ai/api/v1';
+function getBaseURL() { return BASE_URL; }
+
 function isAvailable() {
   return Boolean(process.env.OPENROUTER_API_KEY);
 }
@@ -29,7 +35,7 @@ async function chat(messages, opts = {}) {
     body.reasoning = { exclude: true };
   }
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+  const res = await fetch(`${BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -93,4 +99,4 @@ function getStatus() {
   return { ok: isAvailable(), model: getModel() };
 }
 
-module.exports = { name: 'openrouter', chat, isAvailable, getModel, getStatus };
+module.exports = { name: 'openrouter', chat, isAvailable, getModel, getStatus, getBaseURL };

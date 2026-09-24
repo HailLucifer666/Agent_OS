@@ -48,6 +48,7 @@ var path = require('path');
 var os = require('os');
 var { treeKill } = require('../command-runner');
 var { createLogger } = require('../../src/core/logger');
+var routePolicy = require('../../src/core/brain/route-policy');
 var logger = createLogger(process.env.LOG_LEVEL || 'info');
 // The post-mortem layer: what a dead child process gets reported AS. Split out
 // for BUG-356 because this file sits on its size ratchet ceiling.
@@ -203,13 +204,16 @@ function readPiAiCatalog(route) {
   }
 }
 
-function catalogHasModel(route, model) {
+// The catalog's entry for a model (null when absent). Its baseUrl is what the
+// billing policy judges: dsh calls the host pi-ai's catalog names, not MYTHOS's
+// own *_API_URL overrides.
+function catalogEntry(route, model) {
   var catalog = readPiAiCatalog(route);
-  if (!catalog) return false;
+  if (!catalog) return null;
   for (var api in catalog) {
-    if (Object.prototype.hasOwnProperty.call(catalog[api] || {}, model)) return true;
+    if (Object.prototype.hasOwnProperty.call(catalog[api] || {}, model)) return catalog[api][model] || {};
   }
-  return false;
+  return null;
 }
 
 function buildLane() {
@@ -251,11 +255,16 @@ function selectModel(override) {
       rejected.push(label + ' (' + mapped.apiKeyEnv + ' unset)');
       continue;
     }
-    if (!catalogHasModel(mapped.route, model)) {
+    var entryInCatalog = catalogEntry(mapped.route, model);
+    if (!entryInCatalog) {
       rejected.push(label + ' (pi-ai catalog for route "' + mapped.route + '" does not describe "'
         + model + '")');
       continue;
     }
+    // Wave 0c: under MODEL_BILLING_POLICY=free-only a paid or unclassified route is
+    // rejected by name like any unreachable one — the explicit override included.
+    var billing = routePolicy.decide({ provider: laneProvider, model: model, endpoint: entryInCatalog.baseUrl, mode: 'build' });
+    if (!billing.allowed) { rejected.push(label + ' (' + billing.reason + ')'); continue; }
     return {
       laneProvider: laneProvider,
       route: mapped.route,

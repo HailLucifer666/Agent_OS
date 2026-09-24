@@ -24,6 +24,7 @@ const { createBreaker } = require('../immune/breakers');
 // of thrown away. The liveness probe reads a free /models catalog and therefore
 // cannot see a 402.
 const providerHealth = require('./provider-health');
+const routePolicy = require('./route-policy');
 const { createLogger } = require('../logger');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
@@ -426,6 +427,14 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
     if (isCooling(lane, model)) { reportSkip(lane, model, 'cooldown'); continue; }
     // Skip lanes whose provider isn't configured (e.g. GROQ_API_KEY not set).
     if (LANES[lane] && typeof LANES[lane].isAvailable === 'function' && !LANES[lane].isAvailable()) continue;
+    // Wave 0c (2026-09-24): the billing policy is asked again HERE, at the moment
+    // of invocation, and so on every fallback hop — not only when the ranked list
+    // was built. registry.chainFor already drops refused routes, so in production
+    // this line refuses nothing today; it is what still holds if a caller ever
+    // hands this walk a list that did not come through chainFor (tests do exactly
+    // that, which is how this line is reached and pinned).
+    const billing = routePolicy.decide({ provider: lane, model, endpoint: registry.endpointFor(lane), mode: 'chat' });
+    if (!billing.allowed) { reportSkip(lane, model, 'billing-policy'); errors.push(`${lane}:${model}: ${billing.reason}`); continue; }
     // B1: the escalating skip. allow() is what advances OPEN -> HALF_OPEN when
     // resetMs has passed, so calling it here is also how a recovered provider
     // gets its single probe back.
