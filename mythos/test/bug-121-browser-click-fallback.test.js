@@ -77,8 +77,8 @@ describe('BUG-121 — browser_click falls back to a script click for lazy-hydrat
   // SPLIT 2026-09-24 (BUG-462). This test was "a normal visible element uses the
   // native click and is fully verified", asserting "Playwright actionability IS
   // the oracle — this one is proven" on a page that did not change at all. That
-  // was the claim 15:11:24 disproved: a native click passed every actionability
-  // check and opened nothing. Actionability proves the click could land; the
+  // is the hollow proof BUG-462 removed: a click that changed nothing read as
+  // proven. Actionability proves the click could land; the
   // page moving is what proves it did.
   it('a normal visible element uses the native click, and is verified when the page moves', async () => {
     const log = [];

@@ -384,8 +384,8 @@ async function browser_click({ selector, ref }) {
       const moved = checkRef(ref, page);
       if (moved) return moved;
       // Playwright's actionability check (visible, stable, not covered) proves the
-      // click COULD land; it says nothing about what the click did. 15:11:24 on
-      // 2026-09-24 was a native click that passed every check and opened nothing.
+      // click COULD land; it says nothing about what the click did (BUG-462). What
+      // it did is judged from the page before and after, in browser-effect.js.
       const target = refLocator(page, ref);
       return await effect.actWithEvidence(page, { intent: { kind: 'click' }, ref, locator: target,
         payload: { clicked: ref, via: 'ref-click' }, act: () => target.click(), settle: true });

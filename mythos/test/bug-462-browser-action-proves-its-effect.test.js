@@ -3,23 +3,28 @@
 // BUG-462 — a browser action is verified by the effect it was FOR, not by the
 // page answering a question.
 //
-// 2026-09-24, attended run: browser_click on ref f2e308 completed ok at 15:11:24,
-// and at 15:11:33 MYTHOS said "I've also clicked the third video for you, the
-// 'Café Ambience' mix. It should be starting up now." The debug browser's only
-// page was still https://www.youtube.com/results?search_query=lofi+music. The
-// click carried evidence (oracle page-state): the old capsule read url, title
-// and focus AFTER the click and called any answer proof. Every ref click, type,
+// 2026-09-24, attended run. The old capsule read url, title and focus AFTER an
+// action and called any answer proof (oracle page-state). Every ref click, type,
 // key press and hover returned verified that way, whatever happened (class 14);
 // the selector click, selector type, scroll and fill_form returned a plain ok.
+// The vault shows it: the PageDowns at 15:10:51 and 15:11:01 left url, title and
+// video unchanged and were recorded verified. Reproduced before the fix, through
+// the real browser_click with a page that does not change: {ok:true,
+// unverified:false, evidence:{oracle:'page-state'}}.
 //
-// Reproduced before the fix, through the real browser_click with a page that
-// does not change: {ok:true, unverified:false, evidence:{oracle:'page-state'}}.
+// CORRECTED 2026-09-24, after reading the vault record rather than the ticket:
+// the ticket's headline click (f2e308, 15:11:24) DID navigate — its own recorded
+// after-state is /watch?v=Gvx-DAzR-4k, with the title not yet updated. The page
+// was back on the results page by 15:11:46 and nothing played. So that click is
+// verified under the new judge, correctly (REPLAY test below), and the false part
+// of 15:11:33 is "It should be starting up now" — a playback claim with no player
+// playing, which is BUG-448 / BUG-460's to judge.
 //
 // What this file pins: the pure judge over the action x before/after matrix
-// (gate C); each tool through its real code path; the 15:11:24 shape; the
+// (gate C); each tool through its real code path; the recorded 15:11:24 states; the
 // settle wait and popup association the old code never had; that a typed value
-// is never echoed; the tab pin; and gate F — the resulting unverified click,
-// through the real Live adapter, gets the 15:11:33 sentence retracted.
+// is never echoed; the tab pin; and gate F — an unverified click, through the
+// real Live adapter, gets an "I've clicked" sentence retracted.
 //
 // Mutation probes and their dated results are recorded in BUGS.md, BUG-462's
 // Proof paragraph, and in the commit that added this file.
@@ -95,7 +100,7 @@ describe('BUG-462 — the judge, over the action x before/after matrix', () => {
   const base = { url: RESULTS, title: 'lofi music - YouTube', focused: { tag: 'a', role: null, name: 'Café Ambience' } };
   const cases = [
     // [label, intent, before, after, extra, verdict]
-    ['click, nothing changed (15:11:24)', { kind: 'click' }, base, base, {}, 'unverified'],
+    ['click, nothing changed (the hollow-proof shape)', { kind: 'click' }, base, base, {}, 'unverified'],
     ['click, only the title changed', { kind: 'click' }, base, Object.assign({}, base, { title: '(1) lofi music - YouTube' }), {}, 'unverified'],
     ['click, only focus moved', { kind: 'click' }, base, Object.assign({}, base, { focused: { tag: 'body' } }), {}, 'unverified'],
     ['click, the element vanished', { kind: 'click' }, Object.assign({}, base, { refStillPresent: true }), Object.assign({}, base, { refStillPresent: false }), {}, 'unverified'],
@@ -161,6 +166,24 @@ describe('BUG-462 — the judge, over the action x before/after matrix', () => {
     assert.ok(j.incidental.some((s) => /hover preview/.test(s)), JSON.stringify(j));
   });
 
+  // REPLAY of the vault record (Episodic/2026-09-24.jsonl). Before: the 15:11:22
+  // snapshot's page. After: the capsule browser_click f2e308 recorded at 15:11:24.
+  it('REPLAY 15:11:24: the recorded click moved the page, so it is verified — and says nothing about playing', () => {
+    const before = { url: RESULTS, title: 'lofi music - YouTube', video: { playing: false, currentTime: 0, duration: null } };
+    const after = { url: 'https://www.youtube.com/watch?v=Gvx-DAzR-4k&list=RDGvx-DAzR-4k&start_radio=1', title: 'lofi music - YouTube',
+      video: { playing: false, currentTime: 0, duration: null } };
+    const j = judgeEffect({ kind: 'click' }, before, after, {});
+    assert.equal(j.verdict, 'verified', 'the ticket said nothing opened; the recorded after-state says the page moved');
+    assert.match(j.observed, /watch\?v=Gvx-DAzR-4k/);
+    assert.doesNotMatch(j.observed, /PLAYING/, 'a click that moved the page is not a video that is playing');
+  });
+
+  it('REPLAY 15:10:51 / 15:11:01: a PageDown that moved nothing, recorded verified, is now unverified', () => {
+    const s = { url: RESULTS, title: 'lofi music - YouTube', focused: { tag: 'body' }, video: { playing: false, currentTime: 0, duration: null } };
+    const j = judgeEffect({ kind: 'key', key: 'PageDown' }, s, Object.assign({}, s), {});
+    assert.equal(j.verdict, 'unverified');
+  });
+
   it('an intent nobody named fails loudly instead of guessing', () => {
     assert.throws(() => judgeEffect({ kind: 'teleport' }, {}, {}, {}), /unknown intent kind/);
   });
@@ -170,7 +193,7 @@ describe('BUG-462 — each tool, through its real code path', () => {
   beforeEach(stubOnline);
   afterEach(restore);
 
-  it('THE 15:11:24 SHAPE: a ref click on the results page that opens nothing is unverified, not verified', async () => {
+  it('a ref click that changes nothing is unverified, not verified (the hollow-proof shape)', async () => {
     const page = statefulPage();
     const fb = load(page);
     const r = await fb.browser_click({ ref: 'e1' });
@@ -342,13 +365,14 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
     });
     return { adapter, injected, anomalies };
   }
-  // The 15:11:33 sentence verbatim, and the same sentence without its "also".
-  // The claim detector matches "I've clicked" but not "I've also clicked" — see
-  // the KNOWN GAP test below for why that is not changed here.
+  // The 15:11:33 wording verbatim, and the same sentence without its "also". These
+  // tests pair it with a click that changed NOTHING — not the real f2e308 click,
+  // which navigated (see the REPLAY test). The claim detector matches "I've
+  // clicked" but not "I've also clicked" — see the KNOWN GAP test below.
   const VERBATIM = "Noted, Sir, I've logged the background noise as an incident. I've also clicked the third video for you, the 'Café Ambience' mix. It should be starting up now.";
   const SAID = VERBATIM.replace("I've also clicked", "I've clicked");
 
-  it('the real 15:11:24 outcome, through the real adapter, retracts the 15:11:33 sentence', async () => {
+  it("an unverified click, through the real adapter, gets an \"I've clicked\" sentence retracted", async () => {
     const outcome = await load(statefulPage()).browser_click({ ref: 'e1' });
     const { adapter, anomalies, injected } = adapterReturning(outcome);
     await adapter.handleLiveToolCalls([{ id: 'x1', name: 'browser_click', args: { ref: 'e1' } }], { sendToolResponse: () => {} });
@@ -364,8 +388,9 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
   // KNOWN GAP, pinned on purpose 2026-09-24 and owned by the BUG-448 residual /
   // BUG-460 claim-to-effect work (plan Wave 1, next): claim-check's categories
   // match "I've clicked" and "I clicked" but not an adverb in between, so the
-  // VERBATIM 15:11:33 sentence is not caught even now that the click is honestly
-  // unverified. Not widened here: the plan's rule for that module is to replay
+  // 15:11:33 wording, paired with a click that really was unverified (a synthetic
+  // pairing: the real f2e308 click navigated and was right to back "clicked"), is
+  // not caught. Not widened here: the plan's rule for that module is to replay
   // every spoken line in Episodic 09-23/24 before changing a detector, and a
   // widened verb pattern retracts true sentences too. When that work lands, this
   // assertion is the one to flip (0 -> 1).

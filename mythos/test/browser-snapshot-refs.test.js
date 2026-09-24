@@ -300,7 +300,8 @@ describe('the verify half — a ref action reports what the page says afterwards
 
   // REWRITTEN 2026-09-24 (BUG-462). These used to hand browser_click a page that
   // did NOT change and require verified ("a ref click carries oracle-backed
-  // evidence, not a bare ok"). That was the hollow proof 15:11:24 walked through:
+  // evidence, not a bare ok"). That was the hollow proof BUG-462 removed (the
+  // 09-24 PageDowns at 15:10:51 and 15:11:01 changed nothing and read verified):
   // the capsule read url/title/focus AFTER the click and called any answer proof,
   // and a page always has a url. They now pin the before/after rule instead — a
   // change the click was for proves it; a page merely reporting its state does not.

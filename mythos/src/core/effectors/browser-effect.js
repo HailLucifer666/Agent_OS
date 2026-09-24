@@ -2,14 +2,21 @@
 
 // browser-effect.js — BUG-462: did a browser action have the effect it was FOR?
 //
-// 2026-09-24, attended run. browser_click on ref f2e308 returned ok at 15:11:24
-// and MYTHOS said "I've also clicked the third video for you ... It should be
-// starting up now." The debug browser's only page was still the results page.
-// The click had "evidence": the old withStateCapsule read url, title and focus
-// AFTER the click and called any answer proof (oracle page-state). A page always
+// 2026-09-24, attended run. The old withStateCapsule read url, title and focus
+// AFTER an action and called any answer proof (oracle page-state). A page always
 // has a url, so every ref click, type, key press and hover came back verified
 // whatever happened — a check that could not fail (class 14), asking "did the
-// page report something" instead of "did the thing happen" (gate E).
+// page report something" instead of "did the thing happen" (gate E). The vault
+// shows it directly: the PageDowns at 15:10:51 and 15:11:01 left url, title and
+// video exactly as they were and were recorded verified.
+//
+// CORRECTED the same day, after reading the vault record: the ticket's headline
+// case, browser_click f2e308 at 15:11:24, DID navigate — its own after-state was
+// /watch?v=Gvx-DAzR-4k (title not yet updated). The page was back on the results
+// page by 15:11:46 and nothing ever played; what sent it back is not established.
+// So under this module that click is verified by the move, correctly. What was
+// false at 15:11:33 was "It should be starting up now": a playback claim with no
+// player playing, which is the claim checker's to judge (BUG-448 / BUG-460).
 //
 // The rule now: capture the state BEFORE the action, capture it again after, and
 // judge the difference against what this kind of action is for. Four outcomes,
@@ -43,10 +50,10 @@ const CLICK_SETTLE_MS = 800;
 const SCROLL_EPSILON_PX = 2;
 const SEEK_MIN_SECONDS = 5;
 // A video counts as THE player only if it is the largest visible one and covers
-// at least this share of the viewport. ATTACKED 2026-09-24: the ticket's own
-// suspected mechanism for 15:11:24 is a click that landed on a hover preview, and
-// YouTube's results page plays a small inline <video> for that — which the first
-// version of this judge counted as "a video started". Unmeasured on real pages;
+// at least this share of the viewport. ATTACKED 2026-09-24: YouTube's results
+// page carries a small inline <video> for hover previews — every capture of the
+// 09-24 results page in the vault holds a paused one with no duration — and the
+// first version of this judge counted any video changing state. Unmeasured on real pages;
 // a thumbnail preview is a few percent of a 1080p viewport, a watch-page player
 // tens of percent. It errs toward unverified: a small embedded player that really
 // started reads as unknown, never a preview as success.
