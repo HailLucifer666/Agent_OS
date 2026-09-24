@@ -90,6 +90,12 @@ function createOpenAICompatProvider(config) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let lineBuf = '';
+    // BUG-458: why a stream ended is otherwise lost — two think_deeply calls on
+    // 2026-09-24 returned no text and nothing recorded the finish reason, so the
+    // cause could not be named. Reported through opts.onMeta, never thrown: the
+    // caller (chain.js) decides what an empty answer means.
+    let finishReason = null;
+    let streamError = null;
 
     for (;;) {
       const { done, value } = await reader.read();
@@ -113,9 +119,14 @@ function createOpenAICompatProvider(config) {
           full += delta;
           if (onToken) onToken(delta);
         }
+        if (evt?.choices?.[0]?.finish_reason) finishReason = evt.choices[0].finish_reason;
+        if (evt?.error) streamError = String(evt.error.message || evt.error).slice(0, 200);
       }
     }
 
+    if (typeof opts.onMeta === 'function') {
+      try { opts.onMeta({ finishReason, streamError }); } catch (_) { /* instrumentation only */ }
+    }
     return full;
   }
 

@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8099,
+      "value": 8115,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6038,13 +6038,13 @@
         "n": 458,
         "shape": "entry",
         "state": "open",
-        "title": "the reasoning lane counts an empty answer as a success, so no fallback model is tried (filed 2026-09-24)",
+        "title": "the reasoning lane counts an empty answer as a success, so no fallback model is tried (filed 2026-09-24; CODED 2026-09-24)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** `deepthink.call ok:false chars:0` at 14:59:21.941 (369 ms) and 15:01:07.462 (402 ms), each with `deepthink.attempt ok:true` and `attemptsTried:1` — provider `nim`, model `nvidia/nemotron-3-super-120b-a12b`. Two of the session's four calls. MYTHOS told the operator plainly that the reasoning model had failed and answered by itself, which is the right behaviour. The operator pointed out that fallback models exist. **Mechanism, not yet measured.** The attempt counts an HTTP-successful reply with empty content as a success, so the lane never falls through. Plausibly the model spends its budget on hidden reasoning and retu…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs) — an empty or non-text reply is its own outcome and the walk moves on; a stream cut after text is never joined to another model; the finish reason is recorded. Live check owed: an attended think_deeply that meets an empty reply. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** `deepthink.call ok:false chars:0` at 14:59:21.941 (369 ms) and 15:01:07.462 (402 ms), each with `deepthink.attempt ok:true` and `attemptsTried:1` — provider `nim`, model `nvidia/nemotron-3-super-120b-a12b`. Two of the session's four calls. MYTHOS told the operator plainly that the reasoning model had failed and answered by itself, which is the right behaviou…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-24 from the attended run] Two empty answers with attemptsTried 1. Remaining evidence: the finish reason, and a fallback taken on empty content.",
-          "source": "mythos/src/core/effectors/deep-think.js"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-24] An empty or non-text reply is its own attempt outcome and the walk moves on, with no success, cooldown or breaker tick recorded; a stream cut after text stops the walk instead of appending another model; openai-compat reports finish_reason into the attempt record. Reproduced headlessly first (7 of 14 red on the old code). Remaining evidence: an attended think_deeply that meets an empty reply.",
+          "source": "mythos/test/bug-458-empty-answer-is-not-success.test.js; mythos/src/core/brain/chain.js"
         }
       },
       {

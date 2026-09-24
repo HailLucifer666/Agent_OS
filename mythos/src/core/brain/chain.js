@@ -280,6 +280,7 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
   const deferredTimeoutCooldowns = [];
   let nonTimeoutFailures = 0;
   let anyAttemptSucceeded = false;
+  let emptyReplies = 0; // BUG-458 — attempts that answered with no usable text
 
   // Settle the deferred timeout cooldowns. There are THREE exits from the walk and
   // it is called on all of them: success (~line 430), caller abort (~line 375) and
@@ -459,6 +460,19 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
     // to tell "this attempt hit ITS OWN timeout" apart from a provider error, and
     // that is the single most useful field in the telemetry.
     let attemptTimedOut = false;
+    // BUG-458 (2026-09-24): did THIS attempt already hand real text to the
+    // caller's onToken? The voice legacy path streams tokens straight into TTS, so
+    // once one has gone out the operator may already have HEARD it. Walking on to
+    // another model after that would speak a second answer glued to half of the
+    // first. Measured before this change: model 1 streams "The capital is" and
+    // drops, model 2 is called and its "Paris." is appended. Whitespace does not
+    // count — nothing audible was delivered.
+    let deliveredText = false;
+    const attemptOnToken = onToken ? (t) => { if (!deliveredText && /\S/.test(String(t))) deliveredText = true; onToken(t); } : undefined;
+    // BUG-458: the provider's own account of why its stream ended (openai-compat
+    // reports it; providers that do not leave it null, which the record says).
+    let attemptMeta = null;
+    const onMeta = (m) => { attemptMeta = m; };
     // Telemetry must never be able to break the chain walk it is measuring.
     const reportAttemptEnd = (fields) => {
       if (!onAttemptEnd) return;
@@ -480,9 +494,34 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
         let content;
         if (lane === 'ollama') {
           const msgs = effectiveKind === 'vision' ? toOllamaVisionMessages(messages) : messages;
-          content = await ollama.chat(msgs, { model, keepAlive: process.env.VOICE_OLLAMA_KEEP_ALIVE || '10m', signal: attemptCtrl.signal, onToken });
+          content = await ollama.chat(msgs, { model, keepAlive: process.env.VOICE_OLLAMA_KEEP_ALIVE || '10m', signal: attemptCtrl.signal, onToken: attemptOnToken, onMeta });
         } else {
-          content = await LANES[lane].chat(messages, { model, signal: attemptCtrl.signal, source: 'voice-chain', onToken });
+          content = await LANES[lane].chat(messages, { model, signal: attemptCtrl.signal, source: 'voice-chain', onToken: attemptOnToken, onMeta });
+        }
+        // BUG-458 (2026-09-24): "the call did not throw" was the cheap question;
+        // "is there an answer" is the one that matters (gate E). Two of four
+        // think_deeply calls that afternoon came back with NO text, each after one
+        // attempt the log recorded as ok:true, and no fallback model was tried.
+        // openai-compat.js returns the joined delta.content of a stream, so a stream
+        // that ends without content — a filter stop, an in-stream error object, an
+        // answer in a field it does not read — returns '' without throwing. Why the
+        // model did that is NOT known; nothing recorded the finish reason.
+        //
+        // So an unusable reply is its own outcome, decided BEFORE any success is
+        // recorded: no breaker.recordSuccess, no providerHealth.recordSuccess, and
+        // the walk moves on. It also takes NO cooldown and trips no breaker (class
+        // 11): one ambiguous reply must not bench a working model for a minute. It
+        // DOES count as "a provider answered" for BUG-273 C3, because it proves the
+        // network worked — so the timeouts deferred in this walk were each
+        // provider's own slowness and are taken. A refusal is text and is returned.
+        const unusable = typeof content !== 'string' ? 'invalid-shape' : (content.trim() ? null : 'empty');
+        if (unusable) {
+          reportAttemptEnd({ ok: false, timedOut: false, outcome: unusable,
+            finishReason: (attemptMeta && attemptMeta.finishReason) || null, streamError: (attemptMeta && attemptMeta.streamError) || null });
+          errors.push(`${lane}:${model}: ${unusable} reply`);
+          emptyReplies += 1; nonTimeoutFailures += 1;
+          wholeLaneTimeoutStreaks.delete(laneKey(lane, model));
+          continue;
         }
         reportAttemptEnd({ ok: true, timedOut: false });
         // B1: a success in HALF_OPEN is what closes the breaker and resets the
@@ -575,6 +614,15 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
         // BUG-273 C3: held until the run ends. See deferredTimeoutCooldowns above.
         deferredTimeoutCooldowns.push({ lane: lane, model: model, breaker: breaker });
       }
+      // BUG-458: text from this attempt already reached the caller (see
+      // deliveredText), so falling through would append another model's answer to
+      // it. Stop here, AFTER this attempt's own bookkeeping, and say why.
+      if (deliveredText) {
+        settleDeferredTimeouts();
+        const cut = new Error('The answer was cut off part-way and was not retried on another model.');
+        cut.partialStream = true; cut.provider = lane; cut.model = model;
+        throw cut;
+      }
     }
   }
 
@@ -588,6 +636,9 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
   if (errors.length > 0) console.warn('[brain chain] chain-exhausted:', JSON.stringify(errors.map(function(e) { return String(e).slice(0, 120); })));
   const err = new Error('All AI providers are currently unavailable. Please try again later.');
   err.chainExhausted = true;
+  // BUG-458: how many providers DID answer, with nothing usable — so a caller can
+  // say "every model answered empty" instead of "offline", which it is not.
+  err.emptyReplies = emptyReplies;
   throw err;
 }
 
