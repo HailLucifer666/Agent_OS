@@ -57,6 +57,7 @@ const {
 // the file-size ratchet; full rationale in that module.
 const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger');
 const { isAssertionOnUnintelligibleInput } = require('./fragment-guard'); // BUG-299 / BUG-460
+const { createAuthorityGate } = require('./authority-gate'); // BUG-461 / BUG-464: ask before acting on words that did not ask
 // BUG-398 R5a: the five claim sentences moved to their own module when adding a
 // fifth pushed this file past the size ratchet's ceiling. Pure text, no closure
 // use — the comments explaining each one moved with it, verbatim, because they
@@ -238,7 +239,9 @@ function createLiveToolAdapter(deps) {
     return false;
   }
 
-  const livePendingConfirms = new Map(); // confirmId -> {name, callId, createdAt}
+  const livePendingConfirms = new Map(); // confirmId -> {name, callId, createdAt, spoken?}
+  const authorityGate = createAuthorityGate({ leash, connectionId, pendingConfirms: livePendingConfirms, dispatchAction, logger, audit: memory && memory.audit,
+    resolveConfirm: (...a) => resolveLiveConfirm(...a), isNegative: (t) => NEGATIVE_RE.test(String(t || '')) });
   const liveTurnActions = [];            // AD-4: reconciled on turnComplete
   const recentActionLedger = createRecentActionLedger(); // BUG-357: cross-turn evidence
   // Security-review fix: onToolCall (live-session.js) is fire-and-forget, so a
@@ -480,7 +483,7 @@ function createLiveToolAdapter(deps) {
   }
 
   const suggestedProcedures = createProcedureAttribution();
-  async function handleLiveToolCalls(calls, { sendToolResponse }) {
+  async function handleLiveToolCalls(calls, { sendToolResponse, userTextSoFar, typedTextSoFar } = {}) {
     sweepPendingConfirms();
     // BUG-128 instrumentation: a re-issued batch carries fresh call ids, so the
     // only way to recognise one in a log is by its CONTENT. Logging the shape
@@ -680,6 +683,8 @@ function createLiveToolAdapter(deps) {
         responses.push({ id: call.id, name: call.name, response: { status: 'denied', reason: verdict.reason } });
         continue;
       }
+      const held = authorityGate.hold(call, decision, verdict, { spoken: userTextSoFar, typed: typedTextSoFar }); // BUG-461/464
+      if (held.response) { commitAction(held.row); responses.push({ id: call.id, name: call.name, response: held.response }); continue; }
 
       // WAVE 3 — tools that take longer than a Live turn get an explicit
       // started/done split instead of being awaited inside the turn.
@@ -702,7 +707,7 @@ function createLiveToolAdapter(deps) {
           status: 'started', message: STARTED_MESSAGE,
         }});
         // Deliberately not awaited: the whole point is that the turn does not wait.
-        dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id })
+        dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent })
           .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
           .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
         continue;
@@ -714,7 +719,7 @@ function createLiveToolAdapter(deps) {
         // like a SLOW_TOOLS call — the model never reaches turnComplete with an
         // unanswered call id, which is the only reason it re-issues a batch.
         const pending = dispatchAction(decision, {
-          tier: verdict.tier, channel: 'voice-live', traceId: call.id,
+          tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent,
         });
         const settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
         if (settled === DEADLINE_EXCEEDED) {
@@ -1098,7 +1103,7 @@ function createLiveToolAdapter(deps) {
   function notifySpokenGoAheadWhilePending(text) {
     if (!livePendingConfirms.size) return;
     const notice = buildSpokenGoAheadNotice(text,
-      [...livePendingConfirms.values()].map((e) => e.name),
+      [...livePendingConfirms.values()].filter((e) => !e.spoken).map((e) => e.name), // a spoken proposal IS approved by a spoken yes (authority-gate.js)
       { negative: NEGATIVE_RE.test(String(text || '')) });
     if (notice) sendSystemNotice(notice.verdict, notice.instruction,
       { site: 'spoken-go-ahead-no-dispatch', tool: notice.tool, claim: 'awaiting-click' });
@@ -1161,7 +1166,8 @@ function createLiveToolAdapter(deps) {
     decision.args = Object.assign({}, decision.args, { text: text + UNBACKED_NOTE_STAMP });
   }
 
-  function onLiveTurnComplete({ userText, assistantText, turnId }) {
+  function onLiveTurnComplete({ userText, assistantText, turnId, typedText }) {
+    authorityGate.onTurnComplete({ userText, assistantText, typedText }); // BUG-461/464: presents, approves on a yes, or drops
     // B3 — before any of this turn's ORDINARY handling (history append,
     // episodic write, reflection), a spoken "no" cancels whatever is pending.
     // Doing this first means the cancellation itself lands in liveTurnActions

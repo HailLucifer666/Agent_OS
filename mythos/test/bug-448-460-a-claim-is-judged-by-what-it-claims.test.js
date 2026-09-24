@@ -44,10 +44,18 @@ const row = (tool, fields) => Object.assign({ tool, ok: true, unverified: false,
 const unverifiedRow = (tool) => row(tool, { ok: false, unverified: true, status: 'unverified', confirmedStep: 'the k key was pressed' });
 const failedRow = (tool) => row(tool, { ok: false, unverified: false, dispatchOk: false, status: 'failed' });
 
+// The verdict the real leash gives an operator connection: tier 3 clicks and
+// keys are operator-present-trusted, everything at or under the ceiling is
+// within-autonomous-max. BUG-461 (Wave 2) gates on that reason, so a fake that
+// called everything trusted would test a different system.
+const verdictFor = (d) => (TIER_TABLE[d.tool] === 3
+  ? { allow: true, requireConfirm: false, tier: 3, reason: 'operator-present-trusted' }
+  : { allow: true, requireConfirm: false, tier: TIER_TABLE[d.tool] || 0, reason: 'within-autonomous-max' });
+
 function harness(outcomeFor) {
   const injected = []; const anomalies = [];
   const adapter = createLiveToolAdapter({
-    leash: { check: () => ({ allow: true, requireConfirm: false, tier: 3, reason: 'operator-present-trusted' }), confirm: { create: () => 'c' } },
+    leash: { check: verdictFor, confirm: { create: () => 'c' } },
     dispatchAction: async (d) => outcomeFor(d.tool || d.name || ''),
     bus: { emit: (type, p) => { if (type === 'health.anomaly') anomalies.push(p); } },
     logger: { warn() {}, info() {} },
@@ -59,8 +67,11 @@ function harness(outcomeFor) {
   });
   return { adapter, injected, anomalies };
 }
+// The operator's words reach the adapter at CALL time (live-session.js passes
+// userTextSoFar since BUG-461), so the fixture passes them there as well as at
+// turn end — the wire does both.
 async function turn(h, tool, args, userText, assistantText) {
-  await h.adapter.handleLiveToolCalls([{ id: 'c-' + tool, name: tool, args: args || {} }], { sendToolResponse: () => {} });
+  await h.adapter.handleLiveToolCalls([{ id: 'c-' + tool, name: tool, args: args || {} }], { sendToolResponse: () => {}, userTextSoFar: userText });
   const rows = h.adapter._internal.liveTurnActions.slice();
   h.adapter.onLiveTurnComplete({ userText, assistantText, turnId: 1 });
   return rows;
@@ -83,7 +94,9 @@ describe('BUG-448 residual — a keystroke claim is a key press, not a message',
   it('(b) a key that was DELIVERED but not proven still backs "sent the keystroke" — the claim is about the dispatch', async () => {
     assert.deepEqual(detectUnbackedClaims(SAID_KEYSTROKE, [unverifiedRow('browser_press_key')], []), []);
     const h = harness(() => KEY_OK_UNVERIFIED);
-    const rows = await turn(h, 'browser_press_key', { key: 'k' }, 'Play it.', SAID_KEYSTROKE);
+    // The 15:11:53 words. This read 'Play it.' until BUG-461: two words are now
+    // held and asked about, which is not what this test is about.
+    const rows = await turn(h, 'browser_press_key', { key: 'k' }, 'Play the Cafe Ambience video.', SAID_KEYSTROKE);
     assert.equal(rows[0].ok, false, 'the wire: unverified folds into ok:false');
     assert.equal(rows[0].dispatchOk, true);
     assert.equal(h.anomalies.filter((a) => a.kind === 'claimed-action-not-taken').length, 0);
@@ -120,9 +133,13 @@ describe('BUG-460 — a one-word command the world confirms was obeyed is not "u
     assert.equal(isAssertionOnUnintelligibleInput('further', SAID_FURTHER, []), true, 'the rule itself is unchanged when nothing was proven');
   });
 
+  // (h) and (k) drive browser_scroll, not the incident's browser_press_key. Since
+  // BUG-461 a one-word command never reaches a TRUSTED key press: it is held and
+  // MYTHOS asks (bug-461-464-ask-before-acting.test.js (t5)). The verified-action
+  // exemption is still reachable, through every tool the gate does not hold.
   it('(h) the same through the real adapter: no anomaly, no "did not catch that" notice, and the row carries verified', async () => {
     const h = harness(() => VERIFIED_SCROLL);
-    const rows = await turn(h, 'browser_press_key', { key: 'PageDown' }, 'further', SAID_FURTHER);
+    const rows = await turn(h, 'browser_scroll', { direction: 'down' }, 'further', SAID_FURTHER);
     assert.equal(rows[0].verified, true, 'evaluateOutcome must carry the oracle verdict onto the turn row');
     assert.equal(h.anomalies.filter((a) => a.kind === 'assertion-on-unintelligible-input').length, 0);
     assert.ok(!h.injected.some((t) => /did not\s+transcribe as anything intelligible/.test(t)));
@@ -131,8 +148,11 @@ describe('BUG-460 — a one-word command the world confirms was obeyed is not "u
   it('(i) CONTROL 14:53:44: "November" + remember() still fires — a write carries the model\'s own words', async () => {
     const h = harness(() => ({ ok: true, result: { remembered: true } }));
     const rows = await turn(h, 'remember', { text: "you haven't been feeling well" }, 'November', SAID_NOVEMBER);
-    assert.equal(rows[0].ok, true);
-    assert.equal(rows[0].verified, false, 'a plain ok is not an oracle');
+    // Since BUG-464 the remember never runs: nobody asked for it. The reply
+    // asserted instead of asking, so the correction still fires.
+    assert.equal(rows[0].ok, false);
+    assert.equal(rows[0].clarification, true, 'held by the authority gate, not dispatched');
+    assert.notEqual(rows[0].presented, true, 'the reply never asked to save anything');
     assert.equal(h.anomalies.filter((a) => a.kind === 'assertion-on-unintelligible-input').length, 1);
   });
 
@@ -143,7 +163,8 @@ describe('BUG-460 — a one-word command the world confirms was obeyed is not "u
 
   it('(k) BOUND, pinned: a command acted on with no oracle still draws the correction', async () => {
     const h = harness(() => ({ ok: true, unverified: true, reason: 'could not read the scroll position', result: {} }));
-    await turn(h, 'browser_press_key', { key: 'PageDown' }, 'further', SAID_FURTHER);
+    const rows = await turn(h, 'browser_scroll', { direction: 'down' }, 'further', SAID_FURTHER);
+    assert.equal(rows[0].dispatchOk, true, 'the call must actually run, or this bound is not being tested');
     assert.equal(h.anomalies.filter((a) => a.kind === 'assertion-on-unintelligible-input').length, 1);
   });
 

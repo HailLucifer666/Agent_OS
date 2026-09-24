@@ -44,6 +44,13 @@ const SUBSTANTIVE_MIN_CHARS = 40;
 // Bound, stated: a command acted on with no oracle (an unverified outcome) still
 // draws the correction; so does a verified action beside an invented fact in the
 // same reply, which is the correction's purpose.
+//
+// BUG-461 (2026-09-24): a call the authority gate HELD and MYTHOS then actually
+// asked about (row.clarification + row.presented, authority-gate.js) is the right
+// answer to a fragment. Correcting it would make MYTHOS ask "shall I scroll
+// further?" and then say "I missed what you said". Held but NOT asked about — the
+// real "November" reply asserted instead of asking — still draws the correction.
+// Bound: an assertion spoken beside a real question in the same reply is excused.
 function isAssertionOnUnintelligibleInput(userText, assistantText, actionsThisTurn) {
   const heard = String(userText || '').trim();
   // An EMPTY transcript is not a fragment. MYTHOS speaks unprompted on
@@ -53,7 +60,7 @@ function isAssertionOnUnintelligibleInput(userText, assistantText, actionsThisTu
   if (heard.length > FRAGMENT_MAX_CHARS) return false;
   if (/\s/.test(heard)) return false;
   if (String(assistantText || '').trim().length < SUBSTANTIVE_MIN_CHARS) return false;
-  return !(Array.isArray(actionsThisTurn) ? actionsThisTurn : []).some((a) => a && a.verified === true);
+  return !(Array.isArray(actionsThisTurn) ? actionsThisTurn : []).some((a) => a && (a.verified === true || (a.clarification === true && a.presented === true)));
 }
 
 module.exports = { isAssertionOnUnintelligibleInput, FRAGMENT_MAX_CHARS, SUBSTANTIVE_MIN_CHARS };

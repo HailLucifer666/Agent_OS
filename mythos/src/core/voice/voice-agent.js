@@ -406,6 +406,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   if (!leash || typeof leash.check !== 'function') throw new Error('createVoiceAgent requires leash');
   if (typeof dispatch !== 'function') throw new Error('createVoiceAgent requires dispatch(decision, ctx)');
   if (!bus) throw new Error('createVoiceAgent requires bus');
+  const typedMemoryGate = require('./authority-gate').createTypedMemoryGate(); // BUG-464: remember needs the operator's own words
 
   // BUG-017: when the real effector hub is available (always true at real boot —
   // see server/index.js), build the catalog from it so every registered effector
@@ -465,7 +466,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // is unchanged in shape; the difference is that the accept now comes from a
   // human.
 
-  async function executeAction(action, { connectionId, traceId, channel } = {}) {
+  async function executeAction(action, { connectionId, traceId, channel, said } = {}) {
     // H4: Guard against empty/invalid args before dispatch.
     if (!action || !action.tool) return { tool: '?', args: {}, ok: false, summary: 'no tool specified' };
     if (action.args && typeof action.args === 'object') {
@@ -538,7 +539,8 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
       return { tool: decision.tool, args: decision.args, ok: false, summary: `Denied: ${verdict.reason}.` };
     }
 
-    const outcome = await dispatch(decision, { tier: verdict.tier, traceId: traceId });
+    const heldMemory = typedMemoryGate.hold(decision, said, connectionId); if (heldMemory.refuse) return { tool: decision.tool, args: decision.args, ok: false, summary: heldMemory.refuse };
+    const outcome = await dispatch(decision, { tier: verdict.tier, traceId: traceId, consent: heldMemory.consent });
     const ok = Boolean(outcome && outcome.ok);
     const raw = outcome && outcome.result;
     // WAVE 3 — carry `unverified` onto the action. Without this the flag died here:
@@ -743,7 +745,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         if (signal && signal.aborted) {
           return { say: finalSay, actions: executedActions, aborted: true };
         }
-        const result = await executeAction(action, { connectionId: ctx.connectionId, traceId: ctx.traceId, channel: ctx.channel });
+        const result = await executeAction(action, { connectionId: ctx.connectionId, traceId: ctx.traceId, channel: ctx.channel, said: text });
         executedActions.push(result);
         // B2: Track failures across all iterations.
         if (result && result.ok === false && !result.confirmPending) allFailedActions.push(result);

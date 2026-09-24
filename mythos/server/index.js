@@ -2192,6 +2192,7 @@ function createServer(deps) {
       surface: ctx.surface,
       acceptedScope: ctx.acceptedScope,
       origin: ctx.origin, // BUG-446: a cortex-raised confirm is re-checked at execution
+      consent: ctx.consent, // BUG-464: the operator's consent token, minted server-side (voice/authority-gate.js)
     });
   }
 

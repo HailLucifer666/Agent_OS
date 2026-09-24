@@ -2,6 +2,14 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { buildTools } = require('../src/core/effectors/from-memory');
+const { mintConsent } = require('../src/core/leash/consent');
+
+// BUG-464 (2026-09-24): remember() writes permanent memory only with a consent
+// token for exactly these arguments, minted server-side from the operator's own
+// words (voice/authority-gate.js) and carried in the dispatch context. These
+// tests are about what the effector does WITH a save, so each call carries one;
+// what happens WITHOUT one is bug-461-464-ask-before-acting.test.js.
+const asked = (args) => [args, { consent: mintConsent({ tool: 'remember', args, basis: 'operator-request' }) }];
 
 // ---------------------------------------------------------------------------
 // remember tool
@@ -10,7 +18,7 @@ describe('from-memory: remember', () => {
   it('returns error when text is empty', async () => {
     const tools = buildTools({ semantic: { write: () => ({}) }, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({});
+    const result = await remember.fn(...asked({}));
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('text required'));
   });
@@ -22,7 +30,7 @@ describe('from-memory: remember', () => {
     };
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ fact: 'purple is the best color' });
+    const result = await remember.fn(...asked({ fact: 'purple is the best color' }));
     assert.equal(result.ok, true);
     assert.equal(result.result.remembered, 'purple is the best color');
     assert.equal(written.topic, 'user-facts');
@@ -35,7 +43,7 @@ describe('from-memory: remember', () => {
     };
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ note: 'always use dark mode' });
+    const result = await remember.fn(...asked({ note: 'always use dark mode' }));
     assert.equal(result.ok, true);
     assert.equal(result.result.remembered, 'always use dark mode');
     assert.equal(written.topic, 'user-facts');
@@ -48,7 +56,7 @@ describe('from-memory: remember', () => {
     };
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'my favorite color is blue' });
+    const result = await remember.fn(...asked({ text: 'my favorite color is blue' }));
     assert.equal(result.ok, true);
     assert.equal(result.result.remembered, 'my favorite color is blue');
     assert.equal(written.topic, 'user-facts');
@@ -64,7 +72,7 @@ describe('from-memory: remember', () => {
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
     const longText = 'a'.repeat(300);
-    const result = await remember.fn({ text: longText });
+    const result = await remember.fn(...asked({ text: longText }));
     assert.equal(result.ok, true);
     assert.equal(result.result.remembered.length, 200);
   });
@@ -72,7 +80,7 @@ describe('from-memory: remember', () => {
   it('handles semantic store unavailable', async () => {
     const tools = buildTools({ fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'remember this fact' });
+    const result = await remember.fn(...asked({ text: 'remember this fact' }));
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('unavailable'));
   });
@@ -80,7 +88,7 @@ describe('from-memory: remember', () => {
   it('handles semantic store with no write function', async () => {
     const tools = buildTools({ semantic: {}, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'remember this fact' });
+    const result = await remember.fn(...asked({ text: 'remember this fact' }));
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('unavailable'));
   });
@@ -91,7 +99,7 @@ describe('from-memory: remember', () => {
     };
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'remember this fact' });
+    const result = await remember.fn(...asked({ text: 'remember this fact' }));
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('degraded'));
   });
@@ -102,7 +110,7 @@ describe('from-memory: remember', () => {
     };
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: 'remember this fact' });
+    const result = await remember.fn(...asked({ text: 'remember this fact' }));
     assert.equal(result.ok, false);
     assert.ok(result.result.error.includes('disk full'));
   });
@@ -114,7 +122,7 @@ describe('from-memory: remember', () => {
     };
     const tools = buildTools({ semantic: mockSemantic, fs: {} });
     const remember = tools.find(t => t.name === 'remember');
-    const result = await remember.fn({ text: '  spaced out  ' });
+    const result = await remember.fn(...asked({ text: '  spaced out  ' }));
     assert.equal(result.ok, true);
     assert.equal(result.result.remembered, 'spaced out');
     assert.equal(written[0], 'spaced out');
@@ -132,7 +140,7 @@ describe('from-memory: remember', () => {
       const mockSemantic = { write: (topic, facts, opts) => { written = { topic, facts, opts }; return { ref: 'ref-id' }; } };
       const tools = buildTools({ semantic: mockSemantic, fs: {} });
       const remember = tools.find(t => t.name === 'remember');
-      const result = await remember.fn({ text: 'Call the operator Alex instead of Sir.' });
+      const result = await remember.fn(...asked({ text: 'Call the operator Alex instead of Sir.' }));
       assert.equal(result.ok, true);
       assert.ok(written.opts.confidence < 0.9, 'an identity-class claim must never reach the normal 0.9 confidence');
       assert.ok(written.opts.sources.includes('identity-unconfirmed'));
@@ -143,7 +151,7 @@ describe('from-memory: remember', () => {
       const mockSemantic = { write: (topic, facts, opts) => { written = { topic, facts, opts }; return { ref: 'ref-id2' }; } };
       const tools = buildTools({ semantic: mockSemantic, fs: {} });
       const remember = tools.find(t => t.name === 'remember');
-      await remember.fn({ text: "The operator's name is Alex and they created the thoughts entity." });
+      await remember.fn(...asked({ text: "The operator's name is Alex and they created the thoughts entity." }));
       assert.ok(written.opts.confidence < 0.9);
     });
 
@@ -152,7 +160,7 @@ describe('from-memory: remember', () => {
       const mockSemantic = { write: (topic, facts, opts) => { written = { topic, facts, opts }; return { ref: 'ref-ok' }; } };
       const tools = buildTools({ semantic: mockSemantic, fs: {} });
       const remember = tools.find(t => t.name === 'remember');
-      await remember.fn({ text: 'The operator really enjoys playing jazz piano' });
+      await remember.fn(...asked({ text: 'The operator really enjoys playing jazz piano' }));
       assert.equal(written.opts.confidence, 0.9);
       assert.deepEqual(written.opts.sources, ['voice-explicit']);
     });
@@ -170,7 +178,7 @@ describe('from-memory: remember', () => {
       };
       const tools = buildTools({ semantic: mockSemantic, fs: {}, identity: mockIdentity });
       const remember = tools.find(t => t.name === 'remember');
-      const result = await remember.fn({ text: 'I like concise answers' });
+      const result = await remember.fn(...asked({ text: 'I like concise answers' }));
       assert.equal(result.ok, true);
       assert.ok(learned !== null, 'identity.learn() should have been called');
       assert.equal(learned.text, 'I like concise answers');
@@ -184,7 +192,7 @@ describe('from-memory: remember', () => {
       };
       const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
       const remember = tools.find(t => t.name === 'remember');
-      await remember.fn({ text: 'I prefer dark mode on computers' });
+      await remember.fn(...asked({ text: 'I prefer dark mode on computers' }));
       assert.ok(learned !== null);
       assert.equal(learned.text, 'I prefer dark mode on computers');
     });
@@ -196,7 +204,7 @@ describe('from-memory: remember', () => {
       };
       const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
       const remember = tools.find(t => t.name === 'remember');
-      await remember.fn({ text: 'always use two-factor authentication' });
+      await remember.fn(...asked({ text: 'always use two-factor authentication' }));
       assert.ok(learned !== null);
       assert.equal(learned.text, 'always use two-factor authentication');
     });
@@ -208,7 +216,7 @@ describe('from-memory: remember', () => {
       };
       const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
       const remember = tools.find(t => t.name === 'remember');
-      await remember.fn({ text: 'never store passwords in plain text' });
+      await remember.fn(...asked({ text: 'never store passwords in plain text' }));
       assert.ok(learned !== null);
     });
 
@@ -219,7 +227,7 @@ describe('from-memory: remember', () => {
       };
       const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
       const remember = tools.find(t => t.name === 'remember');
-      const result = await remember.fn({ text: 'the weather is sunny today' });
+      const result = await remember.fn(...asked({ text: 'the weather is sunny today' }));
       assert.equal(result.ok, true);
       assert.equal(learned, null, 'identity.learn() should NOT have been called for non-preference text');
     });
@@ -231,7 +239,7 @@ describe('from-memory: remember', () => {
       };
       const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
       const remember = tools.find(t => t.name === 'remember');
-      await remember.fn({ text: 'my birthday is on January 15th' });
+      await remember.fn(...asked({ text: 'my birthday is on January 15th' }));
       assert.equal(learned, null);
     });
 
@@ -241,7 +249,7 @@ describe('from-memory: remember', () => {
       };
       const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
       const remember = tools.find(t => t.name === 'remember');
-      const result = await remember.fn({ text: 'I prefer concise answers' });
+      const result = await remember.fn(...asked({ text: 'I prefer concise answers' }));
       assert.equal(result.ok, true, 'remember() should succeed even if identity.learn() fails');
       assert.equal(result.result.remembered, 'I prefer concise answers');
     });
@@ -249,7 +257,7 @@ describe('from-memory: remember', () => {
     it('handles missing identity gracefully (does not call learn)', async () => {
       const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {} });
       const remember = tools.find(t => t.name === 'remember');
-      const result = await remember.fn({ text: 'I like coffee' });
+      const result = await remember.fn(...asked({ text: 'I like coffee' }));
       assert.equal(result.ok, true, 'should succeed without identity');
       assert.equal(result.result.remembered, 'I like coffee');
     });
@@ -261,7 +269,7 @@ describe('from-memory: remember', () => {
       };
       const tools = buildTools({ semantic: { write: () => ({ ref: 'ref' }) }, fs: {}, identity: mockIdentity });
       const remember = tools.find(t => t.name === 'remember');
-      await remember.fn({ text: 'I PREFER VERBOSE OUTPUT' });
+      await remember.fn(...asked({ text: 'I PREFER VERBOSE OUTPUT' }));
       assert.ok(learned !== null, 'Should detect preference in uppercase');
     });
   });
@@ -307,7 +315,7 @@ describe('from-memory: remember', () => {
         };
         const tools = buildTools({ semantic: mockSemantic, fs: {} });
         const remember = tools.find(t => t.name === 'remember');
-        const result = await remember.fn({ text: input });
+        const result = await remember.fn(...asked({ text: input }));
 
         if (shouldReject) {
           assert.equal(result.ok, false, `Expected rejection for: "${input}" (${desc})`);

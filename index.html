@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8203,
+      "value": 8262,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6077,13 +6077,13 @@
         "n": 461,
         "shape": "entry",
         "state": "open",
-        "title": "background noise was transcribed as a command, and MYTHOS acted on it (filed 2026-09-24)",
+        "title": "background noise was transcribed as a command, and MYTHOS acted on it (filed 2026-09-24; CODED 2026-09-24)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** At 15:11:13 the input transcript read *\"Yep, can you play\"*. The model took a snapshot and clicked a video (`browser_click f2e308`, 15:11:24). The operator: *\"I didn't say anything. I didn't say anything. It's the background noise\"*, then *\"Did I ask you to play the cafe ambience video? I didn't.\"* The operator also logged an incident about the background noise at 15:11:22. **Direction.** A tier-3 action taken on a short, low-confidence transcript should confirm first. Related to BUG-455's mic gate. **Attribution:** attended run 2026-09-24.",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs) — a click, a typing action or a key press that the leash allows only because a person is connected now runs only when the operator's own words ask for it. Otherwise MYTHOS asks one short question, and a plain yes runs exactly that call. Attended check owed. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** At 15:11:13 the input transcript read *\"Yep, can you play\"*. The model took a snapshot and clicked a video (`browser_click f2e308`, 15:11:24). The operator: *\"I didn't say anything. I didn't say anything. It's the background noise\"*, then *\"Did I ask you to play the cafe ambience video? I didn't.\"* The operator also logged an inc…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-24 from the attended run] One instance, confirmed by the operator. Remaining evidence: the transcript confidence or level for that turn.",
-          "source": "mythos/src/core/voice/live-session.js (inputTranscription); mythos/src/core/leash"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-24] A trusted click, type or key press runs only on operator words that ask for it; otherwise MYTHOS asks and a plain yes runs exactly that call. Replayed first: the click was a turn later than filed, under an objection, and a second instance exists (09-23). Remaining evidence: an attended noise case and a golden-path line.",
+          "source": "mythos/test/bug-461-464-ask-before-acting.test.js; mythos/src/core/voice/operator-authority.js; mythos/src/core/voice/authority-gate.js; mythos/src/core/leash/confirm.js"
         }
       },
       {
@@ -6116,13 +6116,13 @@
         "n": 464,
         "shape": "entry",
         "state": "open",
-        "title": "a permanent memory was saved without the operator asking (filed 2026-09-24)",
+        "title": "a permanent memory was saved without the operator asking (filed 2026-09-24; CODED 2026-09-24, one route open)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** At 14:53:37 `remember(\"User has not been feeling well and needs to rest …\")` ran after the operator described being ill the day before. No \"remember\" or \"note that\" was said, and RULES' MEMORY RULE requires an explicit ask. At 14:55:27 the operator: *\"You don't have to remember that. I was just testing\"*, followed by `forget_fact`. A later `remember` at 14:55:56 was requested and is not part of this ticket. Minor; the same class as the MEMORY RULE's own examples. **Attribution:** attended run 2026-09-24.",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs). The `remember` tool writes permanent memory only when the operator asked in their own words, or said yes after the exact text was read back to them. A second route stays open by decision (see below). Attended check owed. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** At 14:53:37 `remember(\"User has not been feeling well and needs to rest …\")` ran after the operator described being ill the day before. No \"remember\" or \"note that\" was said, and RULES' MEMORY RULE requires an explicit ask. At 14:55:27 the operator: *\"You don't have to remember that. I was just testing\"*, followed by `forget_fact`. A later `remember` at 14:55:56 wa…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-24 from the attended run] One instance with times. Remaining evidence: a count across sessions.",
-          "source": "mythos/src/core/voice/voice-agent.js (RULES MEMORY RULE); mythos/src/core/effectors/from-memory.js"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-24] remember writes only with a server-minted consent token: the operator's explicit ask, or a yes to the exact text read back. Counted across 13 days: 2 unrequested saves of 10. The background summariser (memory/index.js 3b) still writes user-facts unasked: decision owed. Remaining evidence: an attended save both ways.",
+          "source": "mythos/test/bug-461-464-ask-before-acting.test.js; mythos/src/core/leash/consent.js; mythos/src/core/effectors/from-memory.js; mythos/src/core/voice/operator-authority.js"
         }
       },
       {

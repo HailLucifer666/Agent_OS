@@ -351,10 +351,10 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
   const { summarizeActionsForResult } = require('../src/core/voice/action-outcome-summary');
 
   function adapterReturning(outcome) {
-    const injected = []; const anomalies = [];
+    const injected = []; const anomalies = []; const dispatched = [];
     const adapter = createLiveToolAdapter({
       leash: { check: () => ({ allow: true, requireConfirm: false, tier: 3, reason: 'operator-present-trusted' }), confirm: { create: () => 'c' } },
-      dispatchAction: async () => outcome,
+      dispatchAction: async (d) => { dispatched.push(d); return outcome; },
       bus: { emit: (type, p) => { if (type === 'health.anomaly') anomalies.push(p); } },
       logger: { warn() {}, info() {} },
       connectionId: 'conn-462',
@@ -363,8 +363,14 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
       getLiveSession: () => ({ isOpen: () => true, sendText: (t) => injected.push(t) }),
       toolAckDeadlineMs: 500,
     });
-    return { adapter, injected, anomalies };
+    return { adapter, injected, anomalies, dispatched };
   }
+  // The operator's words reach the adapter at call time since BUG-461, and a
+  // trusted click on four words or fewer is held and asked about — so these use
+  // a full request, as the operator really phrased it on 09-02. Without it the
+  // click never runs and every assertion below would pass for the wrong reason.
+  const REQUEST = 'Can you play the third video?';
+  const heard = { sendToolResponse: () => {}, userTextSoFar: REQUEST };
   // The 15:11:33 wording verbatim, and the same sentence without its "also". These
   // tests pair it with a click that changed NOTHING — not the real f2e308 click,
   // which navigated (see the REPLAY test). The claim detector matches "I've
@@ -374,15 +380,16 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
 
   it("an unverified click, through the real adapter, gets an \"I've clicked\" sentence retracted", async () => {
     const outcome = await load(statefulPage()).browser_click({ ref: 'e1' });
-    const { adapter, anomalies, injected } = adapterReturning(outcome);
-    await adapter.handleLiveToolCalls([{ id: 'x1', name: 'browser_click', args: { ref: 'e1' } }], { sendToolResponse: () => {} });
-    adapter.onLiveTurnComplete({ userText: 'play the third video', assistantText: SAID, turnId: 61 });
+    const { adapter, anomalies, injected, dispatched } = adapterReturning(outcome);
+    await adapter.handleLiveToolCalls([{ id: 'x1', name: 'browser_click', args: { ref: 'e1' } }], heard);
+    adapter.onLiveTurnComplete({ userText: REQUEST, assistantText: SAID, turnId: 61 });
     // Filtered to the click: the same sentence also says "I've logged", and this
     // turn has no log_incident, which is a separate (correct) claim.
     const flagged = anomalies.filter((a) => a.kind === 'claimed-action-not-taken' && a.claimedTool === 'browser_click');
     assert.equal(flagged.length, 1, JSON.stringify(anomalies));
     assert.equal(flagged[0].claimedTool, 'browser_click');
     assert.ok(injected.some((t) => /CORRECTION/.test(t)), 'the retraction notice is sent');
+    assert.equal(dispatched.length, 1, 'the click must have RUN and come back unverified — a held click is a different test');
   });
 
   // KNOWN GAP, pinned on purpose 2026-09-24 and owned by the BUG-448 residual /
@@ -399,8 +406,8 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
   it("KNOWN GAP: \"I've also clicked\" is not matched by the claim detector yet", async () => {
     const outcome = await load(statefulPage()).browser_click({ ref: 'e1' });
     const { adapter, anomalies } = adapterReturning(outcome);
-    await adapter.handleLiveToolCalls([{ id: 'x3', name: 'browser_click', args: { ref: 'e1' } }], { sendToolResponse: () => {} });
-    adapter.onLiveTurnComplete({ userText: 'play the third video', assistantText: VERBATIM, turnId: 63 });
+    await adapter.handleLiveToolCalls([{ id: 'x3', name: 'browser_click', args: { ref: 'e1' } }], heard);
+    adapter.onLiveTurnComplete({ userText: REQUEST, assistantText: VERBATIM, turnId: 63 });
     assert.equal(anomalies.filter((a) => a.kind === 'claimed-action-not-taken' && a.claimedTool === 'browser_click').length, 0,
       'if this now fails with 1, the claim module has closed the gap: flip it and record it in BUGS.md');
   });
@@ -409,8 +416,8 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
     const page = statefulPage({ onClick: () => { page.st.url = WATCH; } });
     const outcome = await load(page).browser_click({ ref: 'e1' });
     const { adapter, anomalies } = adapterReturning(outcome);
-    await adapter.handleLiveToolCalls([{ id: 'x2', name: 'browser_click', args: { ref: 'e1' } }], { sendToolResponse: () => {} });
-    adapter.onLiveTurnComplete({ userText: 'play the third video', assistantText: SAID, turnId: 62 });
+    await adapter.handleLiveToolCalls([{ id: 'x2', name: 'browser_click', args: { ref: 'e1' } }], heard);
+    adapter.onLiveTurnComplete({ userText: REQUEST, assistantText: SAID, turnId: 62 });
     assert.equal(anomalies.filter((a) => a.kind === 'claimed-action-not-taken' && a.claimedTool === 'browser_click').length, 0);
   });
 });

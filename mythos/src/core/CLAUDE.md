@@ -119,6 +119,26 @@ file adds the invariants specific to this layer.
 - Credential-pattern scanning runs before any T3/T4 effector, and the
   scanner's own output is always redacted in the audit reason — never the
   full secret.
+- **Operator-present trust now also needs the operator's words (BUG-461,
+  2026-09-24).** A Live call the leash allows as `operator-present-trusted` or
+  `session-granted` then passes `voice/authority-gate.js`: it runs only when
+  this turn's echo-accepted spoken words, or HUD-typed words, ask for it
+  (`voice/operator-authority.js`). Otherwise MYTHOS asks one question, and a
+  whole-utterance yes runs exactly the stored call through the confirm
+  registry's spoken entries (`markPresented`, `acceptSpoken`). The gate only
+  narrows: it never approves what the leash did not allow, and a spoken yes
+  never approves a click-only confirm. Measured cause: at 09-24 15:11:24 a
+  click ran in a turn that said "I didn't say anything… it's the background
+  noise". Do not dispatch a trusted call around `authorityGate.hold()`.
+- **`remember` needs a consent token (BUG-464, 2026-09-24).** It writes
+  `user-facts` only with a token from `leash/consent.js` for exactly its
+  arguments. The token is minted by the authority gate and carried in the
+  dispatch context; `dispatch-action.js` and `server/index.js`'s wrapper both
+  forward `consent`, and model arguments never can. So the autonomous loop,
+  the engagement executor and any new caller cannot write permanent memory
+  through the tool. Only `authority-gate.js` mints (test-pinned). The
+  background summariser in `memory/index.js` (step 3b) still writes
+  `user-facts` directly: decision owed, pinned as a known gap.
 
 ## Dispatch (`effectors/dispatch-action.js`)
 
