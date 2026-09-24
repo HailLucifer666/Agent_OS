@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8125,
+      "value": 8187,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6090,13 +6090,13 @@
         "n": 462,
         "shape": "entry",
         "state": "open",
-        "title": "browser_click reported success when nothing opened, and MYTHOS said the video was starting (filed 2026-09-24)",
+        "title": "browser_click reported success when nothing opened, and MYTHOS said the video was starting (filed 2026-09-24; CODED 2026-09-24)",
         "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** `browser_click` on ref `f2e308` completed ok at 15:11:24. At 15:11:33 MYTHOS said *\"I've also clicked the third video for you, the 'Café Ambience' mix. It should be starting up now.\"* The debug browser's only page target was still `https://www.youtube.com/results?search_query=lofi+music`. It then pressed \"k\" and said *\"it seemed to load paused\"*. A later click (`f2e436`) did open the video the operator named. **Mechanism, not yet measured.** The click landed on an element that does not navigate (a thumbnail overlay or hover preview), or navigation never started. Either way, `browser_click` has no post-condition that t…",
+        "excerpt": "**Status:** 🔧 CODED 2026-09-24 (branch fix/rev4-28-bugs) — every browser action now reads the page before AND after and is verified only by the change it was for; a click that changes nothing is unverified with the next step named; a ref cannot be spent on a different tab. Live check owed: the golden path, which can now fail steps that used to pass on the hollow proof. Filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local. **Evidence.** `browser_click` on ref `f2e308` completed ok at 15:11:24. At 15:11:33 MYTHOS said *\"I've also clicked the third video for you, the 'Café Ambience' mix. It should be starting up now.\"* The debug browser's only page target was still `https://www.youtube.com/results?search_que…",
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-24 from the attended run] One instance; the page target was read from the browser. Remaining evidence: a url-changed check on the same page.",
-          "source": "mythos/src/core/effectors/from-browser.js (browser_click)"
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-24] Browser actions are judged on the page before and after, against what each is for; the old capsule called any after-state proof. Thirteen paths covered, a ref pinned to its tab, values never echoed. Reproduced headlessly first. Remaining evidence: the golden path, and the \"I've also clicked\" claim gap handed to BUG-460.",
+          "source": "mythos/test/bug-462-browser-action-proves-its-effect.test.js; mythos/src/core/effectors/browser-effect.js; mythos/src/core/effectors/from-browser.js"
         }
       },
       {

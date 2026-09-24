@@ -298,9 +298,21 @@ describe('the verify half — a ref action reports what the page says afterwards
   beforeEach(stubOnline);
   afterEach(restore);
 
-  it('a ref click carries oracle-backed evidence, not a bare ok', async () => {
+  // REWRITTEN 2026-09-24 (BUG-462). These used to hand browser_click a page that
+  // did NOT change and require verified ("a ref click carries oracle-backed
+  // evidence, not a bare ok"). That was the hollow proof 15:11:24 walked through:
+  // the capsule read url/title/focus AFTER the click and called any answer proof,
+  // and a page always has a url. They now pin the before/after rule instead — a
+  // change the click was for proves it; a page merely reporting its state does not.
+  it('a ref click that moves the page is verified, and the move is the evidence', async () => {
+    let url = 'https://example.test/';
     const page = fakePage({
-      evaluate: async () => ({ focused: { tag: 'button', role: null, name: 'Play' }, video: null }),
+      url: () => url,
+      locator: () => ({
+        click: async () => { url = 'https://example.test/watch?v=1'; },
+        count: async () => 1,
+        first: () => ({ scrollIntoViewIfNeeded: async () => {} }),
+      }),
     });
     const fb = loadEffector(page);
     fb.__setSnapshotStateForTest(['e1'], 1);
@@ -310,31 +322,40 @@ describe('the verify half — a ref action reports what the page says afterwards
     assert.equal(r.ok, true);
     assert.equal(r.unverified, false);
     assert.equal(r.evidence.oracle, 'page-state');
-    assert.match(r.evidence.observed, /example\.test/);
-    assert.match(r.evidence.observed, /focus on <button>/);
+    assert.match(r.evidence.observed, /watch\?v=1/);
   });
 
-  it('a video element gives the playing/paused oracle the week-long YouTube case needs', async () => {
+  it('a click that starts the video is verified by the player flipping to PLAYING', async () => {
+    let playing = false;
     const page = fakePage({
-      evaluate: async () => ({ focused: null, video: { playing: true, currentTime: 3.2, duration: 210 } }),
+      evaluate: async () => ({ focused: null, video: { playing, currentTime: 3.2, duration: 210, src: 'blob:v1' } }),
+      locator: () => ({
+        click: async () => { playing = true; },
+        count: async () => 1,
+        first: () => ({ scrollIntoViewIfNeeded: async () => {} }),
+      }),
     });
     const fb = loadEffector(page);
     fb.__setSnapshotStateForTest(['e1'], 1);
 
     const r = await fb.browser_click({ ref: 'e1' });
-    assert.match(r.evidence.observed, /video PLAYING/);
+    assert.equal(r.unverified, false);
+    assert.match(r.evidence.observed, /video is now PLAYING/);
     assert.equal(r.result.state.video.playing, true);
   });
 
-  it('a paused video is reported as paused — the oracle is not there to agree with us', async () => {
+  it('a click that leaves the video paused is NOT verified — the oracle is not there to agree with us', async () => {
     const page = fakePage({
-      evaluate: async () => ({ focused: null, video: { playing: false, currentTime: 0, duration: 210 } }),
+      evaluate: async () => ({ focused: { tag: 'button', role: null, name: 'Play' }, video: { playing: false, currentTime: 0, duration: 210, src: 'blob:v1' } }),
     });
     const fb = loadEffector(page);
     fb.__setSnapshotStateForTest(['e1'], 1);
 
     const r = await fb.browser_click({ ref: 'e1' });
-    assert.match(r.evidence.observed, /video paused/);
+    assert.equal(r.ok, true, 'the click was delivered');
+    assert.equal(r.unverified, true);
+    assert.match(r.reason, /cannot confirm/);
+    assert.equal(r.result.state.video.playing, false, 'the state is still reported for the model to read');
   });
 
   it('a page that tells us nothing yields unverified:true, never a fabricated confirmation', async () => {
@@ -363,8 +384,10 @@ describe('the verify half — a ref action reports what the page says afterwards
     fb.__setSnapshotStateForTest(['e1'], 1);
 
     const r = await fb.browser_click({ ref: 'e1' });
-    assert.equal(r.ok, true);
-    assert.equal(r.evidence.oracle, 'page-state', 'url/title still answered, so it is still evidence');
+    assert.equal(r.ok, true, 'a probe that throws must not turn a delivered click into a failure');
+    // BUG-462: this used to assert oracle page-state "because url/title still
+    // answered". A url answering is not the click doing anything.
+    assert.equal(r.unverified, true);
   });
 
   it('a ref that stops resolving mid-action fails with the remedy, not a raw Playwright error', async () => {
