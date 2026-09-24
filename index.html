@@ -6126,7 +6126,7 @@
         }
       },
       {
-        "n": 466,
+        "n": 467,
         "shape": "entry",
         "state": "open",
         "title": "a key being present decided what got billed: premium models headed six lanes the moment their key appeared, and nothing could say \"free only\" (CODED 2026-09-24)",
@@ -6138,18 +6138,31 @@
           "evidence": "[CODED 2026-09-24] MODEL_BILLING_POLICY=free-only: one route decision (provider + model + effective endpoint + mode) consulted by chainFor after CHAIN_* overrides, by chain.complete at every attempt, and by the Live open, the three speech providers, embeddings, generate_image, dsh model selection and MCP key hand-over. Fragility, not a live bug: no premium key on the operator machine. Remaining evidence: one real boot with the flag set, after the operator console check of free-tier billing.",
           "source": "mythos/test/free-only-route-policy.test.js; mythos/src/core/brain/route-policy.js"
         }
+      },
+      {
+        "n": 468,
+        "shape": "entry",
+        "state": "open",
+        "title": "on this machine open_web type:\"youtube\" cannot play anything: YOUTUBE_MODE=newtab sends every video to a newtab card, which has no surface under Electron (filed 2026-09-24)",
+        "detail": {},
+        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-24, found while reproducing BUG-459 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only); times are local. **Evidence.** 15:09:46, \"Can you open YouTube and search for lofi music and play the third video?\": `open_web {\"query\":\"lofi music\",\"type\":\"youtube\"}`. 15:09:50, the media window: `open-web -> {\"opened\":false,\"reason\":\"not a media widgetType\"}`. 15:09:53: `OK open_web ... reason=the dashboard did not answer, so I cannot confirm it rendered`, recorded as UNVERIFIED, and the next turn retracted the claim. Nothing played. No `setWindowOpenHandler: denied` line was logged, so the HUD did not even attempt to open a tab. **Mechanism, read from source (not yet reproduced headlessly).** This machine's `%APPDATA%\\MYTHOS\\config.json` sets `YOUTUBE_MODE` to `newtab` (the schema d…",
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "[FILED 2026-09-24 from the attended run] With YOUTUBE_MODE=newtab (set in this machine's desktop config) open_web type:\"youtube\" returns a newtab card, which has no surface under Electron; nothing played and it reported unverified, not failed. Remaining evidence: the same request after a repair.",
+          "source": "mythos/src/core/effectors/from-dashboard.js (youtube newtab branch); electron/media-window.js"
+        }
       }
     ],
     "counts": {
       "verified": 89,
       "fixed": 182,
-      "open": 29,
+      "open": 30,
       "coded": 9,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 312,
+    "total": 313,
     "openDeclared": [
       274,
       275,
@@ -6179,7 +6192,8 @@
       462,
       463,
       464,
-      466
+      467,
+      468
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
