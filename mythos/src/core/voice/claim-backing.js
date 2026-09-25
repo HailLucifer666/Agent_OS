@@ -169,13 +169,113 @@ function fits(category, sentence, match, row, rows, strongEnough, t) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// B2b-3 (2026-09-26) — "it's playing" is a claim about the PLAYER. Before this, nothing judged
+// it at all (the KNOWN GAP pinned in bug-448-460-a-claim-is-judged-by-what-it-claims.test.js).
+// Replayed first: 81 Live sentences of this shape, 63 flat claims, labelled by reading each turn
+// against the player readings and the operator's next words. Most were true and read back by
+// Spotify's own check. The false ones read nothing:
+//   2026-07-31 00:26:21 "Spotify is showing that "THE KID LAROI - COME DOWN" is indeed playing."
+//                        (Spotify read "SHE DON'T NEED TO KNOW"; the operator said so)
+//   2026-08-05 21:04:31 "I've got "Blinding Lights" playing on the dashboard for you instead"
+//   2026-08-05 21:12:12 ""Blinding Lights" is playing …"  (operator: "Where is it playing?")
+//   2026-09-24 09:41:33 "It should be starting up now."   (BUG-462's 15:11:33; nothing played)
+// THE RULE: backed by a player reading that says PLAYING (the latest reading of each player in
+// this turn and the 120 s window; a pause read after a play wins), matching what the sentence
+// names; or by the operator's own words this turn saying it is playing. The operator is the
+// only witness for a player MYTHOS cannot read, and is kept apart from the machine reading on
+// purpose: only a statement with a subject counts ("it's playing", "it just play"), never an
+// instruction ("yes, play it") and never a question.
+// THE COST, measured and accepted: a browser reading is one sample a moment after the click,
+// and YouTube often starts a second later. Three true "It should be playing now" sentences had
+// only a paused sample. So the correction never says it did not play: it says "not confirmed",
+// and names media_status / browser_media_state, both reachable by voice (refusal rule 2).
+const PLAY_WORD = 'playing(?!\\s+(?:coy|dumb|games?|along|nice|tricks?|around|hard|catch|the\\s+part|a\\s+role|up)\\b)';
+const PLAYBACK_RE = new RegExp([
+  "\\b(?:is|are|'s)\\s+(?:(?:now|still|indeed|already|again|finally|actually|currently|officially|definitely|really|\\w+ly)\\s+){0,2}" + PLAY_WORD,
+  '\\b(?:now|currently|still)\\s+' + PLAY_WORD,
+  '\\bplaying\\s+now\\b',
+  '\\bshould\\s+(?:now\\s+)?be\\s+(?:\\w+\\s+(?:and\\s+)?){0,2}?(?:playing|starting|started)\\b',
+  '\\b(?:got|have|has)\\b[^.,;]{0,60}?\\b' + PLAY_WORD,
+  '\\bplayback\\s+has\\s+(?:started|begun|resumed)\\b',
+].join('|'), 'i');
+// Tested BEFORE the claim: a negation, a hedge, an attempt or a future anywhere in the sentence.
+// "I cannot pretend it's playing", "hopefully the music is playing", "nothing's playing yet",
+// "Should be able to get that playing now", "should be playing momentarily". Favours misses.
+const NOT_A_PLAYBACK_CLAIM_RE = /\b(?:not|never|no longer|nothing|pretend|unless|hopefully|hope|hoping|maybe|perhaps|might|whether|if|try|trying|tried|attempt(?:s|ed|ing)?|able to|unsure|soon|shortly|momentarily)\b|n't\b|\bin a (?:moment|second|few)\b/i;
+// "should be starting up" is about media only when the sentence is: "A separate Brave instance
+// should be starting up for you" is a browser launch (2026-09-23 08:31:48).
+// A quoted title counts too: ""Starboy" should be starting on YouTube right about now".
+const MEDIA_RE = /\b(?:it|video|song|music|track|playback|stream|episode|trailer|mix|playlist|album|podcast|audio|youtube|spotify)\b|["“‘]/i;
+const blankQuotes = (s) => s.replace(QUOTED_RE, (m) => ' '.repeat(m.length));
+// A `re`-shaped matcher, so claim-check.js runs it like any category. Quotes are blanked first
+// (same length, so the index holds): "a 'NOW PLAYING' widget" names a label, not a player.
+const PLAYBACK_CLAIM = {
+  exec(sentence) {
+    const s = String(sentence || '');
+    if (NOT_A_PLAYBACK_CLAIM_RE.test(s)) return null;
+    const m = PLAYBACK_RE.exec(blankQuotes(s));
+    if (!m || (/start/i.test(m[0]) && !MEDIA_RE.test(s))) return null;
+    const out = [s.slice(m.index, m.index + m[0].length)];
+    out.index = m.index;
+    return out;
+  },
+};
+
+// What the sentence says is playing: each quoted title, and the capitalised words of its own
+// clause (the clause's first word dropped: "Soft jazz is playing" names no player).
+function playbackTargets(sentence, match) {
+  const quoted = [];
+  sentence.replace(QUOTED_RE, (m, a, b, c, d) => { const g = tokens(a || b || c || d); if (g.size) quoted.push(g); return m; });
+  const flat = blankQuotes(sentence);
+  const from = Math.max(-1, ...[',', ';', ':', '—', '–', '('].map((c) => flat.lastIndexOf(c, match.index))) + 1;
+  const tail = flat.slice(match.index).split(CLAUSE_END_RE)[0];
+  const words = (flat.slice(from, match.index) + tail).split(/\s+/).filter(Boolean).slice(1);
+  const loose = new Set();
+  for (const w of words) if (/[A-Z]/.test(w) && !/^i(?:'|$)/i.test(w)) for (const t of tokens(w)) loose.add(t);
+  return { quoted, loose };
+}
+// A quoted title must be mostly there ("THE KID LAROI - COME DOWN" is not "The Kid LAROI - SHE
+// DON'T NEED TO KNOW": the artist alone is half); a loose name needs one word.
+function fitsPlayback(targets, text) {
+  const words = tokens(text);
+  if (targets.quoted.length) return targets.quoted.some((g) => [...g].filter((w) => words.has(w)).length * 2 > g.size);
+  return !targets.loose.size || [...targets.loose].some((w) => words.has(w));
+}
+// Present tense only: "it was playing before you paused it" is not "it is playing" (found
+// attacking this rule, 2026-09-26). "it just play" is how the ASR wrote 09-24's confirmation.
+// Only these adverbs may stand between, so a denial ("it's not playing", "isn't") cannot match
+// at all; a separate denial check here was proved unreachable by mutation and deleted.
+const OPERATOR_SAYS_PLAYING_RE = /\b(?:it|that|this|music|song|video|track)(?:'s|\s+is)?(?:\s+(?:now|just|still|really|actually|definitely|finally|already))*\s+(?:play(?:s|ing)?|working)\b/i;
+function operatorSaysPlaying(text, targets) {
+  const s = String(text || '');
+  const m = OPERATOR_SAYS_PLAYING_RE.exec(s);
+  if (!m || /\?\s*$/.test(s)) return false;
+  return fitsPlayback(targets, s);
+}
+function playerBacks(sentence, match, rows, t) {
+  const targets = playbackTargets(sentence, match);
+  const current = t.current || [];
+  const latest = new Map(); // player source -> its newest reading; the ledger is older than this turn
+  for (const a of rows.filter((r) => r && !current.includes(r)).concat(current)) if (a && a.act && a.act.player) latest.set(a.act.player.source, a);
+  for (const a of latest.values()) if (a.act.player.playing && fitsPlayback(targets, a.act.player.what + ' ' + a.tool)) return true;
+  return operatorSaysPlaying(t.operatorText, targets);
+}
+function playbackNotice(phrase) {
+  return {
+    message: `CORRECTION of your own prior statement — you said "${phrase}" but nothing has observed the player playing: no reading in this turn or the last two minutes says so, and the operator has not.`,
+    instruction: 'Tell the operator plainly that you have NOT confirmed it is playing. Do not say it failed and do not say it is playing. If they want to know, read it with media_status, or browser_media_state for a browser video, and report what that says.',
+  };
+}
+
 const proven = (a) => a.ok === true;
 const delivered = (a) => a.ok === true || a.unverified === true || a.dispatchOk === true || a.status === 'unverified';
 
-// tier: { elliptical, progressive, pending, current }. `rows` are this turn's and the recent
-// ledger's; `current` is this turn's alone (namesContradict).
+// tier: { elliptical, progressive, pending, current, operatorText }. `rows` are this turn's and
+// the recent ledger's; `current` is this turn's alone; `operatorText` is this turn's words.
 function backs(category, sentence, match, rows, tier) {
   const t = tier || {};
+  if (category.byPlayer) return playerBacks(sentence, match, rows || [], t);
   const own = category.byOp ? null : new Set(((category.gateTools && category.gateTools.length) ? category.gateTools : category.tools)
     .concat(t.elliptical ? [] : (category.backingTools || [])));
   const strongEnough = t.pending ? () => true
@@ -184,4 +284,4 @@ function backs(category, sentence, match, rows, tier) {
   return all.some((a) => a && a.tool && (!own || own.has(a.tool)) && strongEnough(a) && fits(category, sentence, match, a, all, strongEnough, t));
 }
 
-module.exports = { backs, DISPATCH_OBJECT, DISPATCH_CLAIM_RE };
+module.exports = { backs, DISPATCH_OBJECT, DISPATCH_CLAIM_RE, PLAYBACK_CLAIM, playbackNotice };

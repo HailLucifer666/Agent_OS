@@ -70,7 +70,7 @@
 // (B2b) — pure siblings; claim-backing reads the browser driver's alias table, no IO.]
 
 const { unexcusedHits, groupOverlapping } = require('./claim-overlap'); const { claimView } = require('./claim-shape'); // BUG-448; B2b-1: the part of a sentence that claims anything
-const { backs, DISPATCH_OBJECT, DISPATCH_CLAIM_RE } = require('./claim-backing'); // B2b-2: which row makes which sentence true
+const { backs, DISPATCH_OBJECT, DISPATCH_CLAIM_RE, PLAYBACK_CLAIM, playbackNotice } = require('./claim-backing'); // B2b-2/3: which row makes which sentence true
 
 const CLAIM_CATEGORIES = [
   {
@@ -211,6 +211,9 @@ const CLAIM_CATEGORIES = [
   // B2b-2: "I've sent the play command to Spotify" is a claim that a CALL went out, not a
   // message; the replay found 13 true ones retracted as sends. Backed by what the call did.
   { name: 'dispatch', tools: [], byOp: true, re: DISPATCH_CLAIM_RE },
+  // B2b-3: "it's playing" is a claim about the PLAYER, backed by a reading of it or the operator's
+  // own words (claim-backing.js); its correction says "not confirmed", never "it did not happen".
+  { name: 'playback', tools: [], byPlayer: true, re: PLAYBACK_CLAIM },
   {
     // BUG-448 residual, 2026-09-24 15:11:53 (sixth of its class): "I've sent the keystroke"
     // after an ok browser_press_key("k") was retracted, because `sending` owned "sent".
@@ -495,7 +498,7 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       // succeed: that is direct counter-evidence about the very action claimed,
       // and a backing tool is not entitled to overrule it. The first-person and
       // progressive tiers carry no such counter-evidence, so they are backed.
-      const backed = backs(category, sentence, match, actions, { elliptical, progressive: progressiveTier, current }); // B2b-2
+      const backed = backs(category, sentence, match, actions, { elliptical, progressive: progressiveTier, current, operatorText: options?.operatorText }); // B2b-2/3
       hits.push({ category, gate, match, backed, start: match.index, end: match.index + match[0].length,
         // The elliptical tier fires ONLY because an owned tool was attempted and
         // did not succeed, so its match is counter-evidence by construction.
@@ -510,6 +513,7 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
         phrase: hit.match[0],
         sentence: spoken, // as spoken, so replaceUnbackedClaims and a correction can find it
         candidateTools: hit.gate.slice(),
+        ...(hit.category.byPlayer ? { notice: playbackNotice(hit.match[0]) } : {}), // B2b-3: "not confirmed", not "did not happen"
       });
     }
   }

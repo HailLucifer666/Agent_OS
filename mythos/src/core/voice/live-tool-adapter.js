@@ -1253,7 +1253,7 @@ function createLiveToolAdapter(deps) {
       // BUG-357: the detector also sees the bounded recent-turn ledger; ledger
       // first so a CURRENT-turn row wins any Map collision below.
       const knownActions = [...recentActionLedger.forClaims(), ...actionsThisTurn];
-      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims(), { voiceHonesty: deps.config?.LIVE_VOICE_HONESTY_ENABLED !== false });
+      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims(), { voiceHonesty: deps.config?.LIVE_VOICE_HONESTY_ENABLED !== false, operatorText: userText }); // B2b-3: the operator's words can back "it's playing"
       const statusByTool = new Map(knownActions.map((a) => [a.tool, a.status || actionStatus(a)]));
       for (const claim of unbackedClaims) {
         // A3: name the actual tool and its real status. `tool`/`target` stay the
@@ -1305,9 +1305,9 @@ function createLiveToolAdapter(deps) {
           ? `${failedTool}: ${byTool.get(failedTool).summary || 'did not succeed'}`
           : 'no successful tool call backs this claim this turn';
         sendSystemNotice(
-          `CORRECTION of your own prior statement — you said "${claim.phrase}" but that action did NOT happen (${detail}).`,
-          'Retract this aloud now: tell the operator plainly that it did not happen. Do NOT repeat the claim again later in this conversation.',
-          { site: 'ad4-correction-retract', tool: failedTool || null, claim: 'retract' },
+          claim.notice ? claim.notice.message : `CORRECTION of your own prior statement — you said "${claim.phrase}" but that action did NOT happen (${detail}).`,
+          claim.notice ? claim.notice.instruction : 'Retract this aloud now: tell the operator plainly that it did not happen. Do NOT repeat the claim again later in this conversation.',
+          { site: 'ad4-correction-retract', tool: failedTool || null, claim: claim.notice ? 'unconfirmed' : 'retract' }, // B2b-3: a playback claim is corrected as unconfirmed
         );
       }
 

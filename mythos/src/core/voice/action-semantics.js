@@ -51,6 +51,26 @@ function opOf(tool, args) {
   return 'other';
 }
 
+// B2b-3 (2026-09-26): what a PLAYER was observed doing, read from the result's own shape, so any
+// tool whose result carries a reading supplies it and none is named here:
+//   the browser capsule (BUG-462)  state.video.playing, with the page title and url   -> 'page'
+//   media_status, spotify_status   playing, with title, artist and source            -> 'media'
+//   spotify_play                   nowPlaying, read from Spotify's window title       -> 'media'
+// spotify_play's nowPlaying counts as playing even unverified: its own note says "a click DID
+// land and something is playing", just not what was asked. The page capsule is ONE sample taken
+// a moment after the action, and YouTube often starts a second later: a paused sample is not
+// proof it stayed paused, which is why the claim checker's correction says "not confirmed".
+function playerOf(r) {
+  const video = (r.state && r.state.video) || r.video;
+  const cap = (parts) => parts.filter((p) => typeof p === 'string' && p).join(' ').slice(0, MAX_TARGET_CHARS);
+  if (video && typeof video.playing === 'boolean') {
+    return { source: 'page', playing: video.playing, what: cap([r.state && r.state.title, r.title, (r.state && r.state.url) || r.url]) };
+  }
+  if (typeof r.playing === 'boolean') return { source: 'media', playing: r.playing, what: cap([r.title, r.artist, r.source]) };
+  if (typeof r.nowPlaying === 'string' && r.nowPlaying) return { source: 'media', playing: true, what: cap([r.nowPlaying]) };
+  return null;
+}
+
 function describeAction(tool, args, result) {
   const a = args && typeof args === 'object' ? args : {};
   const r = result && typeof result === 'object' ? result : {};
@@ -63,6 +83,8 @@ function describeAction(tool, args, result) {
   const act = { op, target: parts.join(' ').slice(0, MAX_TARGET_CHARS) };
   // A call that took a query searched, whatever else it did (spotify_play searches, then plays).
   if (typeof a.query === 'string' && a.query.trim()) act.searched = true;
+  const player = playerOf(r);
+  if (player) act.player = player;
   // A tab close's result names the REMAINING tab in title/url (from-browser.js browser_tabs),
   // so only the closed index is read from it.
   if (/-tab$/.test(op)) {
