@@ -36,7 +36,8 @@
 // live-turn-no-transcript-known have — is the WRONG fix and would be a
 // regression of the class this branch spent four phases removing. An
 // acknowledge playbook resolves with outcome 'applied', and immune/announcer.js
-// speaks every 'applied' outcome as "Self-healed: <title>." Nothing is healed
+// spoke every 'applied' outcome as "Self-healed: <title>." (until BUG-447 deleted it,
+// 2026-09-23 — the off-the-no-match-path half of this reasoning still holds). Nothing is healed
 // when a confirm expires. Reporting a heal that did not happen is exactly
 // BUG-311/316, and it would also route the anomaly OFF the no-match path, which
 // is the only path that runs the explainer at all.
@@ -249,7 +250,8 @@ describe('BUG-324 — an anomaly that knows its cause must say so', () => {
   it('neither kind gains a playbook — nothing is healed, so nothing may be announced as healed', () => {
     // Q8, PIN THE DISPOSITION. This is a deliberate decision not to change
     // behaviour, so it gets a test rather than a comment nobody runs.
-    // immune/announcer.js speaks every outcome 'applied' as "Self-healed: X".
+    // immune/announcer.js spoke every outcome 'applied' as "Self-healed: X" (deleted by
+    // BUG-447 on 2026-09-23; leaving the no-match path is still the reason below).
     // An acknowledge playbook for either kind would therefore announce a heal
     // that did not occur (BUG-311/316's class) AND take the anomaly off the
     // no-match path, which is the only path that produces the cause sentence

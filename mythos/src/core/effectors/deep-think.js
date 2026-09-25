@@ -174,6 +174,15 @@ async function deepThink(brain, opts) {
       attemptsTried: attempts.length,
     });
   }
+  // BUG-458: the chain now walks past an empty reply, so "every reasoning model
+  // answered with nothing" arrives here as offline + emptyReplies. It is not
+  // offline, and think_deeply speaks `reason` verbatim (from-computer.js), so name
+  // it. The `!!content` check above stays as a backstop for a brain that is not
+  // chain.js (tests reach it); chain.js itself can no longer return empty text.
+  const emptyReason = (result.offline && result.emptyReplies > 0)
+    ? ('every reasoning model that answered returned no text (' + result.emptyReplies + ' empty repl'
+      + (result.emptyReplies === 1 ? 'y' : 'ies') + ')')
+    : null;
   return {
     content: content,
     provider: result.provider || null,
@@ -181,6 +190,7 @@ async function deepThink(brain, opts) {
     offline: !!result.offline,
     timedOut: false,
     ms,
+    ...(emptyReason ? { reason: emptyReason, emptyReplies: result.emptyReplies } : {}),
   };
 }
 

@@ -51,7 +51,6 @@ const path = require('node:path');
 const SRC = path.join(__dirname, '..', 'src');
 const { createBus } = require('../src/core/bus');
 const { createHealer } = require('../src/core/immune/healer');
-const { createAnnouncer } = require('../src/core/immune/announcer');
 
 const HEALER_SRC = fs.readFileSync(path.join(SRC, 'core', 'immune', 'healer.js'), 'utf8');
 const SERVER_SRC = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
@@ -75,10 +74,13 @@ async function runChain(kinds) {
   const spoken = [];
   const healed = [];
   const bus = createBus({ historySize: 200 });
+  // 2026-09-23, BUG-447: immune/announcer.js (the speaker these cases listened to)
+  // is deleted — successful heals are never spoken (operator decision D5). Speech
+  // is now captured where every immune line becomes audio: action.speak-requested.
+  const emit = bus.emit.bind(bus);
+  bus.emit = (type, payload) => { if (type === 'action.speak-requested') spoken.push(payload.text); return emit(type, payload); };
   const healer = createHealer({ bus, config: {}, effectors: null, brain: null });
-  const announcer = createAnnouncer({ bus, config: {}, speak: (t) => { spoken.push(t); } });
   if (healer.start) healer.start();
-  announcer.start();
   bus.subscribe('health.healed', (e) => healed.push(e.payload));
   for (const kind of kinds) {
     bus.emit('health.diagnosed', { kind, target: 'probe', severity: 'minor', evidence: {} });
@@ -118,26 +120,24 @@ describe('BUG-234 - an acknowledgement is not a heal', () => {
     assert.equal(healed[0].playbookId, 'live-turn-silent-known');
   });
 
-  it('a REAL heal is still applied, and is still spoken', async () => {
+  it('a REAL heal is still applied — and, since BUG-447, still not spoken', async () => {
     // The other negative control. If the fix keyed on something broader than
-    // `healed === false` it would silence genuine remediations, which is a far
-    // worse trade than the bug.
+    // `healed === false` it would stop recording genuine remediations as applied.
+    // Being SPOKEN is no longer the test: D5 (2026-09-23) silenced every
+    // successful heal; the applied outcome is what the HUD and vault record.
     const { spoken, healed } = await runChain(['provider-down']);
     assert.equal(healed.length, 1);
     assert.notEqual(healed[0].outcome, 'acknowledged',
       'probe-provider performs a real global re-probe — it must keep reporting applied');
-    if (healed[0].outcome === 'applied') {
-      assert.ok(spoken.length === 1 && /Self-healed/.test(spoken[0]),
-        'a real heal must still be announced');
-    }
+    assert.deepEqual(spoken, [], 'a successful heal is never spoken (BUG-447, D5)');
   });
 });
 
 describe('BUG-234 - the two consumers that were lying', () => {
-  it('the announcer speaks only on applied, so acknowledged is silent by construction', () => {
-    const ANNOUNCER = fs.readFileSync(path.join(SRC, 'core', 'immune', 'announcer.js'), 'utf8');
-    assert.match(ANNOUNCER, /if \(h\.outcome !== 'applied'\) return;/,
-      'the fix relies on this test — if the announcer ever broadens, acknowledged speaks again');
+  it('the announcer that spoke applied heals is gone, so nothing can speak an acknowledgement as a heal', () => {
+    // Was: a source pin on the announcer's `outcome !== 'applied'` guard. BUG-447
+    // (2026-09-23) deleted the announcer, which removes the consumer this pinned.
+    assert.equal(fs.existsSync(path.join(SRC, 'core', 'immune', 'announcer.js')), false);
   });
 
   it("the server's actuallyHealed still keys on applied", () => {

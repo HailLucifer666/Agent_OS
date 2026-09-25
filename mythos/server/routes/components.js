@@ -29,6 +29,7 @@
 
 const path = require('path');
 const child_process = require('child_process');
+const { exitsCleanly } = require(path.join(__dirname, '..', '..', 'src', 'core', 'util', 'exec-file-text.js'));
 
 // Client-facing error text goes through sanitizeRestError: a raw err.message
 // here disclosed absolute filesystem paths (ENOENT/EACCES carry them) over HTTP
@@ -49,17 +50,15 @@ function mountComponentsRoutes(app, deps) {
   // without depending on the host that runs the suite.
   const probeWsl = d.probeWsl || defaultProbeWsl;
 
+  // BUG-436 (2026-09-23): this was spawnSync, so opening the setup page could
+  // freeze the whole server — voice included — for up to the 10 s bound while
+  // wsl.exe answered. Same probe, same bound, no longer blocking.
   function defaultProbeWsl() {
-    if (process.platform !== 'win32') return false;
-    try {
-      const res = child_process.spawnSync('wsl.exe', ['--status'], { timeout: 10000, windowsHide: true });
-      return res.status === 0;
-    } catch {
-      return false;
-    }
+    if (process.platform !== 'win32') return Promise.resolve(false);
+    return exitsCleanly('wsl.exe', ['--status'], { timeoutMs: 10000 });
   }
 
-  app.get('/api/setup/components', (req, res) => {
+  app.get('/api/setup/components', async (req, res) => {
     let report;
     try {
       report = buildReport();
@@ -70,7 +69,7 @@ function mountComponentsRoutes(app, deps) {
       return res.status(500).json({ error: 'component report failed: ' + sanitizeRestError(err) });
     }
 
-    const wslPresent = probeWsl();
+    const wslPresent = await probeWsl();
     const selection = installSelection.readInstallSelection({});
     res.json({
       components: components.mergeComponentState({
@@ -87,7 +86,7 @@ function mountComponentsRoutes(app, deps) {
 
   app.post('/api/setup/components/install', async (req, res) => {
     const ids = req.body && req.body.ids;
-    const wslPresent = probeWsl();
+    const wslPresent = await probeWsl();
     const resolved = components.resolveComponentIds(ids, { wslPresent });
     if (!resolved.ok) return res.status(400).json({ error: resolved.error });
 

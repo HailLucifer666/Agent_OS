@@ -8,8 +8,8 @@
 // reader now refuse to truncate real data on a corrupt file:
 //   - leash/checkpoints.js (approval history)
 //   - memory/documents.js (document index)
-//   - security/pin-lock.js (the serious one: a corrupt pin.json must never
-//     read as "no PIN configured", which would silently disable the gate)
+//   (a third, security/pin-lock.js, was deleted with the PIN on 2026-09-23;
+//   its two cases went with it — there is no pin.json left to protect)
 //
 // B8: memory/index.js's mergeConsolidatedTopics() deleted the source
 // consolidated-* topics BEFORE confirming semantic.write() succeeded, and
@@ -27,7 +27,6 @@ const path = require('node:path');
 const { createFsStore } = require('../src/core/memory/fs-store');
 const { createCheckpointRegistry } = require('../src/core/leash/checkpoints');
 const { createDocumentsStore } = require('../src/core/memory/documents');
-const { createPinLock } = require('../src/core/security/pin-lock');
 const { createMemory } = require('../src/core/memory/index');
 
 function tmpVault() {
@@ -92,34 +91,6 @@ describe('B7 — memory/documents.js index read-mutate-write', () => {
 
     const raw = fs.readFileSync(file, 'utf8');
     assert.ok(raw.includes('doc-1'), 'registerDocument must not have overwritten the corrupt index with a fresh one');
-  });
-});
-
-describe('B7 — security/pin-lock.js: corrupt pin.json must never disable enforcement', () => {
-  let dir, store;
-  beforeEach(() => { ({ dir, store } = tmpVault()); });
-  afterEach(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} });
-
-  it('isConfigured() is true on a corrupt pin.json — enforcement stays ON', () => {
-    const file = path.join(dir, 'Identity', 'pin.json');
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, '{ "salt": "abcd", "hash": "1234', 'utf8'); // truncated
-
-    const lock = createPinLock({ fs: store });
-    // This is the finding's central assertion: server/index.js:307 treats
-    // isConfigured()===false as "skip the gate." A corrupt file must never
-    // produce that value.
-    assert.equal(lock.isConfigured(), true, 'a corrupt pin.json must fail closed, never read as "no PIN configured"');
-  });
-
-  it('verifyPin() denies on a corrupt pin.json instead of treating it as unconfigured', () => {
-    const file = path.join(dir, 'Identity', 'pin.json');
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, '{ "salt": "abcd", "hash": "1234', 'utf8');
-
-    const lock = createPinLock({ fs: store });
-    const res = lock.verifyPin('4242');
-    assert.equal(res.ok, false, 'a corrupt pin.json must deny verification, never succeed');
   });
 });
 

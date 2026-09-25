@@ -106,7 +106,10 @@ describe('GET /api/config/s2s (the flag surface the S2S bridge needs)', () => {
   test('leaks nothing but flags — no API key, model id or endpoint', async () => {
     await withServer({ VOICE_S2S_ENABLED: true, GEMINI_API_KEY: 'sk-should-never-appear', LIVE_MODEL: 'secret-model' }, async (port) => {
       const res = await httpGet(port, '/api/config/s2s');
-      assert.deepEqual(Object.keys(res.body), ['enabled', 'operatorEnabled', 'screenShare']);
+      // 2026-09-23: gateRecorder added (BUG-406's mic-gate recorder). A boolean, like the others — asserted
+      // below — so the route still exposes flags only.
+      assert.deepEqual(Object.keys(res.body), ['enabled', 'operatorEnabled', 'gateRecorder', 'screenShare']);
+      assert.equal(typeof res.body.gateRecorder, 'boolean');
       assert.equal(res.body.operatorEnabled, false);
       assert.equal(JSON.stringify(res.body).includes('sk-should-never-appear'), false);
       assert.equal(JSON.stringify(res.body).includes('secret-model'), false);

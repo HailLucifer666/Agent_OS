@@ -88,9 +88,17 @@ function voiceFor(provider, config) {
 // real rungs to reach this code ends up probing the REAL kokoro provider, which
 // on a machine with no weights pays LOAD_TIMEOUT_MS. Measured while writing this:
 // 15,109ms per test case. Production passes nothing and still gets parseChain().
-function createTtsChain({ config, logger, providers } = {}) {
+//
+// BUG-450 (2026-09-23): `circuits` is the per-engine circuit registry
+// (providers/tts-circuit.js). The server passes the SHARED one to every chain it
+// builds, so a rebuilt chain remembers what is parked; a chain given none gets
+// its own, which keeps tests that swap the real engine modules isolated.
+function createTtsChain({ config, logger, providers, circuits } = {}) {
   const chain = Array.isArray(providers) && providers.length ? providers.slice() : parseChain(config);
   const log = logger || { info() {}, warn() {} };
+  const registry = circuits || require('./tts-circuit').createCircuitRegistry({ logger: log });
+  if (circuits && typeof circuits.useLogger === 'function' && logger) circuits.useLogger(logger);
+  const circuitOf = (p) => registry.forProvider(p, config);
   let active = null;          // resolved provider
   let resolving = null;       // in-flight resolve(), so concurrent turns share one probe
 
@@ -148,12 +156,22 @@ function createTtsChain({ config, logger, providers } = {}) {
     if (resolving) return resolving;
     resolving = (async () => {
       for (const p of chain) {
+        // BUG-450: an engine parked by a REAL failure is skipped without asking it
+        // again, so a rebuilt chain (voice picker, restart of the chain) does not
+        // re-pay the outage.
+        if (circuitOf(p).state === 'cooling') {
+          log.info('tts.unavailable', { provider: nameOf(p), reason: 'parked after a failure (tts.provider-parked)', ms: 0 });
+          continue;
+        }
         const r = await probe(p);
         if (r.ok) {
           active = p;
           log.info('tts.resolved', { provider: nameOf(p), ms: r.ms, chain: chain.map(nameOf).join(',') });
           return p;
         }
+        // NOT parked. "Unavailable when asked" is not a failure: a sidecar that
+        // starts a second late would otherwise be silenced for a whole cooldown
+        // (found by tts-down-sentence-chunks.test.js while this was being written).
         log.info('tts.unavailable', { provider: nameOf(p), reason: r.reason, ms: r.ms });
       }
       active = null;
@@ -167,33 +185,45 @@ function createTtsChain({ config, logger, providers } = {}) {
     return Boolean(await resolve());
   }
 
+  // BUG-450 (2026-09-23): start at the active engine, as before, and ask each
+  // engine's circuit first — a parked one is skipped without a call; one nobody has
+  // proven yet admits ONE call and makes concurrent sentences wait for its answer;
+  // a failure parks it (tts-circuit.js). The one walk BACKWARDS is to an engine
+  // parked by a failure: once its cooldown ends, ONE probe may win it back. Engines
+  // that merely reported unavailable when resolved are not revisited, exactly as
+  // before — the voice does not flap.
   async function synthesize({ text, signal }) {
     const start = await resolve();
     if (!start) throw new Error('no TTS provider available');
-    // Try the active provider first, then everything AFTER it in the chain. Never
-    // walk backwards: re-trying a provider that already failed this session is what
-    // would make the voice flap mid-conversation.
-    const from = chain.indexOf(start);
     let lastErr = null;
-    for (let i = from; i < chain.length; i++) {
+    const from = chain.indexOf(start);
+    for (let i = 0; i < chain.length; i++) {
       const p = chain[i];
+      const circuit = circuitOf(p);
+      if (i < from && circuit.state !== 'cooling' && circuit.state !== 'probing') continue;
+      const ticket = await circuit.admit(signal); // rejects only if the caller aborts while waiting
+      if (!ticket) continue;
+      let err = null;
       try {
         const audio = await p.synthesize({ text, voice: voiceFor(p, config), signal });
         if (audio && audio.length) {
+          ticket.success();
           if (p !== active) {
             log.warn('tts.failover', { from: nameOf(active), to: nameOf(p), reason: lastErr && lastErr.message });
-            active = p;   // stick to the new one for the rest of the session
+            active = p;
           }
           return { audio, mime: mimeFor(p), provider: nameOf(p) };
         }
-        lastErr = new Error(nameOf(p) + ' returned empty audio');
-      } catch (err) {
-        if (signal && signal.aborted) throw err;   // barge-in is not a provider failure
-        lastErr = err;
-        log.warn('tts.provider-failed', { provider: nameOf(p), error: err.message });
+        err = new Error(nameOf(p) + ' returned empty audio');
+      } catch (e) {
+        err = e;
       }
+      if (signal && signal.aborted) { ticket.cancelled(); throw err; }   // barge-in is not a provider failure
+      ticket.failure(err, signal);
+      lastErr = err;
+      log.warn('tts.provider-failed', { provider: nameOf(p), error: err.message });
     }
-    throw lastErr || new Error('all TTS providers failed');
+    throw lastErr || new Error('all TTS providers failed or are parked');
   }
 
   return {

@@ -8,7 +8,7 @@
 // covered. It turns a 401 on any /api/… call into a visible condition instead
 // of the null every call site already swallows.
 import './net-guard.js';
-import { subscribe, visionQuery, registerReplyHandler, sendMessage, utterance, reconnectAfterUnlock } from './ws.js';
+import { subscribe, visionQuery, registerReplyHandler, sendMessage, utterance } from './ws.js';
 import { createHudReadyReporter } from './hud-ready.js';
 import { onRefresh } from './stats-bus.js';
 import { mountHud } from './neural-map/hud-canvas.js';
@@ -27,14 +27,12 @@ import { decideGestureMic } from './vision/gesture-mic.js';
 import { canGestureAccept } from './vision/gesture-confirm.js';
 import { createComposeBar } from './compose-bar.js';
 import { mountInitScreen } from './init-screen.js';
-import { mountPinLockScreen } from './pin/pin-lock-screen.js';
 import { mountAuthGate } from './auth/auth-gate.js';
 import { mountStatusBanner } from './status-banner.js';
 import { mountUpdateBanner } from './update-banner.js';
 import { mountVersionBadge } from './version-badge.js';
 import { mountSetupScreen } from './setup/setup-screen.js';
 import { mountComponentBanner } from './setup/component-banner.js';
-import { isGateClosed } from './pin/pin-gate.js';
 import { isEntityAlive } from './entity-status.js';
 import { safeUrl } from './url.js';
 
@@ -46,10 +44,9 @@ const ctx = { subscribe, onRefresh };
 // server never answers) — see init-screen.js for the reveal timing.
 mountInitScreen({ subscribe });
 
-// MYTHOS_AUTH_TOKEN gate — mounted BEFORE the PIN screen because the PIN
-// screen's own GET /api/pin/status is itself behind the token gate: with a
-// token configured and no cookie, that call 401s and the PIN screen resolves
-// 'indeterminate' (fails open) without ever knowing whether a PIN exists.
+// MYTHOS_AUTH_TOKEN gate — only a REMOTE browser on a token-configured
+// deployment ever sees it; the desktop app is signed in by the Electron main
+// process before this page loads (electron/main.js primeAuthSession).
 // Non-blocking and completely inert on a default install — it asks GET /health
 // first and does nothing at all when authRequired is false. See auth/auth-gate.js.
 mountAuthGate(document.getElementById('auth-root'));
@@ -70,7 +67,7 @@ mountVersionBadge(document.getElementById('version-badge'));
 // optional gaps (no adb, no piper voice) is not nagged on every boot. Mounted
 // after the token gate because that status call is itself behind it: a 401 here
 // means "not authenticated yet", never "your install is incomplete".
-// On a machine where NOTHING is configured yet (no stored key, no PIN) this
+// On a machine where NOTHING is configured yet (no stored key) this
 // opens the first-run wizard instead of the gap list, and it now RETRIES the
 // status probe: in the packaged .exe the window loads before the fork()ed server
 // child is listening, so the single boot-time probe used to resolve
@@ -89,21 +86,15 @@ mountComponentBanner(document.getElementById('status-banner-root'), {
   onOpenSetup: () => { try { setupScreen.open(); } catch (_) { /* screen not mountable here */ } },
 });
 
-// §7.3 local PIN lock — the enforcement point the backend never had. Mounted
-// here (before the HUD builds) but NON-BLOCKING: it asks GET /api/pin/status
-// and only paints an overlay if a PIN is actually configured. With no PIN
-// configured — the default — nothing changes at all. See pin/pin-lock-screen.js.
-const pinLockScreen = mountPinLockScreen(document.getElementById('pin-root'), { onUnlock: () => {
-  reconnectAfterUnlock();
-  refreshVoiceConfiguration().then(() => { if (!isGateClosed(pinLockScreen.lockState())) ensureWakeWord(); });
-}, onLockState: () => publishHudReady() });
-
 // BUG-433: tell the server whether this HUD can actually PLAY proactive speech.
 // Rule and report both live in hud-ready.js (pure, therefore testable). A
 // playback hint, never an authentication claim — the server decides what the socket IS.
 const publishHudReady = createHudReadyReporter({
   send: sendMessage,
-  readState: () => ({ voiceConfigLoaded, lockState: pinLockScreen.lockState() }),
+  // Since the PIN was removed (2026-09-23) readiness is the voice configuration
+  // alone. It used to wait for an unlock as well, and the unlock is what armed
+  // the greeting (BUG-433); see hud-ready.js.
+  readState: () => ({ voiceConfigLoaded }),
 });
 
 // D5: Track brain availability from entity-state broadcasts.
@@ -121,11 +112,11 @@ subscribe(['entity-state'], (msg) => {
   _brainOnline = isEntityAlive(state);
 });
 
-// PIN-protected settings refresh after unlock. Every construction path waits
-// for current facts so a fast click cannot freeze pre-unlock VAD defaults.
+// Voice settings arrive asynchronously. Every construction path waits for
+// current facts so a fast click cannot freeze default VAD values.
 let _vadOverrides = null, _wakewordCfg = null, _wakewordCfgError = null;
 let _s2sEnabled = false, _operatorEnabled = false, operatorPlayback = null, disposeDesktopTask = null;
-let _screenShareCfg = null;
+let _screenShareCfg = null; let _gateRecorder = false; // BUG-406
 let voiceConfigReady, _wakewordCfgReady, voiceConfigLoaded = false;
 voiceConfiguration.subscribe(({ vad, wakeword, s2s }) => {
   voiceConfigLoaded = true;
@@ -133,13 +124,12 @@ voiceConfiguration.subscribe(({ vad, wakeword, s2s }) => {
   _wakewordCfg = wakeword.value; _wakewordCfgError = wakeword.error;
   _s2sEnabled = Boolean(s2s.value && s2s.value.enabled);
   _operatorEnabled = Boolean(s2s.value && s2s.value.operatorEnabled);
-  _screenShareCfg = s2s.value?.screenShare?.enabled ? s2s.value.screenShare : null;
+  _screenShareCfg = s2s.value?.screenShare?.enabled ? s2s.value.screenShare : null; _gateRecorder = s2s.value?.gateRecorder === true;
   if (_operatorEnabled && !disposeDesktopTask) disposeDesktopTask = mountDesktopTask();
   if (!_operatorEnabled && disposeDesktopTask) { disposeDesktopTask.close(); disposeDesktopTask = null; }
   publishHudReady(); // BUG-433: readiness just went UP.
 });
 function refreshVoiceConfiguration() {
-  // Refresh all authenticated facts after PIN success, not just the caption.
   voiceConfigLoaded = false;
   // BUG-433: and here it goes DOWN. A refresh starting inside the greeting's
   // delay window would otherwise leave it armed for a client that cannot play.
@@ -205,7 +195,6 @@ const compose = createComposeBar({
   onCamToggle: () => ensureCamera().toggle(),
   onMicSettings: async () => {
     await voiceConfigReady;
-    if (isGateClosed(pinLockScreen.lockState())) return;
     // Ensure the voice loop exists so its setMicDevice/getMicDevice are live,
     // then open the panel with them threaded through the overlay payload. The
     // panel works even if voice is idle — it owns its own diagnostic AudioContext.
@@ -218,7 +207,7 @@ const compose = createComposeBar({
   onVoiceSettings: () => {
     overlays.openPanel('voice-settings');
   },
-  // Provider keys + local PIN, on demand. Re-probes /api/setup/status first so
+  // Provider keys, on demand. Re-probes /api/setup/status first so
   // the wizard reflects what the server sees now, not what it saw at boot.
   onSetup: () => setupScreen.open(),
   // F7: the full-session transcript. The panel is not new — it has been in the
@@ -364,6 +353,7 @@ function ensureS2S() {
           // reported it enabled, so a failed or missing fetch cannot start
           // streaming the operator's desktop.
           screenShare: _screenShareCfg,
+          gateRecorder: _gateRecorder, // BUG-406: off unless the server says VOICE_GATE_RECORDER=true
         });
         return s2s;
       })
@@ -382,8 +372,6 @@ function ensureS2S() {
 // All voice affordances share the tested, exclusive transport decision.
 async function toggleVoiceImpl() {
   await voiceConfigReady;
-  // PIN status must positively permit capture before any microphone starts.
-  if (isGateClosed(pinLockScreen.lockState())) return;
   const plan = decideVoiceTransport({
     s2sEnabled: _s2sEnabled && !_operatorEnabled,
     s2sActive: Boolean(s2s && s2s.isActive()),
@@ -418,8 +406,7 @@ const toggleVoice = createToggleGuard(toggleVoiceImpl);
 // electron/main.js claims an OS-wide accelerator (Alt+Space by default) and
 // forwards it here as 'talk', so the operator can start talking without finding
 // the window. Routed through toggleVoice() rather than at the mic directly, so
-// it inherits transport selection AND the PIN-gate refusal — a keypress must not
-// be able to open the mic on a locked HUD.
+// it inherits transport selection and the mic-exclusivity invariant.
 //
 // window.mythos exists only under Electron; in a plain browser tab this block is
 // a no-op, which is the honest degradation (a web page cannot claim a global
@@ -471,7 +458,7 @@ function applyGestureMic(gesture) {
     return;
   }
   // Start goes through toggleVoice(), never voice.start()/s2s.start() directly:
-  // it owns the PIN gate refusal, the transport choice and the mic-exclusivity
+  // it owns the transport choice and the mic-exclusivity
   // invariant. It is async and a gesture handler must not block, so this is
   // deliberately fire-and-forget — but a rejection still has to be visible
   // rather than an unhandled promise.
@@ -512,7 +499,6 @@ const GESTURE_ACTIONS = {
 // you see" answer is spoken exactly like a voice reply, chunk-by-chunk.
 async function describeScene(text) {
   await voiceConfigReady;
-  if (isGateClosed(pinLockScreen.lockState())) return;
   if (!camera || !camera.isActive()) { mic.setCaption('Camera is off — click the camera icon first.', 'error'); return; }
   const image = camera.captureFrame();
   if (!image) { mic.setCaption('Could not capture a frame.', 'error'); return; }
@@ -591,12 +577,6 @@ subscribe(['camera-power-request'], async (msg) => {
   const m = msg.payload || msg;
   const ack = (on, state, reason) =>
     sendMessage({ type: 'camera-power-ack', reqId: m.reqId, on, state, reason: reason || '' });
-  // The PIN gate governs every sensor affordance, exactly as it does for the mic
-  // and every voice path (see toggleVoice) — a locked HUD must not open a camera.
-  if (isGateClosed(pinLockScreen.lockState())) {
-    ack(false, 'locked', 'the HUD is locked');
-    return;
-  }
   const cam = ensureCamera();
   if (cam.isActive()) { ack(true, 'watching', ''); return; }
   try {
@@ -615,19 +595,7 @@ subscribe(['camera-power-request'], async (msg) => {
 // The first permitted pointerdown prepares voice after configuration settles.
 // Construction acquires no microphone; explicit start still owns capture.
 const armOnce = async () => {
-  // Clicking into the PIN lock screen is a pointerdown too — do NOT arm the
-  // mic or start always-on wake-word listening behind a locked HUD. Stay
-  // subscribed so the first real click after unlocking arms as usual.
-  //
-  // Uses the tri-state lockState(), not the boolean isLocked(): the PIN
-  // status check (GET /api/pin/status) is non-blocking, so there is a real
-  // window where lockState() is still 'unknown' (isLocked() reads false in
-  // that same window). isGateClosed() treats 'unknown' the same as 'locked'
-  // so a pointerdown landing during that round trip can't permanently arm
-  // the mic behind a HUD that then paints locked a moment later.
-  if (isGateClosed(pinLockScreen.lockState())) return;
   await voiceConfigReady;
-  if (isGateClosed(pinLockScreen.lockState())) return;
   document.removeEventListener('pointerdown', armOnce);
   ensureVoice();
   ensureWakeWord();
@@ -644,17 +612,8 @@ document.addEventListener('pointerdown', armOnce);
 // bridge below). Only the wake word is armed early: ensureVoice() stays on the
 // gesture so click-to-talk behaviour is untouched.
 if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHotkey === 'function') {
-  // The PIN gate must hold here exactly as it does in armOnce — including its
-  // 'unknown'-counts-as-locked stance — so a locked HUD never starts listening.
-  // Unlike armOnce this can retry, so poll briefly rather than giving up: the
-  // lock state resolves via a non-blocking GET /api/pin/status.
-  let tries = 0;
   const armInShell = () => {
     if (wakeword) return;
-    if (isGateClosed(pinLockScreen.lockState())) {
-      if (++tries < 40) setTimeout(armInShell, 500); // ~20s, then leave it to a click
-      return;
-    }
     ensureWakeWord();
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', armInShell, { once: true });
@@ -665,7 +624,7 @@ if (typeof window !== 'undefined' && window.mythos && typeof window.mythos.onHot
 // mic threw OverconstrainedError 29s into boot (a stale MYTHOS_MIC_DEVICE id)
 // and the wake word stayed dead for the whole 20-minute session, because every
 // arm path in this file is one-shot: armOnce removes its own listener, armInShell
-// polls only the PIN gate and stops once ensureWakeWord() has been CALLED (not
+// runs once and stops once ensureWakeWord() has been CALLED (not
 // once it has succeeded), and startWakeWord() nulls `wakeword` on failure
 // specifically so "a later gesture" can retry. In the Electron shell, hands-free,
 // that later gesture never comes.
@@ -701,7 +660,6 @@ function scheduleWakewordRearm(source) {
   wakewordRearmTimer = setTimeout(() => {
     wakewordRearmTimer = null;
     if (wakewordIsLive()) return;
-    if (isGateClosed(pinLockScreen.lockState())) { scheduleWakewordRearm(source); return; }
     reportWakeword('rearm', 'retrying the wake word after a failed start', {
       source: source, attempt: wakewordRearmIndex, delayMs: delay,
     });
@@ -716,7 +674,6 @@ if (typeof navigator !== 'undefined' && navigator.mediaDevices
     && typeof navigator.mediaDevices.addEventListener === 'function') {
   navigator.mediaDevices.addEventListener('devicechange', () => {
     if (wakewordIsLive()) return;
-    if (isGateClosed(pinLockScreen.lockState())) return;
     wakewordRearmIndex = 0;
     if (wakewordRearmTimer) { clearTimeout(wakewordRearmTimer); wakewordRearmTimer = null; }
     reportWakeword('rearm', 'audio devices changed — retrying the wake word', { source: 'devicechange' });
@@ -843,8 +800,7 @@ function startWakeWord() {
         // BUG-150: every one of these five guards was a SILENT return. A wake
         // word that was heard and then suppressed looked exactly like one that
         // was never heard at all, which is half of why this went a week without
-        // a diagnosis. Behaviour is deliberately unchanged — the PIN gate in
-        // particular is a security control, not a nuisance — they only say so now.
+        // a diagnosis. Behaviour is deliberately unchanged; they only say so now.
         // BUG-273 A3: the sixth guard, and the only one that is not about the
         // present instant. See _lastAssistantAudioAt and wakeword.js's
         // receptiveFieldMs: a score reported now is evidence about the previous ~2
@@ -866,7 +822,6 @@ function startWakeWord() {
         const windowMs = (wakeword && typeof wakeword.receptiveFieldMs === 'function')
           ? wakeword.receptiveFieldMs() : 0;
         const suppressed =
-          isGateClosed(pinLockScreen.lockState()) ? 'pin-gate-closed' :
           (voice && voice.isActive()) ? 'voice-turn-already-active' :
           (s2s && s2s.isActive()) ? 's2s-session-already-active' :
           (s2s && s2s.isSpeaking()) ? 'mythos-is-speaking' :
@@ -885,7 +840,7 @@ function startWakeWord() {
           });
           return;
         }
-        // The five guards above are local truths (PIN gate, already-in-a-turn,
+        // The guards above are local truths (already-in-a-turn,
         // MYTHOS speaking). This one is the mesh's: with several devices hearing
         // the same phrase, exactly one should answer. Reported as its own
         // suppression reason so 'the kitchen phone took it' is visible in the log
@@ -1020,13 +975,6 @@ subscribe(['proactive-speech'], (msg) => {
   };
   // Do not construct a permanently mistuned loop while auth facts are pending.
   if (!voiceConfigLoaded) return drop('voice-config-not-loaded');
-  // Cortex keeps ticking while locked — do not read build results, goal
-  // titles, or error text aloud over a locked HUD (pin.css's "nothing may be
-  // ... read over the top of a locked HUD" claim). Dropped here, before a
-  // reply handler is even registered, so the matching speech-chunk/done
-  // broadcasts land with no handler and are silently ignored (see ws.js's
-  // registerReplyHandler comment) rather than played later.
-  if (isGateClosed(pinLockScreen.lockState())) return drop('pin-' + pinLockScreen.lockState());
   const v = ensureVoice();
   const session = v.beginTurn(msg.reqId); // reqId known upfront — barge-in can cancel this turn's TTS synthesis too (Item B)
   mic.setCaption(msg.text || msg.speak || '', 'reply');
@@ -1048,9 +996,6 @@ subscribe(['proactive-speech'], (msg) => {
 // this relay to actually open the panel. Without it, "open the memory panel"
 // succeeds server-side but the view never changes.
 subscribe(['navigate'], (msg) => {
-  // Same locked-HUD invariant as proactive-speech above: a server-driven
-  // navigate must not change what's rendered behind a locked screen.
-  if (isGateClosed(pinLockScreen.lockState())) return;
   if (msg.route) overlays.openPanel(msg.route);
 });
 
@@ -1062,20 +1007,13 @@ subscribe(['navigate'], (msg) => {
 // focused, so for a year this surface was a caption nobody was looking at.
 subscribe(['ocr-result'], (msg) => {
   // BUG-268 instrumentation, boundary 3 of 3 (see electron/main.js's OCR-grab
-  // callback for the read-in-order guide). Logged BEFORE the gate check and
-  // recording the gate verdict, because a closed lock gate drops the result
-  // silently — no caption, no clipboard write — and from the operator's side
-  // that is indistinguishable from OCR having failed or never run. This line is
-  // the only way to tell "the PIN lock ate it" from the other four candidates.
-  const gateClosed = isGateClosed(pinLockScreen.lockState());
+  // callback for the read-in-order guide).
   try {
     console.info('[BUG-268] ocr-result received', {
-      gateClosed: gateClosed,
       ok: Boolean(msg && msg.payload && msg.payload.ok),
       textLength: String((msg && msg.payload && msg.payload.text) || '').length,
     });
   } catch (_) { /* never break the subscriber to log */ }
-  if (gateClosed) return;
   const p = msg.payload || {};
   if (!p.ok) {
     mic.setCaption('OCR failed: ' + (p.error || 'unknown error'), 'error');

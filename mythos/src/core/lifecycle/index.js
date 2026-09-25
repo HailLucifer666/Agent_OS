@@ -5,14 +5,25 @@
 
 const { createEvent } = require('../bus/event');
 
-function createLifecycle({ bus, logger, config, proc: injectedProc }) {
+// BUG-437 (2026-09-23): what the steps must leave of the shutdown budget for the
+// final `complete` line and the exit, and the most the server drain may take.
+// The shell sends a 6,000 ms budget (electron/child-exit.js SHUTDOWN_REQUEST_MS)
+// and escalates at 7,000, so every step has to be DONE by 5,500.
+const SHUTDOWN_RESERVE_MS = 500;
+const DRAIN_MAX_MS = 1500;
+const TIMED_OUT = Symbol('timed-out');
+
+function createLifecycle({ bus, logger, config, proc: injectedProc, shutdownReserveMs, drainMaxMs }) {
   // BUG-437: `proc` is injectable so registerShutdown()'s handlers can be
   // driven by a test. Production passes nothing and gets the real process.
   const proc = injectedProc || process;
+  const reserveMs = Number.isFinite(shutdownReserveMs) ? shutdownReserveMs : SHUTDOWN_RESERVE_MS;
+  const drainCapMs = Number.isFinite(drainMaxMs) ? drainMaxMs : DRAIN_MAX_MS;
   let steps = [];
   let bootIndex = 0;
   let state = 'idle';  // idle | booting | alive | shutting-down | dead
   let shutdownTimer = null;
+  let shutdownPromise = null;
   let stopServerFn = null; // [Phase 9] registered by the 'server' boot step
   let shutdownSteps = []; // [D-07] registered via registerShutdownStep(), run after stopServerFn()
   const entityName = (config && config.MYTHOS_NAME) || 'MYTHOS';
@@ -68,53 +79,82 @@ function createLifecycle({ bus, logger, config, proc: injectedProc }) {
     bus.emit('lifecycle.alive', {});
   }
 
+  // BUG-437 (2026-09-23 attended run): a step that never returned (a brain call
+  // in reflection-final-pass) held the sequence until the hard exit, so the steps
+  // after it — the ones that SAVE — never ran. Every step is now raced against
+  // ONE absolute deadline for the whole sequence and handed an AbortSignal; a
+  // step that loses the race is logged `timeout` with its elapsed time, aborted,
+  // and left behind. A synchronous step that blocks cannot be interrupted by any
+  // JavaScript timer — none of the registered steps is one, and that is why.
+  async function runBounded(name, fn, budgetMs) {
+    const t0 = Date.now();
+    if (!(budgetMs > 0)) {
+      logger.warn('lifecycle.shutdown.step', { step: name, status: 'skipped', reason: 'no time left before the deadline', elapsedMs: 0 });
+      return { step: name, status: 'skipped' };
+    }
+    const controller = new AbortController();
+    let timer = null;
+    const timeout = new Promise(function(resolve) { timer = setTimeout(function() { resolve(TIMED_OUT); }, budgetMs); });
+    try {
+      const r = await Promise.race([Promise.resolve().then(function() { return fn({ signal: controller.signal }); }), timeout]);
+      const elapsedMs = Date.now() - t0;
+      if (r === TIMED_OUT) {
+        controller.abort();
+        logger.error('lifecycle.shutdown.step', { step: name, status: 'timeout', budgetMs, elapsedMs });
+        bus.emit('lifecycle.shutdown.step-failed', { name: name, error: 'timeout after ' + elapsedMs + 'ms' });
+        return { step: name, status: 'timeout' };
+      }
+      logger.info('lifecycle.shutdown.step', { step: name, status: 'ok', elapsedMs });
+      return { step: name, status: 'ok' };
+    } catch (err) {
+      logger.error('lifecycle.shutdown.step', { step: name, status: 'failed', error: err.message, elapsedMs: Date.now() - t0 });
+      bus.emit('lifecycle.shutdown.step-failed', { name: name, error: err.message });
+      return { step: name, status: 'failed' };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // ONE shutdown per process. A second signal (SIGTERM after the IPC request, a
+  // repeated quit) gets the SAME promise: it used to get `undefined`, so its
+  // handler's exit(0) ran at once — mid-save — while the first sequence was
+  // still writing.
   function shutdown(timeoutMs) {
+    if (shutdownPromise) return shutdownPromise;
+    if (state === 'dead') return Promise.resolve({ clean: true, outcomes: [] });
     timeoutMs = timeoutMs || (config && config.SHUTDOWN_MS) || 10000;
-    if (state === 'shutting-down' || state === 'dead') return;
-
     state = 'shutting-down';
-    logger.info('lifecycle.shutdown.start');
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs - reserveMs;
+    logger.info('lifecycle.shutdown.start', { timeoutMs });
 
-    // Hard exit timer
+    // Hard exit: the backstop for a sequence that cannot finish. `proc`, not the
+    // global — a test that injects a process must not have its runner killed.
     shutdownTimer = setTimeout(function() {
       logger.error('lifecycle.shutdown.hard-exit');
-      process.exit(1);
+      proc.exit(1);
     }, timeoutMs);
 
-    function cleanup() {
+    // Graceful sequence. Step 0 (Phase 9): stop the HTTP/WS server first, bounded
+    // by drainCapMs — a socket that will not close must not spend the budget the
+    // saving steps need. Then the registered steps, in registration order
+    // (shutdown-steps.js owns that order: saving first, reflection last).
+    shutdownPromise = (async function() {
+      const outcomes = [];
+      if (stopServerFn) outcomes.push(await runBounded('server-close', stopServerFn, Math.min(drainCapMs, deadline - Date.now())));
+      for (let i = 0; i < shutdownSteps.length; i++) {
+        outcomes.push(await runBounded(shutdownSteps[i].name, shutdownSteps[i].fn, deadline - Date.now()));
+      }
+      await new Promise(function(resolve) { setImmediate(resolve); });
       if (shutdownTimer) clearTimeout(shutdownTimer);
       state = 'dead';
-      logger.info('lifecycle.shutdown.complete');
-    }
-
-    // Graceful sequence. Step 0 (Phase 9): stop the HTTP/WS server first —
-    // open sockets would otherwise block a clean process.exit(0). Steps 1-N
-    // (D-07): registered shutdown steps (sensors stop, working->episodic
-    // flush, checkpoint write, audit flush) run in registration order — a
-    // throwing step is logged/emitted and never blocks the rest of the
-    // sequence or the final process exit.
-    return (async function() {
-      if (stopServerFn) {
-        try { await stopServerFn(); } catch (_) { /* best-effort — never block exit */ }
-      }
-
-      for (let i = 0; i < shutdownSteps.length; i++) {
-        const step = shutdownSteps[i];
-        try {
-          const result = step.fn();
-          if (result && typeof result.then === 'function') {
-            await result;
-          }
-          logger.info('lifecycle.shutdown.step', { step: step.name, status: 'ok' });
-        } catch (err) {
-          logger.error('lifecycle.shutdown.step', { step: step.name, status: 'error', error: err.message });
-          bus.emit('lifecycle.shutdown.step-failed', { name: step.name, error: err.message });
-        }
-      }
-
-      await new Promise(function(resolve) { setImmediate(resolve); });
-      cleanup();
+      const notOk = outcomes.filter(function(o) { return o.status !== 'ok'; });
+      // `complete` alone is not success: `clean` says whether every step finished.
+      logger.info('lifecycle.shutdown.complete', { clean: notOk.length === 0, elapsedMs: Date.now() - startedAt,
+        notOk: notOk.map(function(o) { return o.step + ':' + o.status; }) });
+      return { clean: notOk.length === 0, outcomes: outcomes };
     })();
+    return shutdownPromise;
   }
 
   function registerShutdown() {

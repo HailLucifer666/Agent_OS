@@ -274,15 +274,15 @@ describe('BUG-150: the detector proves liveness instead of asserting it', () => 
     const arb = APP.indexOf('askWakeArbitration', idx);
     assert.ok(arb > idx, 'the local guards must still precede mesh arbitration');
     const body = APP.slice(idx, arb);
-    for (const reason of ['pin-gate-closed', 'voice-turn-already-active', 's2s-session-already-active',
+    // 'pin-gate-closed' left this list on 2026-09-23 with the PIN itself.
+    for (const reason of ['voice-turn-already-active', 's2s-session-already-active',
       'mythos-is-speaking', 'voice-state-speaking']) {
       assert.ok(body.includes(reason), 'guard must be named in telemetry: ' + reason);
     }
     assert.match(body, /reportWakeword\('detected-suppressed'/,
       'a suppressed detection must be reported, not dropped');
-    // The PIN gate is a security control: it must still be the first thing checked
-    // and must still prevent the turn.
-    assert.ok(body.indexOf('isGateClosed') < body.indexOf('voice.isActive()'),
-      'the PIN gate must remain the first guard');
+    // The PIN gate used to be the first guard here; with the PIN removed
+    // (2026-09-23) no lock guard may linger to suppress a wake for nothing.
+    assert.doesNotMatch(body, /isGateClosed|pin-gate-closed/, 'no PIN guard is left in the wake chain');
   });
 });

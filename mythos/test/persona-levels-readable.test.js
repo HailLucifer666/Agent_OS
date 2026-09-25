@@ -74,14 +74,15 @@ describe('A4: persona levels are readable via read_status', () => {
     assert.equal(res.result.persona, null, 'persona must be null, not a synthesized set of trait values, when identity is missing');
   });
 
-  it('read_status keeps reporting status/recentJobs/openCommitments alongside persona (no regression to the existing shape)', async () => {
+  it('read_status keeps reporting status/recentJobs alongside persona (no regression to the existing shape)', async () => {
     const identity = { getPersonaLevels: () => ({ humor: 6, warmth: 6, formality: 5, sass: 5, proactivity: 6, terseness: 5, strictness: 4 }) };
     const ctx = minimalCtx({ identity, buildRunner: { listJobs: () => [{ id: 'job-1' }] } });
     const tool = findTool(ctx, 'read_status');
     const res = await tool.fn();
     assert.equal(res.ok, true);
     assert.deepEqual(res.result.recentJobs, [{ id: 'job-1' }]);
-    assert.deepEqual(res.result.openCommitments, []);
+    // BUG-446 / D10 (2026-09-23): commitments left read_status for commitment_list.
+    assert.equal('openCommitments' in res.result, false);
     assert.ok('status' in res.result);
     assert.ok('persona' in res.result);
   });

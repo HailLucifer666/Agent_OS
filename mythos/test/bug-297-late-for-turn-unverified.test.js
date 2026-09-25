@@ -296,6 +296,15 @@ describe('BUG-297 — the late-for-turn re-narration is the fourth path', () => 
       'bug398-row7-false-retraction',
       'confirm-rejected-by-voice',
       'confirm-resolved',
+      // Added by BUG-457 (2026-09-24), and this guard reddened on the commit that
+      // introduced it, as intended. A held reply's call was CANCELLED by Google
+      // (the operator spoke during the hold), and live the model once invented the
+      // missing result. This notice narrates the ABSENCE of an outcome: its whole
+      // text is the prohibition — "NOT known yet: do not state, guess or invent it"
+      // — pinned in bug-457-held-reply.test.js (f) and (i). NOT in
+      // bug-273-unverified-payload.test.js's matrix, for the reason given above:
+      // that file enumerates paths narrating a TOOL OUTCOME, and there is none here.
+      'held-call-cancelled',
       'late-for-turn',
       'late-outcome',
       // Added by BUG-357 — the affirmative twin of confirm-rejected-by-voice: a

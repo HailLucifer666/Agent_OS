@@ -311,7 +311,8 @@ test('the dialog no longer promises a fixed half a minute', () => {
   const detail = src.slice(start, src.indexOf('\n}', start));
   assert.ok(/progress bar/i.test(detail),
     'the dialog must say there is no visible progress bar — that is what the operator will see');
-  assert.ok(/vault, keys and PIN/.test(detail),
+  // 'PIN' left this sentence on 2026-09-23 with the PIN itself.
+  assert.ok(/vault and keys are untouched/.test(detail),
     'and must keep the reassurance that an update touches none of them');
 });
 

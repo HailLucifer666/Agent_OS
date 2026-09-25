@@ -1,98 +1,98 @@
 'use strict';
 
-// server/routes/auth.js — the missing half of a mechanism server/index.js has
-// documented since Task 6. extractToken()'s comment there already says the
-// mythos_token cookie is "set by the HUD once the operator enters the token";
-// extractCookieToken() already reads it and tokenOk() already accepts it. Only
-// the endpoint that SETS it was never built, so a browser tab on a deployment
-// with MYTHOS_AUTH_TOKEN configured (mandatory for a non-loopback bind, which
-// the phone node requires) had no way to present the credential at all: every
-// /api/* fetch 401'd and the WS upgrade was refused. The static shell still
-// loaded, so the HUD looked normal and simply never updated.
+// server/routes/auth.js — sign a browser in to a deployment that has a
+// MYTHOS_AUTH_TOKEN, and sign it out again.
 //
-// This route is the login endpoint for that credential. It does NOT weaken the
-// gate:
-//   - the secret must still be presented; nothing is ever auto-issued to a
-//     loopback caller (that is exactly the reverse-proxy hole verifyClient's
-//     no-Origin check exists to close);
-//   - the cookie carries MYTHOS_AUTH_TOKEN itself, i.e. the same credential
-//     tokenOk() already accepts on the cookie channel — no new secret, no new
-//     session type, nothing to keep in sync;
-//   - the presented value is never logged, only the outcome.
+// A token is only ever configured when the server is bound off loopback (phone
+// node, remote browser); server/index.js refuses that bind without one. A plain
+// browser tab cannot set an Authorization header on its own navigation or on a
+// WebSocket upgrade, so it presents the token ONCE here and gets a session
+// cookie back.
 //
-// Same factory-extraction shape as routes/pin.js, and the same honest-404 when
-// the feature isn't wired for this deployment (no token configured).
+// BUG-444 (fixed 2026-09-23): this route used to set the cookie to the TOKEN
+// ITSELF, for 30 days. It now mints a random session id (server/auth-sessions.js
+// keeps only its hash), and the token never leaves the request body it arrived
+// in. The desktop app never sees this prompt: the Electron main process holds
+// the token and calls this route itself (electron/main.js primeAuthSession).
+//
+// Unchanged from before: the presented value is never logged; a wrong guess
+// leaves the browser with exactly what it had (no Set-Cookie on failure); and a
+// deployment with no token gets an honest 404, which is how the HUD knows not
+// to prompt.
 
 const { createLimiter } = require('../rate-limit');
-
-// BUG-442: the name is owned by server/credentials.js now, together with the
-// PIN session's own cookie, so the two can never silently become one again.
-// Re-exported below because callers already import it from here.
-const { BEARER_COOKIE: AUTH_COOKIE } = require('../credentials');
+const { SESSION_COOKIE, LEGACY_COOKIES, readCookie } = require('../credentials');
 
 // Deliberately tight, and deliberately not a lockout. The token is boot-checked
-// for >=16 chars of real entropy (server/index.js), so 5 guesses/min is not a
+// for >=16 chars of real entropy (boot-guards.js), so 5 guesses/min is not a
 // viable oracle against it, while a lockout would let anyone who can reach the
 // port deny the operator their own dashboard.
 const EXCHANGE_WINDOW_MS = 60000;
 const EXCHANGE_MAX = 5;
 
+function sessionCookieOptions(req, maxAgeMs) {
+  return { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: maxAgeMs, path: '/' };
+}
+
 /**
  * @param {object} app express app
  * @param {object} deps
- * @param {string} deps.authToken            MYTHOS_AUTH_TOKEN ('' when unset)
- * @param {(presented:string)=>boolean} deps.authTokenMatches  timing-safe compare (server/index.js)
- * @param {number} deps.cookieTtlMs
+ * @param {string} deps.authToken                         MYTHOS_AUTH_TOKEN ('' when unset)
+ * @param {(presented:string)=>boolean} deps.authTokenMatches  timing-safe compare
+ * @param {object} deps.sessions                          createAuthSessionStore()
+ * @param {(hash:string)=>void} [deps.onSessionRevoked]   close that session's sockets
+ * @param {object} [deps.logger]
  */
 function mountAuthRoutes(app, deps) {
-  const authToken = (deps && deps.authToken) || '';
-  const authTokenMatches = (deps && deps.authTokenMatches) || (() => false);
-  const cookieTtlMs = (deps && deps.cookieTtlMs) || 2592000000; // 30d
+  const d = deps || {};
+  const authToken = d.authToken || '';
+  const authTokenMatches = d.authTokenMatches || (() => false);
+  const sessions = d.sessions;
+  const onSessionRevoked = typeof d.onSessionRevoked === 'function' ? d.onSessionRevoked : () => {};
+  const logger = d.logger || { info() {}, warn() {} };
 
-  const exchangeLimit = createLimiter({
-    windowMs: EXCHANGE_WINDOW_MS,
-    max: EXCHANGE_MAX,
-    scope: 'auth-exchange',
-  });
+  const exchangeLimit = createLimiter({ windowMs: EXCHANGE_WINDOW_MS, max: EXCHANGE_MAX, scope: 'auth-exchange' });
 
-  // ---- POST /api/auth/session { token } — exchange the bearer secret for the
-  // mythos_token cookie, so plain browser navigation (and the WS upgrade, which
-  // a browser cannot attach headers to but DOES send cookies on) authenticates. ----
+  function revokePresented(req) {
+    const hash = sessions ? sessions.revoke(readCookie(req, SESSION_COOKIE)) : null;
+    if (hash) onSessionRevoked(hash);
+    return !!hash;
+  }
+
+  // ---- POST /api/auth/session { token } — exempt from the /api gate (it IS
+  // the way in), rate-limited on its own. ----
   app.post('/api/auth/session', exchangeLimit, (req, res) => {
-    if (!authToken) {
-      // Nothing to exchange for. Mirrors requirePinLock's honest 404 rather
-      // than pretending the endpoint worked. Also what a default loopback
-      // install sees, which is how the HUD knows not to prompt.
+    if (!authToken || !sessions) {
       return res.status(404).json({ error: 'No MYTHOS_AUTH_TOKEN is configured for this deployment.' });
     }
-    // BUG-442 (2026-09-18): a 409 used to live here. Combined mode refused the
-    // exchange entirely, because setting this cookie would have clobbered a live
-    // PIN session — the two shared the name `mythos_token`, so writing one
-    // destroyed the other and locked the operator out of the surface they had
-    // just unlocked. The refusal was the right call for that shape and it left
-    // combined deployments with no way to log a browser in at all.
-    //
-    // The collision is gone: the PIN session lives on `mythos_pin` now
-    // (server/credentials.js), so both cookies coexist and a combined
-    // deployment satisfies both requirements the way its policy says it should.
     const presented = req.body && req.body.token;
     if (typeof presented !== 'string' || !presented) {
       return res.status(400).json({ error: 'A token is required.' });
     }
     if (!authTokenMatches(presented)) {
-      // No Set-Cookie on the failure path — a wrong guess must leave the
-      // browser with exactly what it had.
       return res.status(401).json({ error: 'Incorrect token.' });
     }
-    res.cookie(AUTH_COOKIE, authToken, {
-      httpOnly: true,
-      sameSite: 'strict',
-      secure: req.secure,
-      maxAge: cookieTtlMs,
-      path: '/',
-    });
+    // Signing in again from the same browser replaces its session rather than
+    // leaving the old one live until it expires.
+    revokePresented(req);
+    const issued = sessions.issue();
+    res.setHeader('Cache-Control', 'no-store');
+    for (const name of LEGACY_COOKIES) res.clearCookie(name, { path: '/' });
+    res.cookie(SESSION_COOKIE, issued.id, sessionCookieOptions(req, issued.maxAgeMs));
+    logger.info('auth.session-issued', { persisted: issued.persisted });
     res.json({ ok: true });
+  });
+
+  // ---- POST /api/auth/logout — behind the /api gate like everything else.
+  // Revokes THIS browser's session and closes the sockets it opened; other
+  // browsers stay signed in. Signing everyone out is rotating the token. ----
+  app.post('/api/auth/logout', (req, res) => {
+    const revoked = revokePresented(req);
+    res.setHeader('Cache-Control', 'no-store');
+    res.clearCookie(SESSION_COOKIE, { path: '/' });
+    logger.info('auth.session-revoked', { revoked });
+    res.json({ ok: true, revoked });
   });
 }
 
-module.exports = { mountAuthRoutes, AUTH_COOKIE };
+module.exports = { mountAuthRoutes, SESSION_COOKIE };

@@ -28,22 +28,25 @@ function createConfirmRegistry({ config, onExpire }) {
   // never saw a decline, MYTHOS never learned the send didn't happen, and
   // nothing in the audit trail distinguishes "operator said no" from "nobody
   // ever answered". A per-entry timer makes expiry an EVENT, not an absence.
-  function armExpiry(confirmId, entry) {
+  function armExpiry(confirmId, entry, entryTtl) {
     const timer = setTimeout(() => {
       if (pending.get(confirmId) !== entry) return; // already accepted/rejected
       pending.delete(confirmId);
       if (typeof onExpire === 'function') {
         try { onExpire(confirmId, entry); } catch (_) { /* caller's problem, never ours */ }
       }
-    }, ttlMs);
+    }, entryTtl || ttlMs);
     if (typeof timer.unref === 'function') timer.unref(); // never keeps the process alive
     return timer;
   }
 
-  // create(summary, action, connectionId) -> confirmId. `action` is caller-defined
+  // create(summary, action, connectionId, options) -> confirmId. `action` is caller-defined
   // (Leash callers pass the {tool, args} decision) and is only ever handed back
   // verbatim via accept() — this registry never inspects or executes it.
-  function create(summary, action, connectionId) {
+  // options.spoken (BUG-461/464): the entry may ALSO be approved by the
+  // operator's spoken yes, through acceptSpoken(), once markPresented() records
+  // that the exact proposal was put to them. options.ttlMs may only shorten.
+  function create(summary, action, connectionId, options) {
     // Sweep expired entries on every create — piggybacks on the common path so
     // we need no new setInterval. Without this, confirms leak forever when the
     // client disconnects before replying: accept()/reject() are the only
@@ -62,8 +65,11 @@ function createConfirmRegistry({ config, onExpire }) {
     }
     connectionId = connectionId === undefined ? null : connectionId;
     const confirmId = nextId();
-    const entry = { summary: summary, action: action, expiresAt: Date.now() + ttlMs, connectionId: connectionId, timer: null };
-    entry.timer = armExpiry(confirmId, entry);
+    const spoken = Boolean(options && options.spoken);
+    const entryTtl = options && options.ttlMs > 0 ? Math.min(options.ttlMs, ttlMs) : ttlMs;
+    const entry = { summary: summary, action: action, expiresAt: Date.now() + entryTtl, connectionId: connectionId, timer: null,
+      spoken: spoken, presented: false };
+    entry.timer = armExpiry(confirmId, entry, entryTtl);
     pending.set(confirmId, entry);
     return confirmId;
   }
@@ -97,10 +103,34 @@ function createConfirmRegistry({ config, onExpire }) {
     return pending.delete(confirmId);
   }
 
+  // BUG-461/464: a spoken approval needs a spoken proposal. Only a `spoken`
+  // entry can be marked, and only by its own connection — a refused tool call
+  // alone never becomes something a "yes" can approve.
+  function markPresented(confirmId, connectionId) {
+    const entry = pending.get(confirmId);
+    if (!entry || !entry.spoken || connectionId == null || entry.connectionId !== connectionId) return false;
+    if (Date.now() > entry.expiresAt) return false;
+    entry.presented = true;
+    return true;
+  }
+
+  // The spoken twin of accept(): the stored action, consumed, or null. Stricter
+  // than accept() on scope — an unscoped (null) entry is never voice-approvable,
+  // because "any connection may answer" is not a person answering.
+  function acceptSpoken(confirmId, connectionId) {
+    const entry = pending.get(confirmId);
+    if (!entry || !entry.spoken || !entry.presented) return null;
+    if (connectionId == null || entry.connectionId !== connectionId) return null;
+    pending.delete(confirmId);
+    clearExpiry(entry);
+    if (Date.now() > entry.expiresAt) return null;
+    return entry.action;
+  }
+
   function peek(confirmId) {
     const entry = pending.get(confirmId);
     if (!entry) return null;
-    return { summary: entry.summary, expired: Date.now() > entry.expiresAt };
+    return { summary: entry.summary, expired: Date.now() > entry.expiresAt, spoken: entry.spoken, presented: entry.presented };
   }
 
   // A3: non-consuming read of the tier level for scope-gating decisions.
@@ -114,7 +144,8 @@ function createConfirmRegistry({ config, onExpire }) {
     return { pending: pending.size, ttlMs: ttlMs };
   }
 
-  return { create: create, accept: accept, reject: reject, peek: peek, peekTier: peekTier, stats: stats };
+  return { create: create, accept: accept, reject: reject, peek: peek, peekTier: peekTier, stats: stats,
+    markPresented: markPresented, acceptSpoken: acceptSpoken };
 }
 
 module.exports = { createConfirmRegistry };

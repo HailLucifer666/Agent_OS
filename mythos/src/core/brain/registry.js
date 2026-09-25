@@ -6,7 +6,15 @@ const ollama = require('../../../providers/ollama');
 const groq = require('../../../providers/groq');
 const mistral = require('../../../providers/mistral');
 
+const nim = require('../../../providers/nim');
+const cerebras = require('../../../providers/cerebras');
+const google = require('../../../providers/google');
+const openrouter = require('../../../providers/openrouter');
+const openai = require('../../../providers/openai');
+const zcode = require('../../../providers/zcode');
+
 const { BRAIN_TABLES } = require('./lanes.default');
+const routePolicy = require('./route-policy');
 // BUG-419: every probe in this file reads a free catalog endpoint, so none of
 // them can see an account that refuses to bill. This holds what a real
 // completion said.
@@ -247,6 +255,40 @@ function reportUnknownLane(lane, bus) {
   try { console.warn('[brain] unknown lane "' + name + '" — falling back to the text lane. Known lanes: ' + Object.keys(BRAIN_TABLES).join(', ')); } catch (_) {}
 }
 
+// The host a lane's chat() will actually reach, asked of the provider module
+// itself so an env override (MISTRAL_API_URL, OLLAMA_URL, ...) is seen exactly
+// as the request sees it. nim2 is a second key on NIM's host (chain.js builds it
+// from the same factory and the same NIM_API_URL). null = the lane is unknown here.
+const anthropic = require('../../../providers/anthropic');
+const LANE_ENDPOINT_SOURCES = { ollama, groq, mistral, nim, nim2: nim, cerebras, google, openrouter, openai, zcode, anthropic };
+function endpointFor(lane) {
+  const p = LANE_ENDPOINT_SOURCES[lane];
+  return p && typeof p.getBaseURL === 'function' ? p.getBaseURL() : null;
+}
+
+function routeOf(entry, kind) {
+  return { provider: entry.provider, model: entry.model, endpoint: endpointFor(entry.provider), mode: kind === 'embed' ? 'embed' : 'chat' };
+}
+
+// Wave 0c (2026-09-24): a route refused by MODEL_BILLING_POLICY is dropped here,
+// AFTER the CHAIN_* override is applied — an override naming a paid model must
+// not be a way around the policy. Dropped audibly, never silently: chain.js's B1
+// rule is that a skipped route must be as visible as a failed one, and a route
+// removed before the walk never reaches chain.js's skip reporting at all. Deduped
+// per route, like reportUnknownLane above, because the first report is the whole
+// signal and chainFor runs on every turn.
+const blockedRoutesReported = new Set();
+function reportBlockedRoute(decision, bus) {
+  if (blockedRoutesReported.has(decision.reason)) return;
+  blockedRoutesReported.add(decision.reason);
+  try {
+    if (bus && typeof bus.emit === 'function') {
+      bus.emit('health.anomaly', { kind: 'route-refused-by-billing-policy', reason: decision.reason, classification: decision.classification });
+    }
+  } catch (_) { /* reporting must never break the call */ }
+  try { console.warn('[brain] ' + decision.reason); } catch (_) {}
+}
+
 // Ranked, alive-only chain for a brain lane. Never throws; empty array = nothing alive.
 // Supported kinds: 'voice' | 'build' | 'simple' | 'reasoning' | 'memory' | 'text' | 'vision' | 'embed'
 // `opts.bus` is optional — supplied by chain.js so the unknown-lane report above
@@ -260,7 +302,12 @@ async function chainFor(kind, opts) {
   }
   const override = parseOverride(process.env[table.env]);
   const prefs = override.length ? override : table.prefs;
-  return prefs.filter((p) => isProviderAlive(p.provider, p.model, c));
+  return prefs.filter((p) => {
+    if (!isProviderAlive(p.provider, p.model, c)) return false;
+    const decision = routePolicy.decide(routeOf(p, kind));
+    if (!decision.allowed) reportBlockedRoute(decision, opts && opts.bus);
+    return decision.allowed;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -308,5 +355,7 @@ module.exports = {
   chainFor,
   getStatus,
   refresh,
-  _internal: { BRAIN_TABLES, parseOverride, isProviderAlive },
+  endpointFor,
+  routeOf,
+  _internal: { BRAIN_TABLES, parseOverride, isProviderAlive, _resetBlockedRouteReports: () => blockedRoutesReported.clear() },
 };

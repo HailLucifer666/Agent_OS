@@ -125,9 +125,14 @@ describe('BUG-398 row 13 — the shared reasoning budget names who spent it', ()
       config: {}, brain: { think: async () => ({ content: 'unused' }) }, logger: { warn() {}, info() {} },
     });
 
+    // BUG-446 (2026-09-23): a cortex dispatch runs for an ACTIVE goal with budget
+    // (goals/execution-gate.js), as every real cortex call does — arbitrate() always
+    // names one. The voice call keeps no goal, as before.
+    const activeGoal = { id: 'g-398', status: 'active', budget: { tokens: 20000, actions: 25 }, spent: { tokens: 0, actions: 0 } };
+    const goals = { get: (id) => (id === 'g-398' ? activeGoal : null), debitBudget() {}, markPlanStepDone() {} };
     const ctx = (channel) => ({
-      effectors: hub, bus: { emit() {} }, goals: null, memory: null,
-      config: { ACTION_TIMEOUT_MS: 5000 }, channel,
+      effectors: hub, bus: { emit() {} }, goals: channel === 'cortex' ? goals : null, memory: null,
+      config: { ACTION_TIMEOUT_MS: 5000 }, channel, goalId: channel === 'cortex' ? 'g-398' : null,
     });
     const first = await dispatchAction(
       { tool: 'think_deeply', args: { question: 'why' } }, ctx('cortex'));

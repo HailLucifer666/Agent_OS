@@ -332,7 +332,7 @@ async function settleExternalOpen(args, deps) {
 
   let browserName = browserTarget.normalizeBrowserName(handoff.browser);
   if (!browserName) {
-    const osDefault = (d.osDefaultBrowser || browserTarget.osDefaultBrowser)();
+    const osDefault = await (d.osDefaultBrowser || browserTarget.osDefaultBrowser)();
     browserName = (osDefault && osDefault.drivable) ? osDefault.name : null;
   }
   const proc = browserName ? browserProcessName(browserName) : null;

@@ -64,11 +64,15 @@ function anomalyRow(a) {
   const time = d && !isNaN(d.getTime())
     ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
     : '--:--:--';
-  const msg = a.error || a.target || a.scope || '';
+  // BUG-447 (2026-09-25): a row that needs the operator shows its steps in full and
+  // wraps. They are no longer read aloud — MYTHOS says one plain sentence and points
+  // here — so this is the only place the operator sees the command to run.
+  const steps = a.needsOperator === true && a.reason ? String(a.reason) : '';
+  const msg = steps || a.error || a.target || a.scope || '';
   return `<div class="health-anomaly-row mono">
     <span class="health-anomaly-time">${time}</span>
     <span class="health-anomaly-kind">${escapeHtml(a.kind || 'anomaly')}</span>
-    <span class="health-anomaly-msg">${escapeHtml(String(msg).slice(0, 120))}</span>
+    <span class="health-anomaly-msg${steps ? ' health-anomaly-msg--steps' : ''}">${escapeHtml(String(msg).slice(0, steps ? 1200 : 120))}</span>
   </div>`;
 }
 

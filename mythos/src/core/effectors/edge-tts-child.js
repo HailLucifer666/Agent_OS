@@ -12,7 +12,8 @@ const { childRuntimeDir, childCommand } = require('../util/child-runtime');
 
 const fs = require('fs');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
+const { execFileText, exitsCleanly } = require('../util/exec-file-text');
 
 const TTS_SCRIPT = path.join(__dirname, '..', '..', '..', 'services', 'edge-tts-server.py');
 const MYTHOS_DIR = path.join(__dirname, '..', '..', '..');
@@ -35,14 +36,31 @@ function venvPythons() {
   ];
 }
 
-function createEdgeTtsChild({ logger }) {
+function createEdgeTtsChild({ logger, deps }) {
+  // Test seam (BUG-436): the probe and spawn functions, so a test can hold a probe
+  // open and prove a start that stop() overtook spawns nothing. Production passes none.
+  const run = Object.assign({ exitsCleanly, execFileText, spawn }, deps || {});
   var MAX_RESTART = 3;
   var BACKOFF_MS = [2000, 5000, 15000];
   var restartCount = 0;
   var restartTimer = null;
   let child = null;
 
-  function start() {
+  // BUG-436 (2026-09-23): start() used spawnSync for its python and module probes
+  // (bounded at 3 s per candidate plus 5 s), and it runs again after every child crash,
+  // mid-conversation — each restart froze the whole server for the probes'
+  // duration. The probes are async now, so start() is too. It never rejects
+  // (callers fire and forget, and an unhandled rejection exits this process),
+  // and a start that stop() overtook spawns nothing: `epoch` moves on stop().
+  var epoch = 0;
+  async function start() {
+    try { return await startOnce(epoch); } catch (err) {
+      logger.warn('edge-tts.start-failed', { error: String((err && err.message) || err) });
+      return false;
+    }
+  }
+
+  async function startOnce(myEpoch) {
     if (process.env.EDGE_TTS_AUTOSTART === 'false') return false;
     if (process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT) return false;
 
@@ -72,10 +90,7 @@ function createEdgeTtsChild({ logger }) {
     const candidates = venvPythons().filter((p) => { try { return fs.existsSync(p); } catch { return false; } });
     candidates.push('python', 'python3');
     for (const bin of candidates) {
-      try {
-        const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 3000 });
-        if (r.status === 0) { pyBin = bin; break; }
-      } catch { /* try next */ }
+      if (await run.exitsCleanly(bin, ['--version'], { timeoutMs: 3000 })) { pyBin = bin; break; }
     }
     if (!pyBin) {
       logger.warn('edge-tts.python-missing', { note: 'server TTS off — browser speechSynthesis fallback' });
@@ -85,23 +100,25 @@ function createEdgeTtsChild({ logger }) {
     // Detect edge_tts module. shell:false is required here — shell:true mangles
     // the -c "import edge_tts" quoting on Windows (Python sees bare 'import').
     try {
-      const r = spawnSync(pyBin, ['-c', 'import edge_tts'], { encoding: 'utf8', timeout: 5000 });
-      if (r.status !== 0) {
+      await run.execFileText(pyBin, ['-c', 'import edge_tts'], { timeoutMs: 5000 });
+    } catch (err) {
+      if (err && typeof err.code === 'number') {
         // Project-local install, per CLAUDE.md's isolation rule — a bare global
         // `pip install` is what the old hint told the operator to do.
         logger.warn('edge-tts.module-missing', {
           hint: 'python -m venv .venv && .venv/Scripts/python -m pip install edge-tts  (bin/python on macOS/Linux)',
           detected: pyBin,
         });
-        return false;
+      } else {
+        // Not python's exit status: a timeout kill or a spawn error — "could not check".
+        logger.warn('edge-tts.module-check-failed', { note: 'server TTS off' });
       }
-    } catch {
-      logger.warn('edge-tts.module-check-failed', { note: 'server TTS off' });
       return false;
     }
+    if (myEpoch !== epoch) return false; // stop() ran while the probes were awaited
 
     try {
-      child = spawn(childCommand(pyBin), [TTS_SCRIPT], {
+      child = run.spawn(childCommand(pyBin), [TTS_SCRIPT], {
         cwd: childRuntimeDir(),
         shell: false,
         stdio: 'ignore',
@@ -131,6 +148,7 @@ function createEdgeTtsChild({ logger }) {
   }
 
   function stop() {
+    epoch += 1;
     if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     if (child) {
       try { child.kill(); } catch { /* already gone */ }
