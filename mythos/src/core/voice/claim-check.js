@@ -69,7 +69,7 @@
 // [2026-09-23: the one require is now claim-overlap.js (BUG-448) — also a pure
 // sibling, so the purity promise above still holds.]
 
-const { unexcusedHits, groupOverlapping } = require('./claim-overlap'); // BUG-448
+const { unexcusedHits, groupOverlapping } = require('./claim-overlap'); const { claimView } = require('./claim-shape'); // BUG-448; B2b-1: the part of a sentence that claims anything
 
 const CLAIM_CATEGORIES = [
   {
@@ -429,8 +429,8 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
 
   const claims = [];
   const flaggedCategories = new Set();
-  for (const sentence of splitSentences(text)) {
-    if (FUTURE_RE.test(sentence)) continue;
+  for (const spoken of splitSentences(text)) {
+    const sentence = claimView(spoken); if (sentence === null || FUTURE_RE.test(sentence)) continue; // B2b-1: a question, hedge or quote claims nothing
     const hits = [];
     for (const category of CLAIM_CATEGORIES) {
       if (flaggedCategories.has(category.name)) continue; // one flag per category per reply
@@ -514,7 +514,7 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       claims.push({
         category: hit.category.name,
         phrase: hit.match[0],
-        sentence,
+        sentence: spoken, // as spoken, so replaceUnbackedClaims and a correction can find it
         candidateTools: hit.gate.slice(),
       });
     }
