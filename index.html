@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8336,
+      "value": 8363,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -5995,6 +5995,21 @@
         }
       },
       {
+        "n": 453,
+        "shape": "entry",
+        "state": "verified",
+        "title": "every test gate read `# fail N`, which counts failed LEAF tests only, so a suite that failed to load passed the commit hook, CI and the count check (FIXED 2026-09-23, mutation-proven)",
+        "detail": {
+          "fix": "`tap-verdict.js` holds the rule: the summary must be present, `# fail` and `# cancelled` must be 0, there must be no top-level `not ok` line, and the runner's exit code must be 0 when the caller knows it. The hook and CI capture the exit code on the line straight after the suite runs and pipe the TAP through it; both name the failing suite (CI as `::error::` annotations). `sync-test-count.js` refuses — in both `--check` and `--write` — to derive counts from a run that failed while `# fail` says 0. A counted failure is still reported and not refused, as before: that script keeps documents honest and the hook and CI are the gates. The hook's own `# fail` check and its BUG-371 nested-failure report are unchanged.",
+          "verification": "`mythos/test/bug-453-gates-blind-to-suite-level-failures.test.js` — the rule on fixtures trimmed from the real captures; the hook's gate sliced between `SUITE-GATE` sentinels and executed with `sh`; CI's gate sliced from `ci.yml` and executed under PowerShell; `parseCounts` and the `--check` CLI; source-shape checks that each exit code is read before anything can replace it."
+        },
+        "campaign": {
+          "disposition": "currently verified",
+          "evidence": "[FIXED 2026-09-23, mutation-proven] The hook, CI and sync-test-count read `# fail N`, which counts failed leaf tests only; a describe() that throws at definition time, a failed before() hook and a timeout print `# fail 0` while node --test exits 1. All three gates now share tap-verdict.js (summary present, fail 0, cancelled 0, no top-level not ok except TODO, runner exit 0). Consumers: .githooks/pre-commit, .github/workflows/ci.yml, sync-test-count.js. Not covered: a file that calls process.exit(0) mid-test is reported ok.",
+          "source": "test/bug-453-gates-blind-to-suite-level-failures.test.js"
+        }
+      },
+      {
         "n": 455,
         "shape": "entry",
         "state": "open",
@@ -6210,7 +6225,7 @@
       }
     ],
     "counts": {
-      "verified": 89,
+      "verified": 90,
       "fixed": 182,
       "open": 34,
       "coded": 9,
@@ -6218,7 +6233,7 @@
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 317,
+    "total": 318,
     "openDeclared": [
       274,
       275,

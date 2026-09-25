@@ -25,6 +25,7 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { readTapVerdict } = require('./tap-verdict');
 
 const MYTHOS_ROOT = path.join(__dirname, '..');
 const REPO_ROOT = path.join(MYTHOS_ROOT, '..');
@@ -44,7 +45,7 @@ function runSuite() {
     ['--test', '--test-reporter=tap'],
     { cwd: MYTHOS_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
-  return `${result.stdout || ''}\n${result.stderr || ''}`;
+  return { output: `${result.stdout || ''}\n${result.stderr || ''}`, runnerExit: result.status };
 }
 
 function readStdin() {
@@ -62,23 +63,41 @@ function getSuiteOutput() {
   }
   if (!process.stdin.isTTY) {
     return readStdin().then((piped) => {
-      if (piped.trim()) return piped;
+      // Piped TAP carries no exit code; the top-level `not ok` check in
+      // tap-verdict.js is what stands in for it.
+      if (piped.trim()) return { output: piped, runnerExit: null };
       return runSuite();
     });
   }
   return Promise.resolve(runSuite());
 }
 
-function parseCounts(out) {
+// BUG-453: `# fail` counts failed LEAF tests only. A describe() that throws
+// while defining its tests, a failed before() hook and a timeout all print
+// `# fail 0` — and a suite that never defined its tests is missing from
+// `# tests` as well, so every number read from such a run is wrong, not merely
+// red. The old reply to it was "7 stale number(s). Run --write", i.e. advice to
+// commit the shrunken count as the baseline. A COUNTED failure is still
+// reported and not refused: this script keeps documents honest, and the hook
+// and CI are the gates.
+function parseCounts(out, { runnerExit = null } = {}) {
+  const verdict = readTapVerdict(out, { runnerExit });
+  if (verdict.isUncounted) {
+    throw new Error(
+      `sync-test-count: the suite FAILED but "# fail" reads 0 (${verdict.reasons.join('; ')}). ` +
+      'Refusing to check or write counts from a run whose count omits a failure. ' +
+      `Top-level failures: ${verdict.failures.join(' | ') || '(none named)'}`,
+    );
+  }
   const field = (name) => {
-    const m = out.match(new RegExp(`^# ${name} (\\d+)$`, 'm'));
-    if (!m) {
+    const value = verdict.summary[name];
+    if (value === null) {
       throw new Error(
         `sync-test-count: couldn't find "# ${name} N" in suite output — ` +
         `did the reporter change? (expected --test-reporter=tap TAP summary lines)`,
       );
     }
-    return parseInt(m[1], 10);
+    return value;
   };
   return {
     tests: field('tests'),
@@ -612,7 +631,8 @@ async function main() {
     return;
   }
 
-  const counts = parseCounts(await getSuiteOutput());
+  const { output, runnerExit } = await getSuiteOutput();
+  const counts = parseCounts(output, { runnerExit });
   // AD-10: docs match reality — tool/provider/sensor/dep counts ride along with
   // the test count as generated values, not hand-typed ones.
   counts.deps = computeDepsCount();
@@ -660,5 +680,6 @@ module.exports = {
   EFFECTOR_LABELS,
   PIE_MIN_SLICE,
   applySlots,
+  parseCounts,
   readmeSlots,
 };
