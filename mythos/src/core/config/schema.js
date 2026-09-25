@@ -35,31 +35,10 @@ const SCHEMA = {
   // server/index.js refuses to start when MYTHOS_BIND is non-loopback and
   // this is unset — see mythos/.env.example for the full story.
   MYTHOS_AUTH_TOKEN:        { type: 'string', default: '' },
-  // Track B1 — real server-side enforcement of the §7.3 PIN lock screen.
-  // Until this, the PIN screen was a client-side visual/pointer deterrent
-  // ONLY: tokenOk() (server/index.js) passes every request when
-  // MYTHOS_AUTH_TOKEN is unset, so `curl 127.0.0.1/api/...` bypassed the
-  // lock screen entirely on the default loopback install. ON by default
-  // (operator decision, 2026-08-17: "whenever we start the app, it should
-  // ask for the PIN") — and safe to be on because pinSessionRequired()
-  // (server/index.js) requires BOTH this flag AND a PIN actually configured
-  // via POST /api/pin/set: with no PIN set there is nothing to enforce, so a
-  // fresh install stays open rather than locking the operator out of their
-  // own server. Set false to opt out — a loopback-without-token install then
-  // exercises none of the enforcement paths, exactly as before Track B1.
-  // See .env.example for the full story and its caveats.
-  PIN_SESSION_ENFORCE:      { type: 'bool', default: true },
-  // How long a PIN-unlocked session stays valid with no further activity
-  // (sliding — src/core/security/pin-session.js extends it on every
-  // authenticated request), ms.
-  PIN_SESSION_TTL_MS:       { type: 'number', default: 1800000, min: 60000, max: 86400000 },
-  // How long the mythos_token cookie issued by POST /api/auth/session lives —
-  // i.e. how long a browser tab stays authenticated after the operator types
-  // MYTHOS_AUTH_TOKEN once (server/routes/auth.js). Not sliding: the cookie
-  // carries the bearer token itself, so this is an expiry, not a session.
-  // Longer than the PIN session on purpose — the PIN gates physical presence
-  // and should lapse quickly; this one only saves re-typing a token the
-  // operator already has in .env.
+  // How long a browser stays signed in after typing MYTHOS_AUTH_TOKEN once
+  // (POST /api/auth/session, server/routes/auth.js). Fixed at sign-in, never
+  // sliding. Since BUG-444 (2026-09-23) the cookie carries a random session id
+  // and server/auth-sessions.js keeps only its hash — never the token.
   AUTH_SESSION_COOKIE_TTL_MS: { type: 'number', default: 2592000000, min: 3600000, max: 31536000000 },
   MYTHOS_VAULT_ROOT:        { type: 'string', default: DEFAULT_VAULT_ROOT },
   MYTHOS_TICK_MS:           { type: 'number', default: 1000, min: 100, max: 60000 },
@@ -639,8 +618,16 @@ const SCHEMA = {
   MISTRAL_EMBED_MODEL:         { type: 'string', default: 'mistral-embed' },
   GROQ_STT_MODEL:              { type: 'string', default: 'whisper-large-v3-turbo' },
 
+  // Wave 0c (2026-09-24) — which model routes MYTHOS may call, by what they
+  // cost. '' / 'any' = every configured route (BYO premium included, today's
+  // behaviour). 'free-only' = only routes src/core/brain/route-policy.js
+  // classifies as free or local; paid and unclassified routes are refused by
+  // name. An unknown value fails boot here; the policy module also fails CLOSED
+  // on one, so a typo can never quietly re-enable paid routes.
+  MODEL_BILLING_POLICY:        { type: 'string', default: '', enum: ['', 'any', 'free-only'] },
+
   // Provider URL overrides (default to the official endpoints)
-  NIM_API_URL:                 { type: 'string', default: 'https://integrate.api.nvidia.com/v1' },
+  NIM_API_URL:                { type: 'string', default: 'https://integrate.api.nvidia.com/v1' },
   GROQ_API_URL:                { type: 'string', default: 'https://api.groq.com/openai/v1' },
   MISTRAL_API_URL:             { type: 'string', default: 'https://api.mistral.ai/v1' },
   CEREBRAS_API_URL:            { type: 'string', default: 'https://api.cerebras.ai/v1' },
@@ -867,4 +854,13 @@ const SCHEMA = {
   LIVE_SCREEN_MAX_FRAME_KB:    { type: 'number', default: 2048, min: 64, max: 16384 },
 };
 
-module.exports = { SCHEMA };
+// Settings that USED to exist. Set in .env they would otherwise be ignored in
+// silence (the loader reads schema keys only), which reads as "it is on" to
+// anyone who wrote one. main.js names any that are present, and nothing else.
+// The same keys in config.json are already reported as unknown (BUG-429).
+const RETIRED_SETTINGS = Object.freeze({
+  PIN_SESSION_ENFORCE: 'the PIN was removed on 2026-09-23; the HUD opens without one',
+  PIN_SESSION_TTL_MS: 'the PIN was removed on 2026-09-23; there is no PIN session',
+});
+
+module.exports = { SCHEMA, RETIRED_SETTINGS };

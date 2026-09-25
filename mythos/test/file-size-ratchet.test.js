@@ -103,7 +103,7 @@ const BASELINE = {
   'mythos/src/core/effectors/from-spotify.js': 900,
   'mythos/src/core/effectors/agent-actions.js': 885,
   'mythos/test/cortex-goals.test.js': 884,
-  'mythos/src/core/immune/healer.js': 876,
+  'mythos/src/core/immune/healer.js': 813,
   'mythos/ui/public/js/neural-map/core-orb.js': 874,
   'mythos/src/core/config/schema.js': 870,
   'mythos/src/core/engagements/executor.js': 864,

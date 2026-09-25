@@ -17,15 +17,13 @@ import { markUnauthorized, markCredentialsMissing, currentRecoveryGeneration } f
 
 let installed = false;
 
-// BUG-442: the authentication endpoints own their own failures.
+// BUG-442: the sign-in endpoint owns its own failures.
 //
-// POST /api/pin/verify answers a wrong PIN with a plain 401 { error } from
-// routes/pin.js, and POST /api/auth/session answers a wrong token the same way.
-// Those are not the authorization gate refusing a request — they are a form
-// telling the operator they mistyped. Announcing them here would mean a
-// mistyped PIN opens the ACCESS TOKEN prompt, which is the original bug
-// arriving through a second door.
-const OWN_FAILURE_PATHS = new Set(['/api/pin/verify', '/api/auth/session']);
+// POST /api/auth/session answers a wrong token with a plain 401 { error }.
+// That is not the authorization gate refusing a request — it is a form telling
+// the operator they mistyped, and the form shows it. (/api/pin/verify was the
+// other member until the PIN was removed on 2026-09-23.)
+const OWN_FAILURE_PATHS = new Set(['/api/auth/session']);
 
 // Relative URLs are same-origin by construction. An absolute one is only ours
 // if its origin matches: some other host answering 401 is not this server's
@@ -45,7 +43,7 @@ function sameOriginApiPath(url) {
   }
 }
 
-// `deps` is a test seam, mirroring pin-lock-screen.js's fetchImpl and
+// `deps` is a test seam, mirroring auth-gate.js's fetchImpl and
 // live-session.js's createSocket. It exists because auth-state.js holds
 // process-wide mutable state, so a test that imports its own copy would watch a
 // store this module never notifies — and every assertion would pass vacuously,

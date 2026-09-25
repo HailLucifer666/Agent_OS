@@ -121,8 +121,8 @@ describe('BUG-407 — one answer to "which browser"', () => {
       'C:\\brave\\brave.exe');
   });
 
-  test('the OS default is resolved by RULE: ProgId -> command -> executable -> name', () => {
-    const d = bt.osDefaultBrowser({ platform: 'win32', readRegistryValue: reader(REAL_USERCHOICE, REAL_COMMAND) });
+  test('the OS default is resolved by RULE: ProgId -> command -> executable -> name', async () => {
+    const d = (await bt.osDefaultBrowser({ platform: 'win32', readRegistryValue: reader(REAL_USERCHOICE, REAL_COMMAND) }));
     assert.deepEqual(
       { name: d.name, progId: d.progId, drivable: d.drivable },
       { name: 'brave', progId: 'BraveHTML', drivable: true },
@@ -130,88 +130,88 @@ describe('BUG-407 — one answer to "which browser"', () => {
     );
   });
 
-  test('a real default MYTHOS cannot drive is "not drivable", which is not "unreadable"', () => {
+  test('a real default MYTHOS cannot drive is "not drivable", which is not "unreadable"', async () => {
     const ff = '\r\n    ProgId    REG_SZ    FirefoxURL\r\n';
     const cmd = '\r\n    (Default)    REG_SZ    "C:\\Program Files\\Mozilla Firefox\\firefox.exe" -osint -url "%1"\r\n';
-    const d = bt.osDefaultBrowser({ platform: 'win32', readRegistryValue: reader(ff, cmd) });
+    const d = (await bt.osDefaultBrowser({ platform: 'win32', readRegistryValue: reader(ff, cmd) }));
     assert.equal(d.name, null, 'firefox is not a browser this codebase can drive over CDP');
     assert.equal(d.drivable, false);
     assert.equal(d.progId, 'FirefoxURL', 'and it still reports WHAT the default is, so the caveat can say so');
   });
 
   // (b)
-  test('an unreadable default is null or not-drivable — never a guessed browser', () => {
-    assert.equal(bt.osDefaultBrowser({ platform: 'win32', readRegistryValue: () => '' }), null,
+  test('an unreadable default is null or not-drivable — never a guessed browser', async () => {
+    assert.equal((await bt.osDefaultBrowser({ platform: 'win32', readRegistryValue: () => '' })), null,
       'no ProgId means no answer');
-    const noCmd = bt.osDefaultBrowser({ platform: 'win32', readRegistryValue: reader(REAL_USERCHOICE, '') });
+    const noCmd = (await bt.osDefaultBrowser({ platform: 'win32', readRegistryValue: reader(REAL_USERCHOICE, '') }));
     assert.equal(noCmd.drivable, false, 'a ProgId whose command cannot be read is not a drivable browser');
     assert.equal(noCmd.name, null, 'and it must not be filled in with a plausible default');
-    assert.equal(bt.osDefaultBrowser({ platform: 'darwin', readRegistryValue: () => REAL_USERCHOICE }), null,
+    assert.equal((await bt.osDefaultBrowser({ platform: 'darwin', readRegistryValue: () => REAL_USERCHOICE })), null,
       'there is no Windows UrlAssociations registry off Windows');
   });
 
-  test('a named request wins, and says so', () => {
-    const r = bt.resolveLaunchTarget('brave', { findBrowserExecutable: fakeExeResolver(P) });
+  test('a named request wins, and says so', async () => {
+    const r = (await bt.resolveLaunchTarget('brave', { findBrowserExecutable: fakeExeResolver(P) }));
     assert.deepEqual({ name: r.name, source: r.source }, { name: 'brave', source: 'requested' });
-    assert.equal(bt.resolveLaunchTarget('Google Chrome', { findBrowserExecutable: fakeExeResolver(P) }).name, 'chrome',
+    assert.equal((await bt.resolveLaunchTarget('Google Chrome', { findBrowserExecutable: fakeExeResolver(P) })).name, 'chrome',
       'aliases resolve — the operator says "google chrome" out loud');
   });
 
   // (c) — the original bug, pinned so it cannot come back
-  test('a named browser that is NOT installed FAILS — it never becomes the default', () => {
-    const r = bt.resolveLaunchTarget('edge', {
+  test('a named browser that is NOT installed FAILS — it never becomes the default', async () => {
+    const r = (await bt.resolveLaunchTarget('edge', {
       findBrowserExecutable: fakeExeResolver({ chrome: P.chrome, brave: P.brave }),
       platform: 'win32',
       readRegistryValue: reader(REAL_USERCHOICE, REAL_COMMAND),
-    });
+    }));
     assert.ok(r.error, 'silently opening Brave for an "edge" request is exactly BUG-398 E3');
     assert.match(r.error, /No edge installation found/);
     assert.equal(r.name, undefined, 'and no browser is chosen at all');
   });
 
-  test('an unsupported name FAILS and lists what is supported', () => {
-    const r = bt.resolveLaunchTarget('safari', { findBrowserExecutable: fakeExeResolver(P) });
+  test('an unsupported name FAILS and lists what is supported', async () => {
+    const r = (await bt.resolveLaunchTarget('safari', { findBrowserExecutable: fakeExeResolver(P) }));
     assert.match(String(r.error), /not a browser I can drive/);
     assert.match(String(r.error), /brave, chrome, edge/);
   });
 
   // (d) — and its adjacent case, below
-  test('unnamed follows the OS DEFAULT when MYTHOS can drive it', () => {
+  test('unnamed follows the OS DEFAULT when MYTHOS can drive it', async () => {
     // Default is Chrome while the fallback order would have said Brave. If the
     // order is consulted first this reads 'brave' and the whole ticket is undone.
     const chromeDefaultCmd = '\r\n    (Default)    REG_SZ    "' + P.chrome + '" --single-argument %1\r\n';
-    const r = bt.resolveLaunchTarget(null, {
+    const r = (await bt.resolveLaunchTarget(null, {
       findBrowserExecutable: fakeExeResolver(P),
       platform: 'win32',
       readRegistryValue: reader('\r\n    ProgId    REG_SZ    ChromeHTML\r\n', chromeDefaultCmd),
-    });
+    }));
     assert.deepEqual({ name: r.name, source: r.source }, { name: 'chrome', source: 'os-default' },
       'Brave is first in BROWSER_SEARCH_ORDER, so this can only be chrome if the default was read FIRST');
   });
 
-  test('unnamed falls back to the search order when the default is not drivable', () => {
+  test('unnamed falls back to the search order when the default is not drivable', async () => {
     const ff = '\r\n    ProgId    REG_SZ    FirefoxURL\r\n';
     const cmd = '\r\n    (Default)    REG_SZ    "C:\\Program Files\\Mozilla Firefox\\firefox.exe" -url "%1"\r\n';
-    const r = bt.resolveLaunchTarget(null, {
+    const r = (await bt.resolveLaunchTarget(null, {
       findBrowserExecutable: fakeExeResolver(P),
       platform: 'win32',
       readRegistryValue: reader(ff, cmd),
-    });
+    }));
     assert.deepEqual({ name: r.name, source: r.source }, { name: 'brave', source: 'search-order' },
       'a Firefox default cannot be driven, so BUG-130\'s Brave-first order is exactly what it is for');
   });
 
-  test('unnamed falls back to the search order when the registry says nothing', () => {
-    const r = bt.resolveLaunchTarget(null, {
+  test('unnamed falls back to the search order when the registry says nothing', async () => {
+    const r = (await bt.resolveLaunchTarget(null, {
       findBrowserExecutable: fakeExeResolver(P), platform: 'win32', readRegistryValue: () => '',
-    });
+    }));
     assert.equal(r.source, 'search-order');
   });
 
-  test('nothing installed at all is an honest error, not a path to a missing exe', () => {
-    const r = bt.resolveLaunchTarget(null, {
+  test('nothing installed at all is an honest error, not a path to a missing exe', async () => {
+    const r = (await bt.resolveLaunchTarget(null, {
       findBrowserExecutable: fakeExeResolver({}), platform: 'win32', readRegistryValue: () => '',
-    });
+    }));
     assert.match(String(r.error), /No supported browser found/);
   });
 
@@ -395,16 +395,16 @@ describe('BUG-407 — one answer to "which browser"', () => {
     for (const s of [named, dflt]) assert.match(s, /list_windows/);
   });
 
-  test('BROWSER_EXECUTABLE still outranks the OS default (adjacent case)', () => {
+  test('BROWSER_EXECUTABLE still outranks the OS default (adjacent case)', async () => {
     const before = process.env.BROWSER_EXECUTABLE;
     const portable = path.join('D:', 'portable', 'chrome.exe');
     process.env.BROWSER_EXECUTABLE = portable;
     try {
-      const r = bt.resolveLaunchTarget(null, {
+      const r = (await bt.resolveLaunchTarget(null, {
         findBrowserExecutable: (name) => (name ? P[name] || null : portable),
         platform: 'win32',
         readRegistryValue: reader(REAL_USERCHOICE, REAL_COMMAND),
-      });
+      }));
       assert.equal(r.source, 'browser-executable-env',
         'an explicit operator override must not be silently outranked by the machine default');
       assert.equal(r.exe, portable);

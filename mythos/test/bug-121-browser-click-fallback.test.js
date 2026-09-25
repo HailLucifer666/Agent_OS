@@ -74,7 +74,33 @@ describe('BUG-121 — browser_click falls back to a script click for lazy-hydrat
     assert.ok(!log.includes('native-click'), 'the native click was not possible here');
   });
 
-  it('a normal visible element uses the native click and is fully verified', async () => {
+  // SPLIT 2026-09-24 (BUG-462). This test was "a normal visible element uses the
+  // native click and is fully verified", asserting "Playwright actionability IS
+  // the oracle — this one is proven" on a page that did not change at all. That
+  // is the hollow proof BUG-462 removed: a click that changed nothing read as
+  // proven. Actionability proves the click could land; the
+  // page moving is what proves it did.
+  it('a normal visible element uses the native click, and is verified when the page moves', async () => {
+    const log = [];
+    let url = 'https://example.com/';
+    realBrowserAgent.withPage = async (fn) => fn({
+      waitForSelector: async () => {},
+      click: async () => { log.push('native-click'); url = 'https://example.com/watch?v=abc'; },
+      locator: () => ({ first: () => ({ scrollIntoViewIfNeeded: async () => { log.push('scroll'); } }) }),
+      url: () => url,
+    });
+
+    const { browser_click } = require('../src/core/effectors/from-browser');
+    const r = await browser_click({ selector: '#play' });
+
+    assert.equal(r.ok, true);
+    assert.equal(r.unverified, false, 'the page moved — that is the proof');
+    assert.match(r.evidence.observed, /watch\?v=abc/);
+    assert.equal(r.result.via, 'native-click');
+    assert.deepEqual(log, ['scroll', 'native-click'], 'the element is scrolled into view before clicking');
+  });
+
+  it('a native click that changes nothing is still ok, but UNVERIFIED — actionability is not proof', async () => {
     const log = [];
     realBrowserAgent.withPage = async (fn) => fn({
       waitForSelector: async () => {},
@@ -86,10 +112,10 @@ describe('BUG-121 — browser_click falls back to a script click for lazy-hydrat
     const { browser_click } = require('../src/core/effectors/from-browser');
     const r = await browser_click({ selector: '#play' });
 
-    assert.equal(r.ok, true);
-    assert.notEqual(r.unverified, true, 'Playwright actionability IS the oracle — this one is proven');
+    assert.equal(r.ok, true, 'the click was delivered; calling it a failure would be its own lie');
+    assert.equal(r.unverified, true);
+    assert.equal(r.confirmedStep, 'the click was delivered to the element');
     assert.equal(r.result.via, 'native-click');
-    assert.deepEqual(log, ['scroll', 'native-click'], 'the element is scrolled into view before clicking');
   });
 
   it('a scroll that throws does not lose the click it was helping', async () => {

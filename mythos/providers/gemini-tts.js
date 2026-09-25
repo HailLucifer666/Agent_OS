@@ -42,6 +42,8 @@
 
 // Moved off gemini-2.5-flash-preview-tts 2026-09-11 on the re-measurement above.
 // GEMINI_TTS_MODEL still overrides, so reverting is an env var and not a deploy.
+const routePolicy = require('../src/core/brain/route-policy');
+
 const DEFAULT_MODEL = 'gemini-3.1-flash-tts-preview';
 const DEFAULT_VOICE = 'Aoede';
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -106,6 +108,8 @@ async function synthesize({ text, voice, model, signal }) {
 
   const useModel = model || process.env.GEMINI_TTS_MODEL || DEFAULT_MODEL;
   const useVoice = voice || process.env.GEMINI_LIVE_VOICE || DEFAULT_VOICE;
+  // Wave 0c: the model is caller- and env-settable; judged before the request.
+  routePolicy.assertAllowed({ provider: 'google', model: useModel, endpoint: BASE, mode: 'tts' });
 
   const res = await fetch(`${BASE}/${useModel}:generateContent?key=${key}`, {
     method: 'POST',
@@ -122,8 +126,23 @@ async function synthesize({ text, voice, model, signal }) {
 
   if (!res.ok) {
     let detail = res.statusText;
-    try { const e = await res.json(); detail = (e.error && e.error.message) || detail; } catch { /* keep statusText */ }
-    throw new Error(`gemini-tts failed: ${res.status} ${detail}`);
+    let retryAfterMs;
+    try {
+      const e = await res.json();
+      detail = (e.error && e.error.message) || detail;
+      // BUG-450: Google names how long to wait in a RetryInfo detail ("17s").
+      // Carried as a number for the chain's circuit (providers/tts-circuit.js),
+      // and only when it is a sane wait — anything outside 1 s..24 h is dropped
+      // so the circuit's own ladder applies instead of a nonsense park.
+      const info = ((e.error && e.error.details) || []).find((d) => d && /RetryInfo$/.test(String(d['@type'] || '')));
+      const m = info && /^(\d+(?:\.\d+)?)s$/.exec(String(info.retryDelay || ''));
+      const ms = m ? Math.round(Number(m[1]) * 1000) : NaN;
+      if (ms >= 1000 && ms <= 24 * 60 * 60 * 1000) retryAfterMs = ms;
+    } catch { /* keep statusText */ }
+    const err = new Error(`gemini-tts failed: ${res.status} ${detail}`);
+    err.status = res.status;   // structure first: the circuit parks a 429 as a quota
+    if (retryAfterMs !== undefined) err.retryAfterMs = retryAfterMs;
+    throw err;
   }
 
   const json = await res.json();
@@ -143,6 +162,13 @@ async function listVoices() {
   return ['Aoede', 'Puck', 'Charon', 'Kore', 'Fenrir', 'Leda', 'Orus', 'Zephyr'];
 }
 
+// BUG-450: the circuit is per CREDENTIAL — a new key is a new quota, so it must
+// not inherit the old key's park. A fingerprint, never the key itself.
+function circuitKey() {
+  const key = apiKey();
+  return key ? require('node:crypto').createHash('sha256').update('mythos-tts-circuit:' + key).digest('hex').slice(0, 12) : 'no-key';
+}
+
 module.exports = {
   name: 'gemini-tts',
   mime: 'audio/wav',
@@ -150,6 +176,7 @@ module.exports = {
   getStatus,
   synthesize,
   listVoices,
+  circuitKey,
   // exported for tests — the WAV header is easy to get subtly wrong
   _pcmToWav: pcmToWav,
   _rateFromMime: rateFromMime,

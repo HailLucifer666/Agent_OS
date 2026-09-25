@@ -30,9 +30,6 @@ const { visionThink } = require('./vision-call');
 const evidence = require('./evidence');
 // BUG-407: open_web(browser:true)'s hand-off, including the named-browser route.
 const externalRoute = require('./open-external-route');
-// BUG-113: surface open spoken commitments in read_status so "where are we
-// on X" is answerable from state instead of memory.
-const { listOpenCommitments } = require('./from-calendar');
 // C1: job_status is the pull-side counterpart of the announcer's push-side
 // fix — same defect (a review-failed or fallback-engine build reading as
 // "done"), arriving by voice query instead of by proactive speech.
@@ -88,7 +85,6 @@ function buildTools(ctx) {
   // rather than exercising the real one. Undefined in production — visionThink
   // defaults to the real registry.chainFor.
   const visionChainFor = ctx.visionChainFor;
-  const goals = ctx.goals; // BUG-113: raw GoalSystem, optional — commitment ledger read in read_status
   // A4: identity module, optional — read_status surfaces its current persona
   // levels (same accessor persona_status uses, effectors/from-persona.js) so
   // "what's my humor level set at" is answerable without a separate tool.
@@ -719,10 +715,10 @@ function buildTools(ctx) {
     try {
       const status = probes ? await probes.getStatus() : null;
       const jobs = buildRunner.listJobs().slice(-5);
-      // BUG-113: open commitments ("I'll check X") the operator can ask about
-      // later — best-effort, never blocks status on a ledger read failure.
-      let openCommitments = [];
-      try { openCommitments = listOpenCommitments(goals) || []; } catch (_) {}
+      // BUG-446 / D10 (2026-09-23): open commitments are NOT carried here any more.
+      // read_status answers "how are things", and every answer to that dragged in
+      // the unaccepted promises MYTHOS made itself. They are listed when asked for, by
+      // commitment_list (from-calendar.js), and can be dismissed there.
       // A4: report the persona store's actual current levels — never a
       // fabricated/default set. null when identity isn't available at all,
       // never a stand-in numbers object.
@@ -730,7 +726,7 @@ function buildTools(ctx) {
       if (identity && typeof identity.getPersonaLevels === 'function') {
         try { persona = identity.getPersonaLevels(); } catch (_) {}
       }
-      return ok({ status, recentJobs: jobs, openCommitments, persona });
+      return ok({ status, recentJobs: jobs, persona });
     } catch (err) {
       return fail(err.message);
     }
@@ -1333,7 +1329,7 @@ function buildTools(ctx) {
     // real mechanism — this only makes the first attempt likelier to be right.
     { name: 'navigate', description: 'Switch which MYTHOS dashboard VIEW is showing (e.g. dashboard, kanban, pipeline). This is a HUD router, NOT a browser and NOT a URL bar: it cannot open a website or load a page. For "open <site>" / "go to <url>" use browser_navigate instead.', params: { route: 'string - a dashboard view name, never a URL' }, danger: false, fn: navigate },
     { name: 'close_panel', description: 'Close dashboard panel(s), floating widgets (search/weather/flights/image cards spawned by open_web), AND the Electron media window if one is open (e.g. a YouTube video that will not stop with standard playback controls). Pass all:true to close everything open, omit to close just the top-most one. Reports the real overlaysClosed/widgetsClosed/mediaWindowClosed counts.', params: { all: 'boolean (optional, default false)' }, danger: false, fn: close_panel },
-    { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT the user\'s browser. Despite the name, open_web never browses: use browser_navigate for "search the web", "look up", "open <site>", or anything the user expects to see in a real browser. Only use open_web when the user asked for an at-a-glance card ON THE HUD. Content is rendered in MYTHOS\'s own UI (dashboard overlay/widget, plus MYTHOS\'s own media window for the youtube/web types). type:"youtube" plays a SPECIFIC video (pass query — the song/topic to search; for "open YouTube" with no video in mind, use launch_app("youtube") instead). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image search results (pass query). type:"web" embeds a direct URL and requires url: — a domain in query: is REFUSED, not guessed at (that call failed five times in one 2026-08-14 session). search/weather/flights/image open as floating widgets. This is NOT the user\'s real/desktop browser — but you do NOT have to switch tools for a plain "open this site in my browser": pass browser:true WITH url: and open_web itself routes through its newtab mechanism to the real browser window (the same route frame-blocking sites get). By default that is the OS DEFAULT browser. If the operator NAMES a browser (\"open it in Chrome\"), this route is WRONG and the spoken path refuses it (BUG-435): a browser the operator names is the one MYTHOS drives, so the page can be read and clicked afterwards, and this route hands the url to a signed-in window nothing can click in. browserName survives for HTTP callers only. For full browsing control (tabs, navigation of an attached session) use browser_navigate / browser_tabs instead.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web, or the target when browser:true', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title', browser: 'boolean (optional) - open the url in the REAL browser window via the newtab route instead of rendering a dashboard card. On its own it goes to whichever browser Windows has set as DEFAULT.', browserName: 'string (optional) - chrome, brave or edge. Only meaningful with browser:true. Opens the url in THAT browser using the operator\'s normal profile (logged in, their extensions), by handing the url to the browser executable - not the signed-out MYTHOS debug profile. HTTP callers only: on the spoken path a named browser is REFUSED (BUG-435), because a browser the operator names is the one MYTHOS drives and this route lands the page where nothing can be clicked. Omit it.' }, danger: false, fn: open_web },
+    { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard and does NOT open a browser window unless you pass browser:true WITH url:, which hands it to the operator\'s real browser. By default that is the OS DEFAULT browser; nothing there can be read or clicked afterwards. A card is NOT the user\'s real browser: use browser_navigate for "search the web" and for any page you must then read or click ("play the third video") — after browser_launch_debug if none is attached; then browser_snapshot, browser_click. If the operator NAMES a browser ("open it in Chrome"), browser:true is WRONG and the spoken path refuses it (BUG-435): browser_launch_debug with that browser, then browser_navigate (browserName: HTTP callers only). type:"youtube" plays ONE video it picks itself (pass query) and cannot pick "the third one"; for a bare "open YouTube" use launch_app("youtube"). weather/search/flights/image show floating widgets. type:"web" embeds a direct URL and requires url: — a domain in query: is REFUSED.', params: { type: 'string - youtube|weather|search|flights|image|web', query: 'string (optional) - search query or topic', url: 'string (optional) - for type:web, or the target when browser:true', location: 'string (optional) - for type:weather', title: 'string (optional) - custom title', browser: 'boolean (optional) - open the url in the REAL browser window via the newtab route instead of rendering a dashboard card. On its own it goes to whichever browser Windows has set as DEFAULT.', browserName: 'string (optional) - chrome, brave or edge. Only meaningful with browser:true. Opens the url in THAT browser using the operator\'s normal profile (logged in, their extensions), by handing the url to the browser executable - not the signed-out MYTHOS debug profile. HTTP callers only: on the spoken path a named browser is REFUSED (BUG-435), because a browser the operator names is the one MYTHOS drives and this route lands the page where nothing can be clicked. Omit it.' }, danger: false, fn: open_web },
     { name: 'open_artifact', description: 'Open a build result in the system browser. Use this for /vault/builds/... paths instead of browser_navigate when browser automation is offline. Prefer jobId (from pipeline_status/job_status) over path — it resolves the real artifact path server-side, so you never have to retype a filename. A wrong path fails with the real path(s) named in the error.', params: { path: 'string (optional if jobId given)', jobId: 'string (optional) - resolves the path from the job record instead of retyping it', title: 'string (optional)' }, danger: false, fn: open_artifact },
     { name: 'delete_artifact', description: 'Permanently delete a built artifact (the file + its pipeline card) by matching its title or filename. Destructive and irreversible.', params: { query: 'string - the artifact title or name to match' }, danger: true, fn: delete_artifact },
     // REMEDIATION P3-8: needs_result:true added to every status/check/list/

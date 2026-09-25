@@ -100,6 +100,9 @@ function mountConfigRoutes(app, deps) {
     res.json({
       enabled: Boolean(config.VOICE_S2S_ENABLED),
       operatorEnabled: Boolean(config.DESKTOP_OPERATOR_ENABLED),
+      // BUG-406: the mic-gate recorder (numbers only, written under the repo's .cache/). Read
+      // from the environment like the other voice diagnostics; the server enforces it too.
+      gateRecorder: require('../voice-gate-recording').enabledFromEnv(),
       screenShare: {
         enabled: Boolean(config.LIVE_SCREEN_SHARE_ENABLED),
         fps: config.LIVE_SCREEN_FPS,

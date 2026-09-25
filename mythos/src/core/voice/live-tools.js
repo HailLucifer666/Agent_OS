@@ -71,6 +71,9 @@ const DEFAULT_ALLOWLIST = [
   // read-tool-missing-next-to-its-act-tool shape this list has been bitten by
   // before — and it is what made Incidents/ a place reports went to die.
   'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory','suggest_procedures',
+  // BUG-447 (2026-09-24): resuming after a barge-in. Only the spoken surface can be
+  // barged into, so this is where it belongs; T0, read-only, no act-side sibling.
+  'resume_interrupted_answer',
   // Notes (2026-08-14). All three ship together, act tool WITH both its read
   // tools, per this list's own rule: a withheld read tool next to an act tool
   // does not make the model decline, it makes it substitute the nearest
@@ -120,6 +123,7 @@ const DEFAULT_ALLOWLIST = [
   // just as much to a pair where one tool's description mandates the other:
   // naming an unreachable tool is not a remedy, it is a dead end with a hint.
   'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
+  'commitment_list','commitment_dismiss', // BUG-446 / D10: the only way to ask what MYTHOS promised
   'timer_add','timer_cancel',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
   // spotify_previous was missing while spotify_next was present — "go back" /
@@ -470,6 +474,12 @@ function parseParam(name, spec) {
   return { schema, optional };
 }
 
+// The cap toDeclaration has always applied to a description. Named, and reported
+// by buildFunctionDeclarations when it bites (BUG-459): the cut used to be silent,
+// and measured 2026-09-24 it was dropping the last sentence of think_deeply
+// ("answer the question yourself instead of retrying") on every Live session.
+const DESCRIPTION_MAX_CHARS = 1024;
+
 function toDeclaration(entry, procedureGuidance = false) {
   const properties = {};
   const required = [];
@@ -481,7 +491,7 @@ function toDeclaration(entry, procedureGuidance = false) {
   }
   const decl = {
     name: entry.name,
-    description: String(entry.description || entry.name).slice(0, 1024),
+    description: String(entry.description || entry.name).slice(0, DESCRIPTION_MAX_CHARS),
   };
   if (procedureGuidance && entry.name !== 'suggest_procedures') properties.skillRef = {
     type: 'string', description: 'Optional: skillRef returned by suggest_procedures, only when this action follows one of its steps. Never authorization; resolve current targets.'
@@ -525,7 +535,7 @@ function buildFunctionDeclarations(hub, opts) {
     }
   }
 
-  const declared = [], withheld = [], unavailable = [], needsSetup = [];
+  const declared = [], withheld = [], unavailable = [], needsSetup = [], truncated = [];
   for (const entry of catalog) {
     if (!entry || !entry.name) continue;
     if (!allow.has(entry.name)) { withheld.push(entry.name); continue; }
@@ -537,6 +547,7 @@ function buildFunctionDeclarations(hub, opts) {
       // left the model with a launcher and nothing to launch FOR.
       if (cap.needs) needsSetup.push({ name: entry.name, rule: cap.rule, reason: cap.needs });
     }
+    if (String(entry.description || '').length > DESCRIPTION_MAX_CHARS) truncated.push(entry.name);
     declared.push(toDeclaration(entry, allow.has('suggest_procedures') && catalog.some(e => e.name === 'suggest_procedures')));
   }
   // AD-5 in spirit: a silent cap reads as full coverage. Say what was withheld.
@@ -559,7 +570,11 @@ function buildFunctionDeclarations(hub, opts) {
     options.log(`live-tools: declared ${needsSetup.length} tool(s) that NEED A STEP FIRST — `
       + needsSetup.map((u) => `${u.name} (${u.reason})`).join('; '));
   }
-  return { declarations: declared, withheld, unavailable, needsSetup };
+  if (options.log && truncated.length) {
+    options.log(`live-tools: WARNING — ${truncated.length} description(s) longer than ${DESCRIPTION_MAX_CHARS} chars `
+      + `were CUT, so the model never reads their ending: ${truncated.join(', ')}`);
+  }
+  return { declarations: declared, withheld, unavailable, needsSetup, truncated };
 }
 
 module.exports = {
@@ -568,5 +583,5 @@ module.exports = {
   VOICE_ALLOWLIST_EXEMPT,
   ACT_TOOL_READ_COUNTERPARTS,
   findMissingReadCounterparts,
-  _internal: { parseParam, toDeclaration },
+  _internal: { parseParam, toDeclaration, DESCRIPTION_MAX_CHARS },
 };

@@ -36,7 +36,6 @@ const { createProbes } = require('./core/immune/probes');
 const { createDiagnostician } = require('./core/immune/diagnostician');
 const { createHealer } = require('./core/immune/healer');
 const { createWatchdog } = require('./core/immune/watchdog');
-const { createAnnouncer } = require('./core/immune/announcer');
 const { createMonitor, recoverFromCrash } = require('./core/immune/monitor');
 const { createMetricSensor } = require('./core/sensors/metric');
 const { createEffectorHub } = require('./core/effectors/hub');
@@ -84,7 +83,6 @@ const { registerFromDocs } = require('./core/effectors/from-docs');
 const { registerFromImageGen } = require('./core/effectors/from-image-gen');
 const { registerFromDocuments } = require('./core/effectors/from-documents');
 const { registerFromCodeSearch } = require('./core/effectors/from-code-search');
-const { createPinLock } = require('./core/security/pin-lock');
 const { createOrchestrator } = require('./core/effectors/orchestrator');
 const { createFileSensor } = require('./core/sensors/file');
 const { createWsSensor } = require('./core/sensors/ws');
@@ -189,6 +187,10 @@ async function main() {
       dropped: configResult.settingsDropped,
     });
   }
+  // A retired setting left in .env does nothing; name it rather than ignore it (schema.js).
+  const { RETIRED_SETTINGS } = require('./core/config/schema');
+  const retiredSet = Object.keys(RETIRED_SETTINGS).filter((k) => process.env[k] !== undefined);
+  if (retiredSet.length) logger.warn('config.retired-settings', { keys: retiredSet, why: retiredSet.map((k) => RETIRED_SETTINGS[k]) });
   logger.info('config.settings.loaded', {
     file: configResult.settingsFile,
     // Which layer won, counted. A packaged install reporting "config.json: 0"
@@ -270,7 +272,7 @@ async function main() {
   let leash = null;
   let cortex = null;
   let timerSensor = null;
-  let immune = null; // { probes, diagnostician, healer, watchdog, announcer, monitor }
+  let immune = null; // { probes, diagnostician, healer, watchdog, monitor }
   let metricSensor = null;
   let buildRunner = null;
   let buildEngine = null;
@@ -347,23 +349,19 @@ async function main() {
         getScannerProxy: function() { return scannerProxy; }
       });
       const watchdog = createWatchdog({ bus: bus, config: config, getCortex: function() { return cortex; } });
-      const announcer = createAnnouncer({
-        bus: bus, config: config,
-        // Speech is NOT a hub effector — the old 'speak' effector was dead code and
-        // was removed 2026-07-31 (see effectors/voice.js's header). This re-emits onto
-        // 'action.speak-requested', which server/index.js subscribes to and feeds to
-        // proactiveSpeak() -> providers/edge-tts.synthesize(). Never a silent no-op:
-        // announcer.js requires a real speak() at construction.
-        speak: function(text) { bus.emit('action.speak-requested', { text: text }); return Promise.resolve(); }
-      });
+      // BUG-447 (2026-09-23, operator decision D5): immune/announcer.js is gone.
+      // It spoke every successful heal and every crash recovery — "Self-healed:
+      // cortex restart after a stall…" — over the operator's own questions. A heal
+      // that worked needs nothing from anyone; it stays on the HUD health card and
+      // in the vault's anomaly row. What NEEDS the operator is still spoken, by the
+      // explainer (immune/explainer.js). test/bug-447-heals-are-not-spoken.test.js.
       const monitor = createMonitor({ bus: bus, config: config, memory: memory });
 
       diagnostician.start();
       healer.start();
-      announcer.start();
       monitor.start();
 
-      immune = { probes: probes, diagnostician: diagnostician, healer: healer, watchdog: watchdog, announcer: announcer, monitor: monitor };
+      immune = { probes: probes, diagnostician: diagnostician, healer: healer, watchdog: watchdog, monitor: monitor };
       logger.info('immune.ready', {});
     }},
 
@@ -808,11 +806,6 @@ async function main() {
         });
       }
 
-      // §7.3 (step 5) — local PIN lock gate, separate from Task 6's
-      // MYTHOS_AUTH_TOKEN (that gates network/remote access; this gates
-      // local physical presence).
-      var pinLock = createPinLock({ fs: memory.fs });
-
       // Voice Nodes (Stage 1) — stood up BEFORE createServer because the server
       // destructures deps once, and a phone can connect the moment /ws is open.
       // Deliberately boot-fatal on a bad id list rather than silently off: the
@@ -863,7 +856,8 @@ async function main() {
         // and scripts/parity-check.js. See src/core/config/settings-store.js.
         configOrigins: configResult.origins,
         settingsFile: configResult.settingsFile, settingsDiagnostics: configResult,
-        pinLock: pinLock,
+        // BUG-444: sign-in sessions live beside config.json, never in the vault.
+        authSessionsFile: path.join(path.dirname(configResult.settingsFile), 'auth-sessions.json'),
         goalsEffector: goalsEffector,
         kanbanEffector: kanbanEffector,
         pipelineEffector: pipelineEffector,
@@ -1326,31 +1320,19 @@ async function main() {
       immune.watchdog.stop();
       immune.diagnostician.stop();
       immune.healer.stop();
-      immune.announcer.stop();
       immune.monitor.stop();
     }
   }
 
   // D-07: full graceful shutdown sequence — server-close (step 0, registered
   // separately via registerStopServer above) -> stop-loops -> episodic-flush
-  // -> checkpoint-write -> audit-flush -> exit 0, with SHUTDOWN_MS as the
-  // hard-exit(1) backstop if any step hangs. `memory` is closure-captured
-  // here (same pattern stopRunningLoops relies on for cortex/immune/etc.) and
-  // is populated by the 'memory' boot step before lifecycle.boot() resolves.
-  lifecycle.registerShutdownStep('stop-loops', stopRunningLoops);
-  lifecycle.registerShutdownStep('reflection-final-pass', function() {
-    // P4: one last learning pass over the session's conversations. Bounded by
-    // the brain's own timeouts; skips silently when brain is offline.
-    if (reflection) return reflection.runNow('shutdown');
-  });
-  lifecycle.registerShutdownStep('episodic-flush', function() {
-    if (memory) return memory.working.flushToEpisodic();
-  });
-  lifecycle.registerShutdownStep('checkpoint-write', function() {
-    if (memory) return memory.checkpoints.save(memory.working.snapshot());
-  });
-  lifecycle.registerShutdownStep('audit-flush', function() {
-    if (memory) return memory.audit.write({ tool: 'lifecycle', tier: 0, decision: 'shutdown', outcome: 'ok' });
+  // -> checkpoint-write -> audit-flush -> reflection-final-pass LAST, all
+  // under one deadline with SHUTDOWN_MS as the hard-exit(1) backstop. BUG-437
+  // (2026-09-23): the order, and why reflection moved from second to last, is in
+  // src/core/lifecycle/shutdown-steps.js. `memory` and `reflection` are read
+  // late through getters: both are populated by boot steps that run after this.
+  require('./core/lifecycle/shutdown-steps').registerCoreShutdownSteps(lifecycle, {
+    stopRunningLoops, getMemory: () => memory, getReflection: () => reflection,
   });
 
   // Register signal handlers — the ONE path that drives shutdown on SIGINT/SIGTERM

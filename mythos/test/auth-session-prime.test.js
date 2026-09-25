@@ -9,7 +9,7 @@
 // same secret back into the HUD's own gate after every restart, which is
 // asking a human to be a password manager for a credential the main process
 // already holds. This adds primeAuthSession(win, token, port) — POST
-// /api/auth/session, then mirror the returned mythos_token cookie into the
+// /api/auth/session, then mirror the returned mythos_session cookie into the
 // window's own session — called once at boot, before the first loadURL.
 //
 // electron/main.js cannot be require()d under a bare `node --test`: it loads
@@ -152,7 +152,7 @@ describe('primeAuthSession — real behavior (extracted from electron/main.js)',
 
   it('given a stored token: POSTs /api/auth/session with the token in the JSON body, on the right port', async () => {
     const TOKEN = 'stored-secret-abc123';
-    const fetch = fakeFetch({ status: 200, setCookie: 'mythos_token=cookie-value-xyz; Path=/; HttpOnly; SameSite=Strict' });
+    const fetch = fakeFetch({ status: 200, setCookie: 'mythos_session=cookie-value-xyz; Path=/; HttpOnly; SameSite=Strict' });
     const win = fakeWin();
     const ctx = loadIntoContext({ fetch, log: fakeLog() });
     await ctx.primeAuthSession(win, TOKEN, 4478);
@@ -165,8 +165,8 @@ describe('primeAuthSession — real behavior (extracted from electron/main.js)',
     assert.deepEqual(JSON.parse(opts.body), { token: TOKEN });
   });
 
-  it('given a stored token and a 200 + Set-Cookie response: sets mythos_token on the window session', async () => {
-    const fetch = fakeFetch({ status: 200, setCookie: 'mythos_token=cookie-value-xyz; Path=/; HttpOnly; SameSite=Strict' });
+  it('given a stored token and a 200 + Set-Cookie response: sets mythos_session on the window session', async () => {
+    const fetch = fakeFetch({ status: 200, setCookie: 'mythos_session=cookie-value-xyz; Path=/; HttpOnly; SameSite=Strict' });
     const win = fakeWin();
     const ctx = loadIntoContext({ fetch, log: fakeLog() });
     await ctx.primeAuthSession(win, 'some-token', 4478);
@@ -174,9 +174,20 @@ describe('primeAuthSession — real behavior (extracted from electron/main.js)',
     assert.equal(win.calls.length, 1);
     const set = win.calls[0];
     assert.equal(set.url, 'http://127.0.0.1:4478');
-    assert.equal(set.name, 'mythos_token');
+    assert.equal(set.name, 'mythos_session');
     assert.equal(set.value, 'cookie-value-xyz');
     assert.equal(set.httpOnly, true);
+  });
+
+  // BUG-444 (2026-09-23): the server now answers with a session id under
+  // mythos_session. An OLD server answering with the raw token under
+  // mythos_token must not get that value installed in the renderer.
+  it('ADJACENT: a response carrying only the old raw-token cookie installs nothing', async () => {
+    const fetch = fakeFetch({ status: 200, setCookie: 'mythos_token=raw-token-value; Path=/; HttpOnly' });
+    const win = fakeWin();
+    const ctx = loadIntoContext({ fetch, log: fakeLog() });
+    await ctx.primeAuthSession(win, 'some-token', 4478);
+    assert.equal(win.calls.length, 0, 'the token-shaped cookie is not a session and must never reach the window');
   });
 
   it('401 (wrong token): does not set a cookie, and only the status is logged — never the token, never the response body', async () => {
@@ -231,7 +242,7 @@ describe('primeAuthSession — real behavior (extracted from electron/main.js)',
 
   it('the token never appears in the request URL — only in the JSON body', async () => {
     const TOKEN = 'must-not-leak-into-a-url-539d1e11';
-    const fetch = fakeFetch({ status: 200, setCookie: 'mythos_token=v; Path=/' });
+    const fetch = fakeFetch({ status: 200, setCookie: 'mythos_session=v; Path=/' });
     const win = fakeWin();
     const ctx = loadIntoContext({ fetch, log: fakeLog() });
     await ctx.primeAuthSession(win, TOKEN, 4478);
@@ -242,7 +253,7 @@ describe('primeAuthSession — real behavior (extracted from electron/main.js)',
 describe('BUG-403 safe priming outcomes', () => {
   it('records each successful stage without exposing credentials', async () => {
     const log = fakeLog();
-    const ctx = loadIntoContext({ fetch: fakeFetch({ setCookie: 'mythos_token=private-cookie;' }), log });
+    const ctx = loadIntoContext({ fetch: fakeFetch({ setCookie: 'mythos_session=private-cookie;' }), log });
     await ctx.primeAuthSession(fakeWin(), 'private-secret', 4478);
     assert.deepEqual(log.lines.map((line) => line[1].outcome), ['entered', 'exchanged', 'cookie-installed']);
     assert.doesNotMatch(JSON.stringify(log.lines), /private-secret|private-cookie/);
@@ -251,7 +262,7 @@ describe('BUG-403 safe priming outcomes', () => {
     const log = fakeLog();
     const win = fakeWin();
     win.webContents.session.cookies.set = async () => { throw new Error('private-cookie private-secret'); };
-    const ctx = loadIntoContext({ fetch: fakeFetch({ setCookie: 'mythos_token=private-cookie;' }), log });
+    const ctx = loadIntoContext({ fetch: fakeFetch({ setCookie: 'mythos_session=private-cookie;' }), log });
     await assert.doesNotReject(ctx.primeAuthSession(win, 'private-secret', 4478));
     assert.equal(log.lines.at(-1)[1].stage, 'cookie-install');
     assert.equal(log.lines.at(-1)[1].outcome, 'failed');

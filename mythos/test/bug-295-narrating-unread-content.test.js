@@ -179,6 +179,7 @@ describe('BUG-295 — path 2: the late/ack-deadline outcome', () => {
     const sentText = [];
     const adapter = createLiveToolAdapter(baseDeps({
       toolAckDeadlineMs: 5,
+      toolResultHoldMaxMs: 0, // BUG-457 (2026-09-24): replies are now held up to 12 s; this pins the late path, now the fallback (past the hold, a cancellation, typed words). 0 selects it.
       dispatchAction: async () => { await new Promise((r) => setTimeout(r, 40)); return outcome; },
       getLiveSession: () => ({ isOpen: () => true, sendText: (t) => sentText.push(t) }),
     }));

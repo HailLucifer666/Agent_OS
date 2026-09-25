@@ -178,7 +178,11 @@ function computeEffectorTools(dir = path.join(MYTHOS_ROOT, 'src/core/effectors')
   let total = 0;
   const perFile = {};
   const unreadable = [];
-  const idsOf = (tools) => tools.map((tool) => (tool && (tool.name || tool.id)) || '(unnamed)');
+  // BUG-459: the same derived set, with each tool's description, so a test can
+  // hold the text the voice model is sent to the hub's copy without booting.
+  const tools = [];
+  const keep = (list) => list.forEach((tool) => tool && tools.push({ name: tool.name || tool.id, description: tool.description, params: tool.params }));
+  const idsOf =(tools) => tools.map((tool) => (tool && (tool.name || tool.id)) || '(unnamed)');
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
     let mod;
     try {
@@ -203,6 +207,7 @@ function computeEffectorTools(dir = path.join(MYTHOS_ROOT, 'src/core/effectors')
     if (Array.isArray(mod.TOOLS)) {
       total += mod.TOOLS.length;
       perFile[file] = idsOf(mod.TOOLS);
+      keep(mod.TOOLS);
       continue;
     }
     // A `build*Tools` export exists for exactly one purpose: to declare tools.
@@ -236,6 +241,7 @@ function computeEffectorTools(dir = path.join(MYTHOS_ROOT, 'src/core/effectors')
       }
       total += result.length;
       perFile[file] = idsOf(result);
+      keep(result);
       continue;
     }
     const createFn = Object.keys(mod).find((k) => /^create/.test(k) && typeof mod[k] === 'function');
@@ -249,7 +255,7 @@ function computeEffectorTools(dir = path.join(MYTHOS_ROOT, 'src/core/effectors')
       } catch { /* not a single-tool effector factory (e.g. needs a real vault) — skip */ }
     }
   }
-  return { total, perFile, unreadable };
+  return { total, perFile, unreadable, tools };
 }
 
 function computeEffectorCount(dir) {

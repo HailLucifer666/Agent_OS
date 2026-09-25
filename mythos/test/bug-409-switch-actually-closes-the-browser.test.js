@@ -247,11 +247,11 @@ describe('BUG-409 — the close verifies, then escalates', () => {
       'processOnPort puts a full path in the second field — the parser must keep it whole');
   });
 
-  test('processesForProfile refuses an unauthorised directory before asking Windows anything', () => {
+  test('processesForProfile refuses an unauthorised directory before asking Windows anything', async () => {
     // Returns [] rather than shelling out, so a bad directory cannot become a
     // machine-wide query even in the read path.
-    assert.deepEqual(bp.processesForProfile(''), []);
-    assert.deepEqual(bp.processesForProfile('C:\\Users\\x\\AppData\\Local\\Google\\Chrome\\User Data'), []);
+    assert.deepEqual((await bp.processesForProfile('')), []);
+    assert.deepEqual((await bp.processesForProfile('C:\\Users\\x\\AppData\\Local\\Google\\Chrome\\User Data')), []);
   });
 });
 

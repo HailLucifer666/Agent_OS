@@ -169,8 +169,21 @@ function createExplainer({ bus, brain, memory, config, logger }) {
     // like a right one. Skipping the call is cheaper AND more honest than filtering its
     // result afterwards.
     if (payload.needsOperator === true) {
+      // BUG-447 (2026-09-25, operator decision): what needs the operator is SPOKEN as
+      // the emitter's own plain sentence, and the steps are read on screen — the HUD's
+      // Anomalies list shows `reason` for these rows. Spoken whole, the reason was a
+      // command line: "... running `node scripts/google-auth.js` and putting the new
+      // GOOGLE_REFRESH_TOKEN in mythos/.env ...". An emitter that has not been given a
+      // sentence yet keeps the old full line (never silence) and is named in the log.
+      var plain = typeof payload.sayToOperator === 'string' ? payload.sayToOperator.trim() : '';
+      if (!plain) {
+        log.warn('immune-explain.no-plain-sentence', { kind: kind, target: target,
+          note: 'needsOperator without sayToOperator: the full reason was spoken; give this emitter a sentence' });
+      }
       return { explanation: explanation, remedy: 'none',
-        spoken: explanation + ' This one needs your attention.' };
+        spoken: plain
+          ? plain + (payload.reason ? ' The steps are in the Anomalies list.' : '')
+          : explanation + ' This one needs your attention.' };
     }
 
     // BUG-278: THE MENU IS BUILT FROM APPLICABILITY, NOT ARGUED FOR IN PROSE.

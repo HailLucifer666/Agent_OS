@@ -65,7 +65,9 @@
 // `holdMaxMs` timer and re-armed a fresh full one after each release, so three
 // notices held at t=0 under a 15 s ceiling came out at ~15 s, ~30 s and ~45 s.
 // Each item now carries its own `deadlineAt`, fixed when it was enqueued and
-// preserved across a rotation.
+// preserved across a rotation. [2026-09-23: the deadline, and the forced release
+// it drove, are gone — see the next block. What an item keeps across a rotation
+// now is `enqueuedAt`, which a notice's 60 s age is measured from.]
 //
 // WHAT "SENT" MEANS, AND WHAT IS LOST. 'sent' means a JSON frame was handed to
 // an OPEN socket without a synchronous throw. It does NOT mean Gemini received
@@ -77,32 +79,122 @@
 // whose entire purpose is to stop notices stepping on each other must not
 // become the thing that duplicates them. What is lost in that window is lost,
 // and it is lost by choice rather than by oversight.
+//
+// [2026-09-23: that choice now holds for corrections and notices only. For an
+// OUTCOME — the answer to the operator's own request — losing it is the worse
+// failure, so an outcome sent and never receipted IS replayed once. Next block.]
+// ---------------------------------------------------------------------------
+// THE 2026-09-23 CORRECTION: THE QUEUE HELD THE ANSWER. (BUG-432, BUG-436)
+//
+// The measured pass (attended, flag on, 51 turns) showed the queue did its first
+// job — notices stopped cutting EACH OTHER off — and then did two new harms:
+//
+//   * It held the answer. A web_search result carrying "Price starts at ₹52,542
+//     in India" waited behind heal announcements for the full 15 s ceiling, while
+//     the reply in progress told the operator "I haven't found a current Indian
+//     price". Everything was one class: the answer waited like an announcement.
+//   * Its ceiling turned "wait" into "interrupt". The 15 s timer released a held
+//     notice whether or not the model was speaking, so 4 held notices were forced
+//     into live turns — each one cut a reply off, the defect the queue exists for.
+//
+// And BUG-436's delivery half: sendText() refused every frame while the socket
+// was rotating, BEFORE the queue saw it, so a tool result finishing mid-rotation
+// was spoken by plain TTS outside Live and the resumed session never knew.
+//
+// THE RULES NOW. Each item has a CLASS, decided by its site (SITE_CLASSES below;
+// a derived test fails when a new site has none):
+//
+//   outcome     the answer to the operator's request. Never waits behind a
+//               correction or notice. Sent the moment the transport is ready —
+//               unless another OUTCOME's turn is still being spoken, because two
+//               answers sent back-to-back would cut each other off exactly as
+//               notices used to; then it waits at the FRONT of the queue. While
+//               the transport is down it is held, and on resume it goes first.
+//               Delivered ONCE: see receipts below.
+//   correction  ad4-*, turn-audit lines. Waits for the turn to end. Never expires.
+//   notice      everything else (proactive speech). Waits for the turn to end,
+//               and after NOTICE_MAX_AGE_MS it is DROPPED, with a log row — an
+//               announcement a minute stale is noise, and noise that interrupts.
+//
+// NOTHING IS EVER FORCED INTO A TURN IN FLIGHT. The timer that used to be a
+// ceiling is now an idle tick: it expires stale notices, and it releases one item
+// only when inFlight() is false — a turn that ended without a turnComplete frame
+// reaching us, say. A turn that never ends at all holds corrections until the
+// session closes; that is the price of never interrupting, and it is logged.
+//
+// RECEIPTS, AND WHAT THEY PROVE. Live has no per-frame acknowledgement, so a
+// receipt is the next best thing the wire offers: ANY server frame arriving on
+// the SAME socket after the send. It proves the connection was alive after our
+// frame went out; it does not prove Gemini read it (a frame already in flight
+// towards us can arrive after our send and before the server reads it). An
+// outcome sent and NOT receipted before its socket died is replayed ONCE on the
+// replacement. A second unreceipted drop drops it with a log row rather than
+// replaying forever. The trade: a replay can duplicate an answer the old socket
+// did deliver. For an answer that is the better error; for a correction or an
+// announcement it is not, which is why only outcomes replay.
+//
+// DEDUPLICATION. An outcome carrying a `receiptKey` (the tool call id it answers)
+// is refused as 'duplicate' if the same key is held, unreceipted, or among the
+// last DELIVERED_KEYS_MAX delivered.
+//
+// A FINAL CLOSE hands every held item back through onUndelivered(text, meta,
+// reason, cls). The server's handler (createUndeliveredHandler, below) puts a
+// held OUTCOME into the conversation history, and speaks its spoken form over
+// TTS when it has one. A stale result is never replayed into a LATER session:
+// the arrays are drained, so there is nothing left to replay.
 // ---------------------------------------------------------------------------
 
-// A held notice is released when the model finishes its turn. That is normally
-// within a couple of seconds, but a turn that never completes (a dropped frame,
-// a model that goes quiet) must not silence a correction forever, so every held
-// item carries its own deadline. 15s is well past a spoken reply and well short
-// of the operator having moved on.
-const DEFAULT_HOLD_MAX_MS = 15000;
-// An expired backlog must NOT drain in one callback. With per-item deadlines,
-// three notices enqueued together expire together, and a zero-length timer would
-// fire three sends back-to-back — recreating the exact interruption this file
-// exists to prevent, one tick later. The floor forces each subsequent notice to
-// wait for either a real turn or another gap.
+// An ordinary notice older than this is dropped rather than spoken. Long past a
+// spoken reply (seconds), and long enough that the operator has moved on.
+const NOTICE_MAX_AGE_MS = 60000;
+// The idle tick's interval, and the gap between two idle releases. Without the
+// floor a backlog could drain in one burst the moment the model went quiet —
+// the back-to-back interruption this file exists to prevent, one tick later.
 const MIN_RELEASE_GAP_MS = 1000;
 // After a rotation the operator's buffered speech has just gone up and the turn
-// it provokes owns the floor. Never release synchronously from resume(): arm the
-// timer instead, so the ordinary turnComplete release wins the race whenever a
-// turn actually arrives, and an already-expired notice still gets out if none
-// does. This is the contract's "wait for that turn, or the existing hold ceiling".
+// it provokes owns the floor, so held corrections and notices wait out this
+// grace (or that turn's end). Outcomes do not: they are the answer.
 const POST_RESUME_GRACE_MS = 2000;
+// How many delivered outcome keys are remembered for deduplication. Bounded, so
+// a long session cannot grow it without limit; the oldest is forgotten first.
+const DELIVERED_KEYS_MAX = 500;
+// How many times an unreceipted outcome is replayed across drops.
+const REPLAY_LIMIT = 1;
+
+// Every site that names itself, and its class. A site missing from here is a
+// droppable notice, which is why test/bug-432-outcome-outbox.test.js (c1)
+// derives the list of sites from the source and fails on an unclassed one.
+const SITE_CLASSES = Object.freeze({
+  'late-outcome': 'outcome',
+  'late-for-turn': 'outcome',
+  'confirm-resolved': 'outcome',
+  'confirm-rejected-by-voice': 'outcome',
+  'ask-answer-to-live': 'outcome',
+  'reply-routed-to-live': 'outcome',
+  'held-call-cancelled': 'outcome', // BUG-457: must reach the model before it guesses the cancelled call's result
+  'ad4-correction-premature': 'correction',
+  'ad4-correction-retract': 'correction',
+  'ad4-correction-unheard': 'correction',
+  'bug275-h2-defended-challenge': 'correction',
+  'bug275-h3-unsourced-ranking': 'correction',
+  'bug398-d1-unscheduled-commitment': 'correction',
+  'bug398-row7-false-retraction': 'correction',
+  'spoken-go-ahead-no-dispatch': 'correction',
+  'operator-typed': 'operator',
+  'operator-completed-transcript': 'operator',
+  'proactive-speak': 'notice',
+});
+
+function noticeClass(meta) {
+  const m = meta || {};
+  if (m.operator === true) return 'operator';
+  return SITE_CLASSES[m.site] || 'notice';
+}
 
 function createNoticeQueue({
   inFlight,
   send,
   onUndelivered = null,
-  holdMaxMs = DEFAULT_HOLD_MAX_MS,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
   now = Date.now,
@@ -111,81 +203,189 @@ function createNoticeQueue({
   if (typeof inFlight !== 'function') throw new TypeError('notice-queue: inFlight must be a function');
   if (typeof send !== 'function') throw new TypeError('notice-queue: send must be a function');
 
+  // Held items, outcomes first (an outcome is inserted after the last held
+  // outcome), then corrections and notices in arrival order.
   const held = [];
+  // Outcomes sent and not yet receipted: {..., generation}.
+  const unreceipted = [];
+  const deliveredKeys = new Set();
   let timer = null;
   // READY, not SUSPENDED, is the default: the pure-queue tests construct this
   // with no live session at all and expect offer() to reach the wire.
   let suspended = false;
   let currentGeneration = null;
+  // An outcome's own turn is being spoken: a second outcome waits for its end.
+  let outcomeTurnOpen = false;
 
   function info(msg, fields) {
     if (logger && typeof logger.info === 'function') logger.info(msg, fields);
   }
+  const siteOf = (item) => (item.meta && item.meta.site) || 'unattributed';
 
-  function armCeiling(extraGraceMs) {
-    if (timer !== null || suspended || held.length === 0) return;
-    const wait = Math.max(held[0].deadlineAt - now(), extraGraceMs || MIN_RELEASE_GAP_MS);
-    timer = setTimer(() => {
-      // Null the handle BEFORE releasing: release() can enqueue nothing but it
-      // does re-arm, and a stale handle would be cleared twice.
-      timer = null;
-      info('live.notice-hold-expired', { held: held.length, holdMaxMs });
-      release({ reason: 'hold-expired' });
-    }, wait);
+  function keyPending(key) {
+    return held.some((i) => i.key === key) || unreceipted.some((i) => i.key === key);
   }
 
-  function disarmCeiling() {
+  function rememberDelivered(key) {
+    if (!key) return;
+    deliveredKeys.add(key);
+    if (deliveredKeys.size > DELIVERED_KEYS_MAX) deliveredKeys.delete(deliveredKeys.values().next().value);
+  }
+
+  // One frame to the wire. An outcome that goes out is tracked until a receipt.
+  function transmit(item) {
+    if (send(item.text, item.meta) === false) return false;
+    if (item.cls === 'outcome') {
+      unreceipted.push({ ...item, generation: currentGeneration });
+      outcomeTurnOpen = true;
+    }
+    return true;
+  }
+
+  function holdItem(item) {
+    if (item.cls === 'outcome') {
+      let at = 0;
+      while (at < held.length && held[at].cls === 'outcome') at += 1;
+      held.splice(at, 0, item);
+    } else {
+      held.push(item);
+    }
+  }
+
+  function expireNotices() {
+    const t = now();
+    for (let i = held.length - 1; i >= 0; i -= 1) {
+      const item = held[i];
+      const ageMs = t - item.enqueuedAt;
+      if (item.cls !== 'notice' || ageMs < NOTICE_MAX_AGE_MS) continue;
+      held.splice(i, 1);
+      info('live.notice-expired', { site: siteOf(item), ageMs, dropped: true, queued: held.length });
+    }
+  }
+
+  function armTick(waitMs) {
+    if (timer !== null || suspended || held.length === 0) return;
+    timer = setTimer(tick, Math.max(waitMs || 0, MIN_RELEASE_GAP_MS));
+  }
+
+  function disarmTick() {
     if (timer === null) return;
     clearTimer(timer);
     timer = null;
   }
 
+  // The idle tick. It never sends into a turn in flight: that is the whole
+  // difference from the ceiling it replaced.
+  function tick() {
+    timer = null;
+    expireNotices();
+    if (!suspended && held.length > 0 && !inFlight()) { releaseOne(); return; }
+    armTick(MIN_RELEASE_GAP_MS);
+  }
+
+  // PEEK, then send, then remove: the pre-2026-09-11 order shifted first, so a
+  // refusal destroyed the item it had just failed to deliver.
+  function releaseOne() {
+    const next = held[0];
+    if (!next) return false;
+    if (!transmit(next)) {
+      // RETAIN, suspend, and do NOT re-arm: a retry loop against a dead socket
+      // would only fill the log. The next readiness transition is the only thing
+      // that can change the outcome.
+      suspend('send-refused');
+      info('live.notice-retained', { site: siteOf(next), queued: held.length });
+      return false;
+    }
+    held.shift();
+    armTick(MIN_RELEASE_GAP_MS);
+    return true;
+  }
+
   // The transport went away. Idempotent, because several paths can report the
   // same departure (setState('reconnecting'), the error branch, close()) and a
-  // second report must not re-log or re-arm anything.
+  // second report must not re-log or re-arm anything. The socket's turn went
+  // with it, so no outcome turn is open any more.
   function suspend(reason) {
     if (suspended) return false;
-    disarmCeiling();
+    disarmTick();
     suspended = true;
-    info('live.notice-suspended', { reason: String(reason || 'unknown'), queued: held.length });
+    outcomeTurnOpen = false;
+    info('live.notice-suspended', { reason: String(reason || 'unknown'), queued: held.length, unreceipted: unreceipted.length });
     return true;
   }
 
   // The REPLACEMENT socket has reported setupComplete and any buffered operator
-  // audio is already on the wire. Nothing is released here; the ceiling is armed
-  // and the ordinary turnComplete path is given first refusal.
+  // audio is already on the wire. Unreceipted outcomes from an older socket are
+  // replayed (once), then the first held outcome goes now; everything else waits
+  // for a turn to end, or the grace.
   function resume(opts) {
     const o = opts || {};
     currentGeneration = o.generation === undefined ? null : o.generation;
     suspended = false;
+    const orphaned = [];
+    for (let i = unreceipted.length - 1; i >= 0; i -= 1) {
+      if (unreceipted[i].generation === currentGeneration) continue;
+      orphaned.unshift(unreceipted.splice(i, 1)[0]);
+    }
+    for (let i = orphaned.length - 1; i >= 0; i -= 1) {
+      const item = orphaned[i];
+      if (item.replays >= REPLAY_LIMIT) {
+        info('live.outcome-unconfirmed', { site: siteOf(item), replays: item.replays, dropped: true });
+        continue;
+      }
+      held.unshift({ ...item, replays: item.replays + 1 });
+    }
     info('live.notice-resumed', { generation: currentGeneration, queued: held.length, audioFlushed: o.audioFlushed === true });
-    armCeiling(o.audioFlushed === true ? POST_RESUME_GRACE_MS : MIN_RELEASE_GAP_MS);
+    if (held.length > 0 && held[0].cls === 'outcome') releaseOne();
+    armTick(o.audioFlushed === true ? POST_RESUME_GRACE_MS : MIN_RELEASE_GAP_MS);
     return held.length;
   }
 
   // Returns 'sent' when the frame went to the wire now, 'queued' when it is
-  // held for the end of the current turn (or for the transport to come back),
-  // or false when send() refused it. Three outcomes, three values: a boolean
-  // here would make "held" and "failed" indistinguishable to sendSystemNotice's
-  // delivered check, which is the one thing this queue must not do.
+  // held, 'duplicate' when an outcome with that receiptKey is already on its way
+  // or delivered, or false when send() refused a correction or notice. Distinct
+  // values, because sendSystemNotice must be able to tell "held" from "failed".
   function offer(text, meta) {
     const m = meta || {};
-    // The operator's own words never wait. They are the input the model is
-    // answering, so holding them would be holding up the conversation to
-    // protect a notice about it. They are NOT held while suspended either:
-    // pretending the operator's text was queued when the socket is down would
-    // be a worse lie than an honest false.
-    if (m.operator === true) return send(text, m) === false ? false : 'sent';
-    // Suspended is the fix for "nothing stops delivery while the socket is
-    // down". Hold WITHOUT attempting a send, so no frame is handed to a dead
-    // socket and no injection record is written for one.
-    if (suspended || inFlight()) {
-      held.push({ text, meta: m, deadlineAt: now() + holdMaxMs });
-      armCeiling();
-      info('live.notice-held', { site: m.site || 'unattributed', queued: held.length, suspended });
+    const cls = noticeClass(m);
+    // The operator's own words never wait, and are NOT held while suspended:
+    // pretending the operator's text was queued when the socket is down would be
+    // a worse lie than an honest false.
+    if (cls === 'operator') return send(text, m) === false ? false : 'sent';
+    const key = cls === 'outcome' && m.receiptKey ? String(m.receiptKey) : null;
+    if (key && (deliveredKeys.has(key) || keyPending(key))) {
+      info('live.notice-duplicate', { site: m.site || 'unattributed', queued: held.length });
+      return 'duplicate';
+    }
+    const item = { text, meta: m, cls, key, enqueuedAt: now(), replays: 0 };
+    if (cls === 'outcome' && !suspended && !outcomeTurnOpen) {
+      if (transmit(item)) return 'sent';
+      // Refused at the wire: the socket is dying under an 'open' state. Keep
+      // the answer for the replacement rather than returning false.
+      suspend('send-refused');
+    }
+    // Suspended: hold WITHOUT attempting a send, so no frame is handed to a
+    // dead socket and no injection record is written for one.
+    if (cls === 'outcome' || suspended || inFlight()) {
+      holdItem(item);
+      armTick(MIN_RELEASE_GAP_MS);
+      info('live.notice-held', { site: m.site || 'unattributed', cls, queued: held.length, suspended });
       return 'queued';
     }
-    return send(text, m) === false ? false : 'sent';
+    return transmit(item) ? 'sent' : false;
+  }
+
+  // A server frame arrived on the socket of `generation`: everything sent on it
+  // before that frame is receipted. See RECEIPTS above for what that proves.
+  function ack(opts) {
+    const o = opts || {};
+    for (let i = unreceipted.length - 1; i >= 0; i -= 1) {
+      const item = unreceipted[i];
+      if (o.generation !== undefined && item.generation !== o.generation) continue;
+      unreceipted.splice(i, 1);
+      rememberDelivered(item.key);
+      info('live.outcome-receipted', { site: siteOf(item), generation: item.generation, replays: item.replays });
+    }
   }
 
   // One per turn, matching the shape of the thing being protected: the model
@@ -202,46 +402,31 @@ function createNoticeQueue({
     // path safe: close() has already suspended us by the time turnComplete's
     // release lands in the same synchronous frame handler.
     if (suspended) return false;
-    disarmCeiling();
-    const next = held[0];
-    if (!next) { armCeiling(); return false; }
-    // PEEK, then send, then remove. The old order shifted first, so a refusal
-    // destroyed the item it had just failed to deliver.
-    const ok = send(next.text, next.meta);
-    if (ok === false) {
-      // RETAIN, suspend, and do NOT re-arm: an immediate retry loop against a
-      // dead socket would burn the deadline and fill the log. Delivery waits for
-      // the next readiness transition, which is the only thing that can change
-      // the outcome.
-      suspend('send-refused');
-      info('live.notice-retained', { site: (next.meta && next.meta.site) || 'unattributed', queued: held.length });
-      return false;
-    }
-    held.shift();
-    armCeiling();
-    return true;
+    outcomeTurnOpen = false;
+    disarmTick();
+    expireNotices();
+    return releaseOne();
   }
 
-  // A final close ends the session, so anything still held will never be
-  // spoken through Live. Hand it back rather than dropping it: the adapter has
-  // a speakWhenClosed fallback for exactly this, and a correction that vanishes
-  // silently is worse than one arriving in the other voice.
-  //
   // A NON-final close is a rotation — the same session continues on a new
   // socket — so the queue survives it and merely SUSPENDS. Rotation and the
   // unsolicited drop therefore converge on one state machine rather than two.
   //
-  // Replay into a later session is prevented by DRAINING, not by a check: the
-  // array is emptied, so there is structurally nothing left to replay. Suspending
-  // as well means no timer can survive either.
+  // A FINAL close drains: held items are handed back (see the header), and
+  // unreceipted ones are forgotten — they were sent, and a hand-back would speak
+  // an answer the operator may already have heard. Replay into a later session is
+  // prevented by DRAINING, not by a check: nothing is left to replay.
   function cancel(opts) {
     const final = !opts || opts.final !== false;
     if (!final) { suspend('rotation'); return 0; }
-    disarmCeiling();
+    disarmTick();
     suspended = true;
+    outcomeTurnOpen = false;
     const drained = held.splice(0, held.length);
+    const unconfirmed = unreceipted.splice(0, unreceipted.length).length;
+    if (drained.length || unconfirmed) info('live.notice-drained', { handedBack: drained.length, unconfirmed });
     if (typeof onUndelivered === 'function') {
-      for (const item of drained) onUndelivered(item.text, item.meta, 'session-closed');
+      for (const item of drained) onUndelivered(item.text, item.meta, 'session-closed', item.cls);
     }
     return drained.length;
   }
@@ -249,12 +434,39 @@ function createNoticeQueue({
   return {
     offer,
     release,
+    ack,
     cancel,
     suspend,
     resume,
     size: () => held.length,
     isHolding: () => held.length > 0,
     isSuspended: () => suspended,
+  };
+}
+
+// What the server does with an item a FINAL close could not deliver. Only an
+// OUTCOME is worth anything once its conversation is over: it goes into the
+// conversation history, so the next session knows it happened, and its spoken
+// form (a 30 s+ late outcome has one) is spoken over TTS — the fallback the
+// adapter used to take on every rotation. Corrections and notices about a closed
+// conversation are logged by the session and nothing more. Pure, so it is tested
+// without a server; server/index.js wires it with its own historyAppend and
+// proactiveSpeak.
+function createUndeliveredHandler({ historyAppend, speak, logger } = {}) {
+  const warn = (msg, fields) => { if (logger && typeof logger.warn === 'function') logger.warn(msg, fields); };
+  return function onNoticeUndelivered(text, meta, reason, cls) {
+    if (cls !== 'outcome') return false;
+    const m = meta || {};
+    try {
+      if (typeof historyAppend === 'function') historyAppend('system', String(text));
+    } catch (err) {
+      warn('live.outcome-handback-failed', { site: m.site || 'unattributed', step: 'history', error: String((err && err.message) || err) });
+    }
+    if (m.speech && typeof speak === 'function') {
+      Promise.resolve().then(() => speak(m.speech)).catch((err) =>
+        warn('live.outcome-handback-failed', { site: m.site || 'unattributed', step: 'speech', error: String((err && err.message) || err) }));
+    }
+    return true;
   };
 }
 
@@ -289,17 +501,24 @@ function injectionFields(meta, text, turnId, accepted) {
     claim: m.claim || null, chars: String(text).length, turnId, accepted: accepted !== false };
 }
 
+// LIVE_NOTICE_HOLD_MAX_MS was read here until 2026-09-23. It set the ceiling
+// that forced held notices into live turns, and that ceiling is gone.
 function createNoticeQueueFromEnv(deps) {
   if (String(process.env.VOICE_SERIALIZE_NOTICES || '').toLowerCase() !== 'true') return null;
-  const ceiling = Number(process.env.LIVE_NOTICE_HOLD_MAX_MS);
-  return createNoticeQueue({ ...deps, holdMaxMs: ceiling > 0 ? ceiling : DEFAULT_HOLD_MAX_MS });
+  return createNoticeQueue(deps);
 }
 
 module.exports = {
+  noticeClass,
   createNoticeQueue,
   createNoticeQueueFromEnv,
+  createUndeliveredHandler,
   injectionFields,
-  DEFAULT_HOLD_MAX_MS,
+  noticeClass,
+  SITE_CLASSES,
+  NOTICE_MAX_AGE_MS,
   MIN_RELEASE_GAP_MS,
   POST_RESUME_GRACE_MS,
+  DELIVERED_KEYS_MAX,
+  REPLAY_LIMIT,
 };

@@ -39,7 +39,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+// BUG-436 (2026-09-23): reg.exe no longer runs through execFileSync, which froze the
+// server for its duration on the launch path; see util/exec-file-text.js.
+const { execFileText } = require('../util/exec-file-text');
 const { childRuntimeDir, childCommand, waitForSpawn } = require('../util/child-runtime');
 
 // BUG (on-demand launcher, Phase 6a): mirrors scripts/setup-chrome-debug.ps1's
@@ -181,9 +183,9 @@ const DEBUG_PROFILE_SUFFIX = '-debug-profile';
 const USER_CHOICE_KEY = ['HKCU', 'SOFTWARE', 'Microsoft', 'Windows', 'Shell',
   'Associations', 'UrlAssociations', 'https', 'UserChoice'].join(path.sep);
 
-function readRegistryValue(args) {
+async function readRegistryValue(args) {
   try {
-    return execFileSync('reg.exe', args, { timeout: 4000, windowsHide: true }).toString();
+    return await execFileText('reg.exe', args, { timeoutMs: 4000 });
   } catch (_) {
     // A missing key exits non-zero. Absent is a legitimate answer here (a
     // fresh Windows install with no UserChoice written yet), not an error to
@@ -214,16 +216,16 @@ function parseCommandExecutable(regOutput) {
 // { name, exe, progId, drivable } or null when the platform/registry cannot
 // answer. `drivable` is false for a real default MYTHOS has no CDP story for
 // (Firefox), which is a different fact from "could not read it".
-function osDefaultBrowser(deps) {
+async function osDefaultBrowser(deps) {
   const readValue = (deps && deps.readRegistryValue) || readRegistryValue;
   const platform = (deps && deps.platform) || process.platform;
   if (platform !== 'win32') return null;
 
-  const progId = parseProgId(readValue(['query', USER_CHOICE_KEY, '/v', 'ProgId']));
+  const progId = parseProgId(await readValue(['query', USER_CHOICE_KEY, '/v', 'ProgId']));
   if (!progId) return null;
 
   const cmdKey = ['HKCR', progId, 'shell', 'open', 'command'].join(path.sep);
-  const exe = parseCommandExecutable(readValue(['query', cmdKey, '/ve']));
+  const exe = parseCommandExecutable(await readValue(['query', cmdKey, '/ve']));
   if (!exe) return { name: null, exe: null, progId, drivable: false };
 
   const name = identifyBrowserByExecutable(exe);
@@ -242,7 +244,7 @@ function osDefaultBrowser(deps) {
 // or { error } when nothing usable was found. `source` is reported on the
 // launch result so an unnamed launch never leaves the operator to discover
 // which browser it picked, or why it was not the one their OS uses.
-function resolveLaunchTarget(requested, deps) {
+async function resolveLaunchTarget(requested, deps) {
   // Injected so a test can decide which browsers "exist" — every real browser
   // is installed on a normal dev machine, so a test against the real filesystem
   // can only ever observe one outcome and would pass whatever the rule was.
@@ -272,7 +274,7 @@ function resolveLaunchTarget(requested, deps) {
     }
   }
 
-  const osDefault = osDefaultBrowser(deps);
+  const osDefault = await osDefaultBrowser(deps);
   if (osDefault && osDefault.drivable) {
     // Read from the registry, then confirmed on disk through the same resolver
     // every other path uses: a UserChoice entry can outlive an uninstall.

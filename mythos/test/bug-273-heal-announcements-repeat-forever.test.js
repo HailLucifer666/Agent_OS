@@ -47,85 +47,28 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { createAnnouncer } = require('../src/core/immune/announcer');
-
-function harness(config) {
-  const spoken = [];
-  const subs = {};
-  const bus = {
-    subscribe: (type, fn) => { subs[type] = fn; return () => {}; },
-    emit: () => {},
-  };
-  const announcer = createAnnouncer({
-    bus, speak: (t) => { spoken.push(t); return Promise.resolve(); },
-    config: Object.assign({ ANNOUNCER_REANNOUNCE_MS: 600000 }, config || {}),
-  });
-  announcer.start();
-  return {
-    spoken,
-    // The healer's stall-restart playbook, exactly as it fired four times.
-    stallHealed: () => subs['health.healed']({
-      payload: {
-        outcome: 'applied', playbookId: 'stall-restart',
-        title: 'cortex restart after a stall',
-        kind: 'cortex-stall', actions: ['restart-cortex'],
-      },
-    }),
-    otherHealed: () => subs['health.healed']({
-      payload: {
-        outcome: 'applied', playbookId: 'suppress-tool',
-        title: 'suppression of a terminally-failed tool',
-        kind: 'effector-terminal', target: 'gmail_unread', actions: ['suppress-tool'],
-      },
-    }),
-  };
-}
+// 2026-09-23, BUG-447 (operator decision D5): the dedup this suite pinned held a
+// REPEAT of a spoken heal to once per ten minutes. The heal is now not spoken at
+// all — immune/announcer.js is deleted, and with it the dedup map. What the four
+// "Self-healed: cortex restart after a stall" lines became is pinned here as the
+// strongest form of the same promise: zero, not one. The vault and HUD records
+// (Q2 above) are unchanged; they never depended on the speaker.
+const { createBus } = require('../src/core/bus');
+const { createHealer } = require('../src/core/immune/healer');
 
 describe('BUG-273 — the same heal is not announced every five minutes forever', () => {
-  it('the first heal is spoken, in full — this is not a silencer', () => {
-    const h = harness();
-    h.stallHealed();
-    assert.equal(h.spoken.length, 1);
-    assert.match(h.spoken[0], /cortex restart after a stall/);
-    assert.match(h.spoken[0], /restart-cortex/, 'and still names the action taken');
-  });
-
-  it('the same heal repeating is held — the four the operator heard become one', () => {
-    // 18:16:41, 18:21:48, 18:26:56, 18:32:03 — one condition, one playbook, on
-    // the healer's cooldown, each one an unprompted spoken turn.
-    const h = harness();
-    for (let i = 0; i < 4; i++) h.stallHealed();
-    assert.equal(h.spoken.length, 1,
-      'a standing condition that keeps self-healing is one piece of news, not four');
-  });
-
-  it('a DIFFERENT heal is never suppressed by an unrelated one', () => {
-    // Q3: the key is kind + target + playbook. Two faults healing at once are
-    // two things the operator needs to know.
-    const h = harness();
-    h.stallHealed();
-    h.otherHealed();
-    assert.equal(h.spoken.length, 2);
-  });
-
-  it('after the window, the standing condition is reported again', async () => {
-    // A fault that is still healing itself an hour later must still be able to say
-    // so — silence cannot distinguish "fixed" from "still broken". A 1ms window
-    // and a real wait, rather than a 0: ANNOUNCER_REANNOUNCE_MS is read through a
-    // `|| DEFAULT`, so 0 does not mean 'off', it means 'ten minutes'.
-    const h = harness({ ANNOUNCER_REANNOUNCE_MS: 1 });
-    h.stallHealed();
-    await new Promise((r) => setTimeout(r, 8));
-    h.stallHealed();
-    assert.equal(h.spoken.length, 2);
-  });
-
-  it('a heal that was not applied is still not spoken', () => {
-    // Pinning pre-existing behaviour: outcome must be 'applied'.
-    const h = harness();
-    const before = h.spoken.length;
-    h.stallHealed();
-    assert.equal(h.spoken.length, before + 1);
+  it('the stall heal that was spoken four times in sixteen minutes is now spoken zero times', async () => {
+    const spoken = [];
+    const bus = createBus({ logger: { info() {}, warn() {}, error() {} } });
+    const emit = bus.emit.bind(bus);
+    bus.emit = (type, payload) => { if (type === 'action.speak-requested') spoken.push(payload.text); return emit(type, payload); };
+    const healer = createHealer({ bus, config: {}, memory: null, getCortex: () => ({ stop() {}, start() {} }) });
+    healer.start();
+    for (let i = 0; i < 4; i++) bus.emit('health.healed', { outcome: 'applied', playbookId: 'stall-restart', title: 'cortex restart after a stall', kind: 'cortex-stall', actions: ['restart-cortex'] });
+    await new Promise((r) => setTimeout(r, 50));
+    healer.stop();
+    assert.deepEqual(spoken, [], 'a successful heal is never spoken, however often it recurs');
+    assert.equal(fs.existsSync(path.join(__dirname, '..', 'src', 'core', 'immune', 'announcer.js')), false);
   });
 });
 

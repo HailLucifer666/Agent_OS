@@ -153,20 +153,17 @@ describe('config', () => {
     assert.equal(overridden.config.VOICE_S2S_ENABLED, true);
   });
 
-  // Task A2 (v0.1.10 closeout, operator decision 2026-08-17: "whenever we
-  // start the app, it should ask for the PIN"): PIN_SESSION_ENFORCE defaults
-  // to ON. Safe to default on because pinSessionRequired() (server/index.js)
-  // requires BOTH the flag AND a PIN actually configured — no PIN, no
-  // lockout (pinned by test/pin-session.test.js). Set false to opt out.
-  it('PIN_SESSION_ENFORCE defaults to ON (no-PIN-no-lockout keeps it safe) and accepts a false override', () => {
-    const defaults = validate({}, SCHEMA);
-    assert.equal(defaults.ok, true);
-    assert.equal(defaults.config.PIN_SESSION_ENFORCE, true,
-      'the PIN lock screen must be real access control by default; enforcement still requires a configured PIN');
-
-    const overridden = validate({ PIN_SESSION_ENFORCE: 'false' }, SCHEMA);
-    assert.equal(overridden.ok, true);
-    assert.equal(overridden.config.PIN_SESSION_ENFORCE, false);
+  // PIN_SESSION_ENFORCE was a real setting until the PIN was removed on
+  // 2026-09-23. It is RETIRED, not deleted from memory: an operator's .env may
+  // still carry it, and main.js names it at boot rather than ignoring it silently.
+  it('the PIN settings are retired: absent from the schema, present in RETIRED_SETTINGS', () => {
+    const { RETIRED_SETTINGS } = require('../src/core/config/schema');
+    for (const key of ['PIN_SESSION_ENFORCE', 'PIN_SESSION_TTL_MS']) {
+      assert.equal(key in SCHEMA, false, key + ' must not be a live setting');
+      assert.equal(typeof RETIRED_SETTINGS[key], 'string', key + ' must say why it does nothing');
+    }
+    assert.equal(validate({ PIN_SESSION_ENFORCE: 'true' }, SCHEMA).config.PIN_SESSION_ENFORCE, undefined,
+      'setting it changes nothing');
   });
 
   it('rejects PLANNER_MORNING_HOUR outside its 0-23 range and PLANNER_CHECKIN_EVERY_MS below its floor', () => {

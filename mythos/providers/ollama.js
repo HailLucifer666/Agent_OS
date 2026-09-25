@@ -149,4 +149,8 @@ function getStatus() {
   return { ok: isAvailable(), model: getModel() };
 }
 
-module.exports = { name: 'ollama', chat, listModels, isAvailable, getModel, getStatus };
+// getBaseURL: for brain/route-policy.js, which must know whether "ollama" means
+// this machine or somewhere else before it can call a route local.
+function getBaseURL() { return OLLAMA_URL; }
+
+module.exports = { name: 'ollama', chat, listModels, isAvailable, getModel, getStatus, getBaseURL };

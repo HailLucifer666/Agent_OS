@@ -47,7 +47,10 @@
 // query, let alone killed by it. Making the bad state unrepresentable beats
 // checking for it.
 
-const { execFileSync } = require('child_process');
+// BUG-436 (2026-09-23): execFileSync froze the whole server for every PowerShell
+// round trip here (~0.7–3 s, bounded at 15 s) — see util/exec-file-text.js. The
+// queries are unchanged; they no longer block, so every function below is async.
+const { execFileText } = require('../../src/core/util/exec-file-text');
 const path = require('path');
 
 const CLOSE_POLL_INTERVAL_MS = 400;
@@ -71,11 +74,11 @@ function isMythosDebugProfile(dir) {
   return parent === 'MYTHOS' && /-debug-profile$/.test(leaf);
 }
 
-function runPowerShell(script, deps) {
-  const exec = (deps && deps.execFileSync) || execFileSync;
+async function runPowerShell(script, deps) {
+  const exec = (deps && deps.execFile) || execFileText;
   try {
-    return exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
-      { timeout: PS_TIMEOUT_MS, windowsHide: true }).toString().trim();
+    return String(await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeoutMs: PS_TIMEOUT_MS })).trim();
   } catch (_) {
     // Absent/blocked PowerShell, or a timeout, is reported as "could not tell"
     // by every caller below rather than as "nothing is running" — the
@@ -110,12 +113,12 @@ function parseProcessRows(out) {
 //
 // null means "could not determine", [] means "none running". The caller must
 // not collapse those: one is ignorance, the other is a fact.
-function processesForProfile(profileDir, deps) {
+async function processesForProfile(profileDir, deps) {
   if (!isMythosDebugProfile(profileDir)) return [];
   const esc = String(profileDir).replace(/'/g, "''");
   const script = "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*"
     + esc + "*' -and $_.CommandLine -notlike '*--type=*' } | ForEach-Object { \"$($_.ProcessId)=$($_.Name)\" }";
-  const out = runPowerShell(script, deps);
+  const out = await runPowerShell(script, deps);
   if (out === null) return null;
   return parseProcessRows(out);
 }
@@ -127,14 +130,14 @@ function processesForProfile(profileDir, deps) {
 // process's executable path can, and does.
 //
 // Returns { pid, exe } or null when it cannot be determined.
-function processOnPort(port, deps) {
+async function processOnPort(port, deps) {
   const p = Number(port);
   if (!Number.isInteger(p) || p <= 0 || p > 65535) return null;
   const script = '$c = Get-NetTCPConnection -LocalPort ' + p
     + ' -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; '
     + 'if ($c) { $pr = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; '
     + 'if ($pr) { "$($c.OwningProcess)=$($pr.Path)" } }';
-  const out = runPowerShell(script, deps);
+  const out = await runPowerShell(script, deps);
   if (out === null) return null;
   const rows = parseProcessRows(out);
   if (!rows.length) return null;
@@ -147,10 +150,10 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 // profile. /T so the renderer children go with it: a browser whose top-level
 // process is killed alone leaves orphaned renderers holding the profile lock,
 // and the NEXT launch then fails in a way that looks nothing like this one.
-function killProcess(pid, deps) {
-  const exec = (deps && deps.execFileSync) || execFileSync;
+async function killProcess(pid, deps) {
+  const exec = (deps && deps.execFile) || execFileText;
   try {
-    exec('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeout: 10000, windowsHide: true });
+    await exec('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { timeoutMs: 10000 });
     return true;
   } catch (_) {
     return false;
@@ -201,7 +204,7 @@ async function closeDebugBrowser(opts) {
   // one onto a port the first was still holding — i.e. it would have rebuilt
   // BUG-409 through the fix for BUG-409. Look FIRST, so "nothing of ours is
   // running here" is its own answer.
-  const before = list(profileDir, deps);
+  const before = await list(profileDir, deps);
   if (before === null) {
     return { closed: false, method: 'unknown', survivors: [],
       reason: 'could not establish ownership because the process list could not be read; no close was sent' };
@@ -225,10 +228,10 @@ async function closeDebugBrowser(opts) {
 
   // Verify. The ack is not the evidence — the process table is.
   const deadline = Date.now() + ceiling;
-  let survivors = list(profileDir, deps);
+  let survivors = await list(profileDir, deps);
   while (survivors !== null && survivors.length && Date.now() < deadline) {
     await wait(interval);
-    survivors = list(profileDir, deps);
+    survivors = await list(profileDir, deps);
   }
 
   if (survivors === null) {
@@ -251,11 +254,11 @@ async function closeDebugBrowser(opts) {
   // still holding the process open.
   const killed = [];
   for (const proc of survivors) {
-    if (kill(proc.pid, deps)) killed.push(proc);
+    if (await kill(proc.pid, deps)) killed.push(proc);
   }
   await wait(interval);
   // A failed oracle is still unknown after escalation; it never proves exit.
-  const remaining = list(profileDir, deps);
+  const remaining = await list(profileDir, deps);
   if (remaining === null) {
     return { closed: false, method: 'unknown', survivors,
       reason: 'termination was attempted but the process list could not be read to verify exit' };
@@ -287,11 +290,11 @@ async function closeDebugBrowser(opts) {
 //
 // Non-throwing by contract: it runs on the launch path, so a failure to
 // identify must degrade to "assumed", never fail the launch.
-function identifyBrowserOnPort(cdpUrl, deps) {
+async function identifyBrowserOnPort(cdpUrl, deps) {
   try {
     const port = Number(new URL(String(cdpUrl)).port);
     if (!Number.isInteger(port) || port <= 0) return null;
-    const owner = (deps && deps.processOnPort ? deps.processOnPort : processOnPort)(port, deps);
+    const owner = await (deps && deps.processOnPort ? deps.processOnPort : processOnPort)(port, deps);
     if (!owner || !owner.exe) return null;
     // browser-target.js owns exe -> name, derived from BROWSER_SUBPATHS. Required
     // lazily so this module stays cheap to require from the adapter index.

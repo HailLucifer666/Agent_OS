@@ -1,14 +1,10 @@
 /* auth.css — the MYTHOS_AUTH_TOKEN prompt (js/auth/auth-gate.js).
 
-   Structure copies pin.css's ruleset under an .auth-* prefix rather than
-   sharing selectors with it: the two screens must be able to diverge (this one
-   takes a long opaque token, that one takes 4-12 digits) and, more importantly,
-   they can be live at the same moment. Consistent by copy, not coupled.
+   Its structure was copied from the PIN screen's stylesheet, which was deleted
+   with the PIN on 2026-09-23. Only a REMOTE browser on a token-configured
+   deployment ever sees this prompt.
 
-   z-index 410 sits ABOVE pin.css's 400 deliberately: the PIN screen's own
-   /api/pin/status call is itself gated by the token, so the token must be
-   entered first or the PIN screen cannot even learn whether to lock. The gate
-   also marks #pin-root inert while it is up. */
+   z-index 410 keeps it above the setup screen (405). */
 
 .auth-overlay {
   position: fixed;

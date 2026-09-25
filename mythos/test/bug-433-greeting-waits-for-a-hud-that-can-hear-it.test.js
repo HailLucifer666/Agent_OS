@@ -67,6 +67,17 @@
 // speech that may already be audible, a wrong PIN is still not a state change,
 // and a no-PIN boot still renders no overlay at all.
 //
+// 2026-09-23 — THE PIN WAS REMOVED (operator decision), and with it the lock
+// half of the readiness answer. The live-verified greeting (closed 2026-09-23)
+// was armed "only after unlock", so this file is also the regression guard for
+// re-plumbing that signal. What is left, and still sufficient: the client is
+// greetable once its voice configuration has landed, because app.js's
+// proactive handler still drops anything that arrives before then. The
+// lock-screen tests and probes q4-q6 went with the lock screen. New probe:
+//   (q8) make deriveHudReady return greetable:true unconditionally
+//        => fails 'a HUD whose voice configuration has not landed is not
+//        greetable' and the reporter's first-message assertion. Run 2026-09-23.
+//
 // Run: cd mythos && node --test test/bug-433-greeting-waits-for-a-hud-that-can-hear-it.test.js
 
 const { test, describe } = require('node:test');
@@ -79,8 +90,6 @@ const { createGreetingScheduler, DEFAULT_DELAY_MS } = require('../server/boot-gr
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const ui = (name) => pathToFileURL(path.join(__dirname, '..', 'ui', 'public', 'js', name)).href;
-const settle = () => new Promise((r) => setImmediate(r));
-const response = (value, status = 200) => ({ ok: status === 200, status, json: async () => value });
 
 function makeClock() {
   let t = 0;
@@ -287,47 +296,33 @@ describe('BUG-433 — the greeting waits for a HUD that can actually play it', (
 describe('BUG-433 — the readiness rule', () => {
   const load = () => import(ui('hud-ready.js'));
 
-  test("'unknown' is not 'unlocked' — the tri-state is the point", async () => {
+  test('a HUD whose voice configuration has not landed is not greetable', async () => {
     const { deriveHudReady } = await load();
-    // `lockState !== 'locked'` would pass this, and that is precisely the bug:
-    // 'unknown' is the window before GET /api/pin/status has answered. A
-    // greeting armed there is armed on a guess about a PIN that may be set.
-    assert.deepEqual(deriveHudReady({ voiceConfigLoaded: true, lockState: 'unknown' }),
-      { greetable: false, why: 'pin-unknown' });
-    assert.deepEqual(deriveHudReady({ voiceConfigLoaded: true, lockState: 'locked' }),
-      { greetable: false, why: 'pin-locked' });
-    assert.deepEqual(deriveHudReady({ voiceConfigLoaded: true, lockState: 'unlocked' }),
-      { greetable: true, why: null });
-  });
-
-  test('an absent lock state is unknown, not unlocked', async () => {
-    const { deriveHudReady } = await load();
-    // Fails SAFE on a shape nobody planned for. The opposite default would mean
-    // one renamed field silently re-enables speech over a locked HUD.
-    assert.deepEqual(deriveHudReady({ voiceConfigLoaded: true }), { greetable: false, why: 'pin-unknown' });
+    // app.js drops proactive speech that arrives before this (it would build a
+    // mistuned voice loop), so arming the greeting here is BUG-433 exactly:
+    // synthesized, sent, and heard by nobody.
+    assert.deepEqual(deriveHudReady({ voiceConfigLoaded: false }), { greetable: false, why: 'voice-config-not-loaded' });
     assert.deepEqual(deriveHudReady(undefined), { greetable: false, why: 'voice-config-not-loaded' });
     assert.deepEqual(deriveHudReady({}), { greetable: false, why: 'voice-config-not-loaded' });
   });
 
-  test('a pending voice configuration is reported as itself, not as a PIN problem', async () => {
+  test('a loaded configuration is greetable — there is no lock to wait for any more', async () => {
     const { deriveHudReady } = await load();
-    // The two drop branches in app.js were written separately and this is the
-    // single verdict that replaced them; a `why` that named the wrong one would
-    // send the next investigation down the same two-hypothesis path as 09-16.
-    assert.deepEqual(deriveHudReady({ voiceConfigLoaded: false, lockState: 'unlocked' }),
-      { greetable: false, why: 'voice-config-not-loaded' });
+    assert.deepEqual(deriveHudReady({ voiceConfigLoaded: true }), { greetable: true, why: null });
+    // A stale caller still passing the old field must not be refused for it:
+    // an old lock state is not an input any more, in either direction.
+    assert.deepEqual(deriveHudReady({ voiceConfigLoaded: true, lockState: 'locked' }), { greetable: true, why: null });
   });
 
   test('the reporter re-reads state on every call rather than capturing it', async () => {
     const { createHudReadyReporter } = await load();
     const sent = [];
-    let state = { voiceConfigLoaded: false, lockState: 'unknown' };
+    let state = { voiceConfigLoaded: false };
     const publish = createHudReadyReporter({ send: (m) => sent.push(m), readState: () => state });
     publish();
-    // Both inputs change AFTER construction — the configuration lands, the PIN
-    // resolves — so a reporter that captured them would report the boot state
-    // forever and the greeting would never be armed at all.
-    state = { voiceConfigLoaded: true, lockState: 'unlocked' };
+    // The configuration lands AFTER construction, so a reporter that captured
+    // it would report the boot state forever and the greeting would never arm.
+    state = { voiceConfigLoaded: true };
     publish();
     assert.deepEqual(sent, [
       { type: 'hud-ready', greetable: false, why: 'voice-config-not-loaded' },
@@ -342,121 +337,9 @@ describe('BUG-433 — the readiness rule', () => {
     // every ordinary boot; the next transition re-sends the current verdict.
     const publish = createHudReadyReporter({
       send: () => { throw new Error('socket not open'); },
-      readState: () => ({ voiceConfigLoaded: true, lockState: 'unlocked' }),
+      readState: () => ({ voiceConfigLoaded: true }),
     });
     assert.deepEqual(publish(), { greetable: true, why: null });
-  });
-});
-
-// ---- the transition nobody was told about ---------------------------------------
-
-describe('BUG-433 — the lock screen announces every state change', () => {
-  // Loaded through the data: URL rewriter voice-config-unlock.test.js
-  // established, for the same reason: focus-trap needs a DOM this fixture does
-  // not have, and a data: URL has no base for the relative specifiers.
-  async function loadLockScreen() {
-    const source = fs.readFileSync(new URL(ui('pin/pin-lock-screen.js')), 'utf8')
-      .replace("import { trapFocus } from '../a11y/focus-trap.js';", 'const trapFocus = () => () => {};')
-      .replace("'./pin-gate.js'", JSON.stringify(ui('pin/pin-gate.js')))
-      .replace("'../auth/auth-state.js'", JSON.stringify(ui('auth/auth-state.js')));
-    return import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
-  }
-
-  function fakeDom(t) {
-    const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
-    t.after(() => (previous ? Object.defineProperty(globalThis, 'document', previous) : delete globalThis.document));
-    const captured = {};
-    globalThis.document = {
-      querySelectorAll: () => [],
-      createElement() {
-        const controls = Object.fromEntries(['form', '.pin-input', '.pin-submit', '.pin-message'].map((k) => [k, {
-          value: '', focus() {}, addEventListener(type, cb) { this[type] = cb; },
-        }]));
-        captured.overlay = {
-          controls, setAttribute() {}, remove() {}, classList: { toggle() {} }, querySelector: (k) => controls[k],
-        };
-        return captured.overlay;
-      },
-    };
-    return captured;
-  }
-
-  test('a no-PIN boot announces unlocked WITHOUT an unlock event', async (t) => {
-    const { mountPinLockScreen } = await loadLockScreen();
-    fakeDom(t);
-    const announced = [];
-    let unlocks = 0;
-    // THE REGRESSION THIS EXISTS TO CATCH. The ordinary install has no PIN, so
-    // onUnlock never fires; lockState resolves 'unknown' -> 'unlocked' inside
-    // the status probe and, before this change, in complete silence. Readiness
-    // published before that probe answered would have said 'pin-unknown' and
-    // nothing would ever have corrected it — no greeting on any no-PIN machine,
-    // which is a worse outcome than the bug being fixed.
-    const screen = mountPinLockScreen({ appendChild() { assert.fail('no PIN must not render a lock'); } }, {
-      onUnlock: () => { unlocks++; },
-      onLockState: (s) => announced.push(s),
-      fetchImpl: async () => response({ configured: false }),
-    });
-    t.after(() => screen.cleanup());
-    await settle();
-    assert.deepEqual(announced, ['unlocked']);
-    assert.equal(unlocks, 0, 'and it is NOT an unlock — nothing was verified');
-    assert.equal(screen.lockState(), 'unlocked');
-  });
-
-  test('a configured PIN announces locked, then unlocked on a correct PIN', async (t) => {
-    const { mountPinLockScreen } = await loadLockScreen();
-    const dom = fakeDom(t);
-    const announced = [];
-    let accepted = false;
-    const screen = mountPinLockScreen({ appendChild() {} }, {
-      onLockState: (s) => announced.push(s),
-      fetchImpl: async (url) => (url.endsWith('/status') ? response({ configured: true })
-        : accepted ? response({ ok: true }) : response({ error: 'Incorrect PIN.' }, 401)),
-    });
-    t.after(() => screen.cleanup());
-    await settle();
-    assert.deepEqual(announced, ['locked']);
-    dom.overlay.controls['.pin-input'].value = '1234';
-    dom.overlay.controls.form.submit({ preventDefault() {} });
-    await settle();
-    // A WRONG PIN CHANGES NOTHING, so it announces nothing. A reporter woken on
-    // every keystroke would republish an unchanged verdict at the server.
-    assert.deepEqual(announced, ['locked'], 'a refused PIN is not a state change');
-    accepted = true;
-    dom.overlay.controls['.pin-input'].value = '5678';
-    dom.overlay.controls.form.submit({ preventDefault() {} });
-    await settle();
-    assert.deepEqual(announced, ['locked', 'unlocked']);
-  });
-
-  test('the relock/probe race announces locked exactly once', async (t) => {
-    const { mountPinLockScreen } = await loadLockScreen();
-    fakeDom(t);
-    const announced = [];
-    let fireSessionLost = null;
-    let answerStatus = null;
-    const screen = mountPinLockScreen({ appendChild() {} }, {
-      onLockState: (s) => announced.push(s),
-      onPinSessionLostImpl: (cb) => { fireSessionLost = cb; return () => {}; },
-      fetchImpl: () => new Promise((r) => { answerStatus = () => r(response({ configured: true })); }),
-    });
-    t.after(() => screen.cleanup());
-    await settle();
-    assert.deepEqual(announced, [], 'nothing has answered yet — the state is still unknown');
-    // THE ORDER THAT REACHES IT. A `missing:['pin']` 401 landing before
-    // GET /api/pin/status answers locks the screen; the probe then answers
-    // configured:true and writes 'locked' a SECOND time. This is the sequence
-    // the 2026-09-18 security review found on the other side of the same race,
-    // and an earlier version of this test could not produce it — the relock
-    // subscriber's own `lockState === 'locked'` return was doing all the work,
-    // so removing the idempotence check left every assertion green.
-    fireSessionLost();
-    assert.deepEqual(announced, ['locked']);
-    answerStatus();
-    await settle();
-    assert.deepEqual(announced, ['locked'], 'the same state written twice is not a transition');
-    assert.equal(screen.lockState(), 'locked');
   });
 });
 
@@ -497,19 +380,17 @@ describe('BUG-433 — the wiring', () => {
       + 'not the message');
   });
 
-  test('the client computes readiness from both inputs and publishes it', () => {
-    // The tri-state rule itself is asserted BEHAVIOURALLY above, against the
-    // real module — that is the point of extracting it. What a source-shape pin
-    // is still needed for is the wiring app.js holds and no test can execute:
-    // that the reporter is constructed at all, that it reads BOTH inputs, and
-    // that the lock screen's transitions reach it. Miss any one and the rule is
-    // correct and never consulted.
+  test('the client computes readiness from the voice configuration and publishes it on both edges', () => {
+    // The rule is asserted BEHAVIOURALLY above, against the real module. What
+    // a source-shape pin is still needed for is the wiring app.js holds and no
+    // test can execute: that the reporter is constructed, reads the
+    // configuration, and is told when it lands AND when a refresh takes it away.
     assert.match(APP, /createHudReadyReporter\(/, 'the client is the only thing that knows whether it can play');
-    assert.match(APP, /voiceConfigLoaded, lockState: pinLockScreen\.lockState\(\)/,
-      'both drop branches must feed ONE verdict — written separately is how they drifted apart');
-    assert.match(APP, /onLockState: \(\) => publishHudReady\(\)/,
-      'the no-PIN boot resolves the lock state with no onUnlock, so without this subscription readiness '
-      + 'would be published once as pin-unknown and never corrected');
+    assert.match(APP, /readState: \(\) => \(\{ voiceConfigLoaded \}\)/, 'readiness is the voice configuration');
+    assert.match(APP, /publishHudReady\(\); \/\/ BUG-433: readiness just went UP\./, 'published when it lands');
+    const refresh = APP.slice(APP.indexOf('function refreshVoiceConfiguration()'), APP.indexOf('function refreshVoiceConfiguration()') + 600);
+    assert.match(refresh, /voiceConfigLoaded = false;[\s\S]*publishHudReady\(\);/, 'and when a refresh takes it away');
+    assert.doesNotMatch(APP, /pinLockScreen|lockState/, 'no lock is left to consult (removed 2026-09-23)');
   });
 
   test('both silent drops now record a reason', () => {

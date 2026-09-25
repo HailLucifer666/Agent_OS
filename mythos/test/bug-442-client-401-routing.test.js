@@ -31,7 +31,14 @@
 //        markCredentialsMissing  => fails 'a failure that predates a successful
 //        recovery is dropped'.
 //   (n2) remove OWN_FAILURE_PATHS from net-guard's condition
-//        => fails 'a wrong PIN never opens the token prompt'.
+//        => fails 'a wrong token on the exchange endpoint is likewise its own
+//        business' (re-pointed 2026-09-23: the PIN-verify case it used to fail
+//        went with the PIN).
+//
+// 2026-09-23: the PIN was removed, so the server only ever names 'token' and the
+// PIN routing cases were deleted with the channel they tested. What remains is
+// the part that was never about the PIN: the generation fence, the exclusion of
+// the sign-in form's own 401, and the same-origin check.
 //   (n3) drop the same-origin check in sameOriginApiPath
 //        => fails 'a foreign origin answering 401 never touches HUD state'.
 //
@@ -104,45 +111,20 @@ beforeEach(() => {
 });
 
 describe('BUG-442 — the client routes a 401 to the credential that can satisfy it', () => {
-  test('a missing PIN relocks the PIN screen and does NOT open the token prompt', async () => {
+  test('a missing token opens the token prompt', async () => {
     const { authState } = await freshModules();
     let tokenPrompt = 0;
-    let pinRelock = 0;
     authState.onUnauthorized(() => { tokenPrompt += 1; });
-    authState.onPinSessionLost(() => { pinRelock += 1; });
-
-    authState.markCredentialsMissing(['pin'], authState.currentRecoveryGeneration());
-
-    assert.equal(pinRelock, 1, 'the PIN screen is what can satisfy a missing PIN session');
-    assert.equal(tokenPrompt, 0,
-      'THE FILED SYMPTOM: this is the call that asked the operator for their ACCESS TOKEN when the PIN '
-      + 'session had lapsed. Re-entering the token could not have fixed it');
-  });
-
-  test('a missing token opens the token prompt and leaves the PIN screen alone', async () => {
-    const { authState } = await freshModules();
-    let tokenPrompt = 0;
-    let pinRelock = 0;
-    authState.onUnauthorized(() => { tokenPrompt += 1; });
-    authState.onPinSessionLost(() => { pinRelock += 1; });
-
     authState.markCredentialsMissing(['token'], authState.currentRecoveryGeneration());
-
     assert.equal(tokenPrompt, 1);
-    assert.equal(pinRelock, 0, 'relocking a PIN screen whose session is fine would lock the operator out of nothing');
   });
 
-  test('both missing raises both, token first', async () => {
+  test('ADJACENT: a name this client does not route (a stale "pin") opens nothing', async () => {
     const { authState } = await freshModules();
-    const order = [];
-    authState.onUnauthorized(() => order.push('token'));
-    authState.onPinSessionLost(() => order.push('pin'));
-
-    authState.markCredentialsMissing(['token', 'pin'], authState.currentRecoveryGeneration());
-
-    assert.deepEqual(order, ['token', 'pin'],
-      'on a combined deployment the PIN check itself runs through an authenticated /api call, so an '
-      + 'unsatisfied token gate would leave the PIN screen unable to succeed');
+    let tokenPrompt = 0;
+    authState.onUnauthorized(() => { tokenPrompt += 1; });
+    authState.markCredentialsMissing(['pin'], authState.currentRecoveryGeneration());
+    assert.equal(tokenPrompt, 0, 'an older server naming the PIN must not be read as a token problem');
   });
 
   test('a failure that predates a successful recovery is dropped', async () => {
@@ -178,21 +160,6 @@ describe('BUG-442 — the client routes a 401 to the credential that can satisfy
 });
 
 describe('BUG-442 — net-guard decides what is even ours to announce', () => {
-  test('a wrong PIN never opens the token prompt', async () => {
-    const { authState, install } = await freshModules();
-    let tokenPrompt = 0;
-    authState.onUnauthorized(() => { tokenPrompt += 1; });
-    installFakeWindow(async () => jsonResponse(401, { error: 'Incorrect PIN.' }));
-    install();
-
-    const res = await global.window.fetch('/api/pin/verify', { method: 'POST' });
-
-    assert.equal(res.status, 401, 'the response still reaches the caller unchanged');
-    assert.equal(tokenPrompt, 0,
-      'an authentication form telling the operator they mistyped is not the authorization gate refusing a '
-      + 'request. Announcing it would mean a mistyped PIN opens the ACCESS TOKEN prompt');
-  });
-
   test('a wrong token on the exchange endpoint is likewise its own business', async () => {
     const { authState, install } = await freshModules();
     let tokenPrompt = 0;
@@ -206,17 +173,14 @@ describe('BUG-442 — net-guard decides what is even ours to announce', () => {
 
   test('a structured gate failure is routed by what the SERVER said, not by the URL', async () => {
     const { authState, install } = await freshModules();
-    let pinRelock = 0;
     let tokenPrompt = 0;
-    authState.onPinSessionLost(() => { pinRelock += 1; });
     authState.onUnauthorized(() => { tokenPrompt += 1; });
-    installFakeWindow(async () => jsonResponse(401, { error: 'hint', missing: ['pin'] }));
+    installFakeWindow(async () => jsonResponse(401, { error: 'hint', missing: ['token'] }));
     install();
 
     await global.window.fetch('/api/config/vad');
 
-    assert.equal(pinRelock, 1, 'the server named the PIN, so the PIN screen is what comes back');
-    assert.equal(tokenPrompt, 0, 'and no prose was parsed to get there');
+    assert.equal(tokenPrompt, 1, 'the server named the token, and no prose was parsed to get there');
   });
 
   test('a foreign origin answering 401 never touches HUD state', async () => {

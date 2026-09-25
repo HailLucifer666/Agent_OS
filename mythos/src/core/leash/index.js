@@ -106,6 +106,9 @@ function createLeash(deps) {
         bus.emit('health.anomaly', {
           kind: 'confirm-expired-silently', tool: expiredTool, target: expiredTool,
           needsOperator: true,
+          // BUG-447 (2026-09-25): the spoken sentence; `reason` keeps the detail.
+          sayToOperator: 'Your confirmation' + (expiredTool ? ' for ' + String(expiredTool).replace(/_/g, ' ') : '')
+            + ' expired with no answer, so nothing ran.',
           // The TTL is read from config, not from confirmRegistry.stats(): this
           // callback is constructed as an argument to createConfirmRegistry, so
           // reaching back through the variable being assigned would work only

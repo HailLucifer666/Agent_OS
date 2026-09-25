@@ -91,6 +91,10 @@ function createGmailSensor(ctx) {
                 // This flag says the fault is terminal and human-only, so no remedy is
                 // guessed at all. The reason below is already the complete instruction.
                 needsOperator: true,
+                // BUG-447 (2026-09-25, operator decision): what is SPOKEN is this one
+                // plain sentence; `reason` below keeps the full steps, and the HUD's
+                // Anomalies list shows them. Read aloud, the steps were a command line.
+                sayToOperator: 'Gmail has stopped working because its Google sign-in expired, and it needs you to sign in again.',
                 reason: 'Gmail has stopped working and it will not recover on its own: the Google '
                   + 'refresh token is expired or revoked. Nothing was read. Re-authorise by running '
                   + '`node scripts/google-auth.js` and putting the new GOOGLE_REFRESH_TOKEN in '

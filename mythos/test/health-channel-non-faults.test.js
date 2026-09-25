@@ -224,6 +224,7 @@ describe('B3.1 late-for-turn: the noisy half is separated from the real signal',
       summarizeActionsForResult,
       getLiveSession: () => ({ isOpen: () => true, sendText: () => {} }),
       toolAckDeadlineMs: 20,
+      toolResultHoldMaxMs: 0, // BUG-457 (2026-09-24): replies are now held up to 12 s; this pins the late path, now the fallback (past the hold, a cancellation, typed words). 0 selects it.
     });
   }
 
@@ -244,6 +245,7 @@ describe('B3.1 late-for-turn: the noisy half is separated from the real signal',
       summarizeActionsForResult,
       getLiveSession: () => ({ isOpen: () => true, sendText: () => {} }),
       toolAckDeadlineMs: 20,
+      toolResultHoldMaxMs: 0, // BUG-457 (2026-09-24): replies are now held up to 12 s; this pins the late path, now the fallback (past the hold, a cancellation, typed words). 0 selects it.
     });
     // Close the turn while the dispatch is still in flight, so the started ack
     // lands against a stale generation.
