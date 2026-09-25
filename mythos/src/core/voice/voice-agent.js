@@ -4,6 +4,7 @@
 const { tierOf } = require('../leash/tiers');
 const { truncateAtSentenceBoundary } = require('../effectors/voice');
 const { detectUnbackedClaims, replaceUnbackedClaims } = require('./claim-check');
+const { dayKey } = require('../util/day-key');
 
 // voice-agent.js — the voice tool-calling brain. CA of NOVA
 // app/lib/voice/voice-agent.js: persona + tool catalog + history ->
@@ -325,7 +326,7 @@ function buildSystemContext(capabilityDigest) {
 
 function buildPrompt({ text, history, toolResults, corrective, originalSay, memoryContext, catalog, capabilityDigest }) {
   const now = new Date();
-  const sysDate = now.toISOString().slice(0, 10);
+  const sysDate = dayKey(now); // LOCAL date of this same now; toISOString() is UTC (BUG-454)
   const sysTime = now.toLocaleTimeString('en-US', { hour12: false });
   const parts = [
     RULES,

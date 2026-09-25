@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8363,
+      "value": 8366,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6010,6 +6010,22 @@
         }
       },
       {
+        "n": 454,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the brain's `LOCAL CLOCK` line said it was still yesterday after local midnight, because it glued a UTC date to a local time",
+        "detail": {
+          "cause": "`buildPrompt` in `src/core/voice/voice-agent.js` took one `now` and formatted it twice: `now.toISOString().slice(0, 10)` for the date, which is the UTC calendar day, and `now.toLocaleTimeString('en-US', { hour12: false })` for the time, which is local wall time. The two agree only while local time and UTC are on the same calendar day. At 2026-09-23T20:19:57Z the local time here is 2026-09-24 01:49:57, and the line read `LOCAL CLOCK: 2026-09-23 01:49:57`.",
+          "fix": "The date now comes from `dayKey(now)` in `util/day-key.js`: the local calendar components of the same `now`. That helper already existed because the vault had the identical split (F11, 2026-08-15: Audit and Incidents filenames on UTC days, Episodic on local days), so this uses the one date basis rather than adding a second hand-rolled one. `now` is passed explicitly on purpose. `new Intl.DateTimeFormat().format()` with no argument reads the real clock straight past node:test's fake Date (measured 2026-09-24), so a formatter-based fix would have escaped the held clock that the prompt-equality tests depend on.",
+          "verification": "`test/bug-454-local-clock-local-date.test.js` (3). The zone is pinned by assigning `process.env.TZ` inside the test process, because the defect does not exist in a zone where local and UTC dates coincide: an unpinned test proves nothing on a UTC CI runner. (1) Asia/Colombo at 2026-09-23T20:19:57Z must print `2026-09-24 01:49:57`. (3) America/Los_Angeles at 2026-09-24T03:30:00Z must print `2026-09-23 20:30:00`. (2) is the adjacent case that must keep passing: Asia/Colombo at 06:00Z, where both dates agree, prints `2026-09-23 11:30:00`. Each case first asserts that the zone and the held clock actually took effect, so a broken harness fails with its own message rather than passing for the wrong reason. **Mutation probes, run 2026-09-24, each diffed against a byte copy and restored byte-identical.** (a) The original `toISOString()` line: (1) and (3) go red with the strings above, and (2) sta…"
+        },
+        "campaign": {
+          "disposition": "currently verified",
+          "evidence": "[FIXED 2026-09-24] buildPrompt's LOCAL CLOCK line paired toISOString().slice(0, 10), the UTC date, with toLocaleTimeString(), the local time, so on a UTC+5:30 machine it printed the previous day from 00:00 to 05:30 local (seen in a real full-suite run: `2026-09-23 01:49:57` at local 2026-09-24 01:49:57); west of UTC it printed tomorrow every evening. The date now comes from util/day-key.js dayKey(now), the same local basis the vault uses. Consumers: every batch voice prompt the brain reasons from. Remaining evidence: none for the mechanism; a real-clock probe in Pacific/Honolulu (local date one day behind UTC at the time) printed the local date. Not covered: /api/conversation/history reads Episodic by UTC day, filed separately.",
+          "source": "mythos/src/core/voice/voice-agent.js; mythos/src/core/util/day-key.js; tests: bug-454-local-clock-local-date.test.js"
+        }
+      },
+      {
         "n": 455,
         "shape": "entry",
         "state": "open",
@@ -6225,7 +6241,7 @@
       }
     ],
     "counts": {
-      "verified": 90,
+      "verified": 91,
       "fixed": 182,
       "open": 34,
       "coded": 9,
@@ -6233,7 +6249,7 @@
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 318,
+    "total": 319,
     "openDeclared": [
       274,
       275,
