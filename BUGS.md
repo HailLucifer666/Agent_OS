@@ -630,6 +630,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-470 | open | currently reproduced | [FILED 2026-09-25 from the attended run] The HUD showed "14 ACTIVE" goals and the greeting said "Fourteen goals humming" while the goal system held 0 active and 14 paused. The goals effector counts every unticked Goals.md item as active. Remaining evidence: none; a counting fix. | mythos/src/core/effectors/goals.js; mythos/src/core/conversation/briefing.js |
 | BUG-471 | open | currently reproduced | [FILED 2026-09-25 from the attended run] Clicking what MYTHOS read on screen misses. click_at landed on title text three times, and each expect was a description, which can never verify. see_and_click could not find a title screen_look had just read (an en dash is the likely mismatch). Remaining evidence: the thumbnail position and the OCR text for that title. | mythos/src/core/effectors (see_and_click, click_at verify) |
 | BUG-472 | open | currently reproduced | [FILED 2026-09-25 from the attended run] The voice model loaded unrelated skills (ponytail, systematic-debugging), spoke tool internals including a skill it never loaded ("taste-frontend skill done"), and used think_deeply for "you said good evening". The operator's saved "don't use think_deeply" preference is outside the Live facts tail. Remaining evidence: a count across sessions. | mythos/src/core/voice (Live system instruction, use_skill declaration) |
+| BUG-473 | coded | blocked | [CODED 2026-09-25, S2 of the Stage 1 repair campaign] The Lessons store named each file by goal title but keyed records by tool + args + goal title, so a second failure mode of one goal overwrote the first. A failed update came back as success (count +1, a ref) and the healer called it applied, and key order split one call into two. Now there is one file per whole key, checked before reuse; failed writes report degraded; args are keyed in canonical order. 349 real records were replayed read-only with identical results. Remaining evidence: a real vault holding two failure modes of one goal after merge. | mythos/test/bug-473-lesson-records-keep-their-identity.test.js; mythos/src/core/memory/lessons.js; mythos/src/core/immune/healer.js |
 | BUG-406 | open | blocked | [RECORDER CODED 2026-09-23; study and repair OPEN by decision D9] VOICE_GATE_RECORDER=true now records, around every gate release, the mic level, both gates, whether and how far ahead the player is speaking, and both audio clocks — numbers only, never audio or words — under the repo's .cache/. The acoustic study, a replay harness, any change to the gate and the p95 250 ms target are the next round's work. [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
@@ -3449,6 +3450,36 @@ The operator's saved preference not to use `think_deeply` sits outside the Live 
 **Related.** BUG-449 (spoken tool syntax), BUG-424, BUG-463.
 
 **Attribution:** attended run 2026-09-25.
+
+## BUG-473 — the Lessons store overwrote its own records, reported failed writes as saved, and split one failure into two by key order (filed 2026-09-25; CODED 2026-09-25)
+
+**Status:** 🔧 CODED 2026-09-25 (branch fix/s2-lesson-integrity, S2 of the Stage 1 repair campaign; audit findings F06–F08 in `mythos/docs/PLAN-AUDIT-2026-09-25.md`). Each defect was reproduced headlessly against main f456217d before the fix. Live check owed: a real vault holding two failure modes of one goal after merge.
+
+**Cause, measured against the code.**
+
+- **F06, records overwrote each other.** The file was named after the goal title, while a record was identified by tool + args + goal title. A second failure of the same goal with a different cause replaced the first file. `goals/index.js` keys every distilled lesson by the goal's title and passes the model's free-text "avoid" as the tool, so this is the common case, not an edge.
+- **F07, a failed write was reported as saved.** `recordFailure()` ignored `write()`'s result. A failed update returned a ref, `isNew:false` and a count one higher than the file held. The healer's `record-lesson` action then reported the heal as applied, and `reflection.js` counted the lesson as written.
+- **F08, key order split one failure into two.** Args were hashed as `JSON.stringify(args)`, so `{x:1,y:2}` and `{y:2,x:1}` became two records.
+
+**Fix** (`mythos/src/core/memory/lessons.js`, `mythos/src/core/immune/healer.js`).
+
+- A record's identity is its whole key: the tool, a full sha256 of the canonical args, and the goal title. Canonical args sort object keys at every depth, keep array order and value types, and refuse what JSON cannot state exactly (functions, Maps, cycles, NaN, BigInt) as `unsupported-args`.
+- New files are named `Lessons/<slug>--<16-hex digest>.md`. Before a name is reused, the stored key is read and compared; a name held by a different key gets the next suffix.
+- Replacing a record is internal to `recordFailure()`. It re-reads the file and refuses with `record-changed-underneath` if the file changed or vanished in between. The public `write()` cannot name a file.
+- A failed write returns `degraded:true`, `ref:null` and the count the file still holds (the old id as `existingRef`), and changes nothing. The healer returns `ok:false`, `record-lesson-degraded`.
+- Files written before S2 keep their name, id and identity; nothing is migrated. The name a record is shown under stays the slug.
+
+**Tests.** `mythos/test/bug-473-lesson-records-keep-their-identity.test.js`, 21 tests on the real fs-store over temporary vaults. On main's code 18 of 21 fail (17 on their assertion, 1 because `canonicalArgs` did not exist); the 3 that pass are designed to. All 13 mutation probes were caught; the record, with dates, is in the test file.
+
+**Real data (read-only replay, 2026-09-25).** Main's code and S2's code were run side by side over copies of the Lessons folders from all four vault copies, 349 files. Every record was found as the same record by both, recall returned the same results, every record updated in place (same file, same id), and the exports were identical. The originals were not modified (checked by modification time). An overwrite leaves no trace in the files that survive, so how many real records F06 has already destroyed cannot be measured from them.
+
+**Not covered.**
+
+- An old record whose args were hashed in an unsorted key order is found only when args arrive in that order. In any other order a new record is written beside it, never over it (test r2c). No production caller passes args today.
+- `recordFailure()` still reads every lesson file on each call, as it did before S2.
+- Records overwritten before this fix cannot be recovered.
+
+**Attribution:** Codex plan audit 2026-09-25 (F06–F08); reproduced and fixed in S2.
 
 ## BUG-441 — a result flagged unverified is spoken as a completed action (CODED 2026-09-16; partial evidence 2026-09-23; filed 2026-09-11)
 
@@ -23635,6 +23666,7 @@ those records remain owed (this section is the index until then).
 - BUG-470 - "active goals" counts paused goals (HUD "14 ACTIVE", greeting "fourteen goals") while none are active. Filed 2026-09-25 from the attended run. Full entry above.
 - BUG-471 - clicking what MYTHOS read on screen misses the video: title-text coordinates, descriptive expects that cannot verify, and a dash that breaks see_and_click's text match. Filed 2026-09-25 from the attended run. Full entry above.
 - BUG-472 - the voice model loads unrelated skills, narrates tool internals, and uses think_deeply on trivial turns; the operator's "don't" preference is outside the Live facts tail. Filed 2026-09-25 from the attended run. Full entry above.
+- BUG-473 - the Lessons store overwrote one failure of a goal with the next, reported failed writes as saved, and split one call into two by key order. CODED 2026-09-25 (S2): one file per whole record key, checked before reuse; failed writes say so; args keyed in canonical order. Filed 2026-09-25 from the plan audit (F06-F08). Full entry above.
 
 - BUG-453 - every test gate read `# fail N`, which counts failed leaf tests only, so a
   describe() that throws while defining its tests, a failed before() hook and a timeout all

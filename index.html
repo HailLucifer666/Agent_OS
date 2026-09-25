@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8370,
+      "value": 8391,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6268,18 +6268,33 @@
           "evidence": "[FILED 2026-09-25 from the attended run] The voice model loaded unrelated skills (ponytail, systematic-debugging), spoke tool internals including a skill it never loaded (\"taste-frontend skill done\"), and used think_deeply for \"you said good evening\". The operator's saved \"don't use think_deeply\" preference is outside the Live facts tail. Remaining evidence: a count across sessions.",
           "source": "mythos/src/core/voice (Live system instruction, use_skill declaration)"
         }
+      },
+      {
+        "n": 473,
+        "shape": "entry",
+        "state": "open",
+        "title": "the Lessons store overwrote its own records, reported failed writes as saved, and split one failure into two by key order (filed 2026-09-25; CODED 2026-09-25)",
+        "detail": {
+          "fix": "(`mythos/src/core/memory/lessons.js`, `mythos/src/core/immune/healer.js`). - A record's identity is its whole key: the tool, a full sha256 of the canonical args, and the goal title. Canonical args sort object keys at every depth, keep array order and value types, and refuse what JSON cannot state exactly (functions, Maps, cycles, NaN, BigInt) as `unsupported-args`. - New files are named `Lessons/\u003cslug>--\u003c16-hex digest>.md`. Before a name is reused, the stored key is read and compared; a name held by a different key gets the next suffix. - Replacing a record is internal to `recordFailure()`. It re-reads the file and refuses with `record-changed-underneath` if the file changed or vanished in between. The public `write()` cannot name a file. - A failed write returns `degraded:true`, `ref:null` and the count the file still holds (the old id as `existingRef`), and changes nothing. The healer…",
+          "verification": "`mythos/test/bug-473-lesson-records-keep-their-identity.test.js`, 21 tests on the real fs-store over temporary vaults. On main's code 18 of 21 fail (17 on their assertion, 1 because `canonicalArgs` did not exist); the 3 that pass are designed to. All 13 mutation probes were caught; the record, with dates, is in the test file."
+        },
+        "campaign": {
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-09-25, S2 of the Stage 1 repair campaign] The Lessons store named each file by goal title but keyed records by tool + args + goal title, so a second failure mode of one goal overwrote the first. A failed update came back as success (count +1, a ref) and the healer called it applied, and key order split one call into two. Now there is one file per whole key, checked before reuse; failed writes report degraded; args are keyed in canonical order. 349 real records were replayed read-only with identical results. Remaining evidence: a real vault holding two failure modes of one goal after merge.",
+          "source": "mythos/test/bug-473-lesson-records-keep-their-identity.test.js; mythos/src/core/memory/lessons.js; mythos/src/core/immune/healer.js"
+        }
       }
     ],
     "counts": {
       "verified": 92,
       "fixed": 182,
-      "open": 35,
+      "open": 36,
       "coded": 9,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 321,
+    "total": 322,
     "openDeclared": [
       274,
       275,
@@ -6315,7 +6330,8 @@
       469,
       470,
       471,
-      472
+      472,
+      473
     ],
     "pointerOnly": 11,
     "generatedFrom": "BUGS.md"
