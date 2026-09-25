@@ -252,11 +252,17 @@ function createMemory({ config, bus, logger, brain }) {
         // vecIndexes partition name to the real store it's backed by.
         for (const storeName of ['episodic', 'semantic', 'documents']) {
           const hits = vecIndexes[storeName].search(q, limit);
+          const store = RECALL_STORES[storeName];
+          // BUG-436: one walk for all of this store's hits. Per-hit get() re-read
+          // the whole month of Episodic each time — 8 hits, 1.4 s of blocked loop.
+          let batch = null;
+          if (typeof store.getMany === 'function') {
+            try { batch = store.getMany(hits.filter((h) => h.score >= VECTOR_MIN_SCORE).map((h) => h.ref)); } catch { /* falls back to get() below */ }
+          }
           for (const h of hits) {
             if (h.score < VECTOR_MIN_SCORE) continue;
-            const store = RECALL_STORES[storeName];
             let rec = null;
-            try { rec = store.get(h.ref); } catch { /* pruned/archived ref */ }
+            try { rec = batch ? (batch.get(h.ref) || null) : store.get(h.ref); } catch { /* pruned/archived ref */ }
             if (!rec) continue;
             const record = rec.record || rec;
             // FIX G: keyword-path exclusion happens inside episodic.recall() —
@@ -371,7 +377,17 @@ function createMemory({ config, bus, logger, brain }) {
         // above because conversations have different structure (user said / entity
         // replied) and warrant a different extraction prompt. Results land in
         // Semantic/user-facts.md, recalled by the server's recall-before-respond.
-        try {
+        //
+        // BUG-463 (2026-09-25, operator decision "turn it off"): OFF unless
+        // MEMORY_AUTO_USER_FACTS=true. On 09-23 this turned one day of bug testing into
+        // "The user is currently working on ... bugs 439, 441, 442", which then rode
+        // into every voice session as a durable fact, and MYTHOS kept steering chat
+        // back to bugs. Its prompt already said "only facts still true tomorrow". Also
+        // the write BUG-464 left open: it saved facts about the operator nobody asked
+        // for. The operator's own `remember` requests are untouched (BUG-464's lock).
+        if (process.env.MEMORY_AUTO_USER_FACTS !== 'true') {
+          bus.emit('memory.consolidate-skip', { reason: 'auto-user-facts-off', detail: 'MEMORY_AUTO_USER_FACTS is not "true": no user-facts are written from conversation' });
+        } else try {
           const convos = episodic.recall('', { kind: 'conversation', limit: 20, windowDays: 1 });
           // Only distill if there are NEW conversations since last consolidation
           // (avoid re-processing the same turns every cycle). Heuristic: need at

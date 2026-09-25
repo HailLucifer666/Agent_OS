@@ -73,9 +73,9 @@ const BROWSER_PID_FILE = path.join(__dirname, '..', '..', '.browser-agent.pid');
 // its pid would be worse than returning none — the .bat's provenance check
 // passes, it tree-kills crashpad, and the orphan survives a reap that reported
 // success.
-function findChromePidByUserDataDir(userDataDir, deps) {
+async function findChromePidByUserDataDir(userDataDir, deps) {
   try {
-    const rows = browserProcess.processesForProfile(userDataDir, deps);
+    const rows = await browserProcess.processesForProfile(userDataDir, deps);
     if (!Array.isArray(rows) || !rows.length) return null;
     const known = browserTarget.executableIndex();
     const row = rows.find((r) => known[String(r.name || '').toLowerCase()]);
@@ -85,7 +85,7 @@ function findChromePidByUserDataDir(userDataDir, deps) {
   }
 }
 
-function writeBrowserPidFile(ctx, userDataDir) {
+async function writeBrowserPidFile(ctx, userDataDir) {
   try {
     // launchPersistentContext exposes the browser process via the context's
     // browser() (null for persistent contexts on some versions) — fall back to
@@ -97,7 +97,7 @@ function writeBrowserPidFile(ctx, userDataDir) {
       return proc.pid;
     }
     if (userDataDir && process.platform === 'win32') {
-      const pid = findChromePidByUserDataDir(userDataDir);
+      const pid = await findChromePidByUserDataDir(userDataDir);
       if (pid) {
         fs.writeFileSync(BROWSER_PID_FILE, String(pid), 'utf8');
         return pid;
@@ -283,7 +283,7 @@ const PLAYWRIGHT_CHANNELS = { chrome: 'chrome', edge: 'msedge' };
 
 // Pure. The ordered list of launch attempts, so the CHOICE can be tested with
 // no Playwright, no registry and no browser installed anywhere.
-function planLocalLaunch(userDataDir, deps) {
+async function planLocalLaunch(userDataDir, deps) {
   const d = deps || {};
   const resolve = d.resolveLaunchTarget || browserTarget.resolveLaunchTarget;
   const findExe = d.findBrowserExecutable || browserTarget.findBrowserExecutable;
@@ -291,7 +291,7 @@ function planLocalLaunch(userDataDir, deps) {
 
   const order = [];
   let preferred = null;
-  try { preferred = resolve(null); } catch (_) { preferred = null; }
+  try { preferred = await resolve(null); } catch (_) { preferred = null; }
   if (preferred && preferred.name && !preferred.error) order.push(preferred.name);
   for (const name of browserTarget.BROWSER_SEARCH_ORDER) {
     if (order.indexOf(name) === -1) order.push(name);
@@ -346,7 +346,7 @@ async function launchLocal(userDataDir) {
     // the first attempt and Brave is reachable at all. `launchedChannel` carries
     // the browser NAME now, which browserNameForChannel already normalises — for
     // chrome and edge the value is unchanged.
-    const attempts = planLocalLaunch(userDataDir, {});
+    const attempts = await planLocalLaunch(userDataDir, {});
     if (!attempts.length) {
       throw new Error('no supported browser found ('
         + browserTarget.supportedBrowserList() + ') — install one, or set BROWSER_EXECUTABLE to its path');
@@ -373,7 +373,7 @@ async function launchLocal(userDataDir) {
     launched = true;
     mode = 'launched';
     state = 'ONLINE';
-    const browserPid = writeBrowserPidFile(context, profileDir); // BUG-029
+    const browserPid = await writeBrowserPidFile(context, profileDir); // BUG-029
     log.info('browser-agent launched local browser',
       { browser: launchedChannel, userDataDir: profileDir, pages: context.pages().length, browserPid });
 

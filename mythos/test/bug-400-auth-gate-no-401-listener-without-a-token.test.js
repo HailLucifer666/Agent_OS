@@ -34,7 +34,8 @@
 //      so no present or future subscriber can misread it.
 //   3. server/index.js's requireToken() collapsed three deployments into two
 //      sentences; PIN-only got "set MYTHOS_AUTH_TOKEN", naming a secret the
-//      server does not hold. Class 6 — the error hid its own cause.
+//      server does not hold. Class 6 — the error hid its own cause. (Moot
+//      since 2026-09-23: the PIN was removed, one sentence is left.)
 //
 // The DECISION layer (deriveAuthGate) was right all along; the last describe
 // block pins that as the adjacent behaviour that must keep passing.
@@ -51,7 +52,6 @@
 const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const http = require('node:http');
 const path = require('node:path');
 
 const AUTH_DIR = path.join(__dirname, '..', 'ui', 'public', 'js', 'auth');
@@ -163,113 +163,10 @@ describe('BUG-400 defect 2 — the store cannot raise a token flag on a token-le
   });
 });
 
-describe('BUG-400 defect 3 — the 401 names the credential that is actually missing', () => {
-  const { createBus } = require('../src/core/bus');
-  const { createServer } = require('../server');
-  const { createPinLock } = require('../src/core/security/pin-lock');
-
-  // Mirrors server-auth.test.js's fixtures exactly, minus the token.
-  function fakeFs() {
-    return { vaultPath: (...s) => s.join('/') };
-  }
-  function pinLockWith(pin) {
-    const store = {};
-    const lock = createPinLock({
-      fs: {
-        readJSON: (p, fallback) => (p in store ? store[p] : fallback),
-        readJSONStrict: (p, fallback) => (p in store ? store[p] : fallback),
-        writeJSON: (p, d) => { store[p] = d === null ? null : JSON.parse(JSON.stringify(d)); },
-        vaultPath: (...s) => s.join('/'),
-      },
-    });
-    if (pin) lock.setPin(pin);
-    return lock;
-  }
-  function deps(bus, config, pinLock) {
-    return {
-      bus,
-      pinLock,
-      config: Object.assign({
-        MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3,
-        ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: '',
-        PIN_SESSION_ENFORCE: true, PIN_SESSION_TTL_MS: 1800000,
-      }, config),
-      logger: { info() {}, warn() {}, error() {} },
-      memory: { working: { tick: 0, activeGoalId: null }, episodic: { write: async () => {} }, fs: fakeFs() },
-      goalsEffector: { listGoals: () => [], stats: () => ({ total: 0, done: 0, active: 0 }) },
-      kanbanEffector: { listBoard: () => ({ cards: [] }) },
-      pipelineEffector: { listAll: () => ({}) },
-      effectors: { breakers: new Map(), invoke: async () => ({ ok: true }), effectors: new Map() },
-      leash: { confirm: { create: () => 'cf-1', accept: () => null, reject: () => true } },
-      goals: { debitBudget: () => {} },
-      probes: { getStatus: async () => ({ ok: true }) },
-      agentActions: {
-        assembleKanbanPlan: () => ({ job: { id: 'j1', status: 'queued' } }),
-        buildKanbanCard: () => ({ job: { id: 'j1', status: 'queued' }, board: { cards: [] } }),
-        reviewKanbanCard: () => ({ job: { id: 'j1', status: 'queued' } }),
-      },
-      buildRunner: { getJob: () => null, onJobUpdate: () => () => {} },
-    };
-  }
-  function httpGet(port, pathName) {
-    return new Promise((resolve, reject) => {
-      http.get({ host: '127.0.0.1', port, path: pathName }, (res) => {
-        let body = '';
-        res.on('data', (c) => { body += c; });
-        res.on('end', () => resolve({ status: res.statusCode, body }));
-      }).on('error', reject);
-    });
-  }
-
-  test('PIN-only (the packaged build\'s real shape): 401 says PIN-locked, never "set MYTHOS_AUTH_TOKEN"', async () => {
-    const bus = createBus({ historySize: 50 });
-    const server = createServer(deps(bus, {}, pinLockWith('4242')));
-    await server.ready;
-    const { port } = server.httpServer.address();
-    try {
-      const health = await httpGet(port, '/health');
-      assert.equal(JSON.parse(health.body).authRequired, false, 'precondition: no token configured');
-      const res = await httpGet(port, '/api/status');
-      assert.equal(res.status, 401, 'precondition: the PIN session really is enforced');
-      const err = JSON.parse(res.body).error;
-      assert.match(err, /PIN-locked/, 'the credential that is missing is a PIN session; say so');
-      assert.match(err, /\/api\/pin\/verify/, 'and name the route that supplies it');
-      assert.doesNotMatch(err, /set MYTHOS_AUTH_TOKEN/,
-        'names a token this deployment does not have — this is the sentence that sent the '
-        + 'operator hunting through .env');
-    } finally {
-      await server.stop();
-    }
-  });
-
-  test('BOUND: token-only keeps the original sentence verbatim', async () => {
-    const bus = createBus({ historySize: 50 });
-    const server = createServer(deps(bus, { MYTHOS_AUTH_TOKEN: 'bug-400-test-token', PIN_SESSION_ENFORCE: false }, pinLockWith(null)));
-    await server.ready;
-    const { port } = server.httpServer.address();
-    try {
-      const res = await httpGet(port, '/api/status');
-      assert.equal(res.status, 401);
-      assert.match(JSON.parse(res.body).error, /^Unauthorized — set MYTHOS_AUTH_TOKEN via/);
-    } finally {
-      await server.stop();
-    }
-  });
-
-  test('BOUND: combined mode keeps its BOTH sentence verbatim', async () => {
-    const bus = createBus({ historySize: 50 });
-    const server = createServer(deps(bus, { MYTHOS_AUTH_TOKEN: 'bug-400-test-token' }, pinLockWith('4242')));
-    await server.ready;
-    const { port } = server.httpServer.address();
-    try {
-      const res = await httpGet(port, '/api/status');
-      assert.equal(res.status, 401);
-      assert.match(JSON.parse(res.body).error, /requires BOTH the MYTHOS_AUTH_TOKEN/);
-    } finally {
-      await server.stop();
-    }
-  });
-});
+// Defect 3's server cases were deleted on 2026-09-23 with the PIN: they pinned
+// the PIN-only and combined 401 sentences, and there is now exactly one
+// (credentials.UNAUTHORIZED_HINT), asserted against a real 401 in
+// test/pin-removal-access.test.js. Probe (e) below went with them.
 
 describe('BUG-400 — the decision layer was already right (adjacent, must keep passing)', () => {
   it('authRequired:false wins even when a 401 is also in the probe', async () => {
@@ -325,9 +222,7 @@ describe('BUG-400 — the decision layer was already right (adjacent, must keep 
 //       nobody" and "a 401 that raced the probe is cleared" stays GREEN (the
 //       clear is a separate line) — proving the two store cases watch
 //       different statements.
-//   (e) In server/index.js swap the PIN-only branch back to the generic
-//       sentence -> reds only the PIN-only server case; both BOUND server
-//       cases stay green.
+//   (e) [retired 2026-09-23 with the PIN-only server case it probed]
 //
 // Probe (b) is the one that matters for defect 1: without the BOUND case the
 // ordering assertion is satisfied by deleting the feature.

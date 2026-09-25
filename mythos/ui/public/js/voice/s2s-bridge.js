@@ -37,11 +37,16 @@
 
 import { sendMessage, onBroadcast, offBroadcast } from '../ws.js';
 import { createPcmPlayer } from './pcm-player.js';
+import { createOwnVoiceClock } from './own-voice-clock.js';
+import { attachWaitChime } from './wait-chime.js';
 import { openMicWithFallback } from './mic-device.js';
 import { createBargeInPolicy } from './barge-in-policy.js';
 import { createBargeInBackstop, rmsFromPcm16 } from './barge-in-backstop.js';
 import { createLiveNoiseGate } from './live-noise-gate.js';
 import { createEchoVerdictTracker } from './echo-verdict.js';
+import { createGateRecorder, isGateRelease } from './gate-recorder.js'; // BUG-406: numbers-only mic-gate recorder, off unless configured
+import { arrayBufferToBase64 } from './pcm-base64.js';
+import { createUnheardMeter } from './unheard-meter.js'; // BUG-447: where a barge-in cut the answer, so "go ahead" can resume it
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -56,13 +61,14 @@ const PLAYBACK_RATE = 24000;
 // a spy here instead of mocking the whole ws.js module graph (which every other
 // voice-loop.js import shares). Defaults to the real one — no behavior change
 // outside tests.
-export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOverride } = {}) {
-  const send = sendMessageOverride || sendMessage;
+export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOverride, gateRecorder: recordGate } = {}) {
+  const send = sendMessageOverride || sendMessage; const gateRecorder = recordGate ? createGateRecorder({ rms: rmsFromPcm16 }) : null;
+  const unheard = createUnheardMeter();
   let active = false;
   let stream = null;
   let audioCtx = null;
   let captureNode = null;
-  let player = null;
+  let player = null; let waitChime = null; // BUG-456: attached in start(), detached in stop()
   let screenCapture = null;   // Slice 3 screen share, null unless opted in
 
   // Client-side barge-in backstop (V2 spine §1002-1005). The server's
@@ -319,6 +325,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         missedTurnEnds: cushion.missedTurnEnds,
         ...extra,
       });
+      if (gateRecorder && isGateRelease(extra, captureSuspended)) send({ type: 'voice-gate-recording', at: Date.now(), reason: extra && extra.reason, samples: gateRecorder.drain() });
     } catch (_) { /* logging only — never block the gate */ }
   }
   function setCaptureSuspended(flag, holdMs, reason) {
@@ -447,12 +454,9 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // voice went back into Gemini's START_SENSITIVITY_HIGH VAD, and it re-created
   // the exact self-interrupt this whole gate exists to prevent.
   //
-  // Refreshed on every arriving live-audio-out chunk (see onAudioOutMsg), the same
-  // window is both safer and more responsive: it can only expire when audio has
-  // genuinely STOPPED arriving and no onSpeakEnd came — which is the condition the
-  // watchdog was always meant to detect — so reply length no longer enters into
-  // it and reaching it still always means something else broke.
+  // BUG-455 (2026-09-24): arriving is not playing — Live streams faster than real time, so 20 of 50 holds reopened the mic mid-reply. The window now runs on the PLAYBACK clock: own-voice-clock.js.
   const OWN_VOICE_IDLE_CEILING_MS = 8000;
+  const ownVoiceClock = createOwnVoiceClock();
   // DERIVED, never hand-tuned — that is the whole fix (2026-08-14, second pass).
   // The ring must span the LONGEST time the gate can possibly be held, because
   // every frame it drops is speech the operator actually made. It was a flat 12
@@ -626,10 +630,10 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     return t;
   }
 
-  function armOwnVoiceCeiling() {
-    if (ownVoiceTimer) clearTimeout(ownVoiceTimer);
+  function armOwnVoiceCeiling(delayMs) {
+    if (ownVoiceTimer) clearTimeout(ownVoiceTimer); ownVoiceClock.armed(player);
     ownVoiceTimer = setTimeout(() => {
-      ownVoiceTimer = null;
+      ownVoiceTimer = null; const wait = ownVoiceClock.check(player, OWN_VOICE_IDLE_CEILING_MS); if (wait) { armOwnVoiceCeiling(wait); return; } // BUG-455: still playing on a moving clock — wait, then look again
       // BUG-272 V2: at the ceiling we are not out of information, so this is no
       // longer a blind fail-open. The policy weighs what we know (echo verdict,
       // whether a transcript exists, peak level) and the reason string records
@@ -655,7 +659,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         return;
       }
       releaseOwnVoiceGate('own-voice-' + verdict.reason);
-    }, OWN_VOICE_IDLE_CEILING_MS);
+    }, delayMs || OWN_VOICE_IDLE_CEILING_MS);
     if (typeof ownVoiceTimer.unref === 'function') ownVoiceTimer.unref();
   }
 
@@ -668,7 +672,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // F3: the absolute cap. Armed ONCE at hold start and never refreshed — that is
   // the entire difference from armOwnVoiceCeiling(), whose refresh is what let a
   // hold outrun its own ring. Reaching this means the idle ceiling kept being
-  // pushed out for half a minute, which is a broken player, not a long answer.
+  // pushed out for half a minute: a broken player, or a reply over 30 s (BUG-455).
   function armOwnVoiceMaxHold() {
     if (ownVoiceMaxTimer) clearTimeout(ownVoiceMaxTimer);
     ownVoiceMaxTimer = setTimeout(() => {
@@ -684,7 +688,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     echoVerdict.reset();
     preroll = [];
     prerollDropped = 0;
-    ownVoicePeakRms = 0;
+    ownVoicePeakRms = 0; ownVoiceClock.reset();
     ownVoiceHeldAt = Date.now();
     // BUG-272: MYTHOS has started speaking, so the protection window opens here.
     // This is the transition the policy needs and the only place that knows it.
@@ -797,6 +801,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // indistinguishable from a dead microphone.
       bargeVetoed: bargeVetoed,
       bargeVetoTier: lastVetoReason,
+      playbackWaits: ownVoiceClock.waits, playbackStalled: ownVoiceClock.stalled, // BUG-455: times the watchdog waited on queued playback, and whether it met a frozen audio clock
       // BUG-274: the paragraph above turned out to be exactly the wrong dichotomy.
       // The operator complained they could not interrupt, and it was NEITHER the
       // protection window NOR the learned floor — it was 'already-confirmed', a veto
@@ -869,10 +874,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // So stopping the speech has to be local and has to outlast the flush: for the rest
   // of this model turn, arriving audio is DROPPED instead of played.
   function stopAssistantSpeech(reason) {
-    if (player) player.flush();
+    if (player) unheard.cut(player.flush());
     armAudioOutSuppression();
     releaseOwnVoiceGate(reason);
   }
+  // Positions only, never words; the server resolves them against its own transcript.
+  function reportUnheard() { const report = unheard.endTurn(); if (report) send({ type: 'voice-unheard', ...report }); }
 
   // Fail-open window for the suppression above: if no audio has arrived for this long,
   // the turn is over whether or not a 'live-turn-complete' ever reached us. Q5 — this
@@ -912,6 +919,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (suppressIdleTimer) { clearTimeout(suppressIdleTimer); suppressIdleTimer = null; }
     if (!suppressAudioOut) return;
     suppressAudioOut = false;
+    if (how === 'idle') unheard.resumed(); // the turn carries on, and from here the room hears it
     // The cushion diagnostics used to be added here and were moved to
     // logSuspendTransition() itself on 2026-08-20: on this line they only ever
     // reached the log for turns the operator interrupted, which is the least likely
@@ -924,13 +932,6 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     });
     suppressedChunks = 0;
     suppressStartedAt = 0;
-  }
-
-  function arrayBufferToBase64(buf) {
-    const bytes = new Uint8Array(buf);
-    let bin = '';
-    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-    return btoa(bin);
   }
 
   async function start() {
@@ -955,10 +956,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // here so the suppression lasts exactly as long as the server keeps streaming.
       if (suppressAudioOut) {
         suppressedChunks += 1;
+        unheard.dropped(msg.data);
         refreshSuppressIdleTimer();
         return;
       }
       player.enqueue(msg.data);
+      unheard.played(msg.data);
       // The gate's ceiling is an IDLE window, so every chunk that arrives pushes
       // it out. Without this it was an absolute cap on reply length and tripped
       // mid-sentence on the longest answers — see OWN_VOICE_IDLE_CEILING_MS.
@@ -973,7 +976,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // would eat the start of the next reply.
     onInterruptedMsg = () => {
       bargeBackstop.reset();
-      if (player) player.flush();
+      if (player) unheard.cut(player.flush());
       if (player) player.endTurn();
       endAudioOutSuppression('server-interrupted');
     };
@@ -1027,14 +1030,14 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     // between replies is the operator talking — and from inside the player those are
     // identical. Only this frame can separate them. Kept on ONE line: a source-shape
     // test in bug-274-local-flush-does-not-stop-the-turn.test.js reads this handler.
-    onTurnCompleteMsg = () => { endAudioOutSuppression('turn-complete'); if (player) player.endTurn(); };
+    onTurnCompleteMsg = () => { endAudioOutSuppression('turn-complete'); if (player) player.endTurn(); reportUnheard(); };
     onBroadcast('live-audio-out', onAudioOutMsg);
     onBroadcast('live-turn-complete', onTurnCompleteMsg);
     onBroadcast('live-interrupted', onInterruptedMsg);
     onBroadcast('live-state', onLiveStateMsg);
     onBroadcast('live-transcript', onTranscriptMsg);
     onBroadcast('live-echo-check', onEchoCheckMsg);
-    onBroadcast('live-watchdog-clear', onWatchdogClearMsg);
+    onBroadcast('live-watchdog-clear', onWatchdogClearMsg); if (!waitChime) waitChime = attachWaitChime({ onBroadcast, offBroadcast, getPlayer: () => player, report: (waitedMs) => send({ type: 'voice-wait-chime', waitedMs }) }); // BUG-456: one soft chime in a silent tool wait
 
     sendMessage({ type: 'live-open' });
     armOpenAckTimer();   // BUG-147: silence from here on becomes a visible refusal
@@ -1058,7 +1061,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
         processorOptions: { targetRate: TARGET_RATE, frameMs: FRAME_MS },
       });
       captureNode.port.onmessage = (e) => {
-        if (!active || captureSuspended) return;   // see setCaptureSuspended
+        if (!active) return; if (gateRecorder) gateRecorder.sample(e.data, { captureSuspended, ownVoiceGate, speaking: player ? player.isSpeaking() : false, playhead: player ? player.playhead() : null, micContextTime: audioCtx ? audioCtx.currentTime : null }); if (captureSuspended) return;   // see setCaptureSuspended. BUG-406: sampled BEFORE this return — the frames the gate holds are the ones being studied
         // Measured on the way out, on the same frames the server hears, so the
         // backstop and Gemini's VAD are looking at identical audio. Deliberately
         // AFTER the captureSuspended gate: while we are knowingly making noise
@@ -1283,9 +1286,10 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (onTranscriptMsg) { offBroadcast('live-transcript', onTranscriptMsg); onTranscriptMsg = null; }
     if (onEchoCheckMsg) { offBroadcast('live-echo-check', onEchoCheckMsg); onEchoCheckMsg = null; }
     if (onWatchdogClearMsg) { offBroadcast('live-watchdog-clear', onWatchdogClearMsg); onWatchdogClearMsg = null; }
-    if (onTurnCompleteMsg) { offBroadcast('live-turn-complete', onTurnCompleteMsg); onTurnCompleteMsg = null; }
-    // A suppression must not survive the session that armed it.
+    if (onTurnCompleteMsg) { offBroadcast('live-turn-complete', onTurnCompleteMsg); onTurnCompleteMsg = null; } if (waitChime) { waitChime.detach(); waitChime = null; }
+    // A suppression must not survive the session that armed it — nor may a cut.
     endAudioOutSuppression('session-stopped');
+    unheard.endTurn();
     if (captureNode) { try { captureNode.disconnect(); } catch { /* ok */ } captureNode = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (audioCtx) { try { await audioCtx.close(); } catch { /* ok */ } audioCtx = null; }

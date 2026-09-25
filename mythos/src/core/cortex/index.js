@@ -461,7 +461,9 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       var summary = decision.tool + (argsText ? ' (' + argsText + ')' : '');
       var confirmId = leash.confirm.create(
         summary,
-        { decision: decision, goalId: working.activeGoalId, tier: leashResult.tier },
+        // BUG-446: the origin travels with the record, so an accept that arrives
+        // after the goal was paused is re-checked where it executes.
+        { decision: decision, goalId: working.activeGoalId, tier: leashResult.tier, origin: 'autonomous' },
         'system'
       );
       pendingConfirmsByKey.set(suppressKey, { confirmId: confirmId, suppressedCount: 0 });
@@ -492,6 +494,7 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
       goalId: working.activeGoalId,
       tier: leashResult.tier || 0,
       channel: 'cortex',
+      origin: 'autonomous', // BUG-446: goals/execution-gate.js
       // REMEDIATION P2-12: correlates this dispatch back to the tick that
       // produced it — the cortex-side equivalent of voice's WS reqId / a
       // confirm's confirmId.
@@ -645,7 +648,7 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
                 }
               }, {
                 effectors: effectors, bus: bus, goals: goals, memory: memory, config: cfg,
-                goalId: null, tier: 1, channel: 'cortex', traceId: 'tick-' + working.tick,
+                goalId: null, tier: 1, channel: 'cortex', origin: 'autonomous', traceId: 'tick-' + working.tick,
               });
               bus.emit('cortex.proposed', { text: String(pr.text).slice(0, 80) });
             }

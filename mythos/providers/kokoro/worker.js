@@ -31,14 +31,21 @@
 // through the second. Configuring the instance that does NOT load the model is
 // indistinguishable from configuring nothing, and that is what shipped.
 
-const { parentPort, workerData } = require('node:worker_threads');
+const { parentPort } = require('node:worker_threads');
 const path = require('node:path');
 const { migrateLegacyCache } = require('./migrate-cache');
 
 let ttsPromise = null;
 let voicesCache = null;
 
-function reply(msg, transfer) { if (parentPort) parentPort.postMessage(msg, transfer); }
+// BUG-422 (2026-09-23): this file now runs as a forked child PROCESS by default
+// (child-transport.js) and still runs as a worker thread when a caller injects one.
+// Same protocol either way; the transfer list only means something to a thread —
+// over IPC with 'advanced' serialization the ArrayBuffer is copied as bytes.
+function reply(msg, transfer) {
+  if (parentPort) parentPort.postMessage(msg, transfer);
+  else if (typeof process.send === 'function' && process.connected) process.send(msg);
+}
 
 // Resolve transformers THROUGH kokoro-js, and report both resolved filenames so
 // the host can assert identity rather than trust this comment.
@@ -156,11 +163,18 @@ async function handle(msg) {
   }
 }
 
+function onMessage(msg) {
+  if (msg && msg.op === 'shutdown') { process.exit(0); return; }
+  handle(msg);
+}
+
 if (parentPort) {
-  parentPort.on('message', (msg) => {
-    if (msg && msg.op === 'shutdown') { process.exit(0); return; }
-    handle(msg);
-  });
+  parentPort.on('message', onMessage);
+} else if (typeof process.send === 'function') {
+  process.on('message', onMessage);
+  // The server went away (quit, crash, TerminateProcess): leave with it. A child
+  // that outlives its parent holds ~100 MB of model and a CPU core for nobody.
+  process.on('disconnect', () => process.exit(0));
 }
 
 module.exports = { voicesOf, resolveThroughKokoro };

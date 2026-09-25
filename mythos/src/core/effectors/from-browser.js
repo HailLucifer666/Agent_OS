@@ -5,6 +5,9 @@
 const browserAgent = require('../../../adapters/browser-agent');
 const { effectorFromTool } = require('./adapter');
 const evidenceModule = require('./evidence');
+const snapshotView = require('./snapshot-view');
+const effect = require('./browser-effect'); // BUG-462: did the action do what it was for
+const { remedy } = evidenceModule;
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
 const { spawn } = require('child_process');
 const { childRuntimeDir, childCommand, waitForSpawn } = require('../util/child-runtime');
@@ -131,59 +134,32 @@ async function waitReady(page, selector) {
 // generation counter below is what turns "this ref is stale" into an explicit,
 // agent-shaped error instead of a silent miss or — worse — a hit on whatever
 // element inherited that ref after a re-render.
-const SNAPSHOT_MAX_NODES = 200;
-const SNAPSHOT_MAX_CHARS = 8000;
-
 let snapshotGeneration = 0;
 let snapshotRefs = new Set();
 let snapshotPageUrl = null;
+// BUG-462 — the TAB the snapshot was read from. withPage() acts on the first tab
+// (adapters/browser-agent), so once that tab closes the next action lands on a
+// neighbour, and a url comparison lets a same-url neighbour through. The Page
+// object is the pin; a reconnect mints new objects, which fails safe.
+let snapshotPage = null;
+// BUG-445: the capture a generation was read from, kept so page 2 of it is page 2
+// of the SAME tree. Re-capturing for page 2 could renumber the refs page 1 issued.
+let snapshotYaml = null;
+let snapshotViewChars = null;
 
-// Every ref Playwright emits, in the two shapes it uses: `e12` for the main
-// frame, `f3e12` for a node inside the 3rd frame.
-const REF_MARKER = /\[ref=([a-zA-Z0-9]+)\]/g;
-
-function extractRefs(yaml) {
-  const found = [];
-  let m;
-  REF_MARKER.lastIndex = 0;
-  while ((m = REF_MARKER.exec(yaml)) !== null) found.push(m[1]);
-  return found;
+// Size discipline, BUG-445 (2026-09-23). This used to cap the YAML at 8,000
+// characters header-first and register every ref in it, while the voice adapter
+// then cut the result at 4,000 — so the model saw one video and the tools
+// accepted refs it had never been shown. snapshot-view.js now builds a bounded,
+// main-first, paged list, and the registry holds exactly the refs it printed.
+function pageMoved(page) {
+  if (!snapshotPageUrl) return null;
+  let now = '';
+  try { now = page.url(); } catch (_) { /* a detached page reports no address */ }
+  return snapshotView.sameDocument(now, snapshotPageUrl) ? null : { from: snapshotPageUrl, to: now };
 }
 
-// Size discipline: this text goes back to Gemini Live inside a toolResponse, so
-// an un-capped snapshot of a heavy page (YouTube's home is thousands of nodes)
-// would blow the turn. When the tree does not fit, keep the lines that carry a
-// ref — under mode:'ai' those ARE the interactable elements, i.e. exactly what
-// a ref-based action can target — and say how many nodes were dropped. Silent
-// truncation would read as "that's the whole page", which is the class of lie
-// the evidence contract exists to prevent.
-function capSnapshot(yaml) {
-  const lines = yaml.split('\n');
-  if (lines.length <= SNAPSHOT_MAX_NODES && yaml.length <= SNAPSHOT_MAX_CHARS) {
-    return { text: yaml, truncated: false, omittedNodes: 0, keptNodes: lines.length };
-  }
-  const interactive = lines.filter((l) => l.includes('[ref='));
-  const kept = interactive.slice(0, SNAPSHOT_MAX_NODES);
-  let text = kept.join('\n');
-  let charCapped = false;
-  if (text.length > SNAPSHOT_MAX_CHARS) {
-    text = text.slice(0, SNAPSHOT_MAX_CHARS);
-    // Never hand back a half-written final line: a truncated `[ref=` marker is
-    // a ref the model can read and cannot use.
-    const lastNewline = text.lastIndexOf('\n');
-    if (lastNewline > 0) text = text.slice(0, lastNewline);
-    charCapped = true;
-  }
-  return {
-    text,
-    truncated: true,
-    charCapped,
-    omittedNodes: lines.length - text.split('\n').length,
-    keptNodes: text.split('\n').length,
-  };
-}
-
-async function browser_snapshot({ screenshot } = {}) {
+async function browser_snapshot({ screenshot, page: viewPage, generation } = {}) {
   const guard = await requireOnline();
   if (guard) return guard;
 
@@ -196,43 +172,32 @@ async function browser_snapshot({ screenshot } = {}) {
         'unavailable — playwright-core may have been downgraded). Use CSS selectors for now.'
       );
     }
-    const raw = await page.ariaSnapshot({ mode: 'ai' });
-    const capped = capSnapshot(String(raw || ''));
-    const refs = extractRefs(capped.text);
-
-    // Mint a new generation BEFORE returning: any ref handed out below belongs
-    // to this generation and no earlier one.
-    snapshotGeneration += 1;
-    snapshotRefs = new Set(refs);
-    snapshotPageUrl = page.url();
-
-    const result = {
-      snapshot: capped.text,
-      generation: snapshotGeneration,
-      refCount: refs.length,
-      nodes: capped.keptNodes,
-      truncated: capped.truncated,
-      url: snapshotPageUrl,
-      title: await page.title(),
-    };
-    // Surface a human-verification challenge in the snapshot itself. A model
-    // that has to call a second tool to notice a CAPTCHA will sometimes not
-    // call it, and then spends the turn clicking at a wall.
-    const captchaMarkers = looksLikeCaptcha(capped.text + ' ' + snapshotPageUrl);
-    if (captchaMarkers.length) {
-      result.captchaDetected = true;
-      result.captchaMarkers = captchaMarkers;
-      result.captchaNote =
-        'This page is showing a human-verification challenge. Do NOT try to solve or bypass it — ' +
-        'ask the operator to complete it in the browser window and to tell you when to continue.';
+    const continuing = Number(viewPage) > 1;
+    if (continuing) {
+      const refusal = snapshotView.continuationRefusal({ page: viewPage, generation, current: snapshotGeneration,
+        hasCapture: snapshotYaml !== null, moved: pageMoved(page) });
+      if (refusal) return refusal;
+    } else {
+      // Mint a new generation BEFORE returning: any ref handed out below belongs
+      // to this generation and no earlier one.
+      snapshotYaml = String((await page.ariaSnapshot({ mode: 'ai' })) || '');
+      snapshotGeneration += 1;
+      snapshotRefs = new Set();
+      snapshotPageUrl = page.url();
+      snapshotPage = page;
     }
-    if (capped.truncated) {
-      result.omittedNodes = capped.omittedNodes;
-      result.truncationNote =
-        `This page is larger than one snapshot can carry. Showing the ${capped.keptNodes} ` +
-        `interactable elements (the ones a ref can act on); ${capped.omittedNodes} other nodes ` +
-        'were omitted. Scroll or narrow the page and snapshot again if what you need is missing.';
-    }
+    // Surface a human-verification challenge in the snapshot itself: a model
+    // that has to call a second tool to notice a CAPTCHA will sometimes not, and
+    // spends the turn clicking at a wall. The WHOLE capture is scanned.
+    const header = snapshotView.snapshotHeader({ generation: snapshotGeneration, url: snapshotPageUrl,
+      title: await page.title(), captchaMarkers: looksLikeCaptcha(snapshotYaml + ' ' + snapshotPageUrl) });
+    // The row budget is what the header leaves of the model's budget, fixed per
+    // capture so page 2 is cut on the same boundaries as page 1.
+    if (!continuing) snapshotViewChars = snapshotView.viewCharsFor(header);
+    const v = snapshotView.buildSnapshotView(snapshotYaml, { page: continuing ? viewPage : 1, maxChars: snapshotViewChars });
+    for (const r of v.refs) snapshotRefs.add(r);
+    const result = Object.assign(header, { page: v.page, pages: v.pages, itemCount: v.totalRows, items: v.rows },
+      snapshotView.pagingFields(v, snapshotGeneration));
     // ego-lite's combined capture: the picture and the semantic tree in one
     // result, so a model that wants both does not pay two round trips.
     if (screenshot) {
@@ -249,7 +214,10 @@ async function browser_snapshot({ screenshot } = {}) {
 // agent-browser lesson: an error the model cannot act on is a dead end, and this
 // repo has already paid for that twice (BUG-107's wrong-browser refusal, twice
 // over). Never guesses: a ref we cannot vouch for is refused, not approximated.
-function checkRef(ref) {
+// With `page`, it also refuses a ref whose page has changed underneath it
+// (BUG-445): YouTube moves from home to /watch on a click, with no navigate call
+// for the registry to hear, so the address is re-read at the moment of acting.
+function checkRef(ref, page) {
   if (snapshotGeneration === 0) {
     return fail(
       `ref "${ref}" cannot be used because no snapshot has been taken in this session. ` +
@@ -262,6 +230,17 @@ function checkRef(ref) {
       'either from an older snapshot or was never in one. Call browser_snapshot again and use a ' +
       'ref from the fresh output.'
     );
+  }
+  if (page && snapshotPage && page !== snapshotPage) {
+    invalidateSnapshotRefs('tab-changed');
+    return { ok: false, result: `ref "${ref}" belongs to a tab that is no longer the one in front — it may have ` +
+      'closed — so I did not act on the neighbouring tab. Call browser_snapshot to read the tab in front now.',
+      remedy: remedy('browser_snapshot', {}, 'read the tab that is actually in front before acting') };
+  }
+  const moved = page ? pageMoved(page) : null;
+  if (moved) {
+    invalidateSnapshotRefs('page-moved');
+    return snapshotView.pageMovedRefusal(ref, moved);
   }
   return null;
 }
@@ -277,88 +256,18 @@ function refLocator(page, ref) {
 // meaningless — better to force one extra snapshot than to let a ref resolve
 // against a page the model has never seen.
 function invalidateSnapshotRefs(reason) {
+  snapshotYaml = null;
   if (snapshotRefs.size === 0) return;
   snapshotRefs = new Set();
   snapshotPageUrl = null;
+  snapshotPage = null;
   return reason;
 }
 
-// Phase 3 — the verify half of act-then-verify. After a ref action, read the
-// page back and report what it says, as an oracle-backed `evidence` field
-// rather than a bare ok:true. A full re-snapshot stays the model's explicit
-// choice (call browser_snapshot again); charging every click for a second tree
-// would make the common case expensive to prove the uncommon one.
-//
-// Every probe is individually guarded: a page object that cannot answer one
-// question must not cost us the answers to the others, and an evidence capsule
-// that throws would turn a successful click into a reported failure.
-async function captureStateCapsule(page, ref) {
-  const capsule = {};
-  try { capsule.url = page.url(); } catch (_) {}
-  try { capsule.title = await page.title(); } catch (_) {}
-  if (ref) {
-    // Did the thing we clicked survive the click? Both answers are informative:
-    // a dismissed dialog SHOULD be gone, a toggled button should still be there.
-    try { capsule.refStillPresent = (await refLocator(page, ref).count()) > 0; } catch (_) {}
-  }
-  if (typeof page.evaluate === 'function') {
-    try {
-      const dom = await page.evaluate(() => {
-        const active = document.activeElement;
-        const video = document.querySelector('video');
-        return {
-          focused: active ? {
-            tag: active.tagName ? active.tagName.toLowerCase() : null,
-            role: active.getAttribute ? active.getAttribute('role') : null,
-            name: (active.getAttribute && (active.getAttribute('aria-label') || active.getAttribute('name'))) ||
-              (active.textContent || '').trim().slice(0, 60) || null,
-          } : null,
-          // The video oracle the plan calls for: "is it actually playing" is a
-          // property of the media element, not of the click that started it.
-          // Only reported when the page HAS a video, so a normal page's capsule
-          // stays small.
-          video: video ? { playing: !video.paused, currentTime: video.currentTime, duration: video.duration } : null,
-        };
-      });
-      if (dom && dom.focused) capsule.focused = dom.focused;
-      if (dom && dom.video) capsule.video = dom.video;
-    } catch (_) { /* a page that refuses evaluate still gives us url/title */ }
-  }
-  return capsule;
-}
-
-function describeCapsule(capsule) {
-  const bits = [];
-  if (capsule.url) bits.push('url ' + capsule.url);
-  if (capsule.title) bits.push('title "' + capsule.title + '"');
-  if (capsule.focused && capsule.focused.tag) {
-    bits.push('focus on <' + capsule.focused.tag + '>' + (capsule.focused.name ? ' "' + capsule.focused.name + '"' : ''));
-  }
-  if (capsule.video) bits.push('video ' + (capsule.video.playing ? 'PLAYING' : 'paused'));
-  if (capsule.refStillPresent === false) bits.push('the clicked element is no longer on the page');
-  return bits.join('; ');
-}
-
-// NOTE ON SHAPE, and it is load-bearing: this returns the effector's WHOLE
-// result — `{ok, unverified, evidence, result}` — not something to pass to
-// ok(). Wrapping it (`ok(await withStateCapsule(...))`) buries `unverified` and
-// `evidence` one level down inside `.result`, where dispatch-action and
-// live-tool-adapter's evaluateOutcome do not look; the outcome then reads as a
-// plain ok:true and the voice layer speaks an unproven action as done. That is
-// the exact flattening the evidence contract exists to prevent, and it was
-// briefly live here before this comment existed. Return it directly.
-async function withStateCapsule(page, payload, ref) {
-  const capsule = await captureStateCapsule(page, ref);
-  const observed = describeCapsule(capsule);
-  const result = Object.assign({}, payload, { url: capsule.url, state: capsule });
-  if (!observed) {
-    // No oracle answered. Say so rather than dressing the call's own return up
-    // as proof — verifiedOk would (correctly) throw on an empty observation.
-    return evidenceModule.unverified({ result },
-      'the action was dispatched but the page reported nothing back, so I cannot confirm it changed anything');
-  }
-  return evidenceModule.verifiedOk({ result }, { oracle: 'page-state', observed });
-}
+// The verify half of act-then-verify lives in browser-effect.js (BUG-462): the
+// page is read BEFORE and after each action and the difference is judged against
+// what that action is for. Its results are the effector's WHOLE result — never
+// wrap one in ok(), or `unverified` and `evidence` sink into .result unread.
 
 // agent-browser's lesson, and this repo's own (BUG-107, whose dead-end refusal
 // survived a fix because only one of two sites named a remedy): a failure the
@@ -382,6 +291,9 @@ function __resetSnapshotStateForTest() {
   snapshotGeneration = 0;
   snapshotRefs = new Set();
   snapshotPageUrl = null;
+  snapshotPage = null;
+  snapshotYaml = null;
+  snapshotViewChars = null;
 }
 function __setSnapshotStateForTest(refs, generation) {
   snapshotRefs = new Set(refs || []);
@@ -447,8 +359,9 @@ async function browser_navigate({ url, newTab, browser }) {
 //
 // A ladder, with every rung named in the result so the operator hears WHICH
 // route worked rather than a bare success:
-//   1. visible wait -> scrollIntoViewIfNeeded -> native page.click. Fully
-//      verified: Playwright's actionability check IS the oracle.
+//   1. visible wait -> scrollIntoViewIfNeeded -> native page.click, then the
+//      effect judged before/after. Actionability proves the click COULD land,
+//      not what it did (BUG-462).
 //   2. attached wait -> el.click() in page context. A JS click bypasses
 //      hit-testing, so it can "succeed" against a covered element that a real
 //      user could never have clicked. That is a weaker oracle than rung 1, so
@@ -468,11 +381,14 @@ async function browser_click({ selector, ref }) {
     const guard = await requireOnline();
     if (guard) return guard;
     return browserAgent.withPage(async (page) => {
-      // Native Playwright click on the resolved locator — the actionability
-      // check (visible, stable, receives events, not covered) IS the oracle, so
-      // this path never needs the unverified downgrade the JS-click rung takes.
-      await refLocator(page, ref).click();
-      return await withStateCapsule(page, { clicked: ref, via: 'ref-click' }, ref);
+      const moved = checkRef(ref, page);
+      if (moved) return moved;
+      // Playwright's actionability check (visible, stable, not covered) proves the
+      // click COULD land; it says nothing about what the click did (BUG-462). What
+      // it did is judged from the page before and after, in browser-effect.js.
+      const target = refLocator(page, ref);
+      return await effect.actWithEvidence(page, { intent: { kind: 'click' }, ref, locator: target,
+        payload: { clicked: ref, via: 'ref-click' }, act: () => target.click(), settle: true });
     }).catch(err => fail(refFailure(ref, 'click', err)));
   }
 
@@ -492,8 +408,8 @@ async function browser_click({ selector, ref }) {
       // a scroll that cannot run must not lose us the click that would have.
       try { await page.locator(selector).first().scrollIntoViewIfNeeded({ timeout: 2000 }); } catch (_) {}
       stagesTried.push('native-click');
-      await page.click(selector);
-      return ok({ clicked: selector, url: page.url(), via: 'native-click', stages: stagesTried });
+      return await effect.actWithEvidence(page, { intent: { kind: 'click' },
+        payload: { clicked: selector, via: 'native-click', stages: stagesTried }, act: () => page.click(selector), settle: true });
     }
 
     // Rung 2 — attached but not actionable. This is the lazy-hydration case.
@@ -531,12 +447,14 @@ async function browser_type({ selector, text, clearFirst, ref }) {
     const onlineGuard = await requireOnline();
     if (onlineGuard) return onlineGuard;
     return browserAgent.withPage(async (page) => {
+      const moved = checkRef(ref, page);
+      if (moved) return moved;
       const locator = refLocator(page, ref);
       // fill() replaces, type() appends — the same distinction the selector
       // path makes, kept identical so moving to refs changes targeting only.
-      if (clearFirst) await locator.fill(String(text));
-      else await locator.type(String(text));
-      return await withStateCapsule(page, { typed: String(text).length, into: ref, via: 'ref-type' }, ref);
+      return await effect.actWithEvidence(page, { intent: { kind: 'type', text: String(text), clearFirst: !!clearFirst },
+        ref, locator, field: true, payload: { typed: String(text).length, into: ref, via: 'ref-type' },
+        act: () => (clearFirst ? locator.fill(String(text)) : locator.type(String(text))) });
     }).catch(err => fail(refFailure(ref, 'type into', err)));
   }
 
@@ -549,9 +467,9 @@ async function browser_type({ selector, text, clearFirst, ref }) {
     if (!(await waitReady(page, selector))) {
       return fail(`Element not ready (not visible within ${pageWaitMs()}ms): ${selector}`);
     }
-    if (clearFirst) await page.fill(selector, text);
-    else await page.type(selector, text);
-    return ok({ typed: text.length, into: selector, url: page.url() });
+    return await effect.actWithEvidence(page, { intent: { kind: 'type', text: String(text), clearFirst: !!clearFirst },
+      locator: effect.fieldLocator(page, selector), field: true, payload: { typed: text.length, into: selector },
+      act: () => (clearFirst ? page.fill(selector, text) : page.type(selector, text)) });
   }).catch(err => fail(err.message));
 }
 
@@ -599,14 +517,14 @@ async function browser_fill_form({ fields }) {
           results.push({ index: i, ref: f.ref, ok: false, error: 'missing value' });
           continue;
         }
-        const refProblem = checkRef(f.ref);
+        const refProblem = checkRef(f.ref, page);
         if (refProblem) {
           results.push({ index: i, ref: f.ref, ok: false, error: String(refProblem.result) });
           continue;
         }
         try {
           await refLocator(page, f.ref).fill(String(f.value));
-          results.push({ index: i, ref: f.ref, ok: true });
+          results.push({ index: i, ref: f.ref, ok: true, readsBack: await effect.readsBack(() => refLocator(page, f.ref), f.value) });
         } catch (err) {
           results.push({ index: i, ref: f.ref, ok: false, error: refFailure(f.ref, 'fill', err) });
         }
@@ -625,13 +543,19 @@ async function browser_fill_form({ fields }) {
           continue;
         }
         await page.fill(f.selector, String(f.value));
-        results.push({ index: i, selector: f.selector, ok: true });
+        results.push({ index: i, selector: f.selector, ok: true, readsBack: await effect.readsBack(() => page.locator(f.selector), f.value) });
       } catch (err) {
         results.push({ index: i, selector: f.selector, ok: false, error: (err && err.message) || 'fill failed' });
       }
     }
     const filled = results.filter((r) => r.ok).length;
-    return ok({ fields: results, filled: filled, total: fields.length, url: page.url() });
+    const res = ok({ fields: results, filled: filled, total: fields.length, url: page.url() });
+    // BUG-462: fill() resolving is not the field holding the value. Values are
+    // never echoed back (a form holds passwords); only whether each one matches.
+    const unconfirmed = results.filter((r) => r.ok && r.readsBack !== true).length;
+    if (!filled) return res;
+    return unconfirmed ? evidenceModule.unverified(res, unconfirmed + ' of the ' + filled + ' filled fields do not read back as the value sent')
+      : evidenceModule.verifiedOk(res, { oracle: 'page-state', observed: 'all ' + filled + ' filled fields read back as the values sent' });
   }).catch(err => fail(err.message));
 }
 
@@ -692,8 +616,8 @@ async function browser_scroll({ direction }) {
 
   return browserAgent.withPage(async (page) => {
     const amount = dir === 'down' ? 600 : -600;
-    await page.evaluate((y) => window.scrollBy(0, y), amount);
-    return ok({ scrolled: dir, amount });
+    return await effect.actWithEvidence(page, { intent: { kind: 'scroll', direction: dir },
+      payload: { scrolled: dir, amount }, act: () => page.evaluate((y) => window.scrollBy(0, y), amount) });
   }).catch(err => fail(err.message));
 }
 
@@ -771,8 +695,10 @@ async function browser_go_back() {
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
-    await page.goBack({ waitUntil: 'domcontentloaded' });
-    return ok({ url: page.url(), title: await page.title() });
+    // BUG-462: going back from the first page in a tab resolves without moving,
+    // and used to be reported as a success on the page it never left.
+    return await effect.actWithEvidence(page, { intent: { kind: 'back' }, payload: {},
+      act: () => page.goBack({ waitUntil: 'domcontentloaded' }) });
   }).catch(err => fail(err.message));
 }
 
@@ -926,7 +852,9 @@ async function browser_launch_debug(args) {
   // request. One predicate now. The probe is lazy: it costs a PowerShell round
   // trip only for a named request whose identity we cannot already vouch for.
   const probeOwner = () => launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrlEarly);
-  const refuseNamed = () => browserTarget.namedRequestRefusal({ want, attached: attachedBrowser, probe: probeOwner });
+  // BUG-436: the probe is async now. It is still asked only when the predicate would ask it (a named
+  // request with no identity we can vouch for), and its answer is handed to the unchanged predicate.
+  const refuseNamed = async () => { const probed = (want && !attachedBrowser) ? await probeOwner() : null; return browserTarget.namedRequestRefusal({ want, attached: attachedBrowser, probe: () => probed }); };
 
   const status0 = browserAgent.getStatus();
   if (status0.state === 'ONLINE') {
@@ -934,7 +862,7 @@ async function browser_launch_debug(args) {
     // instead of "launched" — the debug port cannot be shared. BUG-107's
     // browser_switch remedy now lives in namedRequestRefusal, which also
     // closed the null-attachedBrowser hole this branch had.
-    const onlineRefusal = refuseNamed();
+    const onlineRefusal = await refuseNamed();
     if (onlineRefusal) return fail(onlineRefusal);
     return ok({ alreadyOnline: true, browser: attachedBrowser || 'unknown' });
   }
@@ -985,7 +913,7 @@ async function browser_launch_debug(args) {
   // why waitForDebugPortReady polls this same call).
   const adopted = await browserAgent.ensureOnline({ cdpUrl }).catch(() => false);
   if (adopted) {
-    const found = launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
+    const found = await launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
     // attachedBrowser is deliberately NOT set here. Its contract since BUG-106
     // is "a browser MYTHOS launched and can therefore vouch for and close", and
     // this is not that — see browser_switch's own null branch. `portOwner` is
@@ -1000,7 +928,7 @@ async function browser_launch_debug(args) {
   // BUG-407: one resolver, and it now reads the machine's own default browser
   // rather than answering from a list of its own. `source` says which rule
   // chose, and rides out on the result.
-  const target = launchDep('resolveLaunchTarget', resolveLaunchTarget)(want);
+  const target = await launchDep('resolveLaunchTarget', resolveLaunchTarget)(want);
   if (target.error) return fail(target.error);
   const exe = target.exe;
   const chosen = target.name;
@@ -1055,7 +983,7 @@ async function browser_launch_debug(args) {
   // operator was looking at. That is the "it opened YouTube in Brave but could
   // not act on it" report: two browsers, and MYTHOS driving the invisible one
   // under the visible one's name.
-  const observed = launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
+  const observed = await launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
   if (observed && observed !== chosen) {
     // Do not relabel and carry on. Something else holds the port, so the
     // browser just spawned is not the one attached, and the operator now has
@@ -1154,7 +1082,7 @@ async function browser_switch(args) {
 // failure to hand straight back.
 async function resolveTarget(page, { ref, selector }, what) {
   if (ref) {
-    const refProblem = checkRef(ref);
+    const refProblem = checkRef(ref, page);
     if (refProblem) return { failure: refProblem };
     return { locator: refLocator(page, ref), target: ref, ref: ref };
   }
@@ -1220,10 +1148,9 @@ async function browser_upload_file({ ref, selector, path: filePath }) {
   return browserAgent.withPage(async (page) => {
     const t = await resolveTarget(page, { ref, selector }, 'upload a file');
     if (t.failure) return t.failure;
-    await t.locator.setInputFiles(sandboxed.resolved);
-    return await withStateCapsule(page,
-      { uploaded: path.basename(sandboxed.resolved), from: sandboxed.resolved, into: t.target, via: 'set-input-files' },
-      t.ref);
+    return await effect.actWithEvidence(page, { intent: { kind: 'upload', expected: path.basename(sandboxed.resolved) },
+      ref: t.ref, locator: t.locator, field: true, act: () => t.locator.setInputFiles(sandboxed.resolved),
+      payload: { uploaded: path.basename(sandboxed.resolved), from: sandboxed.resolved, into: t.target, via: 'set-input-files' } });
   }).catch(err => fail(t_err(ref, selector, 'upload to', err)));
 }
 
@@ -1249,9 +1176,10 @@ async function browser_select_option({ ref, selector, value, label }) {
     // click to choose, which the snapshot already exposes. Saying so in the
     // failure is what stops the model retrying this tool forever.
     const chosen = label !== undefined ? { label: String(label) } : { value: String(value) };
-    const applied = await t.locator.selectOption(chosen);
-    return await withStateCapsule(page,
-      { selected: applied, on: t.target, via: 'select-option' }, t.ref);
+    let applied = null;
+    return await effect.actWithEvidence(page, { intent: () => ({ kind: 'select', expected: applied }),
+      ref: t.ref, locator: t.locator, field: true, act: async () => { applied = await t.locator.selectOption(chosen); },
+      payload: () => ({ selected: applied, on: t.target, via: 'select-option' }) });
   }).catch(err => fail(
     t_err(ref, selector, 'select an option on', err) +
     ' If this is a custom dropdown rather than a real <select>, click it open with browser_click and ' +
@@ -1332,11 +1260,8 @@ async function browser_press_key({ key, ref, selector }) {
     // BUG-174: reload before anything else — ref/selector and the focus guard
     // are both meaningless for an action the page never sees.
     if (isReload) {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      return await withStateCapsule(page, {
-        reloaded: true, via: 'page.reload',
-        evidence: 'reloaded ' + page.url(),
-      }, null);
+      return await effect.actWithEvidence(page, { intent: { kind: 'reload' }, payload: { reloaded: true, via: 'page.reload' },
+        act: () => page.reload({ waitUntil: 'domcontentloaded' }) });
     }
     if (isPlayerKey) {
       // Checked for the ref/selector path too: pressing on a located element
@@ -1361,11 +1286,11 @@ async function browser_press_key({ key, ref, selector }) {
     if (ref || selector) {
       const t = await resolveTarget(page, { ref, selector }, 'press a key');
       if (t.failure) return t.failure;
-      await t.locator.press(match);
-      return await withStateCapsule(page, { pressed: match, on: t.target, via: 'ref-press' }, t.ref);
+      return await effect.actWithEvidence(page, { intent: { kind: 'key', key: match, onElement: true }, ref: t.ref, locator: t.locator,
+        payload: { pressed: match, on: t.target, via: 'ref-press' }, act: () => t.locator.press(match), settle: true });
     }
-    await page.keyboard.press(match);
-    return await withStateCapsule(page, { pressed: match, on: 'focused element', via: 'keyboard-press' }, null);
+    return await effect.actWithEvidence(page, { intent: { kind: 'key', key: match },
+      payload: { pressed: match, on: 'focused element', via: 'keyboard-press' }, act: () => page.keyboard.press(match), settle: true });
   }).catch(err => fail(t_err(ref, selector, 'press a key on', err)));
 }
 
@@ -1376,10 +1301,10 @@ async function browser_hover({ ref, selector }) {
   return browserAgent.withPage(async (page) => {
     const t = await resolveTarget(page, { ref, selector }, 'hover');
     if (t.failure) return t.failure;
-    await t.locator.hover();
     // Hovering usually exists to REVEAL something, so the useful next step is
     // another snapshot. Say so rather than leaving the model to guess.
-    const result = await withStateCapsule(page, { hovered: t.target, via: 'ref-hover' }, t.ref);
+    const result = await effect.actWithEvidence(page, { intent: { kind: 'hover' }, ref: t.ref, locator: t.locator,
+      payload: { hovered: t.target, via: 'ref-hover' }, act: () => t.locator.hover() });
     result.result.hint = 'If this was meant to open a menu, call browser_snapshot again to see what appeared.';
     return result;
   }).catch(err => fail(t_err(ref, selector, 'hover over', err)));
@@ -1540,7 +1465,7 @@ async function browser_check_captcha() {
 
 const TOOLS = [
   { name: 'browser_navigate', description: 'Navigate the browser to a URL. Set newTab:true to open it in a new tab instead of reusing the current one. If the user named a specific browser (Chrome, Brave, Edge), pass it as `browser` — the call then FAILS rather than driving a different one, and the response says which browser was actually used.', params: { url: 'string - the URL to navigate to', newTab: 'boolean (optional) - open in a new tab instead of the current one', browser: 'string (optional) - chrome, brave or edge; only when the user asked for a specific browser' }, danger: false, fn: browser_navigate, needs_result: true },
-  { name: 'browser_snapshot', description: 'Read the page as an accessibility tree in which every interactable element carries a stable ref like [ref=e12]. THIS IS THE FIRST STEP for any browser interaction: take a snapshot, find the element you want in the tree, then pass its ref to browser_click / browser_type / browser_fill_form instead of guessing a CSS selector. Elements inside iframes (most job-application forms) are included automatically. Refs expire when the page changes — if one is rejected as stale, snapshot again.', params: { screenshot: 'boolean (optional) - also return a base64 PNG of the page alongside the tree' }, danger: false, fn: browser_snapshot, needs_result: true },
+  { name: 'browser_snapshot', description: 'Read the page as a numbered list of the things on it you can act on (links, buttons, fields, tabs), each carrying a ref like e12. THIS IS THE FIRST STEP for any browser interaction: snapshot, find the item, then pass its ref to browser_click / browser_type / browser_fill_form instead of guessing a CSS selector. Order: an open dialog and the search box first, then the main content in page order, then menus and page chrome. Links to the same place are merged into ONE item, so the third video is the third item whose url is a video (/watch?v=...), not the third link. Only refs printed in a snapshot can be acted on; when pages > 1, read the next one by passing the page and generation from nextPage. Elements inside iframes are included. Refs expire when the page changes — if one is rejected, snapshot again.', params: { screenshot: 'boolean (optional) - also return a PNG of the page for the dashboard (it is not sent to you as text)', page: 'number (optional) - which page of the SAME snapshot to read, from nextPage; omit to read the page fresh', generation: 'number (optional) - the generation of the snapshot being continued, from nextPage' }, danger: false, fn: browser_snapshot, needs_result: true },
   { name: 'browser_click', description: 'Click an element on the page. Prefer ref (from browser_snapshot) — it targets the exact element with no guessing. Use selector only when no snapshot ref is available.', params: { ref: 'string (optional) - element ref from browser_snapshot, e.g. e12', selector: 'string (optional) - CSS selector, the fallback when no ref is available' }, danger: false, fn: browser_click },
   { name: 'browser_type', description: 'Type text into an input field. Prefer ref (from browser_snapshot) over a CSS selector. Set clearFirst to true to replace the existing content.', params: { ref: 'string (optional) - element ref from browser_snapshot, e.g. e12', selector: 'string (optional) - CSS selector, the fallback when no ref is available', text: 'string - text to type', clearFirst: 'boolean (optional) - clear field before typing' }, danger: false, fn: browser_type },
   { name: 'browser_screenshot', description: 'Take a screenshot of the current page. Returns base64 PNG.', params: {}, danger: false, fn: browser_screenshot, needs_result: true },
@@ -1578,10 +1503,8 @@ module.exports = {
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
   browser_launch_debug, browser_switch,
   browser_wait_for, browser_fill_form,
-  // Snapshot-and-refs seams. capSnapshot/extractRefs are pure, so the size cap
-  // and ref parsing are testable without a page at all.
-  browser_snapshot, capSnapshot, extractRefs,
-  SNAPSHOT_MAX_NODES, SNAPSHOT_MAX_CHARS,
+  // Snapshot-and-refs. The view itself is pure and lives in snapshot-view.js.
+  browser_snapshot,
   __resetSnapshotStateForTest, __setSnapshotStateForTest,
   // Phase 5 toolkit. resolveUploadPath is exported as its own seam: the upload
   // allowlist is the one security boundary in this file, and it must be

@@ -158,7 +158,8 @@ function mountTtsVoiceRoutes(app, deps) {
     let chainNames = null;
     try {
       const overlay = applyVoiceChoice(process.env, readVoiceChoice(vaultRoot), config.VOICE_TTS_CHAIN || 'edge');
-      const next = createTtsChain({ config: { ...config, ...overlay }, logger: log });
+      // BUG-450: same shared circuits as the boot chain — a parked engine stays parked.
+      const next = createTtsChain({ config: { ...config, ...overlay }, logger: log, circuits: require('../../providers/tts-circuit').sharedCircuits });
       if (setTts) setTts(next);
       chainNames = next.chainNames;
     } catch (err) {

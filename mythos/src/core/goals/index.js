@@ -373,6 +373,14 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
   // after each step's outcome is recorded.
   async function plan(goal, ctx) {
     if (goal && goal.execution && goal.execution.owner === 'desktop') return null;
+    // 0. Budget FIRST, on every branch (BUG-446): the pending-step and skill branches
+    // below used to return a step for an exhausted goal. Both dimensions, like debitBudget().
+    if (goal.spent.tokens >= goal.budget.tokens || goal.spent.actions >= goal.budget.actions) {
+      goal.status = 'paused';
+      goal.reason = 'budget-exhausted';
+      saveGoal(goal.id);
+      return null;
+    }
     // 1. Check current plan for pending step
     if (goal.plan && goal.plan.length > 0) {
       for (var i = 0; i < goal.plan.length; i++) {
@@ -429,15 +437,6 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
       } catch (err) { if (bus) bus.emit('health.anomaly', { kind: 'skills-recall-failed', error: err.message }); }
     }
 
-    // 3. Budget check BEFORE Brain call — check BOTH token and action budgets
-    // to match debitBudget()'s dual-dimension check and prevent wasted actions.
-    if (goal.spent.tokens >= goal.budget.tokens || goal.spent.actions >= goal.budget.actions) {
-      goal.status = 'paused';
-      goal.reason = 'budget-exhausted';
-      saveGoal(goal.id);
-      return null;
-    }
-
     // 4. Brain call
     if (ctx && ctx.brain) {
       // Learning loop (Layer 3): before spending a brain call, consult the
@@ -486,7 +485,7 @@ function createGoalSystem({ fs, config, bus, memory, brain }) {
         if (lessonHits.length || cacheFails.length) {
           var lines = [];
           for (var lj = 0; lj < lessonHits.length && lines.length < 4; lj++) {
-            lines.push('  - [x' + (lessonHits[lj].count || 1) + '] ' + (lessonHits[lj].snippet || '').slice(0, 180));
+            lines.push('  - [x' + (lessonHits[lj].count || 1) + '] ' + (lessonHits[lj].plannerSnippet || lessonHits[lj].snippet || '').slice(0, 180)); // BUG-451: observations only — a stated cause is unverified and is not repeated as an instruction
           }
           for (var cj = 0; cj < cacheFails.length && lines.length < 6; cj++) {
             var fr = cacheFails[cj].record || cacheFails[cj];

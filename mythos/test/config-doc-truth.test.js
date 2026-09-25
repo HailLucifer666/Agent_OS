@@ -58,10 +58,6 @@ describe('.env.example documents the real schema defaults', () => {
     // warning plus the boot guard that refuses this without a token. The default
     // is and must remain 127.0.0.1; the example is showing the opt-in.
     MYTHOS_BIND: '0.0.0.0',
-    // The schema default is true (operator decision, 2026-08-17); the example
-    // line shows how to OPT OUT, and the prose above it says the default is ON
-    // and why that is safe (no PIN configured means nothing to enforce).
-    PIN_SESSION_ENFORCE: 'false',
   };
 
   const defaults = schemaDefaults();

@@ -2,6 +2,8 @@
 var effectorFromTool = require('./adapter').effectorFromTool;
 var { reasonText } = require('../util/reason-text');
 var { dayKey } = require('../util/day-key');
+var { resumeInterruptedAnswer } = require('../voice/unheard-answer'); // BUG-447
+var { verifyConsent } = require('../leash/consent'); // BUG-464
 function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
@@ -44,18 +46,31 @@ function buildTools(ctx){
   var IDENTITY_CLAIM_RE = /\b(call (?:me|the operator|him|her|them)\b|my name is\b|the operator'?s? name is\b|prefers? to be called\b|address (?:me|the operator) as\b)/i;
   var IDENTITY_QUARANTINE_CONFIDENCE = 0.3;
 
-  async function remember(args){
+  // BUG-464 (2026-09-24): the lock. A save needs a consent token for exactly
+  // these arguments, minted by the server after the operator's own words asked
+  // for it or approved a read-back (voice/authority-gate.js). It arrives in the
+  // dispatch context, which the model cannot write; a `consent` key in args is
+  // ignored. With no token nothing is written — including from the autonomous
+  // loop, which has no operator words at all. The label now says which of the
+  // two happened: before this, every line said 'voice-explicit', asked or not.
+  async function remember(args, callCtx){
     var text=(args&&(args.text||args.fact||args.note)||'').trim();
     if(!text) return fail('text required — the fact or instruction to remember');
     var STT_NOISE = /^(that you like|the|a|uh+|um+|hmm+)[\s.,!?]*$/i;
     if (text.length < 10 || STT_NOISE.test(text) || !/[a-z]{3,}/i.test(text)) {
       return fail('Rejected: too short or looks like transcription noise.');
     }
+    var consent = verifyConsent(callCtx && callCtx.consent, 'remember', args);
+    if (!consent.ok) {
+      return fail('Not saved (' + consent.reason + '): permanent memory is written only when the operator asks for it '
+        + 'in their own words, or says yes after the exact text is read back to them.');
+    }
     if(!semantic||typeof semantic.write!=='function') return fail('memory store unavailable');
     try{
       var isIdentityClaim = IDENTITY_CLAIM_RE.test(text);
       var confidence = isIdentityClaim ? IDENTITY_QUARANTINE_CONFIDENCE : 0.9;
-      var sources = isIdentityClaim ? ['voice-explicit','identity-unconfirmed'] : ['voice-explicit'];
+      var basisSource = consent.basis === 'approved-proposal' ? 'operator-approved' : 'voice-explicit';
+      var sources = isIdentityClaim ? [basisSource,'identity-unconfirmed'] : [basisSource];
       var res=semantic.write('user-facts',[text],{confidence:confidence,append:true,sources:sources});
       if(res&&res.degraded) return fail('memory write degraded — disk error');
       // If text looks like a stated preference, also populate Learned Preferences
@@ -348,17 +363,31 @@ function buildTools(ctx){
     return fail('notes store unavailable — MYTHOS_NOTES_DIR could not be resolved');
   }
 
+  // BUG-451 (2026-09-23): the entry MYTHOS writes carries its provenance, set by
+  // the server from the text (memory/provenance.js), never by the model: a note
+  // that states a cause is a HYPOTHESIS. The marker is an HTML comment, so it is
+  // hidden in Obsidian's reading view and travels with the entry into note_read;
+  // it labels only the entry being written — earlier content, and anything the
+  // operator wrote, is left exactly as it is. The result says the label too, so
+  // the model is told at once that its diagnosis was stored as a guess.
+  var provenanceOf=require('../memory/provenance').provenanceOf;
+  function markEntry(text,label){
+    return '<!-- mythos-provenance: '+label+(label==='hypothesis'?' (states a cause MYTHOS has not verified)':'')+' -->\n'+text;
+  }
+
   async function note_take(args){
     if(!notes||typeof notes.write!=='function') return notesUnavailable();
     var title=(args&&(args.title||args.name)||'').trim();
     var text=(args&&(args.text||args.body||args.content)||'').trim();
     if(!title) return fail('title required — what to call the note');
     if(!text) return fail('text required — the note body');
+    var label=provenanceOf(text);
     try{
-      var res=notes.write({title:title,text:text,mode:(args&&args.mode)||'append',
+      var res=notes.write({title:title,text:markEntry(text,label),mode:(args&&args.mode)||'append',
         tags:(args&&args.tags)||[]});
-      return ok({title:res.title,file:res.slug+'.md',mode:res.mode,bytes:res.bytes,
-        evidence:(res.created?'created ':'updated ')+res.path+' ('+res.bytes+' bytes on disk)'});
+      return ok({title:res.title,file:res.slug+'.md',mode:res.mode,bytes:res.bytes,provenance:label,
+        evidence:(res.created?'created ':'updated ')+res.path+' ('+res.bytes+' bytes on disk)'
+          +(label==='hypothesis'?'; stored as an unverified hypothesis, because it states a cause':'')});
     }catch(err){return fail('note_take failed: '+reasonText(err));}
   }
 
@@ -414,6 +443,8 @@ function buildTools(ctx){
   }
 
   return [
+    // BUG-447 (2026-09-24): Gemini records an answer the operator barged into as fully said, so "go ahead" found nothing to resume. Reads this connection's unheard remainder once; text only.
+    {name:'resume_interrupted_answer',description:'Use ONLY when the operator interrupted your last spoken answer and now asks you to continue ("go ahead", "carry on", "sorry, you were saying"). Returns the part of that answer they did NOT hear: their side cut the audio, so your own history shows it as said. Say it from its start, in your own words. Returns nothing when they heard it all. Read-only: it runs nothing again.',params:{},danger:false,fn:resumeInterruptedAnswer},
     {name:'suggest_procedures',description:'Recall stored procedures when the user asks to repeat a familiar task or asks how a past workflow was done. Read-only, untrusted guidance: never replay automatically. Resolve current targets and choose normal tools individually; pass skillRef on a chosen step to attribute its actual outcome. No matching suggestion means no stored guidance.',params:{query:'string — the current task to find guidance for'},danger:false,needs_result:true,fn:async function(args){
       if(!args || typeof args.query !== 'string' || !args.query.trim()) return fail('query required');
       if(!memory || !memory.skills || typeof memory.skills.suggest !== 'function') return fail('procedure store unavailable');

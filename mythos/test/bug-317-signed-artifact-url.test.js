@@ -28,10 +28,8 @@
 //   - scoped to one exact path: a token for a.html cannot open b.html.
 //   - no traversal: '..' anywhere in the path is refused outright.
 //   - constant-time comparison.
-//   - IT DOES NOT BYPASS THE PIN LAYER. When PIN_SESSION_ENFORCE is on, both
-//     layers are required, and a signed URL substitutes for the bearer token
-//     only — never for the PIN session. A signature that skipped both would be a
-//     real downgrade dressed as a convenience.
+//   - a signed URL substitutes for the bearer token and nothing else. (Its two
+//     PIN-layer cases went with the PIN on 2026-09-23.)
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert');
@@ -169,8 +167,6 @@ describe('BUG-317 — the /vault/builds middleware', () => {
       // Stands in for requireToken: called only when the signature route did not
       // already authorise the request.
       requireToken: (req, res, next) => { res.status(401).json({ error: 'Unauthorized' }); },
-      pinSessionRequired: () => !!o.pinRequired,
-      pinSessionValid: () => !!o.pinValid,
     });
   }
 
@@ -197,25 +193,6 @@ describe('BUG-317 — the /vault/builds middleware', () => {
     const res = fakeRes();
     accessWith()(req, res, () => { throw new Error('an expired signature admitted a request'); });
     assert.strictEqual(res.statusCode, 401);
-  });
-
-  test('THE PIN LAYER IS NOT BYPASSED: signature alone is not enough when PIN is enforced', () => {
-    const t = signArtifactPath(REL, SECRET, 300000);
-    const req = fakeReq('/pipeline/ai-news-landing-page.html', { exp: String(t.exp), sig: t.sig });
-    const res = fakeRes();
-    accessWith({ pinRequired: true, pinValid: false })(req, res, () => {
-      throw new Error('a signed URL bypassed the PIN session — that is a downgrade, not a fix');
-    });
-    assert.strictEqual(res.statusCode, 401);
-  });
-
-  test('with PIN enforced AND unlocked, a signed URL is admitted', () => {
-    const t = signArtifactPath(REL, SECRET, 300000);
-    const req = fakeReq('/pipeline/ai-news-landing-page.html', { exp: String(t.exp), sig: t.sig });
-    const res = fakeRes();
-    let nexted = false;
-    accessWith({ pinRequired: true, pinValid: true })(req, res, () => { nexted = true; });
-    assert.strictEqual(nexted, true);
   });
 
   test('a signature for a different artifact does not admit this one', () => {

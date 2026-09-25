@@ -1,47 +1,54 @@
 'use strict';
 
 // server/credentials.js — one place that knows what a credential is, which
-// channel it may arrive on, and which combination a given deployment requires.
+// channel it may arrive on, and when a request is authorized.
 //
-// BUG-442 (2026-09-18). This used to be four things in server/index.js
-// (extractBearerChannel, extractCookieToken, extractToken, tokenOk) plus a
-// cookie name repeated in server/routes/pin.js and server/routes/auth.js. Both
-// routes wrote the literal `mythos_token`, and that collision was the bug: the
-// PIN session and the bearer token are DIFFERENT CREDENTIALS PROVING DIFFERENT
-// THINGS — local physical presence versus knowledge of a shared secret — and
-// they were being carried in the same envelope.
-//
-// What that cost, on 2026-09-16, live: the PIN cookie was written with a hard
-// 30-minute Max-Age while pin-session.js slid its own expiry forward on every
-// successful check. At exactly 30 minutes the browser deleted a cookie the
-// server still considered valid, the next fetch arrived bare, and the HUD asked
-// the operator for their ACCESS TOKEN in the middle of a conversation. Nothing
-// was wrong with the token.
-//
-// And the deeper one, found by reading rather than by the report: tokenOk()
-// accepted a PIN session INSTEAD OF the bearer whenever PIN enforcement was
-// off. The four-combination policy written directly above it says that must
-// never happen. A proof of standing at the machine is not a proof of knowing
-// the secret, and one must never be spendable as the other.
+// HISTORY, because each step here was a real incident:
+//   - BUG-442 (2026-09-18): the PIN session and the bearer token shared one
+//     cookie name, so a 30-minute PIN cookie expiring mid-conversation made the
+//     HUD ask for the ACCESS TOKEN. The two credentials were split onto two
+//     cookies.
+//   - BUG-444 (filed 2026-09-18, fixed 2026-09-23): the bearer's cookie carried
+//     the RAW MYTHOS_AUTH_TOKEN for 30 days. It now carries a random session id
+//     (server/auth-sessions.js stores only its hash), under a NEW name.
+//   - 2026-09-23, operator decision: the PIN is removed entirely. "I open the
+//     app, it puts me in the HUD." There is one credential left.
 //
 // THE POLICY, and it is the whole of it:
 //
-//   | bearer configured | PIN enforced | required               |
-//   |-------------------|--------------|------------------------|
-//   | no                | no           | nothing                |
-//   | yes               | no           | valid bearer           |
-//   | no                | yes          | valid PIN session      |
-//   | yes               | yes          | BOTH                   |
+//   | MYTHOS_AUTH_TOKEN | required                                              |
+//   |-------------------|-------------------------------------------------------|
+//   | unset             | nothing — the server refuses a non-loopback bind      |
+//   |                   | without a token (server/index.js), so this is always  |
+//   |                   | loopback, and the Origin/Host guards are what stop a  |
+//   |                   | web page from driving it                              |
+//   | set               | the token (Authorization header or ?token=), or a     |
+//   |                   | live session id in the mythos_session cookie          |
 //
-// Each credential is checked on its own channels and can only ever satisfy its
-// own row. There is no combination in which one substitutes for the other.
+// A configured token gates LOOPBACK TOO. There is deliberately no "it came from
+// 127.0.0.1, let it in" exemption: a remote user behind a local reverse proxy
+// arrives from 127.0.0.1 as well. The desktop app gets its session without a
+// prompt because the Electron MAIN process holds the token and exchanges it
+// (electron/main.js primeAuthSession) — the renderer never sees the token.
 
-// The bearer cookie keeps its name: browsers already hold it, it is a 30-day
-// cookie (routes/auth.js), and re-issuing it would log every operator out for
-// no reason. The PIN session gets the new name, because it is the one whose
-// lifetime was wrong anyway and whose holders must re-authenticate regardless.
-const BEARER_COOKIE = 'mythos_token';
-const PIN_COOKIE = 'mythos_pin';
+// The session cookie has a NEW name on purpose. The old `mythos_token` cookie
+// held the raw token; if the new id rode under the same name, a browser still
+// holding the old value would present it on the channel that now means
+// "session", and every check would have to tell the two apart forever. A new
+// name makes the old value structurally unreadable as a credential.
+const SESSION_COOKIE = 'mythos_session';
+
+// Cookies that were credentials once and are never read as one again. Cleared
+// whenever a request carries one (server/index.js), logged by NAME only.
+//   mythos_token — the raw bearer token (BUG-444)
+//   mythos_pin   — the PIN session (removed 2026-09-23)
+const LEGACY_COOKIES = Object.freeze(['mythos_token', 'mythos_pin']);
+
+// The one 401 sentence, shown VERBATIM by the HUD (AD-5). It used to be three
+// (server/auth-hint.js, BUG-400); with the PIN gone only the token case exists,
+// and a request with no token configured is never refused.
+const UNAUTHORIZED_HINT = 'Unauthorized — this deployment has a MYTHOS_AUTH_TOKEN. Sign in once with '
+  + 'POST /api/auth/session {"token": ...} (the HUD asks for it), or send Authorization: Bearer <token>.';
 
 function readCookie(req, name) {
   const header = req && req.headers && req.headers.cookie;
@@ -56,6 +63,10 @@ function readCookie(req, name) {
   return null;
 }
 
+function legacyCookiesPresent(req) {
+  return LEGACY_COOKIES.filter((name) => readCookie(req, name) !== null);
+}
+
 // Authorization: Bearer <t>, then ?token=<t>. A browser WebSocket cannot set
 // headers, which is why the query channel exists at all (V2 §18.2).
 function fromHeaderOrQuery(req) {
@@ -63,13 +74,7 @@ function fromHeaderOrQuery(req) {
   if (auth && /^Bearer\s+/i.test(auth)) {
     const value = auth.replace(/^Bearer\s+/i, '').trim();
     // An EMPTY `Authorization: Bearer ` is treated as absent, not as a supplied
-    // credential. Otherwise a proxy or client that injects a blank header
-    // suppresses the cookie channel entirely and the operator gets a hard 401
-    // where the cookie used to work — and it would be inconsistent with the
-    // query branch below, which already treats an empty ?token= as absent.
-    // (Security review, 2026-09-18.) A NON-empty wrong value is still honoured
-    // as an explicit attempt and still refused, which is the point of the
-    // first-present-wins rule.
+    // credential, matching the query branch below. (Security review, 2026-09-18.)
     if (value) return value;
   }
   try {
@@ -79,89 +84,55 @@ function fromHeaderOrQuery(req) {
   return null;
 }
 
-// Header, then query, then the bearer cookie — FIRST PRESENT WINS, which is not
-// the same as "first valid wins". A caller that explicitly supplies a wrong
-// Authorization header is told it is wrong; it does not quietly fall through to
-// a cookie that happens to be right, because that turns a stale script's bad
-// credential into a silent success and hides the misconfiguration forever.
+// The bearer token and ONLY the bearer token: header, then query. Since BUG-444
+// no cookie carries it, so there is no cookie channel to fall back to. The
+// AETHER node-trust branch of verifyClient uses this directly, because a
+// browser session proves nothing about being an enrolled device on the LAN.
 function extractBearer(req) {
-  const explicit = fromHeaderOrQuery(req);
-  if (explicit !== null) return explicit;
-  return readCookie(req, BEARER_COOKIE);
-}
-
-// The PIN session rides its own cookie and nothing else — EXCEPT on a
-// deployment with no bearer configured, where header/query stays accepted
-// because that is how it behaved before this change and a non-browser client on
-// a PIN-only install has no other way in. It can never satisfy a bearer
-// requirement from there, because `missing` is computed per credential below.
-//
-// A legacy `mythos_token` value is NEVER read as a PIN session. It cannot be
-// told apart from a bearer cookie, and guessing wrong in that direction would
-// hand bearer-shaped input to the PIN checker.
-function extractPin(req, opts) {
-  const fromCookie = readCookie(req, PIN_COOKIE);
-  if (fromCookie !== null) return fromCookie;
-  if (opts && opts.allowHeaderQuery) return fromHeaderOrQuery(req);
-  return null;
+  return fromHeaderOrQuery(req);
 }
 
 /**
- * The single authorization decision. Returns which credentials are MISSING
- * rather than a boolean, because the client has to choose between relocking the
- * PIN screen and opening the token prompt, and it was previously guessing —
- * net-guard.js read every /api/ 401 as "the token is wrong", which is exactly
- * how a lapsed PIN session asked the operator for their access token.
+ * The single authorization decision.
  *
- * `missing` names only credentials this deployment REQUIRES and did not get a
- * valid one of. It never names a credential the deployment does not use, and it
- * never leaks whether a presented value was absent or merely wrong.
+ * EXPLICIT CREDENTIAL WINS, and is not a "first valid wins": a caller that
+ * supplies a wrong Authorization header is told it is wrong, even if it also
+ * holds a valid session cookie. Falling through would turn a stale script's bad
+ * token into a silent success and hide the misconfiguration forever.
  *
- * @returns {{ok: boolean, missing: string[], pinPresented: string|null}}
+ * Sessions are resolved HERE and nowhere else (not in extractBearer), so there
+ * is exactly one path by which a cookie becomes an authorization.
+ *
+ * @param {object} req
+ * @param {{authToken: string, authTokenMatches: (s:string)=>boolean, sessionValid: (id:string)=>boolean}} policy
+ * @returns {{ok: boolean, missing: string[], via: 'open'|'bearer'|'session'|null, sessionId: string|null}}
+ *   `missing` keeps its pre-existing shape for the HUD's 401 routing: only ever
+ *   [] or ['token'].
  */
 function evaluate(req, policy) {
   const p = policy || {};
-  const needBearer = !!p.authToken;
-  const needPin = !!p.pinRequired;
-  const missing = [];
+  if (!p.authToken) return { ok: true, missing: [], via: 'open', sessionId: null };
 
-  if (needBearer && !p.authTokenMatches(extractBearer(req))) missing.push('token');
+  const explicit = fromHeaderOrQuery(req);
+  if (explicit !== null) {
+    const ok = !!p.authTokenMatches(explicit);
+    return { ok, missing: ok ? [] : ['token'], via: ok ? 'bearer' : null, sessionId: null };
+  }
 
-  const pinPresented = needPin ? extractPin(req, { allowHeaderQuery: !needBearer }) : null;
-  if (needPin && !p.pinValid(pinPresented)) missing.push('pin');
-
-  // DISPOSITION, pinned deliberately (security review, 2026-09-18).
-  //
-  // In combined mode this array is a per-factor validity oracle: a caller with
-  // no PIN session gets ['token'] for a wrong bearer and ['pin'] for a right
-  // one, so a recovered candidate token can be CONFIRMED at the global rate
-  // limit rather than at the 5/min the exchange endpoint imposes. That is real
-  // and it is accepted, for two reasons.
-  //
-  // First, the obvious fix does not work. Suppressing 'pin' until the bearer
-  // passes still answers ['token'] versus ['pin'] — distinguishable, so the
-  // oracle survives. The ONLY way to close it is to return a constant list on
-  // every failure, and that would tell the HUD the token is missing whenever
-  // the PIN lapses — which is BUG-442's user-visible symptom, reintroduced in
-  // the very change that fixes it.
-  //
-  // Second, the confirmation is worth little here: the bearer is boot-checked
-  // for >=16 characters of real entropy, so this is not a guessing channel, and
-  // in combined mode a confirmed token still opens nothing without the PIN.
-  //
-  // What would change this: if the token requirement ever stands alone on a
-  // network-reachable deployment, revisit. A cheaper mitigation than a constant
-  // list is to rate-limit the INFORMATIVE 401 to the exchange endpoint's budget
-  // while leaving the bare 401 unlimited.
-  return { ok: missing.length === 0, missing, pinPresented };
+  const sessionId = readCookie(req, SESSION_COOKIE);
+  if (sessionId !== null && typeof p.sessionValid === 'function' && p.sessionValid(sessionId)) {
+    return { ok: true, missing: [], via: 'session', sessionId };
+  }
+  return { ok: false, missing: ['token'], via: null, sessionId: null };
 }
 
 module.exports = {
-  BEARER_COOKIE,
-  PIN_COOKIE,
+  UNAUTHORIZED_HINT,
+  SESSION_COOKIE,
+  LEGACY_COOKIES,
   readCookie,
+  legacyCookiesPresent,
   fromHeaderOrQuery,
   extractBearer,
-  extractPin,
   evaluate,
 };

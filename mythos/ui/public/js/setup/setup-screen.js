@@ -196,16 +196,6 @@ export function mountSetupScreen(root, opts) {
     else dismiss.focus();
   }
 
-  async function probePin() {
-    try {
-      const res = await doFetch('/api/pin/status', { headers: { Accept: 'application/json' } });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
-  }
-
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   // MAX_PROBES exists because of the real first-run failure: in the packaged
@@ -233,11 +223,10 @@ export function mountSetupScreen(root, opts) {
 
   let wizard = null;
 
-  function openWizard(statusBody, pinStatus) {
+  function openWizard(statusBody) {
     if (wizard) wizard.dispose();
     wizard = mountFirstRunWizard(root, {
       status: statusBody,
-      pinStatus,
       fetchImpl: doFetch,
       bridge,
       onClose() { wizard = null; },
@@ -251,16 +240,9 @@ export function mountSetupScreen(root, opts) {
     const statusBody = (status && status.body) || {};
     need.keyStoreNames = Array.isArray(statusBody.keyStoreNames) ? statusBody.keyStoreNames : [];
 
-    const pinStatus = await probePin();
-    if (disposed) return;
+    const screen = chooseSetupScreen({ need, keyStoreNames: need.keyStoreNames });
 
-    const screen = chooseSetupScreen({
-      need,
-      keyStoreNames: need.keyStoreNames,
-      pinConfigured: Boolean(pinStatus && pinStatus.configured),
-    });
-
-    if (screen === 'wizard') openWizard(statusBody, pinStatus);
+    if (screen === 'wizard') openWizard(statusBody);
     else if (screen === 'gaps') paint(need);
   })();
 
@@ -273,9 +255,8 @@ export function mountSetupScreen(root, opts) {
       if (disposed) return;
       teardown();
       const status = await probe();
-      const pinStatus = await probePin();
       if (disposed) return;
-      openWizard((status && status.body) || {}, pinStatus);
+      openWizard((status && status.body) || {});
     },
     dispose() {
       disposed = true;

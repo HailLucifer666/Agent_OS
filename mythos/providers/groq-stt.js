@@ -7,6 +7,8 @@
 // this machine ('network' error in under half a second) and whose on-device
 // model download stalls indefinitely for the same underlying reason.
 
+const routePolicy = require('../src/core/brain/route-policy');
+
 const BASE = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1';
 const MODEL = process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo';
 // The transcription POST has to be bounded, and not only for latency: this
@@ -67,6 +69,8 @@ async function transcribe(buffer, mimeType) {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('GROQ_API_KEY missing — add it to mythos/.env to enable voice input');
   if (!buffer || !buffer.length) throw new Error('empty audio');
+  // Wave 0c: GROQ_API_URL can point this at a non-Groq host; judged before the request.
+  routePolicy.assertAllowed({ provider: 'groq', model: MODEL, endpoint: BASE, mode: 'stt' });
 
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: mimeType || 'audio/webm' }), `utterance.${extFor(mimeType)}`);

@@ -681,6 +681,23 @@ async function groupProcedures(sandbox) {
       ? 'disk round trip returned the saved steps and left every procedure byte unchanged; live voice selection remains unverified'
       : 'ORACLE: saved guidance was missing, altered, or retrieval changed the procedure files' };
   });
+  // BUG-447 (2026-09-24): resume_interrupted_answer, registered by the same effector
+  // file. The oracle is the store round trip — the words handed back are the ones the
+  // tracker took from its own transcript for this connection, and they are gone after
+  // one call. Whether a model calls it on "go ahead" is only visible attended.
+  const unheard = require(path.join(MYTHOS_ROOT, 'src/core/voice/unheard-answer'));
+  const conn = 'harness-connection';
+  const tracker = unheard.createUnheardTracker({ remember: (e) => unheard.rememberUnheard(conn, e), forget: () => unheard.forgetUnheard(conn) }); // wired as server/index.js wires it (forget required since 2026-09-25)
+  tracker.audio(Buffer.alloc(48000, 0).toString('base64')); // 1 s of 24 kHz 16-bit PCM
+  tracker.turnEnd({ assistantText: 'First part was heard. Second part was not.', turnId: 1 });
+  tracker.unheard({ cutMs: 700, turnMs: 1000 });
+  await exercise('procedures', tools, 'resume_interrupted_answer', {}, { connectionId: conn }, r => {
+    const text = r && r.result && r.result.unheard;
+    const passed = okOf(r) && text === 'Second part was not.' && unheard.takeUnheard(conn) === null;
+    return { ok: !!passed, detail: passed
+      ? 'returned the unheard sentence the tracker remembered, once; the model choosing to call it remains unverified'
+      : 'ORACLE: the unheard text was missing, wrong, or still stored after the call' };
+  });
   return rowsSince(mark);
 }
 

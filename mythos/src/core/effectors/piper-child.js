@@ -19,7 +19,8 @@ const { childRuntimeDir, childCommand } = require('../util/child-runtime');
 
 const fs = require('fs');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
+const { spawn } = require('child_process');
+const { execFileText, exitsCleanly } = require('../util/exec-file-text');
 
 const PIPER_SCRIPT = path.join(__dirname, '..', '..', '..', 'services', 'piper-server.py');
 const MYTHOS_DIR = path.join(__dirname, '..', '..', '..');
@@ -64,14 +65,31 @@ function hasVoices(dir) {
   }
 }
 
-function createPiperChild({ logger, config }) {
+function createPiperChild({ logger, config, deps }) {
+  // Test seam (BUG-436): the probe and spawn functions, so a test can hold a probe
+  // open and prove a start that stop() overtook spawns nothing. Production passes none.
+  const run = Object.assign({ exitsCleanly, execFileText, spawn }, deps || {});
   const MAX_RESTART = 3;
   const BACKOFF_MS = [2000, 5000, 15000];
   let restartCount = 0;
   let restartTimer = null;
   let child = null;
+  let epoch = 0;
 
-  function start() {
+  // BUG-436 (2026-09-23): start() used spawnSync for its python and module probes
+  // (bounded at 3 s per candidate plus 8 s), and it runs again after every child crash,
+  // mid-conversation — each restart froze the whole server for the probes'
+  // duration. The probes are async now, so start() is too. It never rejects
+  // (callers fire and forget, and an unhandled rejection exits this process),
+  // and a start that stop() overtook spawns nothing: `epoch` moves on stop().
+  async function start() {
+    try { return await startOnce(epoch); } catch (err) {
+      logger.warn('piper.start-failed', { error: String((err && err.message) || err) });
+      return false;
+    }
+  }
+
+  async function startOnce(myEpoch) {
     if (process.env.PIPER_AUTOSTART === 'false') return false;
     if (process.env.NODE_ENV === 'test' || process.env.NODE_TEST_CONTEXT) return false;
 
@@ -97,10 +115,7 @@ function createPiperChild({ logger, config }) {
     const candidates = venvPythons().filter((p) => { try { return fs.existsSync(p); } catch { return false; } });
     candidates.push('python', 'python3');
     for (const bin of candidates) {
-      try {
-        const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 3000 });
-        if (r.status === 0) { pyBin = bin; break; }
-      } catch { /* try next */ }
+      if (await run.exitsCleanly(bin, ['--version'], { timeoutMs: 3000 })) { pyBin = bin; break; }
     }
     if (!pyBin) {
       logger.warn('piper.python-missing', { note: 'piper offline — TTS chain will use the next provider' });
@@ -108,21 +123,24 @@ function createPiperChild({ logger, config }) {
     }
 
     try {
-      const r = spawnSync(pyBin, ['-c', 'import piper'], { encoding: 'utf8', timeout: 8000 });
-      if (r.status !== 0) {
+      await run.execFileText(pyBin, ['-c', 'import piper'], { timeoutMs: 8000 });
+    } catch (err) {
+      // A numeric code is python's own exit status: it ran and could not import.
+      // Anything else (a timeout kill, a spawn error) is "could not check".
+      if (err && typeof err.code === 'number') {
         logger.warn('piper.module-missing', {
           hint: 'python -m venv .venv && .venv/Scripts/python -m pip install piper-tts  (bin/python on macOS/Linux)',
           detected: pyBin,
         });
-        return false;
+      } else {
+        logger.warn('piper.module-check-failed', { note: 'piper offline' });
       }
-    } catch {
-      logger.warn('piper.module-check-failed', { note: 'piper offline' });
       return false;
     }
+    if (myEpoch !== epoch) return false; // stop() ran while the probes were awaited
 
     try {
-      child = spawn(childCommand(pyBin), [PIPER_SCRIPT], {
+      child = run.spawn(childCommand(pyBin), [PIPER_SCRIPT], {
         cwd: childRuntimeDir(),
         shell: false,
         stdio: 'ignore',
@@ -157,6 +175,7 @@ function createPiperChild({ logger, config }) {
   }
 
   function stop() {
+    epoch += 1;
     if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
     if (child) {
       try { child.kill(); } catch { /* already gone */ }

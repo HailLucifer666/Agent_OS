@@ -51,7 +51,11 @@ test('guard-the-guard: the middleware is mounted and ahead of the API surface', 
   const mountIdx = INDEX_SRC.indexOf('createLoopbackHostGuard({ configuredPort: PORT })');
   assert.ok(mountIdx !== -1, 'loopback host guard missing from server/index.js — DNS-rebinding protection was removed');
   assert.match(INDEX_SRC, /app\.use\(createLoopbackHostGuard/, 'guard exists but is not mounted with app.use');
-  const firstApiIdx = INDEX_SRC.indexOf("'/pin/status'");
+  // The earliest thing mounted on /api, whatever it is. This used to anchor on
+  // the '/pin/status' exemption, a path literal that disappeared with the PIN
+  // (2026-09-23) and took the ordering proof with it; the first /api mount
+  // cannot disappear without the API going too.
+  const firstApiIdx = INDEX_SRC.indexOf("app.use('/api'");
   assert.ok(firstApiIdx !== -1, 'could not locate the earliest API route to prove ordering');
   assert.ok(mountIdx < firstApiIdx,
     `guard mounted at ${mountIdx} but earliest route at ${firstApiIdx} — the guard runs too late to protect it`);

@@ -8,18 +8,27 @@
 // wrong; the comments say which.
 
 const path = require('node:path');
-const { Worker } = require('node:worker_threads');
 const { resolveKokoroModelDir, legacyCacheDirs } = require('./paths');
+const { forkChild } = require('./child-transport');
 
 const WORKER_PATH = path.join(__dirname, 'worker.js');
 
+// BUG-422 (2026-09-23): the default transport is a child PROCESS
+// (child-transport.js), no longer a worker_threads Worker. Terminating a worker
+// thread mid-inference was measured to kill the whole server (0xC0000409 at exit
+// on every trial, mid-session after the second of four kills). `spawn` stays an
+// injection seam with the same Worker-shaped surface; `workerPath` exists so a
+// test can put a fake child behind the REAL default transport.
 function createKokoroClient({
   env = process.env,
   initTimeoutMs,
   synthTimeoutMs,
   now = Date.now,
-  spawn = (file) => new Worker(file),
+  spawn,
+  workerPath = WORKER_PATH,
 } = {}) {
+  const transportName = spawn ? 'custom' : 'child-process';
+  const spawnChild = spawn || ((file) => forkChild(file, { env }));
   // Both deadlines are computed as `now() + <timeout>`. Omit one and that is
   // NaN, which setTimeout does not reject — it clamps to 1 ms and fires
   // immediately, so the caller is told "kokoro load timed out" when the real
@@ -64,7 +73,7 @@ function createKokoroClient({
   function ensureWorker() {
     if (worker) return worker;
     gen += 1;
-    const w = spawn(WORKER_PATH);
+    const w = spawnChild(workerPath);
     const myGen = gen;
     w.on('message', (msg) => onMessage(myGen, msg));
     w.on('error', (err) => failGeneration(myGen, (err && err.message) || String(err)));
@@ -134,7 +143,8 @@ function createKokoroClient({
         if (active && active.id === id) { active = null; }
         // A timed-out load or synthesis means the worker is in an unknown state:
         // onnxruntime inference is not interruptible, so there is nothing to
-        // cancel and the only way to reclaim the thread is to replace it.
+        // cancel and the only way to reclaim it is to replace the child PROCESS —
+        // its native threads die with it, which a worker thread's did not (BUG-422).
         replaceWorker('kokoro ' + op + ' timed out after ' + (deadlineAt - (deadlineAt - remaining)) + 'ms');
         reject(new Error('kokoro ' + op + ' timed out'));
       }, remaining);
@@ -254,6 +264,7 @@ function createKokoroClient({
     synthesize,
     shutdown,
     meta: () => loadMeta,
+    transport: () => transportName,
     hasWorker: () => worker !== null,
     generation: () => gen,
     queueDepth: () => queue.length,

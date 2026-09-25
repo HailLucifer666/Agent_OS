@@ -10,7 +10,7 @@ function readBrowserPid() {
   try { return fs.readFileSync(path.join(__dirname, '../../../.browser-agent.pid'), 'utf8').trim(); }
   catch (err) { if (err.code === 'ENOENT') return null; throw err; }
 }
-function attachedBrowserRefusal(pid, agent, { readPid = readBrowserPid, now = Date.now } = {}) {
+async function attachedBrowserRefusal(pid, agent, { readPid = readBrowserPid, now = Date.now } = {}) {
   const status = agent.getStatus();
   if (status.state !== 'ONLINE') return null;
   let attached = Number(readPid());
@@ -18,7 +18,7 @@ function attachedBrowserRefusal(pid, agent, { readPid = readBrowserPid, now = Da
     let row = cache.get(agent);
     if (!row || row.url !== status.cdpUrl || now() >= row.until) {
       const url = new URL(status.cdpUrl);
-      const found = agent.processOnPort(Number(url.port || (url.protocol === 'https:' ? 443 : 80)));
+      const found = await agent.processOnPort(Number(url.port || (url.protocol === 'https:' ? 443 : 80)));
       row = { pid: found?.pid, url: status.cdpUrl, until: now() + 10000 }; cache.set(agent, row);
     }
     attached = row.pid;
@@ -30,7 +30,7 @@ function attachedBrowserRefusal(pid, agent, { readPid = readBrowserPid, now = Da
 function makeCloseWindow({ delegate, fail, implicitTarget, agent, readPid, now }) {
 return async function close_window({ pid }) {
   if (!pid) return fail('PID is required.');
-  const refusal = attachedBrowserRefusal(pid, agent || require('../../../adapters/browser-agent'), { readPid, now }); // Only close needs the browser adapter.
+  const refusal = await attachedBrowserRefusal(pid, agent || require('../../../adapters/browser-agent'), { readPid, now }); // Only close needs the browser adapter.
   if (refusal) return refusal;
   var res = await delegate({ cmd: 'close_window', pid });
 
