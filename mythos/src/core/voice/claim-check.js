@@ -110,7 +110,8 @@ const CLAIM_CATEGORIES = [
     //     after the API send failed, and guessing which it meant risks the one
     //     error this file must never make (telling MYTHOS to retract the truth).
     backingTools: ['ui_type', 'send_key'],
-    re: /\b(?:i(?:'ve| have) |i )(sent|texted|emailed|messaged)\b/i,
+    // BUG-448 residual: "sent the keystroke" belongs to key-press, below.
+    re: /\b(?:i(?:'ve| have) |i )(sent|texted|emailed|messaged)\b(?!\s+(?:the |a |that )?(?:key(?:stroke|press)?s?|shortcut|hotkey|\S{1,12} key)\b)/i,
     // A3 (2026-08-14): the measured false claim was "Message sent to Alex, sir."
     // at 17:29:26, in the same turn as whatsapp_send=FAIL — and the mandatory
     // first-person prefix above missed it, exactly as this file's header predicts
@@ -203,6 +204,18 @@ const CLAIM_CATEGORIES = [
     name: 'clicking',
     tools: ['browser_click', 'ui_click', 'click_at', 'right_click_at', 'see_and_click', 'cua_click'],
     re: /\b(?:i(?:'ve| have) |i )(clicked|tapped)\b/i,
+  },
+  {
+    // BUG-448 residual, 2026-09-24 15:11:53 (sixth of its class): "I've sent the keystroke"
+    // after an ok browser_press_key("k") was retracted, because `sending` owned "sent".
+    // Split by the claim's OBJECT: a keystroke claim is about the DISPATCH, so a delivered
+    // key backs it even unverified; "sent the message" stays `sending`'s. Tools derived
+    // from every *key* tool in TIER_TABLE (test/claim-check-categories.test.js).
+    name: 'key-press',
+    tools: ['browser_press_key', 'media_key'],
+    backingTools: ['send_key'],
+    backedByDispatch: true,
+    re: /\b(?:i(?:'ve| have) |i )(?:sent|pressed|hit)\s+(?:the |a |that )?(?:key(?:stroke|press)?|shortcut|hotkey|\S{1,12} key)\b/i,
   },
   {
     name: 'reminders',
@@ -374,6 +387,10 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
   const successfulTools = new Set(
     actions.filter((a) => a && a.ok === true).map((a) => a.tool),
   );
+  // BUG-448 residual: delivered, proven or not — for claims about the dispatch itself.
+  const dispatchedTools = new Set(
+    actions.filter((a) => a && (a.ok === true || a.dispatchOk === true)).map((a) => a.tool),
+  );
   // A3: tools from this category that WERE attempted this turn and did not
   // succeed (failed, pending, unverified). This is the gate on the elliptical
   // tier — see the sending category's comment. `ok !== true` is the same test
@@ -482,8 +499,9 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       // succeed: that is direct counter-evidence about the very action claimed,
       // and a backing tool is not entitled to overrule it. The first-person and
       // progressive tiers carry no such counter-evidence, so they are backed.
-      const backed = gate.some((tool) => successfulTools.has(tool))
-        || (!elliptical && (category.backingTools || []).some((tool) => successfulTools.has(tool)));
+      const backers = category.backedByDispatch ? dispatchedTools : successfulTools;
+      const backed = gate.some((tool) => backers.has(tool))
+        || (!elliptical && (category.backingTools || []).some((tool) => backers.has(tool)));
       hits.push({ category, gate, match, backed, start: match.index, end: match.index + match[0].length,
         // The elliptical tier fires ONLY because an owned tool was attempted and
         // did not succeed, so its match is counter-evidence by construction.

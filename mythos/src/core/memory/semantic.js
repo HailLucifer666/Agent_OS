@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { isStartupOnlyFact } = require('./startup-facts');
 
 // Semantic memory — human-readable markdown with parseable sidecar
 // vault/Semantic/<topic>.md
@@ -338,7 +339,8 @@ function createSemanticStore({ fs, config, bus, logger }) {
         // which is how recall_memory came to answer "I recalled that" with
         // nothing to say. A hit with no text is not a hit; drop it here, at
         // the one place that knows WHY it is empty.
-        const snippet = facts.slice(0, 3).join('; ').slice(0, 200);
+        // BUG-463: a note saved for startup is the boot greeting's, never a recall snippet's.
+        const snippet = facts.filter((f) => !isStartupOnlyFact(f)).slice(0, 3).join('; ').slice(0, 200);
         if (!snippet) continue;
         hits.push({
           ref: sc.id || files[i].name,
