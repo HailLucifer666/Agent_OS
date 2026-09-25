@@ -15,10 +15,13 @@ means the full suite green AND the app run and used. Only then is it merged, and
 good `main` is tagged `good-YYYY-MM-DD`. Merges are the operator's click; the
 session's permission check refuses `gh pr merge`.
 
-**Nothing waits to be merged.** #118, #121, #122, #104, #101, #119 and #120 are all in
-`main`, which is `f456217d`. The `good-2026-09-25` tag is `ae88f424` (after #122, before
-the last four) and is never moved; `f456217d` itself is not tagged yet. A new tag waits
-for the operator's go-ahead after a smoke run of that exact commit.
+**Five campaign branches wait for Codex review, then the operator's merge**, each one
+commit on `main` `f456217d`, in this order (C1 row 10): this docs branch, then
+`fix/s1-authority-consent` `f819adac`, `fix/s2-lesson-integrity` `eab6c27a`,
+`fix/b1-interrupt-reason` `9f459d12` and `fix/b2a-acknowledgement-is-not-a-fragment`
+`6311ebee`. All five rewrite the generated docs, so before its merge each later one is
+updated from `main`, regenerated and re-run. The `good-2026-09-25` tag is `ae88f424`
+and is never moved; `f456217d` is not tagged yet (operator's go-ahead after a smoke run).
 
 **Attended 2026-09-25 (build fee97e18, 37 turns): the build works, and the week's fixes held live.** The mic reopened early in 0 of 41 holds (20 of 50 on 09-24); 11 chimes at 0.6 s; 7 held replies clean; the memory lock and "ask first" held, and a spoken "no" was honoured; the Gmail line was one plain sentence; resume returned the right answer; the goAway rotation and the quit were clean. **Found**, each in BUGS.md with times: talking over MYTHOS does not stop it (BUG-469); two retractions of true actions (448); "yes, refresh the page" not taken as a yes (461); the read-back skipped (464); a double delivery and six screen_look cut-ins (457); English transcribed as Spanish twice (447); a 2.7 s low-CPU stall on a Lessons read (436); paused goals counted active (BUG-470); video clicks miss (BUG-471); unrelated skills and think_deeply overuse (BUG-472).
 
@@ -39,7 +42,8 @@ targeted retries) → B8 (the operator's merges, then the Stage 1 week). One `fi
 branch per change; Claude builds, Codex reviews each branch before the operator merges.
 
 B0 done 2026-09-25: base `f456217d`, worktree `.claude/worktrees/stage1`, baseline
-8370/8370, 0 fail, 0 skipped, runner exit 0, five docs gates exit 0, 35 open.
+8370/8370, 0 fail, 0 skipped, runner exit 0, five docs gates exit 0, 35 open. S1, S2, B1
+and B2a are built on their branches (campaign progress log). B2 is split into B2a–B2d.
 
 ## The golden path
 
@@ -66,29 +70,22 @@ directly. A long-form TEMP is required (8.3 short form fakes `fail=2 skipped=1`)
 In `BUGS.md`'s OPEN WORK register, FIXED/RESOLVED/CLOSED/SATISFIED anywhere in a
 bullet closes that ticket. CI is manual dispatch: once, on a final commit.
 
-## Operator decisions owed
+## Operator decisions
 
-- **Presence window (before B5's BUG-446 fix):** how recently must the operator have used
-  MYTHOS to count as "present"? Background goal work runs only while present (decided);
-  the window is not. Ten minutes is a suggestion, not a decision.
-- **BUG-451's three vault records** stating a false cause: remove, quarantine or keep?
-- **Tag `f456217d`** once its smoke run is done.
-- **Operator actions:** say "forget the note about bugs 439" (a stale fact; sessions do not
-  edit the vault). Re-authorise Gmail (`invalid_grant`) if a sitting needs it. Confirm the
-  Mistral console is on the free tier. The wake-word licence question goes to a lawyer.
-
-Answered 2026-09-25 (campaign C1 has the sources): the 02:11:40 "Okay" was said; no video click
-played; the identity writer saves on cue words and says so; the auto note-taker is off; short
-commands whose own words name the action run without asking.
+All answered 2026-09-25 (campaign C1 rows 4 and 9–15, with sources). Still the operator's:
+**tag `f456217d`** after its smoke run, and each merge click. **Operator actions:** remove
+BUG-451's three records (the session supplies the steps); say "forget the note about bugs
+439" (sessions do not edit the vault); re-authorise Gmail (`invalid_grant`) if a sitting
+needs it; confirm the Mistral console is on the free tier; the wake-word licence goes to a lawyer.
 
 ## NEXT ACTION
 
-**S1** on `fix/s1-authority-consent`, from `f456217d`: a prohibition, an explanation
-request, changed memory content, a wrong-target question and an unheard or partial
-read-back must each authorise nothing, proven through the real adapter, registry and
-dispatcher. Then S2 (the lesson store overwrites its own records, reports a failed write
-as success, and hashes arguments by key order). Not yet exercised live: web_search,
-recall_memory (436's CPU fix) and crash containment.
+**B1b** (C1 row 13): `scripts/verify-voice-session.js` says "nothing left to cut" from
+`suppressedChunks`, which counts audio arriving after the stop; the recorder showed
+0.4–5.1 s queued at all 8 barge-ins. Fix the verdict, on its own branch from `f456217d`.
+Then B2b (448: a claim backed by the wrong action), B2c (461 short-command positives,
+plus measuring which Bengali/Hindi words are transcribed) and B2d (457: one delivery
+record per result). Not yet exercised live: web_search, recall_memory and crash containment.
 
 ## Where the detail lives
 
