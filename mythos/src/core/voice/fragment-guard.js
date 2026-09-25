@@ -1,5 +1,7 @@
 'use strict';
 
+const { isAcknowledgement } = require('./acknowledgement'); // B2a (BUG-460): a recognised word is not a fragment
+
 // fragment-guard.js — BUG-299's rule ("a fragment transcript cannot license a
 // factual assertion") and BUG-460's narrowing of it. Moved out of
 // live-tool-adapter.js on 2026-09-24 because that file sits at its size ceiling
@@ -51,6 +53,14 @@ const SUBSTANTIVE_MIN_CHARS = 40;
 // further?" and then say "I missed what you said". Held but NOT asked about — the
 // real "November" reply asserted instead of asking — still draws the correction.
 // Bound: an assertion spoken beside a real question in the same reply is excused.
+//
+// B2a (2026-09-25, plan A5): a recognised ACKNOWLEDGEMENT is not unintelligible
+// input. "Okay." drew this correction live at 02:11:41, and all six acknowledgement
+// fires in the replayed history (2286 Live turns) were the operator being
+// understood. Whether such a reply's facts are backed is the claim checker's job,
+// exactly as after any ordinary sentence; this rule is about hearing. The
+// classifier (acknowledgement.js) is whole-utterance and closed, and it is never
+// consent — nothing on an authorising path imports it.
 function isAssertionOnUnintelligibleInput(userText, assistantText, actionsThisTurn) {
   const heard = String(userText || '').trim();
   // An EMPTY transcript is not a fragment. MYTHOS speaks unprompted on
@@ -59,6 +69,7 @@ function isAssertionOnUnintelligibleInput(userText, assistantText, actionsThisTu
   if (!heard) return false;
   if (heard.length > FRAGMENT_MAX_CHARS) return false;
   if (/\s/.test(heard)) return false;
+  if (isAcknowledgement(heard)) return false;
   if (String(assistantText || '').trim().length < SUBSTANTIVE_MIN_CHARS) return false;
   return !(Array.isArray(actionsThisTurn) ? actionsThisTurn : []).some((a) => a && (a.verified === true || (a.clarification === true && a.presented === true)));
 }
