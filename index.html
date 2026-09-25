@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8366,
+      "value": 8370,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6161,6 +6161,36 @@
         }
       },
       {
+        "n": 465,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the conversation panel asked for the UTC day's Episodic file, so after local midnight it read yesterday's and missed tonight's",
+        "detail": {
+          "cause": "`GET /api/conversation/history` in `server/index.js` named \"today's\" file with `new Date().toISOString().slice(0, 10)`, which is the UTC calendar date. Episodic files are written under the LOCAL day: `episodic.js` `dayFile(record.ts)` builds the name from the record timestamp's local date components, and `util/day-key.js` is the one date basis every dated vault file is meant to share (F11, 2026-08-15, which fixed exactly this split for Audit and Incidents). Its header says in as many words not to build a dated vault filename from `toISOString()`. The reader and the writer agreed only while local time and UTC sat on the same calendar day. Same class as BUG-454 (the voice prompt's `LOCAL CLOCK` line), a different consumer; BUG-454's commit named this route and left it out of its scope.",
+          "fix": "`const today = require('../src/core/util/day-key').dayKey();` — the same local basis the writer uses, computed per request. `dayKey()` rather than `memory.fs.todayKey()` because `day-key.js` is deliberately a plain module, so a fake fs store in a test does not need a method it has no reason to implement. The require is inline, following the `live-breakers.js` line near the top of `createServer`, because `server/index.js` sits one line under its size-ratchet ceiling (4679 of 4680); the change is line-count neutral.",
+          "verification": "`test/bug-465-history-reads-local-day.test.js` (4), against a real fs store behind the real route over HTTP. A recording proxy captures every fs call made with an `Episodic/` path, so the tests pin the file the route opens, not the rows it returns (those cannot be asserted until BUG-466 is fixed; the recorder watches every method, so switching the route to `readText()` keeps the file meaningful). The zone is pinned by assigning `process.env.TZ` in-process and the instant held with `t.mock.timers`, and each case first asserts that both took effect. (1) Asia/Colombo at 2026-09-23T20:19:57Z (local 2026-09-24 01:49:57) must read `Episodic/2026-09-24.jsonl`. (3) America/Los_Angeles at 2026-09-24T03:30:00Z must read `Episodic/2026-09-23.jsonl`. (4) The real Episodic writer, at test (1)'s instant, must file the row under the same path the route then reads. (2) is the adjacent case that must kee…"
+        },
+        "campaign": {
+          "disposition": "currently verified",
+          "evidence": "[FIXED 2026-09-24] GET /api/conversation/history named today's Episodic file with toISOString().slice(0, 10), the UTC date, while Episodic is written under the local day, so on a UTC+5:30 machine the panel read the previous day's file from 00:00 to 05:30 local and, west of UTC, a not-yet-existing file every evening. The name now comes from util/day-key.js dayKey(), per request. Consumers: HUD conversation panel. Regression oracle: bug-465-history-reads-local-day.test.js pins the path read in three zone/instant cases and that the real Episodic writer and the route agree; mutation probes recorded there. Remaining evidence: none for the mechanism; a real boot with TZ=Pacific/Kiritimati (local date one day ahead of UTC at the time) served the local day's file. Rows cannot render until BUG-466 is fixed.",
+          "source": "mythos/server/index.js (/api/conversation/history); mythos/src/core/util/day-key.js; tests: bug-465-history-reads-local-day.test.js"
+        }
+      },
+      {
+        "n": 466,
+        "shape": "entry",
+        "state": "open",
+        "title": "the conversation panel's Episodic half has never shown a row: the history route sends every row as the text \"[object Object]\" (filed 2026-09-24, OPEN)",
+        "detail": {
+          "cause": "`GET /api/conversation/history` in `server/index.js` builds its `episodic` field as `(memory.fs.readLines('Episodic/' + today + '.jsonl') || []).filter(Boolean).join('\\n')`. `readLines()` returns PARSED objects, one per line, and `Array.prototype.join` turns each object into the string `[object Object]`. The client's `parseEpisodicJsonl()` (`ui/public/js/views/transcript-model.js`) calls `JSON.parse` on each line, fails, and skips the line without a word — by design, because the same tolerance is what survives a torn final line. So the transport turns every row into a line the reader is built to discard. The route's own comment above it says \"Raw text, not parsed\"; the code does the opposite. It has read this way since the route was added in `1908d50d` (2026-08-12)."
+        },
+        "campaign": {
+          "disposition": "currently reproduced",
+          "evidence": "[FILED 2026-09-24] The same route joins readLines()'s parsed objects into one string with Array.join, so every Episodic row reaches the panel as the text \"[object Object]\" and the client's parser, built to skip torn lines, skips all of them. The Episodic half of the panel has never shown a row since the route was added (1908d50d, 2026-08-12). Measured in isolation and on a real boot (8 of 8 lines \"[object Object]\"). Consumers: HUD conversation panel (conversation.js, transcript-model.js buildTranscript). Remaining evidence: none; a fix is proven by a written turn coming back out of buildTranscript through the real route.",
+          "source": "mythos/server/index.js (/api/conversation/history); mythos/ui/public/js/views/transcript-model.js (parseEpisodicJsonl)"
+        }
+      },
+      {
         "n": 467,
         "shape": "entry",
         "state": "open",
@@ -6241,15 +6271,15 @@
       }
     ],
     "counts": {
-      "verified": 91,
+      "verified": 92,
       "fixed": 182,
-      "open": 34,
+      "open": 35,
       "coded": 9,
       "diagnosed": 1,
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 319,
+    "total": 321,
     "openDeclared": [
       274,
       275,
@@ -6279,6 +6309,7 @@
       462,
       463,
       464,
+      466,
       467,
       468,
       469,

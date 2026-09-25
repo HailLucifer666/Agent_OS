@@ -1114,8 +1114,8 @@ function createServer(deps) {
   app.get('/api/conversation/history', (req, res) => {
     // Today only. The panel is a SESSION transcript, not an archive, and
     // reading the whole Episodic directory would grow unbounded with vault
-    // age for a view that shows one day.
-    const today = new Date().toISOString().slice(0, 10);
+    // age for a view that shows one day. BUG-465: the LOCAL day, the basis the Episodic writer files under (util/day-key.js); a UTC key read yesterday's file every night 00:00-05:30 at UTC+5:30, and tomorrow's (absent) file every evening west of UTC.
+    const today = require('../src/core/util/day-key').dayKey();
     let session = null;
     let episodic = '';
     try { session = memory.fs.readJSON('Conversation/session.json', null); } catch (_) { /* no vault, or unreadable */ }
