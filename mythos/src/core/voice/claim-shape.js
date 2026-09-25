@@ -32,14 +32,18 @@ const GERUND = '(?:opening|launching|closing|dismissing|spawning|navigating|load
 const QUESTION_OPENER_RE = /^(?:shall|should|would|could|can|may|do|did|does|is|are|how about|what about|want me to|would you like)\b/i;
 const HEDGE = "(?:would|could|might|may|should|must|isn'?t|is not|wasn'?t|was not|won'?t|will not|can'?t|cannot|couldn'?t|hasn'?t|has not|didn'?t|did not|doesn'?t|does not|never|seems?|seemed|appears?|appeared|is beyond|is outside)";
 const HEDGED_GERUND_SUBJECT_RE = new RegExp('^' + GERUND + '\\b[^,;—–]{0,80}?\\b' + HEDGE + '\\b[^,;—–]*[,;—–]?', 'i');
-const REPORTED_QUOTE_RE = /\b(?:said|claimed|stated|told you)\s*[,:]?\s*(?:"[^"]*"|“[^”]*”)/gi;
+const NOW_RE = /\b(?:now|as we speak)\b/i;
+const REPORTED_QUOTE_RE =/\b(?:said|claimed|stated|told you)\s*[,:]?\s*(?:"[^"]*"|“[^”]*”)/gi;
 const REPORTED_CLAUSE_RE = /\b(?:saying|claiming)\s+(?:that\s+)?[^,;.!?]*/gi;
 const NOUN_GERUND_RE = new RegExp('\\b(for|of|about|by|before|after|without)\\s+' + GERUND + '\\b', 'gi');
 
 function claimView(sentence) {
   const s = String(sentence || '').trim();
   if (QUESTION_OPENER_RE.test(s) && /\?\s*$/.test(s)) return null;
-  const view = s.replace(HEDGED_GERUND_SUBJECT_RE, ' ')
+  // "Opening YouTube now should not take long" asserts the act is under way; the hedge is
+  // about duration. A hedged gerund that says "now" stays a claim (found attacking this rule).
+  const hedged = HEDGED_GERUND_SUBJECT_RE.exec(s);
+  const view = (hedged && !NOW_RE.test(hedged[0]) ? s.replace(HEDGED_GERUND_SUBJECT_RE, ' ') : s)
     .replace(REPORTED_QUOTE_RE, ' ')
     .replace(REPORTED_CLAUSE_RE, ' ')
     .replace(NOUN_GERUND_RE, '$1 it')

@@ -91,6 +91,7 @@ describe('what must still be judged', () => {
     assert.deepEqual(flagged('I said "done", and I\'ve opened YouTube.'), ['opening'], 'only the quote is removed');
     assert.deepEqual(flagged('Done, Sir: "YouTube is opening now."'), ['opening'], 'a quote is excused only after a reporting verb');
     assert.deepEqual(flagged("I'm not just saying it, I've opened it."), ['opening'], '"saying <clause>" ends at the clause');
+    assert.deepEqual(flagged('Opening YouTube now should not take long.'), ['opening'], 'a hedge about duration does not excuse "opening … now"');
   });
 
   it('(s1) a flag reports the sentence as spoken, so a correction can find it', () => {
@@ -120,5 +121,8 @@ describe('what must still be judged', () => {
 //   m11 a gerund after a preposition is not neutralised                 -> p1
 //   m12 the flag reports the view, not the sentence as spoken           -> s1
 //   m13 the checker ignores claimView                                   -> q1, g1, r1, p1, r2
+//   m14 (2026-09-26, second commit) a hedged gerund saying "now" is excused -> a1
 // Two bounds were pinned only after an attack found them unguarded: m7 and m9 survived the
 // first draft of this file, so a1 gained the unquoted-claim and "saying it, I've" cases.
+// A third came from attacking the committed rule: "Opening YouTube now should not take long"
+// was excused whole, because the hedge ("should") was about duration. m14 is that rule's probe.
