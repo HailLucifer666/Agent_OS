@@ -23,8 +23,8 @@ window to ship a fix before any public disclosure.
 
 - Anything that lets a remote party reach the tool surface without the
   bearer token (see "Network access" below).
-- Anything that lets a local, unauthenticated party bypass the PIN gate
-  (see "Local access" below).
+- Anything that lets a web page — any site open in a browser on this machine —
+  drive the local API (see "Local access" below).
 - Injection (prompt, command, SQL-shaped, path) reachable through any
   effector or adapter.
 - Secrets/credentials leaking into logs, audit trails, or model context.
@@ -43,12 +43,19 @@ us anyway if the defaults are unsafe.
   if `MYTHOS_BIND` is non-loopback and no token is set — this is enforced in
   `mythos/server/index.js`, not just documented, so an unauthenticated
   non-loopback bind is not a runtime state that can happen silently.
-- **Local/physical access**: `PIN_SESSION_ENFORCE` plus
-  `mythos/src/core/security/pin-session.js` turn the PIN lock screen into a
-  real server-verified session (a CSPRNG token, `crypto.timingSafeEqual`
-  comparison, sliding TTL) instead of a client-side-only visual deterrent.
-  This is a separate, independent layer from the network token — one gates
-  "someone at the keyboard," the other gates "someone on the network."
+- **Local access**: there is no PIN. It was removed on 2026-09-23 — MYTHOS is
+  a single-user desktop app and opens straight into the HUD. On a loopback
+  bind with no token the server trusts this machine: any local process can
+  call the API, which is the deliberate trade. What it refuses is a web page:
+  a request carrying a foreign `Origin`, or a browser `Sec-Fetch-Site` other
+  than `same-origin`/`none`, is rejected before any handler runs
+  (`mythos/src/core/server/boot-guards.js`), and a DNS-rebound hostname is
+  rejected by the Host check (BUG-337).
+- **Remote browsers** (token configured): signing in exchanges the token for a
+  random session id; the server stores only its SHA-256 and a fingerprint of
+  the token, outside the vault, and the cookie never carries the token
+  (`mythos/server/auth-sessions.js`, BUG-444). Sessions expire after 30 days,
+  one browser can sign out alone, and rotating the token ends all of them.
 - **Secrets**: every provider key is BYO, lives in `mythos/.env`
   (gitignored), and is documented — with no hardcoded default — in
   `mythos/.env.example`. There is no first-party key baked into the repo to

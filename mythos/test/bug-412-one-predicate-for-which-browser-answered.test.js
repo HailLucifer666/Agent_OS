@@ -153,9 +153,9 @@ describe('BUG-412 — one predicate for "is what answered what was asked?"', () 
   // same two resolvers the rest of the system uses. Strictly stronger than the
   // regex: it would catch a plan that asked for msedge and named it chrome, which
   // textual order-matching could not.
-  test('every launch attempt names the browser its own options would actually start', () => {
-    const attempts = browserAgent.planLocalLaunch(
-      path.join('C:', 'fake', 'MYTHOS', 'chrome-debug-profile'), {});
+  test('every launch attempt names the browser its own options would actually start', async () => {
+    const attempts = (await browserAgent.planLocalLaunch(
+      path.join('C:', 'fake', 'MYTHOS', 'chrome-debug-profile'), {}));
     assert.ok(attempts.length >= 1,
       'the plan must be non-empty on a dev machine — this guard is worthless against an empty list');
     for (const attempt of attempts) {

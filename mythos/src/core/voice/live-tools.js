@@ -71,6 +71,9 @@ const DEFAULT_ALLOWLIST = [
   // read-tool-missing-next-to-its-act-tool shape this list has been bitten by
   // before — and it is what made Incidents/ a place reports went to die.
   'remember','forget_fact','log_incident','list_incidents','incident_status','recall_memory','suggest_procedures',
+  // BUG-447 (2026-09-24): resuming after a barge-in. Only the spoken surface can be
+  // barged into, so this is where it belongs; T0, read-only, no act-side sibling.
+  'resume_interrupted_answer',
   // Notes (2026-08-14). All three ship together, act tool WITH both its read
   // tools, per this list's own rule: a withheld read tool next to an act tool
   // does not make the model decline, it makes it substitute the nearest
@@ -120,6 +123,7 @@ const DEFAULT_ALLOWLIST = [
   // just as much to a pair where one tool's description mandates the other:
   // naming an unreachable tool is not a remedy, it is a dead end with a hint.
   'reminder_add','reminder_list','reminder_cancel','reminder_approve_action',
+  'commitment_list','commitment_dismiss', // BUG-446 / D10: the only way to ask what MYTHOS promised
   'timer_add','timer_cancel',
   'gmail_unread','gmail_read','gmail_draft','gmail_send',
   // spotify_previous was missing while spotify_next was present — "go back" /

@@ -66,6 +66,10 @@
 // would silently turn every query into a false positive.
 // (The BUG-275 ranked-entity detector and its evidence-digest dependency moved
 // to ranked-claim-check.js when this file reached the 800-line ceiling.)
+// [2026-09-23: the one require is now claim-overlap.js (BUG-448) — also a pure
+// sibling, so the purity promise above still holds.]
+
+const { unexcusedHits, groupOverlapping } = require('./claim-overlap'); // BUG-448
 
 const CLAIM_CATEGORIES = [
   {
@@ -383,16 +387,34 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
   // it), and `started`/`confirmPending` are set explicitly by their push sites.
   // Only the progressive tier reads this — a pending tool makes "it is opening
   // now" true, and the premature-claim path already owns that correction.
+  //
+  // BUG-448: a row is not pending once ITS OWN call has returned. The SLOW_TOOLS
+  // path records a 'started' row and, later, a result row with the same traceId,
+  // and both stay in the turn. Counted as pending, the stale row silenced this
+  // tier for the whole category after the tool had finished — at 13:59:49 on
+  // 2026-09-23 that removed `opening` from the judgement entirely, and a FAILED
+  // launch would have been excused the same way.
+  const returnedTraces = new Set(
+    actions.filter((a) => a && a.traceId && (a.ok === true || a.ok === false)).map((a) => a.traceId),
+  );
   const pendingTools = new Set(
-    actions.filter((a) => a && a.tool
+    actions.filter((a) => a && a.tool && !(a.traceId && returnedTraces.has(a.traceId))
       && (a.started === true || a.confirmPending === true || a.ok === null || a.ok === undefined))
       .map((a) => a.tool),
+  );
+  // BUG-448: tools that FAILED in this turn. Direct counter-evidence about the
+  // action a category claims, which a sibling category's success must never
+  // overrule (see the grouping below). This turn only, and failed only — a
+  // pending row is not a failure, and a failure turns ago is about another act.
+  const failedThisTurn = new Set(
+    current.filter((a) => a && a.tool && a.ok === false).map((a) => a.tool),
   );
 
   const claims = [];
   const flaggedCategories = new Set();
   for (const sentence of splitSentences(text)) {
     if (FUTURE_RE.test(sentence)) continue;
+    const hits = [];
     for (const category of CLAIM_CATEGORIES) {
       if (flaggedCategories.has(category.name)) continue; // one flag per category per reply
       // BUG-383: `re` may be null. The external-fact category has ONLY the
@@ -427,9 +449,18 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       // a pending tool did NOT happen is its own false statement" (the
       // ad4-correction-premature branch exists for exactly that). So a category
       // with a pending row is silent here, and the premature-claim path owns it.
-      if (!match && category.progressiveRe && !gate.some((tool) => pendingTools.has(tool))
-          && !PROGRESSIVE_SUBJECT_IS_THEIRS_RE.test(sentence)) {
-        match = category.progressiveRe.exec(sentence) || (options?.voiceHonesty !== false && category.incidentProgressiveRe?.exec(sentence));
+      if (!match && category.progressiveRe && !PROGRESSIVE_SUBJECT_IS_THEIRS_RE.test(sentence)) {
+        const progressive = category.progressiveRe.exec(sentence) || (options?.voiceHonesty !== false && category.incidentProgressiveRe?.exec(sentence));
+        // BUG-448: in flight, "it is opening now" is TRUE — never flagged, as
+        // before. It is now also RECORDED, so an overlapping description of the
+        // same action ("… a new Notepad window") is judged with it below rather
+        // than alone.
+        if (progressive && gate.some((tool) => pendingTools.has(tool))) {
+          hits.push({ category, gate, match: progressive, backed: true, counterEvidence: false,
+            start: progressive.index, end: progressive.index + progressive[0].length });
+          continue;
+        }
+        match = progressive;
       }
       if (!match) continue;
       // A fact-finding tool that SUCCEEDED backs the claim. This is what stops
@@ -453,13 +484,20 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       // progressive tiers carry no such counter-evidence, so they are backed.
       const backed = gate.some((tool) => successfulTools.has(tool))
         || (!elliptical && (category.backingTools || []).some((tool) => successfulTools.has(tool)));
-      if (backed) continue;
-      flaggedCategories.add(category.name);
+      hits.push({ category, gate, match, backed, start: match.index, end: match.index + match[0].length,
+        // The elliptical tier fires ONLY because an owned tool was attempted and
+        // did not succeed, so its match is counter-evidence by construction.
+        counterEvidence: elliptical || gate.some((tool) => failedThisTurn.has(tool)) });
+    }
+    // BUG-448: matches whose words overlap are ONE action, judged together —
+    // the rule, its bounds and the 2026-09-23 incident are in claim-overlap.js.
+    for (const hit of unexcusedHits(hits)) {
+      flaggedCategories.add(hit.category.name);
       claims.push({
-        category: category.name,
-        phrase: match[0],
+        category: hit.category.name,
+        phrase: hit.match[0],
         sentence,
-        candidateTools: gate.slice(),
+        candidateTools: hit.gate.slice(),
       });
     }
   }
@@ -738,4 +776,6 @@ module.exports = {
   // same text and must split sentences and skip future tense IDENTICALLY.
   // Two copies of either would drift, and the drift would be invisible.
   splitSentences, FUTURE_RE,
+  // BUG-448: the pure grouping rule (claim-overlap.js), re-exported for its tests.
+  _internal: { groupOverlapping },
 };

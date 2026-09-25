@@ -481,6 +481,9 @@ function buildCalendarTools(ctx) {
     } },
     { name: 'timer_cancel', description: 'Cancel a pending timer by its label/text match.', params: { query: 'string' }, danger: false, fn: async function(args) { return cal.cancelReminder(args); } },
     { name: 'calendar_upcoming', description: 'List upcoming events from the connected Google Calendar (read-only). Requires GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN to be configured — degrades honestly with a clear setup message otherwise.', params: { max: 'number (optional) - max events to return, default 10' }, danger: false, fn: async function(args) { return calendarUpcoming(args, ctx); }, needs_result: true },
+    // BUG-446 / D10: commitments are listed when asked for, never pushed — see commitmentList below.
+    { name: 'commitment_list', description: 'List what MYTHOS itself said it would do ("I will check X", "let me find Y") that the operator has not accepted, done or dismissed. Only when the operator ASKS what you promised or what is still open — never raise these unprompted. Each carries an id for commitment_dismiss.', params: {}, danger: false, fn: async function() { return commitmentList(ctx && ctx.goals); }, needs_result: true },
+    { name: 'commitment_dismiss', description: 'Drop one of the open commitments MYTHOS made itself, by its id from commitment_list, when the operator says to forget it. This records the dismissal only: the commitment is NOT marked done and is never activated.', params: { id: 'string - the commitment id from commitment_list' }, danger: false, fn: async function(args) { return commitmentDismiss(ctx && ctx.goals, args); } },
   ];
 }
 
@@ -636,11 +639,34 @@ function listOpenCommitments(goals) {
   if (!goals || typeof goals.list !== 'function') return [];
   var proposed = goals.list({ status: 'proposed' }) || [];
   return proposed.filter(function(g) {
-    return g && typeof g.title === 'string' && g.title.indexOf(COMMITMENT_TITLE_PREFIX) === 0;
+    return g && typeof g.title === 'string' && g.title.indexOf(COMMITMENT_TITLE_PREFIX) === 0 && !g.dismissedAt;
   });
+}
+
+// BUG-446 / D10 (2026-09-23, operator decision): an unaccepted commitment never
+// activates and is never raised unprompted. read_status used to carry every open
+// one into every status answer; now they are listed only when asked for, and a
+// dismissal is PERSISTED (goal.dismissedAt) without marking anything done —
+// nothing was done, and saying so would be the lie the evidence contract exists
+// to prevent. The record is kept, never deleted: it is what MYTHOS said.
+function commitmentList(goals) {
+  var open = listOpenCommitments(goals);
+  return { ok: true, result: { count: open.length, commitments: open.map(function(g) {
+    return { id: g.id, text: g.title.slice(COMMITMENT_TITLE_PREFIX.length), createdAt: g.createdAt };
+  }) } };
+}
+
+function commitmentDismiss(goals, args) {
+  var id = args && typeof args.id === 'string' ? args.id.trim() : '';
+  var goal = id && goals && typeof goals.get === 'function' ? goals.get(id) : null;
+  var isOpen = goal && goal.status === 'proposed' && !goal.dismissedAt &&
+    typeof goal.title === 'string' && goal.title.indexOf(COMMITMENT_TITLE_PREFIX) === 0;
+  if (!isOpen) return { ok: false, result: 'No open commitment has the id "' + id + '". The ids are listed by commitment_list; nothing was changed.' };
+  goals.update(id, { dismissedAt: new Date().toISOString() });
+  return { ok: true, result: { dismissed: id, text: goal.title.slice(COMMITMENT_TITLE_PREFIX.length), markedDone: false } };
 }
 
 module.exports = {
   createCalendarEffector, buildCalendarTools, registerFromCalendar,
-  detectCommitment, logCommitmentIfPresent, listOpenCommitments
+  detectCommitment, logCommitmentIfPresent, listOpenCommitments, commitmentList, commitmentDismiss
 };

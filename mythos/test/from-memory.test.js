@@ -589,7 +589,9 @@ describe('from-memory: recall_memory', () => {
 describe('from-memory: tool structure', () => {
   it('exports memory tools including read-only procedural guidance (BUG-358)', () => {
     const tools = buildTools({ semantic: { write: () => ({}) }, fs: { ensureDir: () => {}, appendLine: () => {} }, memory: { recallHybrid: async () => [] } });
-    assert.equal(tools.length, 11);
+    // 11 -> 12 on 2026-09-24: resume_interrupted_answer (BUG-447), a T0 read of the
+    // part of MYTHOS's own last answer the operator did not hear.
+    assert.equal(tools.length, 12);
     // The note_* trio registers even with no notes store in ctx — the tools
     // then fail honestly ("notes store unavailable") rather than vanishing,
     // because a tool that disappears based on wiring is invisible to the
@@ -597,7 +599,7 @@ describe('from-memory: tool structure', () => {
     assert.deepEqual(tools.map(t => t.name).sort(), [
       'forget_fact', 'incident_status', 'list_incidents', 'log_incident',
       'note_read', 'note_search', 'note_take',
-      'recall_memory', 'remember', 'self_capabilities', 'suggest_procedures',
+      'recall_memory', 'remember', 'resume_interrupted_answer', 'self_capabilities', 'suggest_procedures',
     ]);
   });
 

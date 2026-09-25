@@ -11,9 +11,10 @@
 //
 // The old shape asked "has anything connected yet?". That is not the question.
 // The question is "is there a client that can actually PLAY this?", and only the
-// client knows the answer: it depends on the PIN state, on whether the voice
-// configuration has loaded, and on whether playback is wired. So the client says
-// so, in a `hud-ready` message, and this module waits for one that can.
+// client knows the answer: it depended on the PIN state (removed 2026-09-23),
+// and it depends on whether the voice configuration has loaded and playback is
+// wired. So the client says so, in a `hud-ready` message, and this module waits
+// for one that can.
 //
 // WHY A MODULE. server/index.js is at its size ceiling, and more to the point
 // this logic is a state machine worth testing as one. The states are not
@@ -122,8 +123,8 @@ function createGreetingScheduler(deps) {
      * A client has told us what it can do. Returns true only when this offer
      * armed the greeting.
      *
-     * `greetable` is the CLIENT's own verdict — socket up, PIN explicitly
-     * unlocked, voice configuration loaded, playback wired. It is a playback
+     * `greetable` is the CLIENT's own verdict — socket up, voice
+     * configuration loaded, playback wired. It is a playback
      * hint and never an authentication claim; the caller is responsible for
      * refusing a socket that has no business nominating itself (a voice node).
      */

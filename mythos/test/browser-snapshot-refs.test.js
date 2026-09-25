@@ -76,17 +76,19 @@ describe('browser_snapshot — the page as refs, not a guess', () => {
   beforeEach(stubOnline);
   afterEach(restore);
 
-  it('returns the accessibility tree, the refs in it, and a generation number', async () => {
+  it('returns the page as items carrying refs, and a generation number', async () => {
     const fb = loadEffector(fakePage());
     fb.__resetSnapshotStateForTest();
 
     const r = await fb.browser_snapshot({});
 
     assert.equal(r.ok, true);
-    assert.match(r.result.snapshot, /\[ref=e1\]/, 'the tree the model reads must carry the refs it will act on');
-    assert.equal(r.result.refCount, 2);
+    // BUG-445 (2026-09-23): a bounded list of items, not raw YAML — see
+    // src/core/effectors/snapshot-view.js for why the tree could not stay.
+    assert.deepEqual(r.result.items.map((i) => i.ref), ['e1', 'e2'],
+      'the list the model reads must carry the refs it will act on');
     assert.equal(r.result.generation, 1);
-    assert.equal(r.result.truncated, false);
+    assert.equal(r.result.pages, 1);
     assert.equal(r.result.url, 'https://example.test/');
   });
 
@@ -133,54 +135,49 @@ describe('browser_snapshot — the page as refs, not a guess', () => {
   });
 });
 
-describe('browser_snapshot — the size cap is stated, never silent', () => {
+// The 8,000-character capSnapshot() these tests used to pin was REMOVED on
+// 2026-09-23 (BUG-445): it registered refs the voice model was never shown. What
+// survives of its contract — a large page is paged and SAYS so, and inert text is
+// never allowed to crowd out what can be acted on — is pinned here against the
+// replacement; the full proof is test/bug-445-snapshot-view-shows-what-it-accepts.
+describe('browser_snapshot — a large page is paged, and says so', () => {
   beforeEach(stubOnline);
   afterEach(restore);
 
-  it('a page that fits is returned whole', () => {
-    const fb = require(FROM_BROWSER);
-    const small = '- button "a" [ref=e1]\n- text: hello';
-    const capped = fb.capSnapshot(small);
-    assert.equal(capped.truncated, false);
-    assert.equal(capped.text, small);
+  it('a page that fits is one page, with no paging note', async () => {
+    const fb = loadEffector(fakePage());
+    fb.__resetSnapshotStateForTest();
+    const r = await fb.browser_snapshot({});
+    assert.equal(r.result.pages, 1);
+    assert.equal(r.result.note, undefined);
+    assert.equal(r.result.nextPage, undefined);
   });
 
-  it('an oversized page keeps the interactable elements and SAYS how many it dropped', () => {
-    const fb = require(FROM_BROWSER);
-    const noise = Array.from({ length: 400 }, (_, i) => `- text: filler ${i}`);
-    const buttons = Array.from({ length: 5 }, (_, i) => `- button "b${i}" [ref=e${i}]`);
-    const capped = fb.capSnapshot(noise.concat(buttons).join('\n'));
-
-    assert.equal(capped.truncated, true);
-    assert.ok(capped.omittedNodes > 0, 'the drop must be counted');
-    assert.ok(capped.text.includes('[ref=e0]'), 'refs are what an action can target — they survive the cap');
-    assert.ok(!capped.text.includes('filler 1'), 'inert text is what gets dropped first');
+  it('an oversized page says how much there is and how to read the rest', async () => {
+    const buttons = Array.from({ length: 400 }, (_, i) => `- button "button number ${i}" [ref=e${i}]`).join('\n');
+    const fb = loadEffector(fakePage({ ariaSnapshot: async () => buttons }));
+    fb.__resetSnapshotStateForTest();
+    const r = await fb.browser_snapshot({});
+    assert.ok(r.result.pages > 1);
+    assert.equal(r.result.itemCount, 400);
+    assert.match(r.result.note, /of 400/);
+    assert.deepEqual(r.result.nextPage, { page: 2, generation: r.result.generation });
   });
 
-  it('the result carries the truncation note, so the model is never told it saw the whole page', async () => {
+  it('inert text never crowds out what can be acted on', async () => {
     const noise = Array.from({ length: 400 }, (_, i) => `- text: filler ${i}`).join('\n');
     const fb = loadEffector(fakePage({ ariaSnapshot: async () => noise + '\n- button "go" [ref=e9]' }));
     fb.__resetSnapshotStateForTest();
-
     const r = await fb.browser_snapshot({});
-    assert.equal(r.result.truncated, true);
-    assert.match(r.result.truncationNote, /omitted/i);
-    assert.ok(r.result.omittedNodes > 0);
+    assert.deepEqual(r.result.items.map((i) => i.ref), ['e9']);
   });
 
-  it('a character-capped tree never ends mid-line — a half-written ref is unusable', () => {
-    const fb = require(FROM_BROWSER);
-    const long = Array.from({ length: 199 }, (_, i) =>
-      `- button "${'x'.repeat(200)}" [ref=e${i}]`).join('\n');
-    const capped = fb.capSnapshot(long);
-    assert.ok(capped.text.length <= fb.SNAPSHOT_MAX_CHARS);
-    assert.ok(!/\[ref=[^\]]*$/.test(capped.text), 'the last line must not be a truncated ref marker');
-  });
-
-  it('extractRefs reads both the main-frame and in-frame ref shapes', () => {
-    const fb = require(FROM_BROWSER);
-    const refs = fb.extractRefs('- button [ref=e1]\n- iframe [ref=f2e7]\n  - textbox "Name" [ref=f2e8]');
-    assert.deepEqual(refs, ['e1', 'f2e7', 'f2e8']);
+  it('both ref shapes — main frame and in-frame — are issued', async () => {
+    const fb = loadEffector(fakePage({ ariaSnapshot: async () =>
+      '- button "a" [ref=e1]\n- iframe [ref=f2e7]:\n  - textbox "Name" [ref=f2e8]' }));
+    fb.__resetSnapshotStateForTest();
+    const r = await fb.browser_snapshot({});
+    assert.deepEqual(r.result.items.map((i) => i.ref), ['e1', 'f2e8']);
   });
 });
 

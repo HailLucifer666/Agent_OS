@@ -121,7 +121,16 @@ describe('S2S half-duplex gate: our own TTS never reaches the Live mic', () => {
 
   it('the bridge drops capture frames while suspended', () => {
     const src = fs.readFileSync(path.join(jsDir, 'voice', 's2s-bridge.js'), 'utf8');
-    assert.match(src, /if \(!active \|\| captureSuspended\) return;/,
+    // 2026-09-23 (BUG-406): the combined `if (!active || captureSuspended) return;`
+    // became two returns with the gate recorder's sample between them — the
+    // recorder must see the frames the gate holds. The invariant this test exists
+    // for is unchanged and is now asserted as an ORDER inside the frame handler:
+    // the suspended return comes before the frame is sent.
+    const start = src.indexOf('captureNode.port.onmessage');
+    const handler = src.slice(start, src.indexOf('source.connect(captureNode)', start));
+    const returnAt = handler.indexOf('if (captureSuspended) return;');
+    const sendAt = handler.indexOf("sendMessage({ type: 'live-audio'");
+    assert.ok(returnAt !== -1 && sendAt !== -1 && returnAt < sendAt,
       'suspended capture must stop sending live-audio frames');
     assert.match(src, /function setCaptureSuspended\(/);
     assert.match(src, /setCaptureSuspended,/, 'the gate must be on the public API');

@@ -79,7 +79,10 @@ describe('server/index.js OCR-grab IPC handler (Slice 2)', () => {
 });
 
 describe('HUD ocr-result handling (Slice 2)', () => {
-  it('subscribes to ocr-result and respects the PIN gate', () => {
+  // REWRITTEN 2026-09-23. This required the OCR result to be dropped behind a
+  // locked HUD. The PIN was removed, so a result is always surfaced — and a
+  // leftover gate would silently eat it, which is BUG-268's original symptom.
+  it('subscribes to ocr-result and surfaces it with no lock gate', () => {
     assert.match(APP_JS, /subscribe\(\['ocr-result'\]/);
     const block = APP_JS.slice(APP_JS.indexOf("subscribe(['ocr-result']"));
     // Window widened from 400 to 1600 chars on 2026-08-20. BUG-268's boundary-3
@@ -89,12 +92,8 @@ describe('HUD ocr-result handling (Slice 2)', () => {
     // window narrow enough to break on a comment reports a defect that is not
     // there, and the fix people reach for is deleting the assertion.
     const window = block.slice(0, 1600);
-    assert.match(window, /isGateClosed\(pinLockScreen\.lockState\(\)\)/,
-      'a locked HUD must not surface OCR text — same invariant as navigate/proactive-speech');
-    // And the verdict must still short-circuit the subscriber. Reading the gate
-    // and rendering anyway would satisfy the match above while breaking the rule.
-    assert.match(window, /if \(gateClosed\) return;|if \(isGateClosed\([^)]*\)\) return;/,
-      'the gate verdict must return early, not merely be computed');
+    assert.doesNotMatch(window, /isGateClosed|gateClosed|lockState/, 'no lock gate may drop the result');
+    assert.match(window, /const p = msg\.payload \|\| \{\};/, 'the subscriber reads the result it is handed');
   });
 
   it('captions the result; the clipboard is the main process\'s job now (BUG-268 D4)', () => {

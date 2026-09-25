@@ -24,7 +24,11 @@ const PROSE_BASELINE = {
   "claim-check.js": ["331fa7dc114f198f"],
   "narration-claims.js": ["d98c73994603d126"],
   "turn-audit-notices.js": ["2516cec7e56c2064"],
-  "voice-agent.js": ["0389baa340c47aa1", "a769c4ee72490ffc", "8266b6bf213bc2b9", "37bb0d112fd86208", "829d84f969b61a66", "e498939cf2a8d0b0", "57ac9c3a016ac87a"],
+  // 2026-09-23, BUG-445: was "e498939cf2a8d0b0". A SWAP, not an addition — still
+  // 7 sites. The hashed literal is the whole RULES block; its BROWSER INTERACTION
+  // RULE now says browser_snapshot LISTS items with a ref like e12 (it no longer
+  // returns a tree of [ref=e12] markers), which rehashes the block. No new advice.
+  "voice-agent.js": ["0389baa340c47aa1", "a769c4ee72490ffc", "8266b6bf213bc2b9", "37bb0d112fd86208", "829d84f969b61a66", "4ef68331d4e70f3f", "57ac9c3a016ac87a"],
   "browser-intent-remedy.js": [
     "49a97d7d71bc722c",
     "50518bdca0531d56"
@@ -92,7 +96,12 @@ const PROSE_BASELINE = {
     "c23975ac085b0403",
     "6724cb9544588cf0",
     "19bc0806640b90b2",
-    "1adc7b106a487c93",
+    // 2026-09-23, BUG-446 (D10): was "1adc7b106a487c93". A SWAP, not an addition —
+    // still 18 sites. Measured with a copy of adviceStrings: from line ~635 the lexer
+    // is out of step with this whole file, and read_status sits INSIDE one of its
+    // mis-lexed backtick spans (lines ~712-795), so removing openCommitments from
+    // read_status rehashes that span. No new advice was written.
+    "90e572638d572dc9",
     "e09870975d9f1611",
     "da227a0c1b53dbd5",
     "8e0298bb1ac1d826",

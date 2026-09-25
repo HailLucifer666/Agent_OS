@@ -990,63 +990,11 @@ describe('immune/probes — (regression) null-guard on remainingPercent', functi
 });
 
 // ---------------------------------------------------------------------------
-// announcer
+// announcer — DELETED 2026-09-23 (BUG-447, operator decision D5). It spoke every
+// successful heal and every crash recovery; a heal that worked is now never
+// spoken. Pinned in test/bug-447-heals-are-not-spoken.test.js; the heal record
+// (title, trigger, actions) in test/bug-162-healer-announce-detail.test.js.
 // ---------------------------------------------------------------------------
-
-describe('immune/announcer', function() {
-  it('requires bus and speak() at construction', function() {
-    var { createAnnouncer } = require('../src/core/immune/announcer');
-    assert.throws(function() { createAnnouncer({ speak: function() {} }); }, /bus/);
-    assert.throws(function() { createAnnouncer({ bus: fakeBus() }); }, /speak/);
-  });
-
-  it('W6: does NOT announce health.diagnosed (conversation/announcer owns that now)', async function() {
-    var bus = fakeBus();
-    var spoken = [];
-    var { createAnnouncer } = require('../src/core/immune/announcer');
-    var announcer = createAnnouncer({ bus: bus, speak: function(text) { spoken.push(text); return Promise.resolve(); } });
-    announcer.start();
-    // Pre-W6 both immune/announcer and conversation/announcer spoke on health.diagnosed
-    // (double-speak). W6 removes the subscription here — conversation/announcer is the
-    // single speaker. Emit at every severity; none should be spoken by THIS announcer.
-    bus.emit('health.diagnosed', { kind: 'cortex-stall', target: null, severity: 'critical' });
-    bus.emit('health.diagnosed', { kind: 'quota-low', target: 'groq', severity: 'minor' });
-    await sleep(10);
-    assert.equal(spoken.length, 0, 'immune/announcer must not speak on health.diagnosed after W6');
-    announcer.stop();
-  });
-
-  it('announces a successful heal, ignores non-applied outcomes', async function() {
-    var bus = fakeBus();
-    var spoken = [];
-    var { createAnnouncer } = require('../src/core/immune/announcer');
-    var announcer = createAnnouncer({ bus: bus, speak: function(text) { spoken.push(text); return Promise.resolve(); } });
-    announcer.start();
-    bus.emit('health.healed', { playbookId: 'stall-restart', outcome: 'applied' });
-    bus.emit('health.healed', { playbookId: 'quota-guard', outcome: 'cooldown' });
-    await sleep(10);
-    assert.equal(spoken.length, 1);
-    assert.ok(spoken[0].indexOf('stall-restart') !== -1);
-    announcer.stop();
-  });
-
-  it('never throws even if speak() rejects', async function() {
-    var bus = fakeBus();
-    var { createAnnouncer } = require('../src/core/immune/announcer');
-    var announcer = createAnnouncer({ bus: bus, speak: function() { return Promise.reject(new Error('tts down')); } });
-    announcer.start();
-    assert.doesNotThrow(function() { bus.emit('lifecycle.recovered', {}); });
-    await sleep(10);
-    announcer.stop();
-  });
-
-  // W6 removed the health.diagnosed subscription from immune/announcer (single-speaker
-  // fix — conversation/announcer now owns diagnosis speech). The BUG-030 dedup test
-  // that previously lived here pinned dedup behavior on a subscription that no longer
-  // exists; the dedup map is retained in source for any future health-channel sub, but
-  // with no subscriber there is no path to exercise. The W6 regression test
-  // (test/w6-single-announcer.test.js) pins the new end-to-end single-speaker contract.
-});
 
 // ---------------------------------------------------------------------------
 // monitor — checkpoint cadence (real memory facade) + memory-growth

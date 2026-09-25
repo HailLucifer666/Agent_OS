@@ -365,7 +365,7 @@ function createLiveToolAdapter(deps) {
       signature = `${name}:${JSON.stringify(args || {})}`;
     } catch (err) {
       // A non-serialisable arg must degrade this ONE call, not the whole
-      // batch — same defensive-by-default convention truncateForModel below
+      // batch — same defensive-by-default convention boundForModel below
       // already follows. Wrongly suppressing a call is worse than wrongly
       // allowing one, so this fails open: not a duplicate.
       logger.warn('live.duplicate-signature-unserializable', { tool: name, error: err.message });
@@ -389,12 +389,9 @@ function createLiveToolAdapter(deps) {
       .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ');
     return s.length > MAX_SUMMARY_CHARS ? s.slice(0, MAX_SUMMARY_CHARS) + '…[truncated]' : s;
   }
-  function truncateForModel(result) {
-    try {
-      const s = typeof result === 'string' ? result : JSON.stringify(result);
-      return s && s.length > 4000 ? s.slice(0, 4000) + '…[truncated]' : (result ?? null);
-    } catch { return String(result).slice(0, 4000); }
-  }
+  // BUG-445: results are bounded as a STRUCTURE (model-result.js); the old
+  // JSON.stringify(result).slice(0, 4000) handed the model a string cut mid-token.
+  const { boundForModel } = require('./model-result');
 
   // Stage 3 (BUG-068): shared "did this outcome actually succeed" verdict —
   // previously only the slow/late path (reportLateOutcome) treated
@@ -473,7 +470,7 @@ function createLiveToolAdapter(deps) {
     // The confirmed step rides as its own key instead.
     const wrapped = { confirmed: false, whatIsUnconfirmed: unverifiedNarration(toolName, reason, confirmedStep) };
     if (confirmedStep) wrapped.confirmedStep = confirmedStep;
-    const payload = truncateForModel(result);
+    const payload = boundForModel(result);
     if (payload !== null && payload !== undefined) wrapped.unconfirmedDetails = payload;
     return wrapped;
   }
@@ -772,7 +769,7 @@ function createLiveToolAdapter(deps) {
         } else {
           summary = `${call.name} done.`;
           if (call.name === 'suggest_procedures') suggestedProcedures.record(ev.result);
-          response = { status: 'ok', result: truncateForModel(ev.result) };
+          response = { status: 'ok', result: boundForModel(ev.result) };
           // BUG-295: the success branch, and the one instance A came through.
           // `message` is the instruction on every other branch here, so it is
           // the instruction on this one too rather than a fourth field the model
@@ -851,7 +848,7 @@ function createLiveToolAdapter(deps) {
       // BUG-273 B2: same split as the awaited branch.
       instruction = ev.confirmedStep ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
     } else {
-      verdict = `${toolName} finished. Result: ${JSON.stringify(truncateForModel(ev.result))}`;
+      verdict = `${toolName} finished. Result: ${JSON.stringify(boundForModel(ev.result))}`;
       // BUG-295: open_web breached the 1500ms ack deadline 44 times in the
       // 2026-08-20 session — more breaches than calls — so a content-free tool
       // reaches the operator through THIS path routinely, not exceptionally.
@@ -880,7 +877,7 @@ function createLiveToolAdapter(deps) {
       evidence: evidenceFor(toolName, ev.result) };
     liveTurnActions.push(lateEntry);
     recentActionLedger.record(lateEntry);
-    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName, remedy: ev.remedy,
+    sendSystemNotice(verdict, instruction, { site: 'late-outcome', tool: toolName, remedy: ev.remedy, receiptKey: traceId || null,
       speech: require('./action-outcome-summary').lateOutcomeSpeech(toolName, { ...ev, rawError: sanitizeResultError(ev.rawError) }, (deps.now || Date.now)() - startedAt),
       claim: ev.abortedInFlight ? 'aborted-in-flight'
         : (!ev.dispatchOk ? 'failed' : (ev.unverified ? (ev.confirmedStep ? 'unverified-partial' : 'unverified') : 'ok')) });
@@ -921,8 +918,8 @@ function createLiveToolAdapter(deps) {
     const liveSession = getLiveSession ? getLiveSession() : null;
     const m = meta || {};
     const message = `${SYSTEM_NOTICE_PREFIX} ${verdict} ${instruction}${m.remedy ? " Structured remedy: " + JSON.stringify({ remedy: m.remedy }) : ""}`;
-    const open = !!liveSession && liveSession.isOpen();
-    const delivered = open && liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null, claim: m.claim || null }) !== false;
+    const open = !!liveSession && (liveSession.isOpen() || (typeof liveSession.acceptsNotices === 'function' && liveSession.acceptsNotices())); // BUG-436: a ROTATING session holds the answer for its replacement; treating it as closed spoke the answer over TTS outside Live
+    const delivered = open && liveSession.sendText(message, { site: m.site || 'unknown', tool: m.tool || null, claim: m.claim || null, speech: m.speech || null, receiptKey: m.receiptKey || null }) !== false;
     if (!delivered) {
       // Logged on the way out too: "the outcome never reached the model" and "the
       // model was told and said nothing" are different failures that used to look
@@ -1011,7 +1008,7 @@ function createLiveToolAdapter(deps) {
           + String(outcome.reason || 'no confirmation available');
       instruction = step ? UNVERIFIED_PARTIAL_CLAIM : UNVERIFIED_NO_PROOF_CLAIM;
     } else {
-      verdict = `The operator APPROVED ${pending.name}. It succeeded. Result: ${JSON.stringify(truncateForModel(outcome.result))}`;
+      verdict = `The operator APPROVED ${pending.name}. It succeeded. Result: ${JSON.stringify(boundForModel(outcome.result))}`;
       // BUG-295: a confirmation gates INTENT. It says nothing about whether the
       // page was read, so an approved navigate needs the same prohibition as an
       // unapproved one.
@@ -1030,7 +1027,7 @@ function createLiveToolAdapter(deps) {
     // sendSystemNotice's guard and its wire format. Two doors meant the injection
     // log could only ever cover one of them — and an incomplete log of what starts
     // a turn is worse than none, because the gaps read as "nothing happened".
-    sendSystemNotice(verdict, instruction, { site: 'confirm-resolved', tool: pending.name,
+    sendSystemNotice(verdict, instruction, { site: 'confirm-resolved', tool: pending.name, receiptKey: 'confirm:' + confirmId,
       claim: accepted ? (unverified ? 'unverified' : (ok ? 'ok' : 'failed')) : 'rejected' });
   }
 
@@ -1365,7 +1362,7 @@ function createLiveToolAdapter(deps) {
         detectUnsourcedRankedEntities(assistantText, actionsThisTurn, recentActionLedger.forClaims()),
         { claim: 'unsourced-ranked-entity', tool: 'unsourced-ranking',
           site: 'bug275-h3-unsourced-ranking', notice: unsourcedRankingNotice,
-          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) }); require('./promoted-rank-anomaly').reportPromotedRanks({ bus, assistantText, actionsThisTurn, recentActions: recentActionLedger.forClaims() }); // BUG-275 H1, folded onto the line above because this file is AT its size ratchet: a name given a rank its source never gave it. Deliberately NOT through reportTurnAudit — operator decision 2026-09-10; every path through that helper speaks aloud, and why this one must not is in promoted-rank-anomaly.js.
+          extra: (b) => ({ absent: b.absent, sawTools: b.sawTools }) }); require('./silent-turn-anomalies').reportSilentTurnAnomalies({ bus, assistantText, actionsThisTurn, recentActions: recentActionLedger.forClaims() }); // BUG-275 H1 and unsearched-current-fact, BUG-449 spoken tool syntax: detectors that REPORT and never speak — deliberately not reportTurnAudit, whose every path speaks aloud. The list, and why each is silent, is in silent-turn-anomalies.js.
 
       // BUG-275 H2: the operator disputes a claim and the reply EXPLAINS it
       // rather than re-checking — the DIG-IN twin of row 7 above. Its evidence

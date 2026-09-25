@@ -13,7 +13,6 @@
   <link rel="stylesheet" href="/css/voice.css" />
   <link rel="stylesheet" href="/css/compose-bar.css" />
   <link rel="stylesheet" href="/css/confirm.css" />
-  <link rel="stylesheet" href="/css/pin.css" />
   <link rel="stylesheet" href="/css/auth.css" />
   <link rel="stylesheet" href="/css/setup.css" />
   <link rel="stylesheet" href="/css/status-banner.css" />
@@ -43,15 +42,10 @@
   <div id="widget-root"></div>
   <div id="overlay-root"></div>
   <div id="confirm-root"></div>
-  <!-- §7.3 local PIN lock. Mounted last so the overlay stacks above every
-       other root; stays empty unless GET /api/pin/status reports a PIN is
-       configured, in which case the HUD behind it is made inert. -->
-  <div id="pin-root"></div>
-  <!-- MYTHOS_AUTH_TOKEN prompt. Stays empty unless GET /health reports
-       authRequired AND GET /api/status answers 401 — a default loopback
-       install with no token configured never paints anything here.
-       Stacks above #pin-root: the PIN screen's own status call is itself
-       gated by the token, so this must be satisfied first. -->
+  <!-- MYTHOS_AUTH_TOKEN prompt, for a REMOTE browser only. Stays empty unless
+       GET /health reports authRequired AND GET /api/status answers 401 — a
+       default loopback install never paints anything here, and the desktop
+       app is signed in by its main process before the page loads. -->
   <div id="auth-root"></div>
   <!-- First-run setup: lists what this machine is still missing (keys, models,
        binaries) and stores keys through the encrypted desktop key store. Sits

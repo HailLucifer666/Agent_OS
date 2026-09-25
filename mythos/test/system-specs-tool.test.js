@@ -7,7 +7,7 @@
 // own server (os.cpus()/totalmem()/freemem() in server/routes/system.js,
 // served at GET /api/system for the dashboard's own widget) but nothing
 // exposed any of it to the model — read_status (from-dashboard.js) returns
-// only {status, recentJobs, openCommitments, persona}.
+// only {status, recentJobs, persona} (openCommitments left it for commitment_list, BUG-446).
 //
 // This file pins the new read_system_specs tool (from-dashboard.js), a
 // STATELESS read of static/instantaneous os facts — deliberately NOT the

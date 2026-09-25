@@ -107,10 +107,10 @@ describe('Phase 4 / Area A — skills.recall signature + successRate gate (B-1, 
     };
     var gs = makeGoalSystem({ memory: { skills: skills } });
     var g = gs.create({ title: 'deploy the app', drive: 'user-service' });
-    // Force past plan + budget so we hit the skills branch then bail.
-    g.budget.tokens = 0; g.budget.actions = 0; // avoid brain call
+    // plan() goes: budget → plan-step (empty) → skills recall → brain (none in ctx).
+    // BUG-446 (2026-09-23) moved the budget check FIRST, so this no longer zeroes the
+    // budget to stop before the brain: with no brain in ctx, plan() stops there anyway.
     gs.debitBudget = function () {};
-    // plan() goes: plan-step (empty) → skills recall → budget → brain (null).
     await gs.plan(g, { memory: { skills: skills }, config: { SKILL_MIN_SUCCESS_RATE: 0.5 } });
     assert.ok(received, 'skills.recall was never invoked');
     assert.equal(typeof received.query, 'string', 'query must be a string, got ' + typeof received.query);

@@ -5,6 +5,7 @@
 const browserAgent = require('../../../adapters/browser-agent');
 const { effectorFromTool } = require('./adapter');
 const evidenceModule = require('./evidence');
+const snapshotView = require('./snapshot-view');
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
 const { spawn } = require('child_process');
 const { childRuntimeDir, childCommand, waitForSpawn } = require('../util/child-runtime');
@@ -131,59 +132,27 @@ async function waitReady(page, selector) {
 // generation counter below is what turns "this ref is stale" into an explicit,
 // agent-shaped error instead of a silent miss or — worse — a hit on whatever
 // element inherited that ref after a re-render.
-const SNAPSHOT_MAX_NODES = 200;
-const SNAPSHOT_MAX_CHARS = 8000;
-
 let snapshotGeneration = 0;
 let snapshotRefs = new Set();
 let snapshotPageUrl = null;
+// BUG-445: the capture a generation was read from, kept so page 2 of it is page 2
+// of the SAME tree. Re-capturing for page 2 could renumber the refs page 1 issued.
+let snapshotYaml = null;
+let snapshotViewChars = null;
 
-// Every ref Playwright emits, in the two shapes it uses: `e12` for the main
-// frame, `f3e12` for a node inside the 3rd frame.
-const REF_MARKER = /\[ref=([a-zA-Z0-9]+)\]/g;
-
-function extractRefs(yaml) {
-  const found = [];
-  let m;
-  REF_MARKER.lastIndex = 0;
-  while ((m = REF_MARKER.exec(yaml)) !== null) found.push(m[1]);
-  return found;
+// Size discipline, BUG-445 (2026-09-23). This used to cap the YAML at 8,000
+// characters header-first and register every ref in it, while the voice adapter
+// then cut the result at 4,000 — so the model saw one video and the tools
+// accepted refs it had never been shown. snapshot-view.js now builds a bounded,
+// main-first, paged list, and the registry holds exactly the refs it printed.
+function pageMoved(page) {
+  if (!snapshotPageUrl) return null;
+  let now = '';
+  try { now = page.url(); } catch (_) { /* a detached page reports no address */ }
+  return snapshotView.sameDocument(now, snapshotPageUrl) ? null : { from: snapshotPageUrl, to: now };
 }
 
-// Size discipline: this text goes back to Gemini Live inside a toolResponse, so
-// an un-capped snapshot of a heavy page (YouTube's home is thousands of nodes)
-// would blow the turn. When the tree does not fit, keep the lines that carry a
-// ref — under mode:'ai' those ARE the interactable elements, i.e. exactly what
-// a ref-based action can target — and say how many nodes were dropped. Silent
-// truncation would read as "that's the whole page", which is the class of lie
-// the evidence contract exists to prevent.
-function capSnapshot(yaml) {
-  const lines = yaml.split('\n');
-  if (lines.length <= SNAPSHOT_MAX_NODES && yaml.length <= SNAPSHOT_MAX_CHARS) {
-    return { text: yaml, truncated: false, omittedNodes: 0, keptNodes: lines.length };
-  }
-  const interactive = lines.filter((l) => l.includes('[ref='));
-  const kept = interactive.slice(0, SNAPSHOT_MAX_NODES);
-  let text = kept.join('\n');
-  let charCapped = false;
-  if (text.length > SNAPSHOT_MAX_CHARS) {
-    text = text.slice(0, SNAPSHOT_MAX_CHARS);
-    // Never hand back a half-written final line: a truncated `[ref=` marker is
-    // a ref the model can read and cannot use.
-    const lastNewline = text.lastIndexOf('\n');
-    if (lastNewline > 0) text = text.slice(0, lastNewline);
-    charCapped = true;
-  }
-  return {
-    text,
-    truncated: true,
-    charCapped,
-    omittedNodes: lines.length - text.split('\n').length,
-    keptNodes: text.split('\n').length,
-  };
-}
-
-async function browser_snapshot({ screenshot } = {}) {
+async function browser_snapshot({ screenshot, page: viewPage, generation } = {}) {
   const guard = await requireOnline();
   if (guard) return guard;
 
@@ -196,43 +165,31 @@ async function browser_snapshot({ screenshot } = {}) {
         'unavailable — playwright-core may have been downgraded). Use CSS selectors for now.'
       );
     }
-    const raw = await page.ariaSnapshot({ mode: 'ai' });
-    const capped = capSnapshot(String(raw || ''));
-    const refs = extractRefs(capped.text);
-
-    // Mint a new generation BEFORE returning: any ref handed out below belongs
-    // to this generation and no earlier one.
-    snapshotGeneration += 1;
-    snapshotRefs = new Set(refs);
-    snapshotPageUrl = page.url();
-
-    const result = {
-      snapshot: capped.text,
-      generation: snapshotGeneration,
-      refCount: refs.length,
-      nodes: capped.keptNodes,
-      truncated: capped.truncated,
-      url: snapshotPageUrl,
-      title: await page.title(),
-    };
-    // Surface a human-verification challenge in the snapshot itself. A model
-    // that has to call a second tool to notice a CAPTCHA will sometimes not
-    // call it, and then spends the turn clicking at a wall.
-    const captchaMarkers = looksLikeCaptcha(capped.text + ' ' + snapshotPageUrl);
-    if (captchaMarkers.length) {
-      result.captchaDetected = true;
-      result.captchaMarkers = captchaMarkers;
-      result.captchaNote =
-        'This page is showing a human-verification challenge. Do NOT try to solve or bypass it — ' +
-        'ask the operator to complete it in the browser window and to tell you when to continue.';
+    const continuing = Number(viewPage) > 1;
+    if (continuing) {
+      const refusal = snapshotView.continuationRefusal({ page: viewPage, generation, current: snapshotGeneration,
+        hasCapture: snapshotYaml !== null, moved: pageMoved(page) });
+      if (refusal) return refusal;
+    } else {
+      // Mint a new generation BEFORE returning: any ref handed out below belongs
+      // to this generation and no earlier one.
+      snapshotYaml = String((await page.ariaSnapshot({ mode: 'ai' })) || '');
+      snapshotGeneration += 1;
+      snapshotRefs = new Set();
+      snapshotPageUrl = page.url();
     }
-    if (capped.truncated) {
-      result.omittedNodes = capped.omittedNodes;
-      result.truncationNote =
-        `This page is larger than one snapshot can carry. Showing the ${capped.keptNodes} ` +
-        `interactable elements (the ones a ref can act on); ${capped.omittedNodes} other nodes ` +
-        'were omitted. Scroll or narrow the page and snapshot again if what you need is missing.';
-    }
+    // Surface a human-verification challenge in the snapshot itself: a model
+    // that has to call a second tool to notice a CAPTCHA will sometimes not, and
+    // spends the turn clicking at a wall. The WHOLE capture is scanned.
+    const header = snapshotView.snapshotHeader({ generation: snapshotGeneration, url: snapshotPageUrl,
+      title: await page.title(), captchaMarkers: looksLikeCaptcha(snapshotYaml + ' ' + snapshotPageUrl) });
+    // The row budget is what the header leaves of the model's budget, fixed per
+    // capture so page 2 is cut on the same boundaries as page 1.
+    if (!continuing) snapshotViewChars = snapshotView.viewCharsFor(header);
+    const v = snapshotView.buildSnapshotView(snapshotYaml, { page: continuing ? viewPage : 1, maxChars: snapshotViewChars });
+    for (const r of v.refs) snapshotRefs.add(r);
+    const result = Object.assign(header, { page: v.page, pages: v.pages, itemCount: v.totalRows, items: v.rows },
+      snapshotView.pagingFields(v, snapshotGeneration));
     // ego-lite's combined capture: the picture and the semantic tree in one
     // result, so a model that wants both does not pay two round trips.
     if (screenshot) {
@@ -249,7 +206,10 @@ async function browser_snapshot({ screenshot } = {}) {
 // agent-browser lesson: an error the model cannot act on is a dead end, and this
 // repo has already paid for that twice (BUG-107's wrong-browser refusal, twice
 // over). Never guesses: a ref we cannot vouch for is refused, not approximated.
-function checkRef(ref) {
+// With `page`, it also refuses a ref whose page has changed underneath it
+// (BUG-445): YouTube moves from home to /watch on a click, with no navigate call
+// for the registry to hear, so the address is re-read at the moment of acting.
+function checkRef(ref, page) {
   if (snapshotGeneration === 0) {
     return fail(
       `ref "${ref}" cannot be used because no snapshot has been taken in this session. ` +
@@ -262,6 +222,11 @@ function checkRef(ref) {
       'either from an older snapshot or was never in one. Call browser_snapshot again and use a ' +
       'ref from the fresh output.'
     );
+  }
+  const moved = page ? pageMoved(page) : null;
+  if (moved) {
+    invalidateSnapshotRefs('page-moved');
+    return snapshotView.pageMovedRefusal(ref, moved);
   }
   return null;
 }
@@ -277,6 +242,7 @@ function refLocator(page, ref) {
 // meaningless — better to force one extra snapshot than to let a ref resolve
 // against a page the model has never seen.
 function invalidateSnapshotRefs(reason) {
+  snapshotYaml = null;
   if (snapshotRefs.size === 0) return;
   snapshotRefs = new Set();
   snapshotPageUrl = null;
@@ -382,6 +348,8 @@ function __resetSnapshotStateForTest() {
   snapshotGeneration = 0;
   snapshotRefs = new Set();
   snapshotPageUrl = null;
+  snapshotYaml = null;
+  snapshotViewChars = null;
 }
 function __setSnapshotStateForTest(refs, generation) {
   snapshotRefs = new Set(refs || []);
@@ -468,6 +436,8 @@ async function browser_click({ selector, ref }) {
     const guard = await requireOnline();
     if (guard) return guard;
     return browserAgent.withPage(async (page) => {
+      const moved = checkRef(ref, page);
+      if (moved) return moved;
       // Native Playwright click on the resolved locator — the actionability
       // check (visible, stable, receives events, not covered) IS the oracle, so
       // this path never needs the unverified downgrade the JS-click rung takes.
@@ -531,6 +501,8 @@ async function browser_type({ selector, text, clearFirst, ref }) {
     const onlineGuard = await requireOnline();
     if (onlineGuard) return onlineGuard;
     return browserAgent.withPage(async (page) => {
+      const moved = checkRef(ref, page);
+      if (moved) return moved;
       const locator = refLocator(page, ref);
       // fill() replaces, type() appends — the same distinction the selector
       // path makes, kept identical so moving to refs changes targeting only.
@@ -599,7 +571,7 @@ async function browser_fill_form({ fields }) {
           results.push({ index: i, ref: f.ref, ok: false, error: 'missing value' });
           continue;
         }
-        const refProblem = checkRef(f.ref);
+        const refProblem = checkRef(f.ref, page);
         if (refProblem) {
           results.push({ index: i, ref: f.ref, ok: false, error: String(refProblem.result) });
           continue;
@@ -926,7 +898,9 @@ async function browser_launch_debug(args) {
   // request. One predicate now. The probe is lazy: it costs a PowerShell round
   // trip only for a named request whose identity we cannot already vouch for.
   const probeOwner = () => launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrlEarly);
-  const refuseNamed = () => browserTarget.namedRequestRefusal({ want, attached: attachedBrowser, probe: probeOwner });
+  // BUG-436: the probe is async now. It is still asked only when the predicate would ask it (a named
+  // request with no identity we can vouch for), and its answer is handed to the unchanged predicate.
+  const refuseNamed = async () => { const probed = (want && !attachedBrowser) ? await probeOwner() : null; return browserTarget.namedRequestRefusal({ want, attached: attachedBrowser, probe: () => probed }); };
 
   const status0 = browserAgent.getStatus();
   if (status0.state === 'ONLINE') {
@@ -934,7 +908,7 @@ async function browser_launch_debug(args) {
     // instead of "launched" — the debug port cannot be shared. BUG-107's
     // browser_switch remedy now lives in namedRequestRefusal, which also
     // closed the null-attachedBrowser hole this branch had.
-    const onlineRefusal = refuseNamed();
+    const onlineRefusal = await refuseNamed();
     if (onlineRefusal) return fail(onlineRefusal);
     return ok({ alreadyOnline: true, browser: attachedBrowser || 'unknown' });
   }
@@ -985,7 +959,7 @@ async function browser_launch_debug(args) {
   // why waitForDebugPortReady polls this same call).
   const adopted = await browserAgent.ensureOnline({ cdpUrl }).catch(() => false);
   if (adopted) {
-    const found = launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
+    const found = await launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
     // attachedBrowser is deliberately NOT set here. Its contract since BUG-106
     // is "a browser MYTHOS launched and can therefore vouch for and close", and
     // this is not that — see browser_switch's own null branch. `portOwner` is
@@ -1000,7 +974,7 @@ async function browser_launch_debug(args) {
   // BUG-407: one resolver, and it now reads the machine's own default browser
   // rather than answering from a list of its own. `source` says which rule
   // chose, and rides out on the result.
-  const target = launchDep('resolveLaunchTarget', resolveLaunchTarget)(want);
+  const target = await launchDep('resolveLaunchTarget', resolveLaunchTarget)(want);
   if (target.error) return fail(target.error);
   const exe = target.exe;
   const chosen = target.name;
@@ -1055,7 +1029,7 @@ async function browser_launch_debug(args) {
   // operator was looking at. That is the "it opened YouTube in Brave but could
   // not act on it" report: two browsers, and MYTHOS driving the invisible one
   // under the visible one's name.
-  const observed = launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
+  const observed = await launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
   if (observed && observed !== chosen) {
     // Do not relabel and carry on. Something else holds the port, so the
     // browser just spawned is not the one attached, and the operator now has
@@ -1154,7 +1128,7 @@ async function browser_switch(args) {
 // failure to hand straight back.
 async function resolveTarget(page, { ref, selector }, what) {
   if (ref) {
-    const refProblem = checkRef(ref);
+    const refProblem = checkRef(ref, page);
     if (refProblem) return { failure: refProblem };
     return { locator: refLocator(page, ref), target: ref, ref: ref };
   }
@@ -1540,7 +1514,7 @@ async function browser_check_captcha() {
 
 const TOOLS = [
   { name: 'browser_navigate', description: 'Navigate the browser to a URL. Set newTab:true to open it in a new tab instead of reusing the current one. If the user named a specific browser (Chrome, Brave, Edge), pass it as `browser` — the call then FAILS rather than driving a different one, and the response says which browser was actually used.', params: { url: 'string - the URL to navigate to', newTab: 'boolean (optional) - open in a new tab instead of the current one', browser: 'string (optional) - chrome, brave or edge; only when the user asked for a specific browser' }, danger: false, fn: browser_navigate, needs_result: true },
-  { name: 'browser_snapshot', description: 'Read the page as an accessibility tree in which every interactable element carries a stable ref like [ref=e12]. THIS IS THE FIRST STEP for any browser interaction: take a snapshot, find the element you want in the tree, then pass its ref to browser_click / browser_type / browser_fill_form instead of guessing a CSS selector. Elements inside iframes (most job-application forms) are included automatically. Refs expire when the page changes — if one is rejected as stale, snapshot again.', params: { screenshot: 'boolean (optional) - also return a base64 PNG of the page alongside the tree' }, danger: false, fn: browser_snapshot, needs_result: true },
+  { name: 'browser_snapshot', description: 'Read the page as a numbered list of the things on it you can act on (links, buttons, fields, tabs), each carrying a ref like e12. THIS IS THE FIRST STEP for any browser interaction: snapshot, find the item, then pass its ref to browser_click / browser_type / browser_fill_form instead of guessing a CSS selector. Order: an open dialog and the search box first, then the main content in page order, then menus and page chrome. Links to the same place are merged into ONE item, so the third video is the third item whose url is a video (/watch?v=...), not the third link. Only refs printed in a snapshot can be acted on; when pages > 1, read the next one by passing the page and generation from nextPage. Elements inside iframes are included. Refs expire when the page changes — if one is rejected, snapshot again.', params: { screenshot: 'boolean (optional) - also return a PNG of the page for the dashboard (it is not sent to you as text)', page: 'number (optional) - which page of the SAME snapshot to read, from nextPage; omit to read the page fresh', generation: 'number (optional) - the generation of the snapshot being continued, from nextPage' }, danger: false, fn: browser_snapshot, needs_result: true },
   { name: 'browser_click', description: 'Click an element on the page. Prefer ref (from browser_snapshot) — it targets the exact element with no guessing. Use selector only when no snapshot ref is available.', params: { ref: 'string (optional) - element ref from browser_snapshot, e.g. e12', selector: 'string (optional) - CSS selector, the fallback when no ref is available' }, danger: false, fn: browser_click },
   { name: 'browser_type', description: 'Type text into an input field. Prefer ref (from browser_snapshot) over a CSS selector. Set clearFirst to true to replace the existing content.', params: { ref: 'string (optional) - element ref from browser_snapshot, e.g. e12', selector: 'string (optional) - CSS selector, the fallback when no ref is available', text: 'string - text to type', clearFirst: 'boolean (optional) - clear field before typing' }, danger: false, fn: browser_type },
   { name: 'browser_screenshot', description: 'Take a screenshot of the current page. Returns base64 PNG.', params: {}, danger: false, fn: browser_screenshot, needs_result: true },
@@ -1578,10 +1552,8 @@ module.exports = {
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
   browser_launch_debug, browser_switch,
   browser_wait_for, browser_fill_form,
-  // Snapshot-and-refs seams. capSnapshot/extractRefs are pure, so the size cap
-  // and ref parsing are testable without a page at all.
-  browser_snapshot, capSnapshot, extractRefs,
-  SNAPSHOT_MAX_NODES, SNAPSHOT_MAX_CHARS,
+  // Snapshot-and-refs. The view itself is pure and lives in snapshot-view.js.
+  browser_snapshot,
   __resetSnapshotStateForTest, __setSnapshotStateForTest,
   // Phase 5 toolkit. resolveUploadPath is exported as its own seam: the upload
   // allowlist is the one security boundary in this file, and it must be

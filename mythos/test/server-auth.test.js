@@ -153,14 +153,17 @@ describe('server-auth (§7.2): token configured — /api/* gate', () => {
     }
   });
 
-  test('/api/status is 200 with the mythos_token cookie', async () => {
+  // INVERTED 2026-09-23 (BUG-444). This asserted a 200: the raw token in a
+  // cookie was a credential channel, which is how the shared secret came to sit
+  // in every browser for 30 days. The channel is gone; the cookie is only cleared.
+  test('/api/status is 401 with the raw token in a mythos_token cookie (BUG-444)', async () => {
     const bus = createBus({ historySize: 50 });
     const server = createServer(tokenDeps(bus));
     await server.ready;
     const { port } = server.httpServer.address();
     try {
       const res = await httpGet(port, '/api/status', { Cookie: `mythos_token=${TOKEN}` });
-      assert.equal(res.status, 200);
+      assert.equal(res.status, 401);
     } finally {
       await server.stop();
     }
@@ -375,7 +378,7 @@ describe('server-auth (H3a, security audit 2026-08-08): the WS upgrade path is r
 // comment there already described the HUD setting it. Only the endpoint that
 // sets it was missing. These tests pin that it is a real check, not a bypass.
 // ---------------------------------------------------------------------------
-describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', () => {
+describe('server-auth: POST /api/auth/session (token -> session cookie; BUG-444)', () => {
   function httpPostJson(port, pathName, obj, headers) {
     return new Promise((resolve, reject) => {
       const data = JSON.stringify(obj || {});
@@ -423,7 +426,7 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
     try {
       const res = await httpPostJson(port, '/api/auth/session', { token: 'anything' });
       assert.equal(res.status, 404);
-      assert.equal(setCookieFor(res, 'mythos_token'), null, 'a deployment with no token must never hand out a credential');
+      assert.equal(setCookieFor(res, 'mythos_session'), null, 'a deployment with no token must never hand out a credential');
     } finally {
       await server.stop();
     }
@@ -437,7 +440,7 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
     try {
       const res = await httpPostJson(port, '/api/auth/session', { token: 'not-the-token' });
       assert.equal(res.status, 401);
-      assert.equal(setCookieFor(res, 'mythos_token'), null);
+      assert.equal(setCookieFor(res, 'mythos_session'), null);
     } finally {
       await server.stop();
     }
@@ -451,13 +454,13 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
     try {
       const res = await httpPostJson(port, '/api/auth/session', {});
       assert.equal(res.status, 400);
-      assert.equal(setCookieFor(res, 'mythos_token'), null);
+      assert.equal(setCookieFor(res, 'mythos_session'), null);
     } finally {
       await server.stop();
     }
   });
 
-  test('the correct token is 200 and sets an HttpOnly; SameSite=Strict mythos_token cookie', async () => {
+  test('the correct token is 200 and sets an HttpOnly; SameSite=Strict mythos_session cookie that is not the token', async () => {
     const bus = createBus({ historySize: 50 });
     const server = createServer(authDeps(bus));
     await server.ready;
@@ -465,8 +468,9 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
     try {
       const res = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
       assert.equal(res.status, 200);
-      const cookie = setCookieFor(res, 'mythos_token');
-      assert.ok(cookie, 'expected a mythos_token cookie');
+      const cookie = setCookieFor(res, 'mythos_session');
+      assert.ok(cookie, 'expected a mythos_session cookie');
+      assert.ok(!decodeURIComponent(cookie).includes(TOKEN), 'BUG-444: the cookie must never carry the token');
       assert.match(cookie, /HttpOnly/i, 'must not be readable from document.cookie');
       assert.match(cookie, /SameSite=Strict/i);
       assert.match(cookie, /Path=\//i);
@@ -485,7 +489,7 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
       assert.equal(before.status, 401, 'precondition: the tab starts unauthenticated');
 
       const exchange = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
-      const cookiePair = setCookieFor(exchange, 'mythos_token').split(';')[0];
+      const cookiePair = setCookieFor(exchange, 'mythos_session').split(';')[0];
 
       const after = await httpGetFull(port, '/api/status', { Cookie: cookiePair });
       assert.equal(after.status, 200, 'the cookie the HUD now sets must be a credential tokenOk() accepts');
@@ -508,7 +512,7 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
     await server.ready;
     try {
       const exchange = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
-      const cookiePair = setCookieFor(exchange, 'mythos_token').split(';')[0];
+      const cookiePair = setCookieFor(exchange, 'mythos_session').split(';')[0];
 
       const result = await new Promise((resolve) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, { origin, headers: { Cookie: cookiePair } });
@@ -534,62 +538,6 @@ describe('server-auth: POST /api/auth/session (token -> mythos_token cookie)', (
         if (res.status === 429) { sawTooMany = true; break; }
       }
       assert.equal(sawTooMany, true, 'expected the dedicated 5/min auth-exchange limiter to trip');
-    } finally {
-      await server.stop();
-    }
-  });
-
-  // Combined mode is NOT this bug's configuration, and mishandling it would be
-  // worse than declining it: tokenOk()'s H1 fix reserves the mythos_token
-  // cookie for the PIN session there, so writing the bearer token into that
-  // same cookie would clobber a live PIN session with a value pinSession
-  // rejects — locking the operator out of the surface they just unlocked.
-  // REWRITTEN 2026-09-18 (BUG-442). This asserted a 409: in combined mode the
-  // exchange REFUSED, because writing the bearer cookie would have destroyed a
-  // live PIN session — the two shared the name `mythos_token`. The refusal was
-  // correct for that shape and it left combined deployments with no way to log
-  // a browser in at all, which is a real hole rather than a rough edge.
-  //
-  // The collision is gone (the PIN session lives on `mythos_pin` now), so the
-  // reason for the 409 is gone with it. What this test guards is unchanged and
-  // is now stated as the positive: the exchange works, the PIN unlock works,
-  // and NEITHER overwrites the other's cookie.
-  test('combined mode (token + enforced PIN) issues both cookies without either clobbering the other', async () => {
-    const { createPinLock } = require('../src/core/security/pin-lock');
-    const bus = createBus({ historySize: 50 });
-    // This file's shared fakeFs() is vaultPath-only; pin-lock needs a real
-    // read/write store (same in-memory shape as test/pin-session.test.js).
-    const store = {};
-    const pinLock = createPinLock({
-      fs: {
-        readJSON: (p, fallback) => (p in store ? store[p] : fallback),
-        readJSONStrict: (p, fallback) => (p in store ? store[p] : fallback),
-        writeJSON: (p, d) => { store[p] = d === null ? null : JSON.parse(JSON.stringify(d)); },
-        vaultPath: (...s) => s.join('/'),
-      },
-    });
-    pinLock.setPin('4242');
-    const server = createServer(baseDeps(bus, {
-      pinLock,
-      config: {
-        MYTHOS_PORT: 0, MYTHOS_BIND: '127.0.0.1', MYTHOS_NAME: 'TEST', MYTHOS_IDLE_SALIENCE: 0.3,
-        ACTION_TIMEOUT_MS: 30000, MYTHOS_AUTH_TOKEN: TOKEN,
-        PIN_SESSION_ENFORCE: true, PIN_SESSION_TTL_MS: 1800000,
-      },
-    }));
-    await server.ready;
-    const { port } = server.httpServer.address();
-    try {
-      const res = await httpPostJson(port, '/api/auth/session', { token: TOKEN });
-      assert.equal(res.status, 200, 'a combined deployment must be able to log a browser in');
-      assert.ok(setCookieFor(res, 'mythos_token'), 'the bearer keeps its own cookie');
-      assert.equal(setCookieFor(res, 'mythos_pin'), null, 'and never writes the PIN session cookie');
-
-      const verify = await httpPostJson(port, '/api/pin/verify', { pin: '4242' });
-      assert.equal(verify.status, 200, 'the PIN unlock path must be untouched by this change');
-      assert.ok(setCookieFor(verify, 'mythos_pin'), 'the PIN session owns its own cookie now');
-      assert.equal(setCookieFor(verify, 'mythos_token'), null,
-        'and must not write the bearer cookie — clobbering a working token was the other half of the collision');
     } finally {
       await server.stop();
     }

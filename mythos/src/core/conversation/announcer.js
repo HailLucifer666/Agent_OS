@@ -7,7 +7,7 @@
 // about. It bridges the gap where a build finishes, the cortex perceives it,
 // but nobody tells the user — the "is it done?" problem.
 //
-// Pattern mirrors immune/announcer.js: subscribe to bus events, generate a
+// Pattern: subscribe to bus events, generate a
 // natural sentence via brain.think (not a canned string), deliver via the
 // injected speak() callback (server/index.js's proactiveSpeak). Per-event-key
 // deduplication prevents announcing the same event twice.
@@ -194,9 +194,10 @@ function createConversationAnnouncer({ bus, brain, config, speak, now }) {
   // `cortex-stall` and `provider-down` — so the list read as covering a stalled
   // cortex while covering nothing at all, and BUG-273 D3's own regression test used
   // `cortex-stalled` as its fixture, proving a backoff ladder against a condition
-  // that cannot occur. Removed rather than corrected: a real cortex-stall already
-  // reaches the operator through immune/announcer.js's heal line when it heals, and
-  // through the explainer's no-match path when it does not. Adding a third voice for
+  // that cannot occur. Removed rather than corrected: a real cortex-stall that
+  // heals needs nothing from the operator (BUG-447, 2026-09-23: successful heals are
+  // never spoken; the heal is on the HUD and in the vault), and one that does not
+  // heal reaches them through the explainer's no-match path. Adding a third voice for
   // one condition is what W6 spent a wave undoing. A guard test now derives the real
   // emitted kinds from source and fails on any future phantom.
   var SERIOUS_KINDS = {

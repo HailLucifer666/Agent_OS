@@ -507,7 +507,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-272 | fixed | blocked | Five slices cover mic fallback/rearm, transcript-free echo telemetry, playback-state barge policy and tool honesty including real external-open IPC, partial process-name unverified, stale-PID remedy and slow-tool deadlines. Original planned13s ceiling/150-frame1.5s/drop-buffer instructions explicitly superseded; later273/388 revise learned floor. Consumers: Wakeword/batch/Live capture, Electron URL handoff and desktop launch/focus.. Regression oracle: bug-272 regressions across mic fallback/barge policy/tool evidence; open-web-is-not-a-browser tests actual request/ack, verify-voice-session current scFields oracle.. Remaining evidence: No current same-room quiet/volume/interruption/wakeword corpus nor actual packaged desktop target runs. Historical slices4b handoff success is only OS acceptance, not render proof. | ui/public/js/voice/mic-device.js:141; ui/public/js/app.js:728; src/core/voice/live-session.js:650; src/core/effectors/from-pc.js:233-327; electron/main.js external open IPC |
 | BUG-273 | fixed | blocked | Full A-D audit includes shared unverified/confirmed-step narration, dormant learned floor, flush telemetry, per-call HUD timestamps, wake receptive-window suppression, whole-lane timeout settlement, operator-only Gmail remedy, text injection attribution, append/rotate death logs, in-flight cortex watchdog and immune announcement dedup. A2 drop-replay premise disproved; later388 rejects attribution of bleedPeak as echo. End-body caller-abort timeout defect now has settleDeferredTimeouts before AbortError, so historical pending claim is superseded. Consumers: Live awaited/confirm/late outcomes, s2s audio/wake, brain fallback, immune speech and Electron restart diagnostics.. Regression oracle: 21 historical bug-273 regression families plus chain-provider-breakers; verify-voice-session uses source scFields interrupted element and scope last boot. Real actor/call timestamps avoid false HUD mismatch accusation.. Remaining evidence: The current recursive suite passed; live acoustic behavior and the full shutdown/restart-log claim still need their independent artifacts. No unimplemented A2 drop policy inferred from superseded plan; source-presence citation does not certify entire multi-slice ticket. | src/core/voice/narration-claims.js; ui/public/js/voice/barge-in-policy.js; src/core/brain/chain.js:386-391; src/core/immune/announcer.js:79-80; electron/main.js:198-212,803 |
 | BUG-274 | open | blocked | [EXTERNAL, lawyer: T3 wake-word weights licence; not a session's call] Full1841-line body assessed including superseded stages and embedded update history. T1/T2 shipped default-chain/docs, T4 policy grants stay true until delivery,200ms sustain and fixed0.035 floor, shared stop door suppresses remaining streamed turn; PCM cushion uses turnOpen and3s lost-boundary guard. T5 discovery no-op returns honest failure; context/message-pump comparisons disproved proposed host rewrite. T3 wake-weight product/licensing decision is sole declared open item; T6 remains deferred. Consumers: TTS defaults, Live playback/interruption, desktop UIA and release artifact licensing gate.. Regression oracle: bug-274-barge-in-authorisation-is-deliverable uses playbackStops with real policy/backstop; local-flush-does-not-stop-the-turn tests delayed stream; pcm-player live-clock jitter cases; UIA context schema parity; licence-audit script/test.. Remaining evidence: Do not reopen shipped T1/T2/T4/T5 from historical planned prose. T3 operator/licensing resolution and owned-weight acoustic validation remain absent. Current same-corpus before/after and fresh packaged playback/UIA gates pending. Historical AEC-inert conclusions superseded by controlled probe and BUG388 attribution correction; no legal verdict made. | ui/public/js/voice/barge-in-policy.js:88,208,500; ui/public/js/voice/s2s-bridge.js stopAssistantSpeech; ui/public/js/voice/pcm-player.js:81,167-223; scripts/audit-licences.js; adapters/pc-child/ps-automation.ps1 UIA probes |
-| BUG-275 | open | blocked | [H1 CODED 2026-09-10: prompt rule + silent detector, corpus-replayed 1 hit in 171 replies. H6/H8 and the remaining halves are what keep this open. 2026-09-23 samples: a stale product fact with no search, an invented element reference, and a screen_look result stored at 600 of 1,351 characters so its claim cannot be audited] Full538-line body read. H1 promotes present names from unranked comparison prose into ordered slots; unsourced-entity detector intentionally cannot catch that. H2 defended-challenge detector current-turn-only; H3/H4 name absence detector shares punctuation-normalized evidence with120s ledger. Current campaign blocks mixed incomplete/truncated evidence accusations. H5 release date and H7 Nvidia premise disproved; H6 ranked conclusions followed results, so ordering theory refuted. H8 loses narration opportunity, not injected context/ledger data. Consumers: Live turn audit, recent-action evidence ledger, spoken correction and persisted history.. Regression oracle: bug-275-unsourced-ranked-entity.test.js actual H3/H4 and H1 negative, evidence-digest wiring tests and defended-challenge real corpus; mixed truncated window negative added in campaign.. Remaining evidence: H1 source-supported rank evidence and measured prevention before streaming remain unresolved, plus H7 canned recovery self-report. Post-turn notices cannot prove speech prevented. Historical corpus replay must be tied to current artifact and timestamped complete evidence; user hardware/live claim/history gates remain. | src/core/voice/ranked-claim-check.js:134-203,285; evidence-digest.js; live-tool-adapter.js reportTurnAudit/reportLateOutcome; turn-audit-notices.js |
+| BUG-275 | open | blocked | [LIVE 2026-09-24] Searched first for current facts twice; no fabricated price. [2026-09-23 SHAPES CODED; prevention OPEN by decision D7] A changeable fact stated as current with no web lookup is now a silent unsearched-current-fact anomaly, shipped only after a replay of two whole days with every hit read (2 real, 1 false positive, in 773 sentences); the screen description is cut at a sentence and marked as cut instead of ending mid-sentence; the "stored at 600 of 1,351" premise is refuted — the vault holds everything the model saw. [H1 CODED 2026-09-10: prompt rule + silent detector, corpus-replayed 1 hit in 171 replies. H6/H8 and the remaining halves are what keep this open. 2026-09-23 samples: a stale product fact with no search, an invented element reference, and a screen_look result stored at 600 of 1,351 characters so its claim cannot be audited] Full538-line body read. H1 promotes present names from unranked comparison prose into ordered slots; unsourced-entity detector intentionally cannot catch that. H2 defended-challenge detector current-turn-only; H3/H4 name absence detector shares punctuation-normalized evidence with120s ledger. Current campaign blocks mixed incomplete/truncated evidence accusations. H5 release date and H7 Nvidia premise disproved; H6 ranked conclusions followed results, so ordering theory refuted. H8 loses narration opportunity, not injected context/ledger data. Consumers: Live turn audit, recent-action evidence ledger, spoken correction and persisted history.. Regression oracle: bug-275-unsourced-ranked-entity.test.js actual H3/H4 and H1 negative, evidence-digest wiring tests and defended-challenge real corpus; mixed truncated window negative added in campaign.. Remaining evidence: H1 source-supported rank evidence and measured prevention before streaming remain unresolved, plus H7 canned recovery self-report. Post-turn notices cannot prove speech prevented. Historical corpus replay must be tied to current artifact and timestamped complete evidence; user hardware/live claim/history gates remain. | src/core/voice/ranked-claim-check.js:134-203,285; evidence-digest.js; live-tool-adapter.js reportTurnAudit/reportLateOutcome; turn-audit-notices.js |
 | BUG-276 | verified | blocked | Six failures split: offline browser recovery launcher remains eligible; site-scoped search skips RSS; provider errors aggregate reasons; undated time-sensitive Wikipedia gets caution under280; switch/pending narration delegated275. Capability snapshot still session-frozen, so recovery tool presence is weaker than instant all-tool restoration. Consumers: open_web, browser launch/switch, installer site-search and Live narration.. Regression oracle: bug-276-f1-browser-recovery-tool-survives-offline.test.js real snapshot; bug-276-f3-site-scoped-search-skips-news-rung.test.js; bug-276-f4-search-failure-names-its-causes.test.js.. Remaining evidence: Actual current configured browser/news/video recovery and provider availability not verified. Fuzzy timeless relevance is deliberate residual; spoken factual/pending claims remain275. | src/core/voice/tool-capability.js browser except rule; src/core/effectors/web-search.js:112-114,771 |
 | BUG-277 | fixed | blocked | Reverse audit reader scans256KB byte chunks with record-safe UTF8 decode and shared total limit across files; corrupt records report byteOffset. Audit writer stays synchronous to preserve same-tick T3/T4 unwritable fail-closed check. Consumers: Briefing heal history, memory routes, incident scan and audit-gated leash.. Regression oracle: fs-store-tail-read.test.js chunk boundary/UTF8/multi-file limit and parity; audit-write-sync-contract.test.js rejects async writer.. Remaining evidence: Fresh large synthetic-file read latency/RSS and identical-row comparison missing; full unmatched scan remains inherently whole-file work. Real user audit untouched. | src/core/memory/fs-store.js:24,39-115,343-361; leash/audit-writer.js |
 | BUG-278 | verified | blocked | Healer forwards needsOperator and reason from diagnosis evidence without overloading action detail; explainer menu checks provider-down/quota-low kind and skips brain when no applicable remedy. Healthy grant live verifier is inconclusive rather than pass. Consumers: Gmail sensor bus-diagnostician-healer-explainer and spoken remedy.. Regression oracle: bug-278-remedy-fit-must-survive-the-wire.test.js observes fields on real bus; live script uses real Gmail fault and asserts brain0 plus spoken full cause.. Remaining evidence: Current terminal Google fault prerequisite unmeasured; historical real run not reused. Repetition incident lacked time-correlated full turns and remains voice-interruption investigation, not immune-loop conclusion. | src/core/immune/healer.js:738-739; src/core/immune/explainer.js:85,192-206; scripts/verify-immune-reauth-chain.js |
@@ -589,29 +589,40 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-403 | diagnosed | blocked | Auth priming emits safe state telemetry, awaits server/exchange/cookie readiness and keeps PIN semantics. Consumers: Electron packaged bootstrap, auth-session routes. Regression oracle: Auth matrix real dev/packaged boots; focused safe-telemetry regressions. Remaining evidence: Original historical failure mechanism is not conclusively reconstructed. | electron/main.js |
 | BUG-404 | fixed | blocked | Persistent infrastructure children use writable runtime cwd; relative binaries retain original resolution; ADB cleanup limits ownership. Consumers: pc/cua/android, TTS/search children; both raw browser launch sites. Regression oracle: 243 prior lifecycle regressions, packaged shutdown/rename and owned PID checks;browser family117pass. Remaining evidence: Handset/ADB shared-session live behavior, crash recovery and installed-artifact uninstall locks. | mythos/src/core/util/child-runtime.js |
 | BUG-405 | verified | blocked | Every pid-bearing failed PC command passes shared stale-target recovery; non-pid and non-stale failures avoid extra lookup. Consumers: from-pc delegate, focus/close/ui_elements and other pid tools. Regression oracle: Full helper/consumer tests read; browser family117pass includes recovery. Remaining evidence: Actual stale native pid followed by current live window list. | mythos/src/core/effectors/window-recovery.js |
-| BUG-422 | open | blocked | [DEATH CAPTURED 2026-09-23: exit 0xE06D7363 (native C++ exception) 6 s after the fourth Kokoro timeout; prime suspect the in-process Kokoro worker terminated mid-inference; standalone repro needed. Restart now works] Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original "the supervisor did not log it" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
+| BUG-422 | open | blocked | [CONTAINED 2026-09-23, cause reproduced by MECHANISM: terminating the in-process Kokoro worker thread mid-inference killed the whole process — 0xC0000409 at exit on every trial and MID-SESSION after the second of four kills (real model, one fresh process per trial); Kokoro now runs in a child PROCESS, and the same matrix exits 0 on all 12 trials, the real server quits 0 in 65 ms, and the packaged MYTHOS.exe passes verify-packaged-kokoro.js. Stays OPEN: the attended code 0xE06D7363 was not the code reproduced, and the 2026-09-09 silent death is unexplained. Earlier: death captured 2026-09-23, 6 s after the fourth Kokoro timeout; restart now works] Child lifecycle instrumentation names the next failure; original cause remains unknown. CORRECTED 2026-09-10 00:10Z by the session that filed this: the ticket's original "the supervisor did not log it" half is WITHDRAWN - the stdout capture it rested on had already stopped receiving at boot, so its silence proves nothing. The no-restart half IS proven, from the child's own log: no boot marker between the death and a different app 4h17m later. Tests cover real process exit and log-only observation. | electron/child-lifecycle.js |
 | BUG-429 | fixed | blocked | Unknown settings are announced through repeat backoff and listed by doctor. Voice kill switch and known-key non-change tested; browser-use stays parked. | mythos/scripts/doctor.js |
-| BUG-432 | open | blocked | [MEASURED 2026-09-23 with the flag on: notices stop cutting each other off, but tool results are held too (a reply said "no price found" while the price sat queued) and the 15 s hold forced 4 interruptions; keep the flag OFF until tool results bypass the queue] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. A held notice was then DESTROYED by two rotation paths — an unsolicited drop never called close() so the ceiling fired into a dead socket, and a deferred goAway released into a socket it had just nulled — with release() shifting before sending so a refusal could not retain the item. Now an explicit READY/SUSPENDED state plus a socket generation, peek-before-send, and per-item deadlines preserved across a rotation. Consumers: live-session setState/flushPendingAudio/turnComplete and sendSystemNotice's delivered check. Regression oracle: bug-432-notices-survive-a-rotation.test.js — 14 tests, 10 mutations each reddening a named test, one of which survived first time and produced test (n). Remaining evidence: FakeSocket only; the real ws library closes asynchronously, no attended rotation observed, and the flag stays OFF until the measured pass. | mythos/src/core/voice/notice-queue.js; mythos/src/core/voice/live-session.js |
+| BUG-432 | coded | blocked | [LIVE 2026-09-24] Price answer delivered with the flag off; slow-tool gaps filed as BUG-456; flag A/B owed. [RE-CODED 2026-09-23 from the measured pass, flag still OFF: every notice now has a class. The answer to the operator's request never waits behind a notice (two answers still take turns with each other); nothing is ever forced into a reply in progress — the 15 s ceiling is gone; an ordinary announcement older than 60 s is dropped with a log row; corrections wait for the turn to end and never expire. Measured before: the flag held a price while the reply said "no price found", and the ceiling forced 4 interruptions] System notices interrupt each other: 15 of 35 interruptions followed an injection within 300 ms. A held notice was then DESTROYED by two rotation paths — an unsolicited drop never called close() so the ceiling fired into a dead socket, and a deferred goAway released into a socket it had just nulled — with release() shifting before sending so a refusal could not retain the item. Now an explicit READY/SUSPENDED state plus a socket generation, peek-before-send, and per-item deadlines preserved across a rotation. Consumers: live-session setState/flushPendingAudio/turnComplete and sendSystemNotice's delivered check. Regression oracle: bug-432-notices-survive-a-rotation.test.js — 14 tests, 10 mutations each reddening a named test, one of which survived first time and produced test (n). Remaining evidence: FakeSocket only; the real ws library closes asynchronously, no attended rotation observed, and the flag stays OFF until the measured pass. | mythos/src/core/voice/notice-queue.js; mythos/src/core/voice/live-session.js |
 | BUG-433 | verified | currently verified | [LIVE-VERIFIED 2026-09-23: armed only after unlock, delivered once, heard; the 51 s audio lag is BUG-450] The boot greeting is injected into a Live session the HUD only subscribes to after the bridge starts, so the packaged app starts silent until the first wake word. Diagnosed from two boots; the proposed fix gates liveForSpeech on a client-started bridge. | mythos/server/index.js |
 | BUG-434 | verified | currently verified | [LIVE-VERIFIED 2026-09-23 for its own scope: a true typing claim into Notepad stood; the class recurred in window-control as BUG-448] A successful ui_type was retracted because "I sent the text to that box" matched the sending claim category, which has no typing tool among its backers. Fixed with backingTools on that category, gated so the elliptical tier keeps its counter-evidence. | mythos/src/core/voice/claim-check.js |
 | BUG-435 | verified | currently verified | [LIVE-VERIFIED 2026-09-16 attended run: one Brave window; browser_launch_debug then browser_navigate with the url, both ok in Audit; fresh-profile caveat recorded.] [CODED 2026-09-10, REGRESSED the same day, REPAIRED 2026-09-11; one attended run pending] The 2026-09-10 guard opened NO page for a named browser (18:21Z), worse than the two windows it fixed: the descriptions still taught the refused call, the refusal named no tool in its message, and its remedy was a step already done. Repaired with a state-derived remedy, tools named in the prose, a coupling test on the descriptions, test/refusal-is-actionable.test.js and a named-browser turn in golden-path.js. One real-browser route per turn: the adapter refuses the second of open_web browser:true vs browser_launch_debug/browser_switch/browser_navigate and tells the model what already opened. The named-browser question is now DECIDED (operator, 2026-09-10): a named browser is the debug browser, so open_web browser:true with a browserName is refused before dispatch and answered with structured remedy() calls to browser_launch_debug then browser_navigate. Unnamed open_web browser:true still reaches the default browser (Stage 1 golden path). The route memory was also fixed: it recorded every call the adapter SAW, so a denied or refused open_web poisoned the turn. 16 tests, mutation-proven. Attended voice unverified. | mythos/src/core/voice/browser-route-guard.js |
-| BUG-436 | open | blocked | [PROFILER RUN 2026-09-23: an 18 s silence had NO loop stall (model-side); a 3 s zero-CPU freeze ended as the debug-browser launch's execFileSync returned, and the profiler named nothing (likely blind to a destructured import — unconfirmed); one non-deferred goAway rotated cleanly] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code. | mythos/src/core/loop-lag.js |
-| BUG-437 | coded | blocked | [PARTIAL 2026-09-23: the X quit leaves no process and the shell waits 6.7 s; the server hangs on its reflection (LLM) step and is hard-killed at 6 s, so checkpoint and flushes never run; tray and in-app quits not exercised] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open. | electron/main.js |
+| BUG-436 | coded | blocked | [LIVE 2026-09-24] goAway held twice; no stall on browser launch; one 1.9 s low-CPU stall unattributed. [BLOCKING HALF CODED 2026-09-23: every synchronous child-process call reachable after boot is now async and still bounded — the browser process queries and taskkill, the default-browser registry read, the setup page's WSL probe, and the Piper / edge-tts probes that re-ran on every crash-restart — with a derived guard over the rest; attended qualification with the stall profiler owed] [DELIVERY HALF CODED 2026-09-23 with BUG-432: a result that finishes while the voice connection is reconnecting is held for the replacement connection and delivered there once, instead of being spoken over plain TTS outside Live; the blocking half (synchronous child-process calls) is still open] [PROFILER RUN 2026-09-23: an 18 s silence had NO loop stall (model-side); a 3 s zero-CPU freeze ended as the debug-browser launch's execFileSync returned, and the profiler named nothing (likely blind to a destructured import — unconfirmed); one non-deferred goAway rotated cleanly] Eighteen event-loop stalls with near-zero CPU in 32 minutes and a Live goaway that dropped an in-flight tool turn. Needs a stall profiler run before code. | mythos/src/core/loop-lag.js |
+| BUG-437 | coded | blocked | [LIVE 2026-09-24] Window-X quit saved first and exited in order with no survivors; tray and in-app paths untried. [CODED 2026-09-23, server half: the saving steps (episodic-flush, checkpoint-write, audit-flush) now run BEFORE reflection, every step under one deadline with a timeout that moves on, one shared shutdown for repeated signals, reflection fenced after its deadline; a forked-IPC quit of the real server ran every step clean in 37 ms and wrote the checkpoint during the quit. Found and handed to BUG-422: the process then crashes 0xC0000409 ~4 s after exit(0), on the pre-change build too, with a Kokoro synthesis cut at shutdown. Earlier: the X quit leaves no process and the shell waits 6.7 s; tray and in-app quits not exercised] Closing 0.1.12 left processes in Task Manager and wrote no quit line; the quit path never reached its logger. Reproduce with the process list open. | electron/main.js |
 | BUG-438 | verified | currently verified | [LIVE-VERIFIED 2026-09-16 attended run: open_web refused honestly (outcome:fail, no render); EP6 then opened in Brave, window title confirmed.] [CODED 2026-09-11; needs one attended spoken run] open_web was asked for "INDIA'S GOT LATENT S2 EP6" twice and both times opened EP2 (watch?v=c35fpGWqXnk), returning the wrong title in its own result and reporting outcome ok. The resolver used candidates[0] and never compared the title it was about to return against the query. A bounded season/episode guard now refuses with code `no-matching-result` before anything renders; unmarked queries take the same path they always did. Consumers: open_web newtab, the oEmbed embed probe, and the newtab fallback, which now consume ONE eligible list. Regression oracle: bug-438-open-web-opens-the-episode-asked-for.test.js — 18 tests, 9 mutations each reddening a named test, one of which survived first time and produced test (11b). Remaining evidence: no attended spoken run; marker agreement is not proof of playback or of video identity, and the guard is inert for a query carrying no season/episode marker. | mythos/src/core/util/youtube-episode.js; mythos/src/core/effectors/from-dashboard.js |
 | BUG-439 | coded | blocked | [CODED 2026-09-16; refresh once then fail with the fresh label, no auto-retry; 2026-09-23 not exercised — the model used the Spotify media tool; retry with a button that has no dedicated tool] cua_click failed twice with "Element 100 not in cache for hwnd=329782. Call get_window_state first." The model DID call it. Timeline: cua_get_window_state dispatched 11:12:12.773, cua_click dispatched 11:12:15.720 in a SEPARATE batch, the state result arrived 11:12:27.108 — the click went out 11.4s before the refresh it depends on returned. live-tool-adapter.js:595 serialises calls WITHIN a batch on purpose; nothing orders them ACROSS batches, and Gemini streams a second call before the first outcome is injected. cua_get_window_state itself took 14.3s, which widens the window. Both cua_click batches carry the same batchHash 4d454baba3f9; BUG-120 dedup missed it because that is scoped to one turn and these were turns 39 and 43. Consumers: live-tool-adapter batch dispatch; from-cua element cache. Remaining evidence: whether cua-driver exposes a refresh cheap enough for cua_click to self-heal on a miss, which is the fix shape that makes the bad state unrepresentable rather than detectable. | mythos/src/core/voice/live-tool-adapter.js:595; mythos/src/core/effectors/from-cua.js |
 | BUG-440 | verified | currently verified | [LIVE-VERIFIED 2026-09-16 attended run: 5x screen_look, every vision.call attemptsTried:1 on google, 2.3-4.3 s.] [CODED 2026-09-11 in 96fb0e5a (static removal + KNOWN_DEAD); register corrected 2026-09-16 — the bench DOES reach the lane, cost was one attempt per boot; attended 3× screen_look pending] The vision lane calls a model this account can NEVER use. screen_look burned its 12000ms budget on google/gemini-3.5-flash-lite (aborted at 7008ms, the per-attempt cap), mistral-small-latest (429 rate limited) and mistral-large-2512 ("403 This model is not available in your subscription tier"), then told the operator it could not see the screen — while a sibling screen_look succeeded via google in 3897ms. The 403 is not transient and cannot recover: it will fail on every call and costs ~1.2s of a 12s budget each time, so a three-rung chain is really about one and a half. BUG-420 already benches provider:model for 24h on a real 403, which means that benching does not cover this lane — a guard scoped to where the problem was first seen. Consumers: screen_look, deepthink/think_deeply (same 429 family: mistral-medium-2604). Remaining evidence: whether the vision lane can share provider-health benching or needs its own, and whether removing the 403 rung alone brings screen_look inside budget. | mythos/src/core/brain/provider-health.js; mythos/src/core/brain/lanes.default.js |
 | BUG-441 | coded | blocked | [CODED 2026-09-16; cause corrected — a missing `clicking` claim category, not a dropped caveat; 2026-09-23 mixed: a hedged click claim, but a claim spoken 8 s before a failed click and an Audit "ok" for a shell-denied open_web; no unverified:true click observed yet] A result carrying unverified:true is spoken as a completed action. Four calls this session returned outcome:ok WITH an unverified flag and an honest reason — open_web x2 "I cannot confirm whether the new tab opened because the browser did not expose a window handle", browser_click x2 "clicked ... from page script because it never became visibly actionable — a script click skips the checks that prove a real user could have". The effector layer is correct; the caveat is dropped between the ledger and the spoken turn, so the operator is told it worked. The healer caught one instance itself (claimed-action-not-taken). Operator incident inc-1789074035676-6 asks for exactly this root cause. Distinct from BUG-434 (a TRUE action wrongly retracted) and from BUG-438 (the unverified flag firing on the tab rather than the title): this is the general rule that ok means dispatched, not proven. Consumers: the spoken narration path; narration-claims.js. Remaining evidence: whether suppressing the claim is enough or the turn must say what could not be confirmed. | mythos/src/core/voice/narration-claims.js; mythos/src/core/voice/live-tool-adapter.js |
 | BUG-442 | verified | currently verified | [LIVE-VERIFIED 2026-09-23: combined mode, 11 idle minutes against a 2-minute PIN session, no token prompt, zero 401s; polling-as-activity decision still open] The PIN session cookie is issued with maxAge = PIN_SESSION_TTL_MS (30 min, hard) while pin-session.js slides its own expiry on every valid check; the browser dropped the cookie at unlock+30 min (10:29Z -> ~11:00Z), every /api fetch turned 401 in combined mode, and net-guard rendered the ACCESS TOKEN prompt for a lapsed PIN session. Live WS kept working (authenticated at upgrade). Consumers: routes/pin.js cookie issue, tokenOk() combined branch, ui/public/js/net-guard.js. Remaining evidence: none needed to start — the mechanism is read from the code and the timing matches the default TTL. | mythos/server/routes/pin.js; mythos/src/core/security/pin-session.js; mythos/ui/public/js/net-guard.js; candidate test: pin-session-cookie-slides.test.js |
 | BUG-443 | fixed | currently verified | [FIXED 2026-09-18 `2e707594`] app_reply failed with "Could not type the reply into slack: [object Object] Nothing was sent." (Audit 10:41:31Z). TWO origins, not the one this row named: from-pc.js delegate() read resp.error raw and window-recovery.js stringified it a line later (where the row was actually made), and from-app-reply.js rendered its own failures with String() because its local pc() helper bypasses from-pc. A sweep found two more private normalizers (reasonOf, from-cua) — seven recorded instances of this class. All route through util/reason-text.js; a derived guard fails on any NEW whole-failure-value stringification rather than counting known ones. Consumers: app_reply spoken failure text; the claim-check ledger reason. Remaining evidence: none, and no live run required — a pure string transformation with no device, timing or platform dependence. | mythos/src/core/effectors/from-app-reply.js; mythos/src/core/effectors/from-pc.js; mythos/src/core/effectors/from-cua.js; tests: bug-443-app-reply-keeps-the-reason.test.js, bug-443-no-unclassified-reason-stringify.test.js |
-| BUG-444 | open | currently reproduced | [FILED 2026-09-18 from the BUG-442 security review] POST /api/auth/session puts the raw MYTHOS_AUTH_TOKEN into the browser cookie for 30 days rather than minting a session identifier (`res.cookie(AUTH_COOKIE, authToken, …)`, routes/auth.js). The secret itself is then at rest in the cookie jar of every browser the operator has ever logged in from, and it cannot be revoked for one browser without rotating the token for the phone node and every other caller. Out of BUG-442's scope by decision, not by oversight: 442 separated the PIN session from the bearer and did not change what the bearer cookie carries. Consumers: browser navigation, the WS upgrade (a browser cannot attach headers), trusted-node auth. Remaining evidence: none — the shape is read directly from source. A fix mints an opaque per-browser session with its own store and revocation, and stops the raw secret ever reaching a cookie. | mythos/server/routes/auth.js; mythos/server/credentials.js |
-| BUG-445 | open | currently reproduced | [FILED 2026-09-23 from the attended run; the golden-path test] Tool results reach the Live model cut to 4,000 characters (truncateForModel); a YouTube snapshot is ~8,650 and the header uses ~3,400, so only the first video's reference is ever visible. Measured on four snapshots: video 1 at ~3,300, videos 2–6 at 4,100–7,900. The model guessed references (one off by one, two nonexistent) and played the wrong video. Same class as BUG-397. Consumers: every browser_snapshot → browser_click flow; Stage 1 golden path. Remaining evidence: none for the mechanism; a fix is proven by attended "play the third / sixth video". | mythos/src/core/voice/live-tool-adapter.js; measured with .cache/windows-operator/attended-2026-09-23/refpos.js |
-| BUG-446 | open | currently reproduced | [FILED 2026-09-23 from the attended run] Five paused "Commitment" goals from 2026-09-11, over budget (e.g. 36,566 of 20,000 tokens), made 9 tool calls at boot including a tier-2 launch_app brave, with the HUD PIN-locked and nobody speaking; budget-exhausted was healed 9 ms after it fired. Consumers: cortex goal execution, immune healer, commitment-goal creation. Remaining evidence: none; operator decision owed on commitment expiry. | mythos/src/core (cortex goal selection, immune healer budget-exhausted playbook); vault/Goals/goal-f3daf200*.json, goal-21999a3d*.json |
-| BUG-447 | open | currently reproduced | [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed "because a Live conversation is in progress". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live. | mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js |
-| BUG-448 | open | currently reproduced | [FILED 2026-09-23 from the attended run] "Opening a new Notepad window right now" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction "that Notepad window didn't actually open" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app. | mythos/src/core/voice/claim-check.js |
-| BUG-449 | open | currently reproduced | [FILED 2026-09-23 from the attended run; seen once] The output transcription began "call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…" — a function call rendered as speech and never dispatched; the same reply said "I'm searching … now". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection. | mythos/src/core/voice/live-session.js (outputTranscription handling) |
-| BUG-450 | open | currently reproduced | [FILED 2026-09-23 from the attended run] gemini-tts 429 on every call and kokoro-tts timing out, retried on every utterance before edge-tts: 10 provider failures, 8 speech-lock ceilings, greeting audio 51 s after its text. Kokoro's timeouts are also the prime suspect for BUG-422's crash. Consumers: every TTS-chain utterance (proactive speech, greeting). Remaining evidence: none; a fix is proven by text-to-audio lag under one working engine's synthesis time. | mythos/providers (TTS chain); mythos/providers/kokoro/client.js |
-| BUG-451 | open | currently reproduced | [FILED 2026-09-23 from the attended run] A healer recurring-failure lesson and a model note both record that clicking by reference fails, and the model saved "rapid re-rendering" as the cause; the real cause is BUG-445's truncation. Records left in the vault on purpose. Consumers: vault/Lessons, notes, future sessions' tool choice. Remaining evidence: none; the operator removes both records once BUG-445 lands. | mythos/src/core/immune (recurring-failure playbook); vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md |
-| BUG-406 | open | blocked | [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
+| BUG-444 | coded | blocked | [LIVE 2026-09-24] Startup half worked: no prompt, session issued, old PIN key ignored. Remote login and rotation untried. [CODED 2026-09-23 with the PIN removal] The sign-in cookie is now a random session id (mythos_session); auth-sessions.js stores its SHA-256 and a token fingerprint beside config.json, never in the vault; the raw-token mythos_token cookie is cleared, never read; per-browser logout closes that session's sockets; rotation ends all sessions; a corrupt store fails closed. Red-first test and 12 mutation probes in the entry. Remaining evidence: attended remote sign-in, sign-out and rotation from a second device. | mythos/test/bug-444-session-cookie-is-not-the-token.test.js; mythos/server/auth-sessions.js; mythos/server/credentials.js |
+| BUG-445 | coded | blocked | [LIVE 2026-09-24] Click-by-ref played a named video; third-video case unproven; one false success filed as BUG-462. [CODED 2026-09-23] browser_snapshot now returns a bounded, paged list built by snapshot-view.js — dialog and search box first, then main in page order, links to one target merged into one item — and the tools accept exactly the refs printed on pages the model has read; a ref from a page that has since changed address is refused. The voice adapter bounds results as a structure (model-result.js): binary fields never reach the model as text, arrays lose items from the end without renumbering. Red-first test and 12 mutation probes in the entry. Remaining evidence: attended "play the third video" and "play the sixth video" on the real page, with the intended video id in the URL and playback advancing. | mythos/test/bug-445-snapshot-view-shows-what-it-accepts.test.js; mythos/src/core/effectors/snapshot-view.js; mythos/src/core/voice/model-result.js |
+| BUG-446 | coded | blocked | [LIVE 2026-09-24] No autonomous run at boot; commitment_list answered truthfully; dismissal untried. [CODED 2026-09-23] Premise corrected by measurement: the goals were PROPOSED commitments, not paused ones — writeBack() lists every user-service goal in Goals.md unchecked and the next boot's sync() set every unchecked row active; the "healed 9 ms later" was the budget-pause playbook applied. Repaired: sync() never activates an unchecked row (tick -> done, untick of a done row -> active); autonomous work is gated at the shared dispatch on goal status and budget, with one action reserved before it starts, and a cortex-raised confirm carries its origin so a late accept is re-checked; plan() checks the budget before any branch; open commitments are listed only when asked (commitment_list) and can be dismissed (commitment_dismiss) without being marked done. Red-first test and 14 mutation probes. Headless seeded-vault boot 2026-09-23: old build 4 Audit rows and proposed 1 -> 0; fixed build 0 rows and proposed 1 -> 1; a ticked row becomes done. Remaining evidence: the spoken D10 half (ask, dismiss, unrelated turn). | mythos/test/bug-446-autonomy-runs-only-active-goals-with-budget.test.js; mythos/src/core/goals/execution-gate.js; mythos/src/core/effectors/goals.js |
+| BUG-447 | open | currently reproduced | [LIVE 2026-09-24] Heals silent and greeting right. Needs-operator line spoken verbatim; resume tool returned an older answer; French transcription reproduced. [PARTLY CODED 2026-09-23: successful heals and crash recoveries are no longer spoken — immune/announcer.js, their only speaker, is deleted (operator decision D5), and a derived map names every listener to heals so a new speaker cannot slip in; the greeting now knows a returning operator from a first boot. Resume after a barge-in CODED 2026-09-24: the HUD reports where playback was cut, the server takes the unheard sentences from its own transcript, and a read-only tool hands them to the model once when the operator asks it to go on — nothing is injected. Still open: the Spanish transcription (no audio of the session was kept, so it cannot be reproduced), and failed-action reporting plus holding actionable speech until the answer ends, which ride on BUG-432's answer lane] [FILED 2026-09-23 from the attended run] 15 of 51 Live turns system-initiated, 15 interrupted, 15 unprompted lines — mostly heal announcements in log vocabulary spoken into the conversation, while a different anomaly was suppressed "because a Live conversation is in progress". The operator's question lost. Consumers: proactive speech, immune announcements, notice queue. Remaining evidence: none; operator decision owed on speaking successful heals during Live. | mythos/src/core/immune (heal announcements); mythos/src/core/voice/notice-queue.js |
+| BUG-448 | coded | blocked | [LIVE 2026-09-24] Notepad case held; a keystroke claim was falsely retracted, same class. [CODED 2026-09-23] Two causes, not one: category matches whose words overlap are now ONE action judged together (a backed match excuses the others unless their own tool failed this turn), and a slow tool's "started" row no longer counts as pending once the same call has returned — that stale row had removed the opening category from the judgement entirely. Not "any launch backs any panel": a sentence only window-control matches is still judged by its own tools. [FILED 2026-09-23 from the attended run] "Opening a new Notepad window right now" (backed by a successful launch_app) matched window-control's progressiveRe, whose tools lack launch_app; the retraction "that Notepad window didn't actually open" was spoken, then undone 15 s later. Fifth recorded instance of this claim-category class. Consumers: claim-check retraction path. Remaining evidence: none; regression test is the verbatim sentence plus a successful launch_app. | mythos/src/core/voice/claim-check.js |
+| BUG-449 | open | blocked | [DETECTOR CODED 2026-09-23; prevention OPEN by decision D7] Tool-call syntax naming a real tool in a turn's output transcript is now a silent spoken-tool-syntax anomaly naming the tool and whether a real call of it ran; the parsed text is never executed and nothing about it is spoken (the healer acknowledges the kind). Keeping it from reaching playback needs the validated text lane, which is deferred. [FILED 2026-09-23 from the attended run; seen once] The output transcription began "call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256…" — a function call rendered as speech and never dispatched; the same reply said "I'm searching … now". Consumers: Live output audio; claim-check (does not treat a spoken call string as a claim). Remaining evidence: whether it recurs, and whether it follows heavy injection. | mythos/src/core/voice/live-session.js (outputTranscription handling) |
+| BUG-450 | coded | blocked | [LIVE 2026-09-24] Gemini parked once on quota with no repeat calls; text and audio together. Kokoro park unexercised. [CODED 2026-09-23] Premise corrected: the chain is sticky and moved off an engine only when a LATER one succeeded, so concurrent sentences each paid gemini (429) and kokoro (timeout) before edge; nothing remembered a failure across calls or chain rebuilds. providers/tts-circuit.js adds one circuit per engine and credential: while an engine is unproven or just out of cooldown ONE call is admitted and the rest wait for its answer; a failure parks it (a 429 for Google's own sane retry delay, anything else for a 5 min / 30 min / 4 h ladder); a cancellation never counts; a rebuilt chain shares the parks; after the cooldown one probe may win the better engine back. Red-first test and 11 mutation probes. Remaining evidence: an attended speech session where Gemini is over quota and Kokoro times out, reading tts.provider-parked against per-sentence latency. | mythos/test/bug-450-tts-circuit.test.js; mythos/providers/tts-circuit.js; mythos/providers/tts.js |
+| BUG-451 | coded | blocked | [LIVE 2026-09-24] An incident recorded a false limitation as fact; incidents carry no provenance. [CODED 2026-09-23] Every remembered sentence now carries provenance assigned by the server from its text, never by the model: a stated cause is a hypothesis, a reported symptom is an observation, and nothing can be labelled verified. The goal planner reads observations only; a note MYTHOS writes is marked on its entry. Records written earlier, the two 09-23 ones included, are classified at read without being edited. [FILED 2026-09-23 from the attended run] A healer recurring-failure lesson and a model note both record that clicking by reference fails, and the model saved "rapid re-rendering" as the cause; the real cause is BUG-445's truncation. Records left in the vault on purpose. Consumers: vault/Lessons, notes, future sessions' tool choice. Remaining evidence: none; the operator removes both records once BUG-445 lands. | mythos/src/core/immune (recurring-failure playbook); vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md |
+| BUG-452 | coded | blocked | [CODED 2026-09-23] The /api CORS middleware only set headers and never refused a foreign Origin, so any website could run /api calls on an install with no PIN and no token; the PIN's SameSite cookie had been the accidental barrier. createCrossOriginGuard refuses a foreign Origin or a Sec-Fetch-Site other than same-origin/none before any handler. Remaining evidence: attended check that a page on another origin cannot run an /api call. | mythos/test/pin-removal-access.test.js; mythos/src/core/server/boot-guards.js |
+| BUG-455 | open | currently reproduced | [FILED 2026-09-24 from the attended run] Echo check had zero reference words at every check on 2026-09-23 and 2026-09-24; the mic gate ceiling released mid-reply and Gemini cut the turn. Remaining evidence: a gate recording around a release. | mythos/src/core/voice/live-session.js (echoFilter); mythos/ui/public/js/voice/s2s-bridge.js (own-voice gate) |
+| BUG-456 | open | currently reproduced | [FILED 2026-09-24 from the attended run] Seven ack-then-silent turns and six injections each followed by an interruption within 0.1 s. Remaining evidence: time to first audio before and after a repair. | mythos/src/core/voice/live-tool-adapter.js (TOOL_ACK_DEADLINE_MS, reportLateOutcome) |
+| BUG-457 | open | currently reproduced | [FILED 2026-09-24 from the attended run] Spoken twice in one session; the phrase is not in the code. Remaining evidence: a count per session and a repair. | mythos/src/core/voice/live-tool-adapter.js (sendSystemNotice late-outcome) |
+| BUG-458 | open | currently reproduced | [FILED 2026-09-24 from the attended run] Two empty answers with attemptsTried 1. Remaining evidence: the finish reason, and a fallback taken on empty content. | mythos/src/core/effectors/deep-think.js |
+| BUG-459 | open | currently reproduced | [FILED 2026-09-24 from the attended run] Two false refusals quoted with times; recovered only on the operator's insistence. Remaining evidence: the same requests after a description repair. | mythos/src/core/effectors/from-dashboard.js (open_web description) |
+| BUG-460 | open | currently reproduced | [FILED 2026-09-24 from the attended run] One clear false positive with times, plus a probable true one. Remaining evidence: a fragment test that checks the turn's outcomes. | mythos/src/core/voice/live-tool-adapter.js (ad4-correction-unheard) |
+| BUG-461 | open | currently reproduced | [FILED 2026-09-24 from the attended run] One instance, confirmed by the operator. Remaining evidence: the transcript confidence or level for that turn. | mythos/src/core/voice/live-session.js (inputTranscription); mythos/src/core/leash |
+| BUG-462 | open | currently reproduced | [FILED 2026-09-24 from the attended run] One instance; the page target was read from the browser. Remaining evidence: a url-changed check on the same page. | mythos/src/core/effectors/from-browser.js (browser_click) |
+| BUG-463 | open | currently reproduced | [FILED 2026-09-24 from the attended run] Quoted twice plus the operator's objection. Remaining evidence: which context block carries it. | mythos/src/core/voice (Live system instruction); mythos/src/core/memory/reflection |
+| BUG-464 | open | currently reproduced | [FILED 2026-09-24 from the attended run] One instance with times. Remaining evidence: a count across sessions. | mythos/src/core/voice/voice-agent.js (RULES MEMORY RULE); mythos/src/core/effectors/from-memory.js |
+| BUG-406 | open | blocked | [RECORDER CODED 2026-09-23; study and repair OPEN by decision D9] VOICE_GATE_RECORDER=true now records, around every gate release, the mic level, both gates, whether and how far ahead the player is speaking, and both audio clocks — numbers only, never audio or words — under the repo's .cache/. The acoustic study, a replay harness, any change to the gate and the p95 250 ms target are the next round's work. [EVIDENCE FIRST, operator: one live-room mic + playback recording] Gate telemetry records release reasons and timing; labels cannot establish absence of echo. BUG-428 now carries the numeric transcript verdict to the ceiling behind a switch; acoustic improvement remains unproven. Consumers: Audio capture, playback gate, interruption handling. Remaining evidence: Synchronized labelled microphone/playback corpus, latency budget and no-regression controls in a live room. | mythos/src/core/voice/live-session.js |
 | BUG-407 | verified | blocked | Shared browser resolver preserves explicit choice/default precedence and HTTP schemes. Repaired asynchronous spawn failure falsely reporting opened then crashing. Consumers: Named external open via open-external-route and debug launcher. Regression oracle: Actual ENOENT original child status1 with false opened:true;53targeted and117familypass. Remaining evidence: Real named/default browser navigation; successful spawn alone does not prove rendered page. | mythos/src/core/effectors/browser-target.js |
 | BUG-408 | verified | blocked | Dedicated debug profile identity is distinct from operator profile and carries guidance about sign-in/extension state. Consumers: buildLaunchResult and browser debug startup. Regression oracle: Profile identity regressions in117browserfamilypass. Remaining evidence: Current account/login state in real debug profile cannot be inferred from its initial empty state. | mythos/src/core/effectors/from-browser.js |
 | BUG-409 | verified | blocked | Close checks owned profile processes, polls actual survivors and escalates. Repaired unknown initial ownership allowing close and null post-kill oracle falsely claiming exit. Consumers: closeLaunchedBrowser and browser_switch. Regression oracle: 2new assertions red before;30close/neighbourpass;initial known-then-null fixtures preserve distinct paths. Remaining evidence: Actual cold/warm browser process exit and port release on current artifact. | mythos/adapters/browser-agent/browser-process.js |
@@ -900,7 +911,19 @@ Every Brave process on the machine carried a start time of 22:35:18 and pid 6960
 
 ## BUG-406 — the half-duplex gate held the operator's microphone for 40% of a conversation, and 92 seconds of that ended in a timeout rather than in actual echo (🔴 DIAGNOSED 2026-09-03, deliberately NOT fixed here)
 
-**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note.
+**Status:** 🔴 measured, not fixed. **Deliberately deferred** — see the closing note. The **recorder** the closing note asks for is CODED 2026-09-23 (next section); the study and the repair are not.
+
+### The recorder (CODED 2026-09-23 — decision D9: recorder this round, study next round)
+
+The entry's own conclusion was that scalar release summaries cannot establish acoustic ground truth, and that the next step needs synchronised microphone and playback evidence around each release. That instrument now exists, behind `VOICE_GATE_RECORDER=true` (off by default, documented in `.env.example`).
+
+- **HUD** (`ui/public/js/voice/gate-recorder.js`): a ring buffer of the last 30 s, at most one sample per 50 ms, each holding the mic frame's RMS, the media gate and the own-voice hold, whether the player says it is speaking, how far ahead of its clock the player has audio queued (new `playhead()` in `pcm-player.js`), and both AudioContext clocks. The frame is sampled **before** the gate's early return — the frames the gate holds are the ones being studied. **Numbers only:** each frame is reduced to one number on the spot; no audio and no words are in reach.
+- **On every release** (an own-voice release, or the end of a media hold) the window is sent to the server, which writes one JSON line per release to `.cache/voice-gate-recorder/<day>.jsonl` — gitignored, never the vault. The server checks the flag itself, keeps only the recorder's own numeric and boolean fields, caps the sample count and reduces the reason to a slug.
+- **Scope:** an instrument for attended runs from source. A packaged install cannot write under its own archive, and says so once in the log.
+
+**Proof.** `test/bug-406-gate-recorder.test.js`, 10 tests; red first against d32f49d8; 14 mutations, each reddening a named test. Two existing guards were updated, each with a dated note: `config-s2s-route.test.js` pins the exact keys of `/api/config/s2s` (the new key is asserted to be a boolean), and `voice-chunk-double-speak.test.js` pinned the literal early return the recorder had to split — it now asserts the order it protects, and a probe removing the suspended return reddens it.
+
+**Reopening criteria, unchanged (D9):** a recorded corpus from an attended session with near-field speech and own-voice controls; the two ceiling constants traced to their justification; a replay harness; only then a change to the gate, measured against the p95 250 ms local-stop target.
 
 **2026-09-10 update:** BUG-428 wires the server's numeric echo verdict into the existing ceiling decision, behind `VOICE_ECHO_VERDICT_TO_CLIENT=false` rollback. No timer tuning and no barge-in echo veto. A verdict is evidence of a transcript, not a labelled acoustic sample; a live room is still required and no operator session was run here. Also, the historical `frames zeroed` column sums cumulative counter snapshots; it cannot establish the number of distinct frames lost. Release durations remain directly measured.
 
@@ -1434,7 +1457,41 @@ Both lane models are dead and the free catalog lists both as alive -- the defect
 
 ## BUG-422 — the server child exits silently mid-session and no restart follows (OPEN, found live 2026-09-09; a child death CAPTURED 2026-09-23)
 
-**Status:** OPEN, CRITICAL. Reproduced live 2026-09-09. **A child death was captured with its exit code on 2026-09-23**, and it points at a strong suspect; the restart half now works. Cause not yet proven.
+**Status:** OPEN, CRITICAL — **CONTAINED 2026-09-23.** The suspected mechanism is reproduced and contained; details below. The ticket stays open because the exact attended exit code was not reproduced, and because the 2026-09-09 death that no restart followed is still unexplained.
+
+### Repro matrix and containment (2026-09-23)
+
+**The matrix.** Real Kokoro model, one fresh process per trial, more than 6 s observed after each operation (`.cache/bug422/matrix.js` + `trial.js`, gitignored). The trials drive the real `providers/kokoro/client.js`.
+
+| trial | worker THREAD (before) | child PROCESS (after) |
+|---|---|---|
+| terminate an idle worker (control) | exit 0 ×2 | exit 0 ×2 |
+| terminate mid-inference | **0xC0000409 ×2** (at exit, ~20 s late) | exit 0 ×2 |
+| … then a replacement load | **0xC0000409 ×2** | exit 0 ×2 |
+| … then a replacement synthesis | **0xC0000409 ×2** | exit 0 ×2, the replacement speaks |
+| shut down mid-inference, then exit(0) (BUG-437's shape) | **0xC0000409 ×2** | exit 0 ×2, in 2 s |
+| four kills ~5 s apart (the attended shape) | **DIED MID-SESSION ×2**, after kill 2 | exit 0 ×2: four kills, a synthesis, 10 s alive |
+
+**What that proves.** A worker thread shares its process, and onnxruntime inference is not interruptible. Terminating the thread mid-inference therefore poisons the WHOLE process: it dies at exit every time, and mid-session once kills accumulate. The reproduced code is 0xC0000409, a fail-fast. The attended death was 0xE06D7363, a native C++ exception, after the same run of kills. The mechanism is the same, but **the code is not**. So the cause of the attended death is *consistent with* this finding and not proven by it.
+
+**Containment.**
+
+- `providers/kokoro/child-transport.js` (new) forks `worker.js` as a child PROCESS. It uses `serialization: 'advanced'`, so the audio ArrayBuffer crosses as bytes. `ELECTRON_RUN_AS_NODE=1` is set in the CHILD env only, because the packaged execPath is MYTHOS.exe. stdout is ignored and stderr inherited. It is unref'd while idle, and `terminate()` awaits the exit, capped at 3 s.
+- `client.js` defaults to the child transport. Request ids, generations, deadlines and cancellation are unchanged, so a timeout or cancel still replaces the engine, and that replacement now kills a PROCESS.
+- `worker.js` answers on a thread port or over IPC, and exits when its parent disconnects.
+- **No watchdog was added,** per this ticket's own rule.
+
+**Proof.**
+
+- **Unit tests.** `test/bug-422-kokoro-runs-out-of-process.test.js` uses a fake child that speaks the real protocol (CI has no weights). It measures "the server survives" as a real host process's exit code across a native `process.abort()` and a hung synthesis. A control test pins that the SAME abort inside a worker thread kills its host.
+- **Mutation probes.** Six: five red, and **one recorded as SURVIVED**. The "await the exit" in `terminate()` cannot be observed on Windows, where TerminateProcess leaves no window between kill and exit. It is kept for POSIX.
+- **Real server.** The forked-IPC quit probe from BUG-437 now exits 0 in 65 ms, ×2. Before the change it crashed 0xC0000409 about 4 s after `process-exit`.
+- **Packaged runtime.** `electron-builder --win --dir`, then `ELECTRON_RUN_AS_NODE=1 MYTHOS.exe scripts/verify-packaged-kokoro.js`, PASSES: `transport: child-process`, 28 voices, 211,244 bytes in 2.9 s, 0 network calls, ran under Electron.
+- **Full suite:** 7957 tests, 7957 pass, 0 fail, 0 skipped.
+
+**What would close it.** Either reproduce 0xE06D7363 itself (for example, kills landing during a replacement LOAD rather than a synthesis) and show the child transport contains it, or catch a live death with the child transport in place and read its code. Separately, the 2026-09-09 case, a death that no restart followed, is still unexplained.
+
+**Earlier status, kept for the record:** OPEN, CRITICAL. Reproduced live 2026-09-09. A child death was captured with its exit code on 2026-09-23 and pointed at a strong suspect; the restart half works.
 
 **Attended run 2026-09-23 — one death, captured.** 13:40:59.641 `mythos child disconnect`, then `mythos child exited (code=3765269347 signal=null); restarting in 1000ms`. The server was back (`lifecycle.alive`) at 13:41:03 and the HUD reconnected under a new connection id. Logs were snapshotted at once (`.cache/windows-operator/attended-2026-09-23/crash1-*.log`).
 
@@ -1477,7 +1534,7 @@ So one of these is true, and this ticket is not closed until it is known which:
 
 **How to reproduce the evidence:** the boot is at line 4414 of `%APPDATA%\MYTHOS\mythos-server.log` and the session's last line is 5864.
 
-## BUG-432 — back-to-back system notices interrupt each other's turn (CODED 2026-09-10 behind a flag; MEASURED 2026-09-23 — keep the flag OFF; filed 2026-09-10)
+## BUG-432 — back-to-back system notices interrupt each other's turn (CODED 2026-09-10 behind a flag; MEASURED 2026-09-23; RE-CODED 2026-09-23 from that measurement — the flag stays OFF until an attended comparison; filed 2026-09-10)
 
 **Measured pass, attended run 2026-09-23 — the flag works for what it was built for and harms what it was not.** Run with `VOICE_SERIALIZE_NOTICES=true` for 51 voice turns across three Live generations.
 
@@ -1486,7 +1543,34 @@ So one of these is true, and this ticket is not closed until it is known which:
 - **The hold limit turns "wait" into "interrupt".** `live.notice-hold-expired holdMaxMs=15000` fired **4 times**, each time injecting into a live turn and cutting it off (e.g. 14:10:04, turn interrupted at audio part 66 after 65 s). The notices that won those fights were mostly unprompted heal announcements (see BUG-447).
 - **Verdict for the decision this ticket is waiting on:** do **not** make the flag default-on as built. Tool results — the answer to what the operator asked — must bypass the queue; only system-originated notices belong in it, and a notice that has waited its limit should be dropped or deferred, not forced into the middle of a reply.
 
+### Repair from the measured pass (CODED 2026-09-23, with BUG-436's delivery half)
+
+The measured pass said two things: the answer must not wait like an announcement, and a notice that has waited its limit must not be forced into a reply. Both are now rules in `src/core/voice/notice-queue.js`, where every item has a **class** decided by its site:
+
+- **Outcome** — the answer to the operator's own request: `late-outcome`, `late-for-turn`, `confirm-resolved`, `confirm-rejected-by-voice`, `ask-answer-to-live`, `reply-routed-to-live`. It never waits behind a correction or a notice; it goes the moment the transport is ready. One exception, found while writing the tests: two answers sent back-to-back would cut each other off exactly as notices used to, so a second answer waits for the first one's turn to end — at the FRONT of the queue.
+- **Correction** — the `ad4-*` corrections and the turn-audit lines. Waits for the turn to end. Never expires.
+- **Notice** — everything else, mainly proactive speech. Waits for the turn to end; after `NOTICE_MAX_AGE_MS` (60 s) it is dropped, logged as `live.notice-expired {site, ageMs, dropped:true}`.
+- **Nothing is forced into a turn in flight.** The 15 s ceiling is removed, and `LIVE_NOTICE_HOLD_MAX_MS` with it (a value left in `.env` is ignored; `.env.example` says so). The timer that remains is an idle tick: it drops stale notices, and it releases one item only when nothing is being said. `live.notice-hold-expired` no longer exists, so an old measurement cannot be misread as a new one.
+- **A derived guard:** every `site:` literal in `src/core/voice` and `server/` must have a class, or a test fails. A site without one would silently be a droppable notice.
+
+**Proof.** `test/bug-432-outcome-outbox.test.js`, 19 tests. Red first against 9db9b967 (12 of the first 13 failed, each for its stated reason; the two adjacent cases passed). 17 mutation probes, every one reddening a named test; the table is in the file. Three older tests pinned the removed ceiling and were re-pointed with dated notes: take-turns (5), and rotation (e) and (f); (g) now uses a correction.
+
+**Sub-claim map.**
+
+| sub-claim | state |
+|---|---|
+| notices interrupt each other (15 of 35 interruptions) | coded 2026-09-10, measured working 2026-09-23 |
+| the queue held a tool result behind notices (₹52,542) | **coded** — outcomes bypass |
+| the 15 s ceiling forced 4 interruptions | **coded** — ceiling removed |
+| a held notice lost across a rotation | coded 2026-09-11; answers now also survive the rotation itself (BUG-436) |
+| default-on | **open** — only after an attended comparison shows timely answers and fewer interruptions |
+
+**Not covered, said so.** An outcome arriving mid-reply is sent at once and cuts that reply. In the ₹52,542 case the reply was wrong, so that is the point; where the reply was right it is an interruption, and only the attended comparison can weigh it. A turn that never ends holds corrections until the session closes. Every test drives a fake socket.
+
 **Status:** 🔧 CODED behind `VOICE_SERIALIZE_NOTICES`, default OFF. The mechanism, its bounds and its tests are in; the flag stays off until the measured pass below, because serialising notices changes live timing and that is exactly what this ticket says needs measuring before it becomes the default.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **Flag OFF, the default.** The case this ticket was filed for held: the 256 GB price came back from `web_search` and was spoken at 15:05:16 (*"around forty-eight thousand eight hundred and thirty rupees"*), about 13 s after the question. What the run exposed instead is BUG-456: every tool slower than 1.5 s leaves a silent gap, and its late result cuts the turn it lands in, so answers arrived 5–15 s after the question. The A/B with the flag ON is still owed.
+
 
 **Attended run 2026-09-16 (VOICE_SERIALIZE_NOTICES=true for the session only; removed after).** Two rotations. First: 10:44:24Z `live.goaway timeLeft:"50s" deferred:true holdMs:48000` → `live.goaway-close why:"turn-complete" heldMs:4682` → `live.notice-suspended reason:"rotation" queued:1` → `live.notice-resumed generation:2 queued:1` → `live.notice-hold-expired held:1 holdMaxMs:15000` → the held think_deeply outcome injected at 10:44:40Z. Second: 10:53:39Z. Session counts (26 min, 64 turns): `live.notice-held` 23, `live.notice-hold-expired` 2, no drop or loss row, `live.interrupted` 10 (09-09 baseline: 35 in 15 turns) — every interrupt inspected sits beside an operator utterance (10:40:29Z "shut up … play India's Got Latent" → interrupted 10:40:32Z), i.e. barge-in, not self-interruption. Only ONE notice was queued across a rotation; the plan wanted two, so the rotation half is evidenced, not closed, and the default stays OFF.
 
@@ -1823,6 +1907,46 @@ Still genuinely open, and NOT the regression: deleting `browserName` outright on
 
 **Status:** 🔴 OPEN, in three separate strands — keep them apart, because two of them are done and the one that matters is not.
 
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** Two Gemini goAways (14:59:51 and 15:12:43) were each held until the reply finished (17.9 s and 1.8 s), and the answer arrived whole. The two `browser_launch_debug` runs (15:06:42 and 15:10:12) logged no loop stall. Stalls still happened elsewhere: 2658 ms at boot (672 ms of CPU); 1272 ms and 1159 ms during `recall_memory` (CPU-bound, 1828 and 1844 ms); and 1940 ms at 14:52:03 with only 219 ms of CPU — the unattributed kind this ticket is about. `LOOP_LAG_TRACE` was not on.
+
+
+### Blocking half (CODED 2026-09-23)
+
+**What was blocking.** A synchronous child-process call (`execFileSync`, `execSync`, `spawnSync`) stops everything in the server — the Live socket, the HUD, every timer — for as long as the child runs. The 2026-09-23 profiler run caught a 3 s freeze with 47 ms of CPU that ended as a debug-browser launch returned; its process queries ran PowerShell that way. Mapping every such call found more than the entry named:
+
+| call | when it ran | bound |
+|---|---|---|
+| `browser-process.js` PowerShell queries and `taskkill` | every browser launch, switch and close | 15 s / 10 s |
+| `browser-target.js` `reg.exe` (default browser) | the launch path | 4 s |
+| `routes/components.js` `wsl.exe --status` | a GET of the setup page | 10 s |
+| `piper-child.js`, `edge-tts-child.js` python and module probes | boot **and every crash-restart**, mid-conversation | 3 s per candidate + 8 s / 5 s |
+
+**The fix.** New `src/core/util/exec-file-text.js` runs the same commands asynchronously, still bounded (the child is killed on timeout). Every function in the list is async now and every caller awaits it — the close-window guard, the launch and adopt paths, the default-browser resolver, the external-open oracle, the setup route. The TTS helpers' `start()` never rejects (its callers fire and forget), and a start that `stop()` overtook while a probe was pending spawns nothing — without that, making the probes async would have created orphan children.
+
+**The guard.** `test/bug-436-no-blocking-child-process.test.js` (a) scans `src/`, `server/` and `adapters/` and fails on any synchronous child-process call not in its waiver list. Two remain, each with a proof the test checks against the source rather than a claim: `identity/version.js` (memoized — git runs once per process, and `version.refresh()` has no production caller) and `android-child` (its only production caller is boot in `main.js`). `fs.*Sync` is out of scope, and so is Electron's main process; both are said so in the test.
+
+**Proof.** 18 tests, including the mechanism with a real child: timers keep firing during the new call and do not under `execFileSync`. Red first against e4aea51f (9 of the first 10). 20 mutation probes, each reddening a named test. **Six survived at first**, all one shape — a missing `await` — because the existing tests used synchronous fakes, which behave identically with or without `await`; each was closed with an async fake, the shape production has. About 30 existing test call sites were updated to await the now-async functions.
+
+**Not covered.** `writeBrowserPidFile`'s awaits run only inside a real Playwright launch, so no test drives them. **Not verified:** an attended run with `LOOP_LAG_TRACE=true` showing no stall during `browser_launch_debug`; the 18.6 s silence with a healthy loop (model side) is a separate question.
+
+### Delivery half (CODED 2026-09-23, with BUG-432)
+
+**The defect.** `live-session.js`'s `sendText` refused every frame while the socket was RECONNECTING, before the notice queue ever saw it, and the adapter's `sendSystemNotice` checked `isOpen()`. So a tool result that finished during a rotation was treated as "no open live session" and spoken by plain TTS outside Live — and the resumed session never learned that it happened.
+
+**The fix.** Behind the same `VOICE_SERIALIZE_NOTICES` flag, because it needs the queue:
+
+- **A rotating session accepts.** `acceptsNotices()` is true while the session is reconnecting or opening; `sendText` hands the frame to the queue, which holds it while suspended. The adapter checks `isOpen() || acceptsNotices()`.
+- **The answer goes first on resume**, then everything else waits for a turn to end.
+- **Receipts.** Live has no per-frame acknowledgement, so a receipt is any server frame arriving on the SAME socket after the send. It is taken BEFORE that frame's own handling, so the `setupComplete` that triggers a flush cannot receipt the flush it triggered (probe M6). An answer sent and never receipted before its socket died is replayed ONCE on the replacement; a second unreceipted drop drops it with a log row.
+- **Deduplication.** A late outcome carries its tool call id as `receiptKey`, a confirm its confirm id; a repeat of a key that is held, unreceipted, or among the last 500 delivered is refused as `'duplicate'`.
+- **A final close, or a rotation that cannot reconnect**, hands every held item back. For an answer, the server's handler (`createUndeliveredHandler`) appends it to the conversation history and, when it has a spoken form (a 30 s+ late outcome), speaks it over TTS. Nothing is ever replayed into a later session.
+
+**Proof.** The same test file as BUG-432: (s1)–(s4) drive the real `createLiveSession` on a fake socket; (a1)/(a2) drive a real slow tool's late outcome through the adapter; (h1)/(h2) the hand-back; (w1) the server wiring. Mutations M5–M9, M13–M15.
+
+**What a receipt does not prove.** That Gemini read the frame — a frame already on its way to us can arrive after our send. A replay can therefore duplicate an answer the old socket did deliver; chosen, because a repeated answer beats a lost one. The ws `error` path passes through `closed` before `reconnecting`, and a result offered in that instant still takes the TTS fallback.
+
+**Not verified.** No attended rotation with a result in flight has been observed.
+
 **Attended run 2026-09-23, with `LOOP_LAG_TRACE=true` — the first run with the profiler armed, and it split the symptom in two.**
 
 - **A silence with a healthy server (14:00:26–14:00:41).** The operator spoke, `live.echo-check` accepted the speech as real (10 words), and then **no audio, text or tool call came back for 18.6 s** — `live.turn-stalled turnId=16 waitedMs=10000`, then an interrupted turn with `audioParts=0`. **No `loop.stalled` anywhere in the window**, so the server's event loop was not frozen. This silence was on the model's side of the socket. It followed a pile-up: at 14:00:07 a claim-check retraction (BUG-448) and a late `ui_type` result were force-injected into a live turn at the same instant, then a turn with no user transcript, then another interruption. Whether that sequence confuses the session is a hypothesis.
@@ -2147,9 +2271,12 @@ Both now route through `util/reason-text.js`, the helper extracted for this clas
 
 **Fix sketch.** Render the failure through the shared reason text helper (`util/reason-text.js`) instead of `String(...)`. Test: a `ui_type` failure carrying `{result:{error:'the foreground window is X, not Slack'}}` produces that sentence in app_reply's message and the string `[object Object]` never appears.
 
-## BUG-444 — `/api/auth/session` puts the raw bearer token in a 30-day browser cookie instead of minting a session (filed 2026-09-18)
+## BUG-444 — `/api/auth/session` puts the raw bearer token in a 30-day browser cookie instead of minting a session (CODED 2026-09-23; filed 2026-09-18)
 
-**Status:** 🐞 OPEN — filed from the BUG-442 security review, not yet worked.
+**Status:** 🔧 CODED 2026-09-23 — a random session id replaces the raw-token cookie, shipped with the PIN removal. Attended startup/access session pending. Filed from the BUG-442 security review.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **The startup half worked.** The app opened straight into the HUD with no PIN and no token prompt. The old `PIN_SESSION_ENFORCE` key in config.json was reported by `config.settings.ignored` and did nothing; the desktop got its session without a prompt (`auth.session-issued persisted=true`, 14:49:58); the greeting was armed by real readiness and spoken once. Not exercised: login, logout and token rotation from a second device, and the cross-origin guard (BUG-452).
+
 
 **Mechanism, read from source at `0502b51d`.** `server/routes/auth.js` exchanges a
 correct `MYTHOS_AUTH_TOKEN` for a cookie whose VALUE is that same token:
@@ -2191,9 +2318,71 @@ here depends on a live run.
 
 **Attribution:** found by the `security-reviewer` pass on BUG-442, 2026-09-18.
 
-## BUG-445 — the voice model is shown only the first 4,000 characters of a browser snapshot, so "play the third video" can never work (filed 2026-09-23)
+**Fix, 2026-09-23 — shipped with the PIN removal (operator decision: "I open the app, it straight puts me in
+the HUD… this is a single user app").** One PR, because the two change the same credential code and neither is
+safe to land alone.
 
-**Status:** 🐞 OPEN, CRITICAL — this is the golden-path test itself ("play the third video"). Mechanism read from source and measured on four real snapshots; not worked.
+- **A session id, never the token.** `POST /api/auth/session` mints 32 random bytes (base64url) under a NEW
+  cookie name, `mythos_session`. `server/auth-sessions.js` stores only the SHA-256 of the id, a domain-separated
+  16-hex fingerprint of the token, and the two timestamps — so a copy of the file is neither anyone's cookie nor
+  the token. Fixed 30-day expiry (`AUTH_SESSION_COOKIE_TTL_MS`), never sliding; at most 32 live sessions.
+- **The old cookie is not a channel any more.** A new name makes the raw-token value structurally unreadable as a
+  credential instead of something every check must tell apart. `mythos_token` (and the PIN's `mythos_pin`) are
+  cleared on sight and logged by name only, once per process (`auth.legacy-cookie-rejected`).
+- **Resolved in exactly one place.** `credentials.evaluate()` resolves the cookie; `extractBearer()` reads header
+  and query only, which is what the AETHER node-trust branch uses. Explicit credential wins: a wrong
+  `Authorization` header fails even beside a valid cookie; an EMPTY one is treated as absent.
+- **Survives restarts; revocable per browser.** The file lives beside `config.json` (Electron userData, or next to
+  the vault headless) — never in the vault, so vault-push cannot carry it. `POST /api/auth/logout` revokes this
+  browser's session and closes the sockets it opened (tagged at connection); other browsers stay signed in.
+  Rotating the token ends every session through the fingerprint. A corrupt file fails CLOSED: nothing in it is
+  honoured, `auth.sessions-store-corrupt` is logged at error, the file is set aside (not overwritten) and a fresh
+  sign-in still works.
+- **The desktop never prompts.** The Electron main process already held the token and exchanged it
+  (`primeAuthSession`); it now installs the `mythos_session` value it gets back, and a response carrying only
+  the old raw-token cookie installs nothing.
+
+**Tests.** `test/bug-444-session-cookie-is-not-the-token.test.js` — written red first against `f283b293`:
+(a) no `mythos_session` cookie was issued, and (c) a raw-token cookie returned 200. Also covered: restart
+survival and what the file holds (d), rotation (e), wrong-header precedence (f), empty header (f2, ported from
+the deleted BUG-442 separation file), per-browser logout closing its sockets (g), corrupt store (h), and the
+no-token adjacent case (i). `test/server-auth.test.js`'s "200 with the mythos_token cookie" case was INVERTED, not
+deleted; `test/aether-node-verifyclient.test.js` now proves a browser session cannot open the node door, with a
+positive control that the same session opens the HUD socket; `test/auth-session-prime.test.js` covers the
+Electron half.
+
+**Mutation probes, run 2026-09-23** (each diffed to confirm it applied, restored sha256-identical):
+
+```
+M1  the token goes back into the cookie                    -> (a) (b) (d) (f2) + server-auth
+M2  node door accepts whatever tokenOk accepts (a session) -> aether: "a browser session is NOT a node credential"
+M3  a raw-token mythos_token cookie is accepted again      -> (c) + server-auth "401 with the raw token"
+M4  loopback source-address exemption                      -> (c) (e) (f) (g)
+M5  a wrong explicit bearer falls through to the cookie    -> (f)
+M6  a corrupt store is honoured (fail open)                -> (h)
+M7  the load-time prune ignores the token fingerprint      -> (e)
+    (first aimed at a fingerprint check inside isValid(): it SURVIVED, because the
+    prune had already dropped every foreign-fingerprint record — that check was
+    unreachable and was deleted, with the reason written above isValid)
+M8  logout does not close the session's sockets            -> (g)
+    (first run HUNG instead of failing: (g) awaited the close with no bound; it now
+    races a 3 s timer, so the regression is a named red, not a stuck run)
+M9  the cross-origin guard is not mounted                  -> pin-removal-access "refused BEFORE the handler runs"
+M10 Sec-Fetch-Site 'same-site' is allowed                  -> pin-removal-access "another localhost port"
+M11 a shipped file fetches /api/pin/status again           -> pin-removal-access "no shipped code reaches for the PIN"
+M12 the guard is not mounted on /vault/builds              -> pin-removal-access "/vault/builds is behind the same guard"
+```
+
+**Not verified, and what closes it:** nothing here has run against a second device. The attended startup/access
+session closes it — fresh boot straight into the HUD; restart; a remote browser signs in, signs out and is
+rotated out; upgrade from a PIN-only and a combined config; reconnect.
+
+## BUG-445 — the voice model is shown only the first 4,000 characters of a browser snapshot, so "play the third video" can never work (CODED 2026-09-23; filed 2026-09-23)
+
+**Status:** 🔧 CODED 2026-09-23, CRITICAL — this is the golden-path test itself ("play the third video"). Repair and proof below; closes on the attended browser-targets session.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **Not yet proven, and one false success.** The model reached YouTube in the debug Brave only after being told twice ("not the dashboard, the browser"; see BUG-459). It read the page with `browser_snapshot` and clicked by ref (`f2e308`, 15:11:24), then said *"I've also clicked the third video for you, the 'Café Ambience' mix. It should be starting up now"* — but the debug browser's only page target was still `youtube.com/results?search_query=lofi+music`, so nothing had opened (BUG-462). That request itself came from background noise the operator did not say (BUG-461). A second click by ref (`f2e436`, 15:12:23) played the video the operator named ("90s chill lo-fi"), which proves clicking by ref, not "the third video". The browser was closed before the third result could be read, so whether `f2e308` was the third video is unknown.
+
 
 **Symptom (attended run 2026-09-23, 14:02–14:05).** "Play the first video" worked every time. Every request for any other video failed or played the wrong one: a guessed CSS selector for the sixth video timed out; *"play the third"* clicked references the tool rejected as "never in a snapshot"; one guess landed on the second video; the first video was replayed twice when the operator asked for others. The operator, after five attempts: *"when I'm asking you to play a particular video, you are not able to."*
 
@@ -2218,9 +2407,45 @@ So the model can only ever address the first result. Every other click is a gues
 
 **Attribution:** attended run 2026-09-23; positions measured with `.cache/windows-operator/attended-2026-09-23/refpos.js`.
 
-## BUG-446 — paused, over-budget "commitment" goals from 12 days earlier executed at boot with real side effects, while the HUD was PIN-locked (filed 2026-09-23)
+### Repair (CODED 2026-09-23)
 
-**Status:** 🐞 OPEN, HIGH — an autonomy and safety defect: actions on the operator's desktop that nobody asked for today. Measured; not worked.
+**Premise corrections, measured before the fix.** The entry above blames the adapter's 4,000-character cut alone. Reading `from-browser.js` showed the defect was worse, and in two layers:
+
+- `capSnapshot()` kept the tree to 8,000 characters **header-first**, and `checkRef()` then accepted **every ref in those 8,000**, while the model saw only 4,000. The tools accepted refs the model was never shown. That is how the guessed `f5e1557` clicked the second video's container and reported ok.
+- The same cap kept only lines carrying `[ref=`. A link's target is a **child** `/url` line with no ref (measured against playwright-core 1.62.1 on 2026-09-23), so every URL was dropped. Even inside the 4,000, no link said which video it was.
+- `screenshotBase64` rode inside the same text result. It was stripped only by accident, when the tree in front of it was big enough to push it past the cut.
+
+**What changed.**
+
+- `src/core/effectors/snapshot-view.js` (new) parses the aria YAML structurally. A quote-aware scanner reads the name **before** any bracket, so a page-controlled name such as `Click [ref=f5e14]` cannot mint a ref. The view emits items in this order: an open dialog, the search box, then **main** in page order, then page chrome. Links that point at the same URL are merged into **one** item, so "the third video" is the third item whose `url` is a video, not the third link. The list is cut by whole rows and paged.
+- `browser_snapshot` registers **exactly the refs printed** on the pages the model has read. `page`/`generation` continue the **same** capture (a re-capture could renumber refs). A continuation of a superseded capture is refused. The row budget is what the header (page address, title, CAPTCHA note) leaves of the model's budget, fixed per capture so that page 2 is cut on the same boundaries as page 1.
+- `checkRef(ref, page)` re-reads the page address at the moment of acting. A ref from a page that has since moved (YouTube goes from home to `/watch` with no navigate call) is refused, with prose plus `remedy()`.
+- `src/core/voice/model-result.js` (new) replaces the adapter's `JSON.stringify(result).slice(0, 4000)`. Results are bounded as a **structure**. Binary fields leave by field identity, always. Arrays lose items from the end, so every index still shown is unchanged; this is also what `cua_get_window_state` and `ui_elements` get. Long strings are shortened with a marker, and every omission is named in `_bounded`.
+- The old `capSnapshot` / `extractRefs` / `SNAPSHOT_MAX_*` are removed rather than kept as a backstop. The tool description and the voice BROWSER INTERACTION RULE now describe the list; RULES got shorter.
+
+**Sub-claim map.**
+
+| claim in this entry | evidence | repair | test | live oracle |
+|---|---|---|---|---|
+| only video 1 is visible to the model | positions table above | main-first view, merged links, row-bounded pages | (A1) videos 1–8 by watch id | attended "play the sixth video" |
+| guessed refs were accepted and clicked | `f5e1557` hit video 2 | registry = printed refs only | (A2) every unseen ref refused | no unseen ref in Audit |
+| a fresh snapshot cannot help | cut at the same place | paging over one capture | (E), (E-stale) | a page-2 click in the attended run |
+| a screenshot was cut to the same 4,000 | 1,799,686 chars measured | binary by field identity | (A3), (d) | — |
+| (found) refs outlive a page change | read from source | address re-read at action time | (D), (D-adjacent) | — |
+| (found) a long header could make the adapter trim registered rows | measured while fixing | row budget = budget − header − reserve | (H) | — |
+
+**Proof.** Red first against ec2efd93: (A1), (A2), (A3), (D), (E) and (E-stale) each failed for the reason named in `test/bug-445-snapshot-view-shows-what-it-accepts.test.js`. Twelve mutation probes, each diffed, restored by sha256-checked copy, and each reddening a named test; the table is in the test file. The first run of two of them (M3, M5) was invalid, because a shell heredoc stripped the regex backslashes and M3 "survived". Both were rewritten without the shell and rerun, and neither invalid result was counted.
+
+**Not covered, deliberately.** `cua_click` and `ui_click` still accept an index the model was not shown. Their state lives in the driver, and bounding their results without renumbering is what this change can guarantee. The registry half belongs with BUG-439. The `from-dashboard.js` comment that still names `truncateForModel` is left alone: any edit to that file rehashes the remedy-prose ratchet's swallowed span (recorded in `test/remedy-prose-ratchet.test.js`).
+
+**Not verified.** Nothing here has run against real YouTube. The fixture is the grammar measured on 2026-09-23 with placeholder titles. Per `src/core/CLAUDE.md` rule 5, a `golden-path.js` line before and after is owed with the attended browser-targets session, and that session closes this ticket.
+
+## BUG-446 — paused, over-budget "commitment" goals from 12 days earlier executed at boot with real side effects, while the HUD was PIN-locked (CODED 2026-09-23; filed 2026-09-23)
+
+**Status:** 🔧 CODED 2026-09-23, HIGH — an autonomy and safety defect. The premise is corrected and the repair is below. It closes on a headless boot against a seeded vault.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **The spoken half worked.** At boot `goals.ready` read 242 goals, active 0 (proposed 211, done 17, paused 14), and no autonomous tool call ran in 23 minutes. Asked *"What have you promised to do for me?"* (15:09:23), the model called `commitment_list` and said nothing was open — true: the 31 user-service goals were 17 done and 14 paused, none proposed. Dismissal was not exercised, because there was nothing to dismiss.
+
 
 **Evidence (boot 2026-09-23 13:37:56, HUD PIN-locked, nobody speaking).** Between 13:38:27 and 13:38:58 the cortex made **9 tool calls across 5 goals**: `web_search` ×3, `whatsapp_contacts` ×2, `open_web` ×3 (YouTube "Star Trek", "live chess tournament", a search) and **`launch_app {"name":"brave"}` at tier 2**. The Brave window was real — MYTHOS itself later listed it among running windows. Two of the five goals, read from the vault:
 
@@ -2241,9 +2466,138 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 
 **Attribution:** attended run 2026-09-23; goal files read from `%APPDATA%\MYTHOS\vault\Goals\`.
 
+### Repair (CODED 2026-09-23)
+
+**Premise corrections, measured (Gate A).**
+
+- **The goals were `proposed`, not `paused`.** `goals.ready` at 08:08:12.535Z logged `proposed:210, paused:9`, and after the 08:11:01Z restart `proposed:205, paused:14`. All five incident goals had unchecked Goals.md rows, and four had `updatedAt` 08:08:12.609–.625, a single batch.
+  - The mechanism: a commitment is created `proposed` and documented inert (`from-calendar.js`). `writeBack()` appends every user-service goal to Goals.md unchecked. At the next boot, `sync()` set every mapped unchecked row `active` unless it was paused.
+  - Goals.md was last written 09-16 16:26 local, after that day's boot, which is why 09-15 and 09-16 did not fire.
+- **"The stop was healed 9 ms later" is refuted.** Audit `aud-b320b320a705` is the budget-pause playbook **applied**.
+- **What survived.** Nothing checked status or budget at the moment an autonomous action ran:
+  - a second action was allowed at .751, and exhaustion was recorded at .757;
+  - `plan()`'s pending-step branch skipped the budget;
+  - a confirm the cortex raised and the operator accepted later was never re-checked.
+
+**What changed.**
+
+1. **`effectors/goals.js` `sync()`: a checkbox records what the operator did.** A ticked row becomes `done` from any status. Unticking a `done` row reopens it as `active`. Any other unchecked row is left alone. A row the operator types is still created `active`.
+2. **`goals/execution-gate.js` (new), called from `dispatch-action.js` before `invoke()`.** For autonomous origin, meaning the cortex's ticks and a confirm the cortex raised:
+   - the goal must be `active`;
+   - tokens spent must be under budget, and actions spent **plus actions in flight** must be under budget;
+   - one action is reserved before the action starts and released once, after the debit or on a throw;
+   - a budget the gate cannot read is refused;
+   - the only goal-less autonomous call allowed is `mull()`'s `propose_goal`.
+   Refusals are `action.blocked` events plus an audit row with `decision: 'blocked'`. Voice, reminders (whose anchor goal is `proposed` by design), the dashboard and hotkeys pass untouched, which is why this is not in the leash.
+3. **The confirm record carries its origin.** The cortex's confirm record now includes `origin: 'autonomous'`, and `server/index.js` forwards it to dispatch, so a late accept is re-checked where it runs.
+4. **`goals/index.js` `plan()` checks the budget before any branch.** That covers the pending step, the procedural skill and the brain.
+5. **D10, operator decision: commitments are listed when asked and never pushed.**
+   - `read_status` no longer carries `openCommitments`.
+   - `commitment_list` (T0) lists the undismissed ones.
+   - `commitment_dismiss` (T1) persists `dismissedAt` on the record, never marks it done, and never deletes it.
+
+**Sub-claim map.**
+
+| claim | evidence | repair | test | live oracle |
+|---|---|---|---|---|
+| paused goals executed | refuted: they were proposed | sync rule | (1a) (1b) (1f) | `goals.ready` proposed count unchanged across two boots |
+| over-budget goals executed | 36,566 of 20,000 | gate at dispatch; plan() budget first | (2c) (3a) | zero cortex Audit rows for a seeded over-budget goal |
+| the stop was healed 9 ms later | refuted: Audit `aud-b320b320a705` | — | — | — |
+| a second action ran at the edge | .751 vs .757 | reservation | (2d) | — |
+| a late accept runs regardless | read from source | origin in the confirm record | (2e) (2o) (2s) | — |
+| "right now" said 12 days ago is replayed | goal dates | never activated; listed only when asked; dismissable | (1a) (4a)–(4d) | ask "what did you promise" |
+
+**Proof.** Red first against a9fbc9d7: (1a), (2a)–(2e), (2o), (2s), (3a) and (4a)–(4d) failed for their stated reasons. Fourteen mutation probes, each applied, restored sha256-identical and each reddening a named test; the table is in the test file. The writer map names every write that can set `active` (desktop controller ×2, `effectors/goals.js` ×6, crash recovery ×1) and fails when one is added. Its own adjacent test proves it counts a status set from a variable, the shape the old `sync()` used.
+
+**Not covered.**
+
+- Commitment **expiry** is moot under D10, because an unaccepted commitment never runs.
+- **Whether autonomy should run while nobody is at the HUD** is still an operator decision. The PIN lock was the only "unattended" signal, and it is gone.
+- The clipboard nag at 14:08:06 came from `mull()`'s "a question you asked that the operator never answered" rule, a proactive-speech path. It belongs with BUG-447.
+
+**Headless boot, measured 2026-09-23.** The real `src/main.js` was booted twice per build against a seeded temp vault, 45 s per boot (`.cache/bug446/seeded-boot.js`, gitignored). Every seeded step is a harmless `list_goals` read, so a gate failure shows up as an Audit row and nothing else. The seed:
+
+- a proposed over-budget commitment with an unchecked row;
+- an ACTIVE over-budget commitment, the one shape crash recovery lets through, because `monitor.js` skips `Commitment:` goals (BUG-342);
+- an over-budget active goal;
+- a healthy active goal.
+
+| | old code (`a9fbc9d7`) | fixed |
+|---|---|---|
+| `goals.ready` proposed, boot 1 then boot 2 | 1 then **0** (activated, then ran) | 1 then **1** |
+| Audit rows for the seeded goals | **4**: both over-budget commitments ran a step | **0** |
+| total actions spent | 11 then 13 | 11 then 11 |
+| active over-budget commitment | ran one step, then paused | paused `budget-exhausted` by `plan()` before any step |
+
+That is the incident's mechanism reproduced live on the old build and gone on the new one. Then the proposed commitment's row was **ticked** in Goals.md and MYTHOS booted once: the goal is `done` and the row stays `[x]`.
+
+Found by the probe: crash recovery pauses every active goal at boot **except** commitments, so the commitments `sync()` activated were exactly the goals that survived to run. The gate at execution is what covers that shape from now on.
+
+**Not verified.**
+
+- The spoken half of D10: asking "what did you promise" lists it; dismissing it removes it; an unrelated turn does not mention it. That needs a voice session.
+- The late-confirm refusal was proven only through the real server in a test (2s), not in a live session.
+
 ## BUG-447 — system-initiated speech crowds out the live conversation: heal announcements are spoken into it, in log vocabulary, and the operator's question loses (filed 2026-09-23)
 
-**Status:** 🐞 OPEN, HIGH — the biggest usability defect of the 2026-09-23 run. Measured; not worked.
+**Status:** 🐞 OPEN, HIGH — PARTLY CODED 2026-09-23 and 2026-09-24 (below). The biggest usability defect of the 2026-09-23 run.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **Two parts held, three did not.**
+
+- **Held — successful heals stayed silent.** `cortex-stall` at 15:00:43 and 15:11:48 and `live-turn-no-transcript` at 14:58:08 (which logged `immune-explain.not-spoken-during-live`) produced no speech.
+- **Held — the greeting knew a returning operator:** *"Ah, good afternoon, Sir. Right on time…"*, no self-introduction. Minor: its text carried markdown asterisks ("*did*").
+- **Not repaired — the needs-the-operator line is not one plain sentence.** The Gmail re-auth explanation, queued at boot, was spoken through the TTS chain at 14:51:12 while a Live session was open, verbatim: *"One of my internal checks has no automatic fix: gmail-reauth-required in gmail. Reported reason: Gmail has stopped working and it will not recover on its own … Re-authorise by running `node scripts/google-auth.js` and putting the new GOOGLE_REFRESH_TOKEN in mythos/.env … This one needs your attention."* It played as the operator's "Going on going on" turn was being answered; that turn was cut with no audio (14:51:12.535) and never answered.
+- **Not repaired — resume after a barge-in misfired (part 2 above).** At 15:08:05 the operator said "hold on" (transcribed as French, below). The model called `resume_interrupted_answer` at 15:08:07 and got the unheard tail of an OLDER answer (turn 44, 15:06:56, 50 characters), because the interrupted superposition answer produced no report and nothing invalidated the older entry. It said *"I was saying that … Notepad should still be open"*, then invented a reason when challenged (BUG-451). At 15:09:12 *"Now you can continue"* resumed the superposition answer correctly **without** the tool: when Gemini itself cuts a turn, its history already ends where the audio stopped. Direction: a remainder must belong to the latest answer or be discarded, and the tool should serve only HUD-side cuts, where Gemini believes it said everything.
+- **Reproduced — wrong-language transcription.** "Hold on" was transcribed as *"Veuillez patienter."* (15:08:15). `GEMINI_LIVE_LANGUAGE` is unset (auto-detect). This is the Spanish sub-claim, now reproduced in French.
+
+
+### Repair, part 1 (CODED 2026-09-23)
+
+**Operator decision D5, taken in the plan:** a self-heal that SUCCEEDED is never spoken. Only what needs the operator is spoken, in one plain sentence.
+
+**Heals.**
+
+- **`src/core/immune/announcer.js` is deleted.** It was the only module that turned a successful heal or a crash recovery into speech: "Self-healed: cortex restart after a stall. Trigger: …".
+- **Nothing is lost from the record.** `health.healed` still reaches the HUD health card and the vault anomaly row, with the playbook title, trigger and actions. That is what BUG-162 needed, and its test now pins that the record carries those fields.
+- **What needs the operator still speaks,** through the explainer, and test (1d) pins it.
+- **Guarding against a comeback.** A deleted module cannot catch a speaker re-added elsewhere, so a derived map names every listener to `health.healed` / `lifecycle.recovered`: the server (HUD, episodic, entity state) and the explainer (no-match path). A new one fails the test; probe M1 added exactly that and turned it red.
+- **Stale comments corrected** in `conversation/announcer.js`, `aether-rebind.js` and BUG-324's test.
+
+**Greeting.** `conversation/briefing.js` `greetingRelationshipClause(previousBootAt)`: a returning operator is told "you already know each other — do NOT introduce yourself"; a first boot gets a half-sentence introduction. `previousBootAt` is the existing `Identity/last-boot.json` record.
+
+**Proof.** Red first against ab1a585c: the module existed and main.js built it, and the greeting clause did not exist. Five mutation probes, all red; the table is in `test/bug-447-heals-are-not-spoken.test.js`. Six older tests that pinned heal SPEECH were re-pointed with dated notes: bug-162, bug-234, bug-273, immune, w6, and bug-324's comments. Full suite: 7952 tests, 7952 pass, 0 fail, 0 skipped.
+
+### Repair, part 2 — resume after a barge-in (CODED 2026-09-24)
+
+**The mechanism, found in the code.** A local barge-in (`s2s-bridge.js` `stopAssistantSpeech`) throws away the audio the HUD had queued, then drops every later chunk of the same turn, and by design tells nobody upstream. Gemini keeps generating, the server keeps forwarding, and Gemini's session history records the whole answer as said. So after "sorry, go ahead" the model believes it had already finished: from its side nothing was cut. A cut by Gemini's own voice detection does the same to the audio the HUD had queued.
+
+**Correction to the sub-claim map below.** It said this needed the deferred validated text lane, because an injected "continue" is user-role text that starts a turn of its own. That is right about injection, and nothing here injects. It did not consider a tool the model chooses to call, on a turn the operator started.
+
+**What changed.**
+
+- **The HUD measures positions, not words** (`ui/public/js/voice/unheard-meter.js`). In the turn's own audio timeline it records where playback was cut, and where it came back if the suppression lifted early. `pcm-player.js` `flush()` now returns how much speech it discarded. On the turn's end the bridge sends `voice-unheard` carrying numbers only.
+- **The server supplies the words from its own transcript** (`src/core/voice/unheard-answer.js`). It places the cut by proportion, then moves it back to the start of the sentence that was cut: repeating a few heard words is how a person resumes. A report whose turn length disagrees with the server's own count by more than 250 ms is refused — that is what a turn-complete frame the HUD never received looks like, and resuming the wrong words would be worse than resuming none.
+- **One read-only tool, `resume_interrupted_answer`** (tier 0, on the Live allowlist). It returns the unheard part once, to this connection only, for up to 120 s. It runs nothing again, and its module requires nothing that can dispatch or speak.
+- `s2s-bridge.js` stays at its size ceiling: its base64 encoder moved unchanged into the new `pcm-base64.js`.
+
+**Proof.** `test/bug-447-resume-after-barge-in.test.js`, 13 tests. Test (l) drives the real server, the real Live session and the real tool adapter against a fake Gemini socket: an answer streams, the HUD reports a cut, the model calls the tool, and the response carries the two sentences the room missed and not the one it heard. Red first against d9d99874 with the new modules present: the four integration tests failed, each for its stated reason. 38 mutation probes (36 code, 2 fixture) each redden a named test; the table is in the file, with the three gaps the probes found and the tests added for them.
+
+**Not covered.** Whether the model calls the tool when the operator says "go ahead" is its own choice, steered by the tool description; only the attended speech session can show it. The bridge's handlers are pinned by source shape, not driven, because `start()` needs a microphone and worklets. Alignment is proportional, so a turn whose speech rate changes sharply can place the cut a sentence off.
+
+**Sub-claim map.**
+
+| sub-claim | state |
+|---|---|
+| heal announcements spoken into the conversation, in log vocabulary | **coded** — never spoken |
+| the two rules disagree (explanations muted in Live, heals spoken) | **coded** — heals are gone; the explainer's rule stands |
+| greeted a weeks-long user with "Allow me to introduce myself" | **coded** — relationship clause |
+| actionable lines wait for the operator's answer to finish | **coded behind BUG-432's flag** — a notice waits for the turn to end and is never forced in; attended speech session owed |
+| a failed action not reported until asked | **delivery path coded** (BUG-432's outbox: a failed outcome is an answer — it never waits behind a notice and never expires). Whether the queue was the cause on 2026-09-23 is unproven until the speech session |
+| no resume after a barge-in and "go ahead" | **coded 2026-09-24, misfired live the same day** (see the attended session above: it returned an older answer's words). Gemini resumed correctly on its own when it had cut the turn itself. Earlier note: — a read-only tool returns the part the room did not hear, once; nothing is injected. The earlier "needs the validated text lane" held for injection only. Attended speech session owed |
+| one correction transcribed in Spanish | open — **reproduced 2026-09-24 in French** ("hold on" became "Veuillez patienter."); `GEMINI_LIVE_LANGUAGE` is unset, so the language is auto-detected. Whether pinning it fixes input transcription is untested |
+| Gmail `invalid_grant` | operator action, not a code defect |
+
+**Not verified.** An attended speech session: no heal line spoken, and the greeting does not introduce itself to the operator.
 
 **Measured over one session (13:53–14:13, 51 voice turns).** **15 of 51 turns were started by the system**, not the operator; **15 turns were interrupted** mid-sentence; **15 unprompted lines** were spoken or injected, most of them heal announcements such as *"Self-healed: cortex restart after a stall. Trigger: cortex-stall on tick-loop. Action taken: restart-cortex."* Injections into the Live session by source: `late-outcome` 8, `proactive-speak` 6, `ad4-correction-retract` 2, `ad4-correction-unheard` 1, `late-for-turn` 1.
 
@@ -2261,9 +2615,28 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 
 **Attribution:** attended run 2026-09-23; counts from `live.turn-parts` and `live.text-injected` in the server log.
 
-## BUG-448 — the claim checker's `window-control` category retracts a true "opening a Notepad window", because its backing tools do not include `launch_app` (filed 2026-09-23)
+## BUG-448 — the claim checker's `window-control` category retracts a true "opening a Notepad window", because its backing tools do not include `launch_app` (CODED 2026-09-23; filed 2026-09-23)
 
-**Status:** 🐞 OPEN — a false retraction was spoken to the operator. Mechanism read from source; not worked. Same class as BUG-434, F1b, BUG-398 row 4 and BUG-441.
+**Status:** 🔧 CODED 2026-09-23 — repair below; an attended speech session is owed. Same class as BUG-434, F1b, BUG-398 row 4 and BUG-441.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **The filed case held; the class did not.** *"Open Notepad"*: `launch_app` ok at 15:03:50, *"I've launched Notepad for you"* at 15:03:57, and no correction followed. At 15:11:53, after `browser_press_key("k")` succeeded, *"I've sent the keystroke to play it for you"* drew `ad4-correction-retract` (`claimed-action-not-taken`) and the model began *"My apologies, Sir. To be clear, I did…"* — a true action retracted, in a playback category whose backing tools do not include `browser_press_key`. That is the sixth instance of this class.
+
+
+### Repair (CODED 2026-09-23)
+
+**The filed mechanism was half the story.** Grouping overlapping matches — the direction recorded below — made the detector tests pass and left the test that drives the real adapter red. The real turn held TWO rows for the one launch: `launch_app` is a slow tool, so the adapter records a "started" row and, later, a result row with the same call id, and both stay in the turn. The checker counted the stale "started" row as pending, and a pending tool silences its category's progressive tier. So `opening` never matched at all, and `window-control` was judged alone whatever the grouping rule said.
+
+**Two changes, `src/core/voice/claim-check.js` and the new pure `claim-overlap.js`:**
+
+- **A started row whose own call has returned is not pending** (matched by call id, so another call of the same tool still in flight stays pending). This also closes a quieter hole: with the stale row, a FAILED launch followed by "Opening Notepad now" was excused as in flight.
+- **Matches whose words overlap are one action.** Within a sentence, overlapping matches (transitively) are judged together: one backed match excuses the others — except a match with counter-evidence, meaning its own category's tool FAILED this turn, or it came from the evidence-gated tier. A progressive claim about a call genuinely in flight is true, and now also backs an overlapping description. Matches that do not overlap stay independent: "I launched Notepad, and I closed the news widget" is two claims.
+- **Not a blanket exception.** A sentence only `window-control` matches ("Closing the news widget now") is still judged by that category's own tools; a successful `launch_app` does not back it (test (b)).
+
+**Proof.** `test/bug-448-one-action-two-categories.test.js`, 17 tests, including the recorded sentence through the real adapter. Red first against e1f9f998 (9 of the first 15 failed, each for its stated reason; the adjacent cases passed). Nine code mutations each redden a named test; a tenth, fixture-only probe reversing the row order stays green, as it must. Table in the file. `claim-check.js` stays under the 800-line limit; the grouping rule was extracted rather than any limit raised.
+
+**Not covered.** Two descriptions of one action in words that do not overlap are still judged apart. The table still cannot tell a HUD panel from an application window — this stops the two descriptions contradicting each other, it does not teach `window-control` what a window is.
+
+**Not verified.** An attended speech session with a launch and a spoken "opening … window".
 
 **Evidence (13:59:43–14:00:22).** `launch_app {"name":"notepad"}` completed ok at 13:59:46. MYTHOS said *"Opening a new Notepad window right now."* At 13:59:49.734 the checker logged `claimed-action-not-taken target=window-control` and queued `ad4-correction-retract`. After its 15 s hold it was injected, and MYTHOS said: *"Actually, Sir, just to set the record straight, that Notepad window didn't actually open after all. Minor glitch there."* Fifteen seconds later: *"Well now, that's unexpected… it seems the system actually did manage to open Notepad."* The operator: *"I see under your agent action list, you were able to launch."* MYTHOS then logged an incident about it, accurately.
 
@@ -2279,7 +2652,18 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 
 ## BUG-449 — the voice model spoke raw tool-call syntax aloud ("call:web_search{maxResults:5,query:…") and the call it named did not run (filed 2026-09-23)
 
-**Status:** 🐞 OPEN — observed once; not worked.
+**Status:** 🐞 OPEN — the detector half is CODED 2026-09-23 (below); prevention is blocked on plan decision D7 (the validated text lane, deferred), so this ticket stays open by scope decision.
+
+### Detector (CODED 2026-09-23)
+
+- **`src/core/voice/spoken-tool-syntax.js`.** Scans a turn's output transcript for three call shapes — `call:NAME{`, Gemini's code-style `default_api.NAME(`, and a snake_case `NAME(key=` / `NAME{key:` — and reports only names in the leash's tier table, derived rather than typed, so a new tool is covered the day it is registered. Prose that merely names a tool is not matched.
+- **The report** is a `spoken-tool-syntax` health anomaly: the tool named, whether a real call of it ran that turn, a bounded fragment and a `reason`. One row per tool per turn.
+- **Never executed.** The parsed name is a label. The module requires only the tier table, and a test pins that it names no way to dispatch, invoke or speak.
+- **Never spoken.** It is wired beside the other silent detector (BUG-275 H1), not through the spoken turn-audit helper. The healer acknowledges the kind with a new known-condition playbook, so the explainer's brain call and speech never run (a bus-level test drives the real diagnostician, healer and explainer and hears nothing). To fit that playbook, the four existing known-condition playbooks moved out of `healer.js` into `immune/known-conditions.js`, unchanged and in the same order; `healer.js` went from 876 to 813 lines and its size-ratchet number was lowered to match.
+
+**Proof.** `test/bug-449-spoken-tool-syntax.test.js`, 12 tests, red first against 469858b1 (all 12; the real-adapter test for its stated reason). Eleven mutation probes, each reddening a named test; the table is in the file. One probe taught something: dropping the `call:` shape did not redden the recorded-transcript test, because that transcript also matches the `NAME{key:` shape — the derived test is what pins `call:`.
+
+**Not covered.** Prevention (above). No correction is sent to the model either: like BUG-275 H1 this is telemetry, and turning it into a spoken correction needs its own review. Whether it follows a long, heavily-injected turn (the entry's open question) is now answerable from the anomaly rows, not yet answered.
 
 **Evidence (turn 50, 14:13:16).** The output transcription of what the operator heard begins verbatim: `call:web_search{maxResults:5,query:Nothing Phone (4a) Pro 256I completely understand your frustration, Sir.` The model rendered a function call as spoken text. The same reply ended *"I'm searching specifically for the current Indian price… now"*, and no `web_search` followed that turn.
 
@@ -2289,9 +2673,12 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 
 **Attribution:** attended run 2026-09-23.
 
-## BUG-450 — the TTS chain retries known-dead engines on every sentence, so proactive audio lags its own text by up to 51 s (filed 2026-09-23)
+## BUG-450 — the TTS chain retries known-dead engines on every sentence, so proactive audio lags its own text by up to 51 s (CODED 2026-09-23; filed 2026-09-23)
 
-**Status:** 🐞 OPEN — measured; not worked. Distinct from BUG-433, whose scheduler is live-verified; this is the voice underneath it.
+**Status:** 🔧 CODED 2026-09-23. The repair is below. Distinct from BUG-433, whose scheduler is live-verified; this is the voice underneath it.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **The Gemini half worked.** The first synthesis at 14:50:17 got a 429; `gemini-tts` was parked for Google's own 42 s retry delay (`inFlightAtPark=1`) and was not called again, and the greeting's text and audio arrived together at 14:50:19 (on 2026-09-23 they were 51 s apart). Kokoro did not time out in this session, so its park was not exercised.
+
 
 **Evidence.** `tts.provider-failed` **10 times** in one session: `gemini-tts` answered **429 quota exceeded on every call**, and `kokoro-tts` **timed out** repeatedly (`kokoro synthesize timed out`), each time before the chain reached `edge-tts`, which worked. `speech.lock-ceiling` (20 s) fired **8 times**. The boot greeting's text reached the HUD at 13:42:15 and its audio played at 13:43:06 — **51 s later**; a self-heal line was spoken 17 s after the heal.
 
@@ -2303,9 +2690,55 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 
 **Attribution:** attended run 2026-09-23.
 
-## BUG-451 — lessons are recorded from symptoms, so MYTHOS wrote a false cause into permanent memory (filed 2026-09-23)
+### Repair (CODED 2026-09-23)
 
-**Status:** 🐞 OPEN — two wrong records now sit in the operator's vault. Not worked; the records were deliberately **not** deleted, because they are the operator's data.
+**Premise correction, measured.** The chain was already sticky (`providers/tts.js`), but it moved off an engine only when a LATER engine succeeded, and nothing remembered a failure between calls:
+
+- **Concurrent sentences paid the same outage over and over.** Each one walked gemini (429), then kokoro (timeout), then edge. Gemini answered 429 six times in 34 s before the failover stuck.
+- **Kokoro failed twice more AFTER the failover,** on calls already in flight.
+- **A crash restart rebuilt the chain,** and Gemini 429'd again from the top.
+
+**What changed.**
+
+- **`providers/tts-circuit.js` (new): one circuit per engine, and per credential for Gemini.** The credential is a fingerprint, never the key. States:
+  - **unproven:** ONE call is admitted and concurrent callers WAIT for its answer.
+  - **healthy:** unlimited concurrency, as before.
+  - **cooling:** the engine is skipped without a call.
+  - **probing:** the cooldown has ended, and ONE call is the probe.
+- **What parks an engine.** A failure parks it. A 429 is parked for Google's RetryInfo delay when that is 1 s..24 h, otherwise for the ladder: 5 min, 30 min, 4 h. A cancellation never counts. A failure from a call admitted BEFORE the park counts as `failedAfterPark` and does not climb the ladder again. Every park is a `tts.provider-parked` line naming the cause and the length.
+- **`providers/gemini-tts.js`:** the error carries `status` and a validated `retryAfterMs`.
+- **`providers/tts.js`:** synthesis still starts at the active engine. The one walk backwards is to an engine parked by a failure, once its cooldown ends, through one probe. `resolve()` skips parked engines, so a rebuilt chain does not re-pay the outage.
+- **Sharing is explicit.** The server's boot chain and the voice-picker rebuild both pass `sharedCircuits`. A chain given no registry gets its own, which keeps tests that swap the real engine modules isolated.
+
+**Found while fixing, repaired in the same change (class 11).** The first cut also parked an engine that merely reported *unavailable* when the chain resolved. With the shared registry, that would have silenced a sidecar that starts a second late for a whole five-minute cooldown. `tts-down-sentence-chunks.test.js` went red on it. "Unavailable when asked" no longer parks anything; test (k) and probe M11 pin it.
+
+**Proof.** Red first against ca84e5d3: (a) gemini was called 3 times for 3 concurrent sentences, (b) a rebuilt chain paid gemini again, (c) the better engine was never tried again, (d) the retry delay was ignored, (h) no status, (i) a late failure escalated the park. Eleven mutation probes, each applied, restored sha256-identical and each reddening a named test. Full suite: 7948 tests, 7948 pass, 0 fail, 0 skipped.
+
+**Not covered.** The circuit is in-process: a crash restart pays ONE Gemini probe, not six. "Stale/cancelled audio discarded, utterance order preserved" is unchanged, because each caller already awaits its chunks in order. Kokoro's own worker-kill on a timeout is BUG-422.
+
+**Not verified.** An attended speech session in which Gemini is over quota and Kokoro times out: `tts.provider-parked` once per engine per outage, text and audio within one working engine's synthesis time.
+
+## BUG-451 — lessons are recorded from symptoms, so MYTHOS wrote a false cause into permanent memory (CODED 2026-09-23; filed 2026-09-23)
+
+**Status:** 🔧 CODED 2026-09-23 (below). The wrong records were deliberately **not** deleted or edited, because they are the operator's data.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **Incidents and spoken explanations are not covered.** At 15:06:07 the model logged an incident reading *"Operator expects direct browser link opening; MYTHOS only offers dashboard rendering or app launch"* — a false limitation (`open_web` with `browser:true` and the debug browser both open links; see BUG-459) written as fact into `Incidents/`. At 15:08:34 it invented a cause for the stale resume (*"I thought you meant you wanted me to … circle back to the Notepad instance"*). Provenance labels lessons and notes; incidents and spoken explanations carry none.
+
+
+### Repair (CODED 2026-09-23)
+
+- **Provenance, assigned by the server** (`src/core/memory/provenance.js`). A sentence that states a cause ("due to", "because", "suggests that", …) is a **hypothesis**; one that reports what happened is an **observation**. The only input is the text, so a model, a reflection pass or an incident report cannot pick its own label, and **no code path can produce "verified"** — that needs trusted evidence for the specific claim, which no writer supplies yet.
+- **Lessons** (`memory/lessons.js`) store the label per entry. An entry keeps the label it was written with; appending labels only the new one. A file written before labels existed is classified at read, so the two 09-23 records are covered without editing them. Recall carries the labels.
+- **The goal planner** reads observations only: its "PRIOR FAILURES" block gets a snippet without the guessed cause, and a lesson whose only line is a guess becomes a warning that its cause is unverified.
+- **Notes** MYTHOS writes (`note_take`) carry a hidden marker on the entry it wrote (`<!-- mythos-provenance: hypothesis … -->`), and the tool result tells the model its diagnosis was stored as a guess. The operator's own text is left byte for byte.
+
+**Measured against the real records.** The model's note ("…stale very quickly **due to** page re-renders") is a hypothesis; the healer's lesson ("…fails repeatedly") is an observation.
+
+**Proof.** `test/bug-451-provenance.test.js`, 11 tests, including the planner driven with the real lessons store. Red first against dd239233 (all 10 of the first 10, after one vacuous pass was found and fixed — see the file). 10 mutations, each reddening a named test.
+
+**Not covered.** Nothing produces "verified" yet. Evidence references are not attached to notes. The **semantic store** is not labelled, and the same false cause also reached a consolidated semantic memory on 2026-09-23 ("the browser_click recurring failure (rapid re-rendering) is resolved") — a sentence this rule would not catch.
+
+> ⚠️ **Operator decision:** three records in the vault state the false cause — `Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md` (a symptom, harmless now), `Notes/Lesson-Learned-Rapid-Ref-Staleness-on-YouTube.md` and `Semantic/consolidated-1790152995257.md`. Remove, quarantine, or keep them — the code no longer lets the planner treat the guess as an instruction either way.
 
 **Evidence.** At 14:11:23 the healer's `recurring-failure` playbook wrote `vault/Lessons/browser-click-on-specific-element-refs-selectors-e-g-f5e1.md`: *"browser_click on specific element refs/selectors (e.g., f5e1537, f5e298) fails repeatedly."* At 14:11:40 the model wrote a `note_take` titled "Lesson…" tagged `troubleshooting, browser-control, lessons-learned`, and told the operator the cause was *"rapid re-rendering… on dynamic sites. I'll be more proactive about getting fresh snapshots."*
 
@@ -2314,6 +2747,165 @@ Boot itself logged `goals.ready active=0 byStatus={proposed:210, done:17, paused
 **Direction.** A lesson should record a cause only when one was established, and otherwise record the symptom *as* a symptom; the model should not be invited to save a diagnosis it has not verified. Once BUG-445 lands, both records should be removed by the operator.
 
 **Attribution:** attended run 2026-09-23.
+
+## BUG-452 — a web page on another site could drive the local API of any install with no PIN and no token (CODED 2026-09-23)
+
+**Status:** 🔧 CODED 2026-09-23 — found while removing the PIN; guard shipped with it. Closes on the attended
+startup/access session (a page on another origin, opened in the operator's browser, cannot run an /api call).
+
+**Mechanism.** The `/api` CORS middleware in `server/index.js` only ever SET `Access-Control-Allow-*` headers
+for an allow-listed Origin; it never refused one. CORS decides whether a page may READ the response, not whether
+the request RUNS, so a form POST, a `fetch(..., { mode: 'no-cors' })` or an `<img src>` from any website reached
+every handler. With no token configured, `tokenOk()` passes every request, so that was the full tool surface.
+The DNS-rebinding guard (BUG-337) did not help: a foreign page is not rebound, its Host header is honestly
+127.0.0.1.
+
+**Why it never bit the operator, and why it would have.** The PIN session cookie was `SameSite`, so a cross-site
+request never carried it and was refused — the PIN was, by accident, the barrier. Every install WITHOUT a PIN
+(a fresh one, headless, Docker on loopback) had no such barrier. Removing the PIN would have handed the
+operator's machine the same exposure. Electron media windows load arbitrary sites (`open_web`), so "a web page"
+includes pages inside the app.
+
+**Fix.** `createCrossOriginGuard` in `src/core/server/boot-guards.js`, mounted on `/api` before CORS and every
+handler. A browser-shaped request is refused when its `Origin` names neither this request's own Host nor an
+`ALLOWED_ORIGINS` entry (the scheme is not compared, so a TLS-terminating proxy still works; `Origin: null` never
+parses to a host), or when `Sec-Fetch-Site` is anything but `same-origin` or `none`. `same-site` is refused on
+purpose: another localhost port is same-site. A non-browser client sends neither header and is unaffected.
+
+**Tests.** `test/pin-removal-access.test.js`: the full Origin × Sec-Fetch-Site matrix cell by cell, then a real
+server proving the MECHANISM — a foreign request is 403 and the handler never ran (call counter) — with the
+HUD's own origin and a plain client as the adjacent cases. Probes M9 (guard unmounted), M10 (`same-site`
+allowed) and M12 (unmounted from `/vault/builds`) in BUG-444's table each redden it.
+
+**What it does not cover.** A local PROCESS can still call the loopback API without any credential — that is
+the operator's single-user decision, stated in `SECURITY.md`. The WebSocket upgrade already refused foreign
+Origins and is unchanged. `/vault/builds` IS behind the same guard (added after the security review): an
+artifact opened from the HUD arrives same-origin and one opened in the OS browser arrives as `none`, so
+neither is refused. A browser too old to send `Origin` on a cross-site POST is the accepted residual (the
+guard cannot refuse a header-less POST without refusing Electron's own sign-in); a proxy that rewrites
+`Host` needs its public origin in `ALLOWED_ORIGINS`.
+
+**Attribution:** found by reading what the PIN protected before deleting it, 2026-09-23.
+
+## BUG-455 — MYTHOS hears itself: the echo filter never has a copy of its own words, and the mic gate's ceiling reopens the microphone while it is still speaking (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** `live.echo-check` reported `reason=no-reference`, `referenceWords=0` on all 12 checks of 2026-09-24 and all 46 of 2026-09-23 — the filter meant to recognise MYTHOS's own words coming back through the microphone had nothing to compare against at any check. At 14:53:35.879 the own-voice gate released on its ceiling (`own-voice-ceiling-near-field-energy`, held 13.3 s, peakRms 0.0444 against bleedPeak 0.0127) while the reply was still playing; 115 ms later Gemini cut the turn at 72 audio parts, and the next input transcript was the single word "November". Ceiling releases in 23 minutes: near-field-energy 3, no-evidence-of-echo 2. The operator: *"I think you are hearing yourself … you are replying to your own words … you are pausing to talk."*
+
+**Mechanism, not yet measured.** The echo check logs `msSinceSpoken=null`. A plausible reading is that the reference expires on the server's audio ARRIVAL clock while HUD playback lags arrival by several seconds (Live streams faster than real time), so the words are gone from the reference by the time the room hears them. BUG-406's recorder (`VOICE_GATE_RECORDER=true`) is the instrument for this.
+
+**Related.** BUG-271 (the echo filter), BUG-406 (the mic hold).
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-456 — every tool slower than 1.5 s leaves a silent gap, and its late result cuts the turn it lands in (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** The 1.5 s tool-ack deadline answered `think_deeply`, `web_search`, `browser_navigate`, `browser_launch_debug` and `open_web` with "started". Each time the model ended its turn with no audio at all (turns 1, 20, 33, 35, 37, 42 and 54). The late result was then injected, and every time Gemini cut its next generation within about 0.1 s: 14:51:00.858→.954, 14:58:07.942→08.044, 15:04:07.679→.759, 15:04:32.095→.188, 15:05:03.220→.302 and 15:06:46.001→.078. A question needing two slow tools ("compare yourself with GPT-6 Astra": `think_deeply`, then `web_search`) went 6.5 s before any audio. It also routed a plain "Hey, what's up?" through `think_deeply`. The operator heard pauses and stops.
+
+**Mechanism.** The ack tells the model to wait, and the model says nothing while it waits — not even "let me check". The injected result is new user-role input (Live has no system channel, BUG-117), which Gemini treats as a barge-in on whatever it had started.
+
+**Direction.** A short spoken hold on the ack, or a tool response that stays pending (the adapter answers at the deadline because an unanswered call makes the model re-issue it). The oracle is time to first audio per question.
+
+**Related.** BUG-432 (the answer lane), BUG-457.
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-457 — a late tool result reaches Gemini in the operator's slot, and the model says aloud "user transcription failed, but I am still responding" (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** At 15:01:46 and 15:04:54 the spoken reply contained *"— user transcription failed but I am still responding to what you said"*. The phrase exists nowhere in MYTHOS's code or in anything the server sent. Both were the system-initiated turn answering an injected late result, where the episodic record shows an empty operator transcript.
+
+**Mechanism.** Live has no system channel (BUG-117), so a late result is user-role text with no speech behind it. The model rationalises a user message that is not speech, and sometimes does so out loud.
+
+**Related.** BUG-424 (scaffolding spoken aloud), BUG-449 (spoken tool syntax), BUG-456.
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-458 — the reasoning lane counts an empty answer as a success, so no fallback model is tried (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** `deepthink.call ok:false chars:0` at 14:59:21.941 (369 ms) and 15:01:07.462 (402 ms), each with `deepthink.attempt ok:true` and `attemptsTried:1` — provider `nim`, model `nvidia/nemotron-3-super-120b-a12b`. Two of the session's four calls. MYTHOS told the operator plainly that the reasoning model had failed and answered by itself, which is the right behaviour. The operator pointed out that fallback models exist.
+
+**Mechanism, not yet measured.** The attempt counts an HTTP-successful reply with empty content as a success, so the lane never falls through. Plausibly the model spends its budget on hidden reasoning and returns no visible text.
+
+**Direction.** Treat empty content as a failed attempt and try the next model; log the finish reason.
+
+**Related.** BUG-426 (reasoning-lane timeouts).
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-459 — open_web's description says it cannot open a browser, so the model twice refused what it could do (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** At 15:05:37: *"I don't have a tool to open links in your real browser window directly."* At 15:09:53: *"I can't click that third video for you."* Both are false. `open_web` with `browser:true` opens a url in the real browser, and the debug-browser tools (`browser_launch_debug`, `browser_navigate`, `browser_snapshot`, `browser_click`) did both a few minutes later, once the operator insisted. The description in `from-dashboard.js` opens with *"Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window … Despite the name, open_web never browses"* and only several sentences later explains `browser:true`. Asked to open YouTube, the model first chose `open_web type:"youtube"`; the media window refused ("not a media widgetType") and the result came back unverified.
+
+**Direction.** A tool description's first sentence must not contradict what the tool does (`src/core/CLAUDE.md`, refusals rule 4); name `browser_navigate` as the route for "open X in my browser".
+
+**Related.** BUG-435 (a named browser means the debug browser), BUG-438.
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-460 — a clear one-word command is flagged as unintelligible, and MYTHOS says "I missed what you said" after obeying it (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** At 15:11:06 the operator said "further"; the model scrolled (`browser_press_key PageDown`) and said *"Got it, going further down"*. Then `assertion-on-unintelligible-input` fired, `ad4-correction-unheard` was injected (`claim=assertion-on-fragment`), and at 15:11:11 it said *"My apologies, Sir, but I completely missed what you said. Could you repeat that for me?"* The same correction fired on "November" at 14:53:44, which may have been a real fragment (BUG-455).
+
+**Direction.** A command the model acted on successfully is not an unintelligible fragment; the turn's own tool outcomes should be consulted before the correction is injected.
+
+**Related.** BUG-447 (unprompted lines).
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-461 — background noise was transcribed as a command, and MYTHOS acted on it (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** At 15:11:13 the input transcript read *"Yep, can you play"*. The model took a snapshot and clicked a video (`browser_click f2e308`, 15:11:24). The operator: *"I didn't say anything. I didn't say anything. It's the background noise"*, then *"Did I ask you to play the cafe ambience video? I didn't."* The operator also logged an incident about the background noise at 15:11:22.
+
+**Direction.** A tier-3 action taken on a short, low-confidence transcript should confirm first. Related to BUG-455's mic gate.
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-462 — browser_click reported success when nothing opened, and MYTHOS said the video was starting (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** `browser_click` on ref `f2e308` completed ok at 15:11:24. At 15:11:33 MYTHOS said *"I've also clicked the third video for you, the 'Café Ambience' mix. It should be starting up now."* The debug browser's only page target was still `https://www.youtube.com/results?search_query=lofi+music`. It then pressed "k" and said *"it seemed to load paused"*. A later click (`f2e436`) did open the video the operator named.
+
+**Mechanism, not yet measured.** The click landed on an element that does not navigate (a thumbnail overlay or hover preview), or navigation never started. Either way, `browser_click` has no post-condition that the page changed.
+
+**Direction.** Give `browser_click` an evidence contract: compare the url and title before and after, and return `unverified` when nothing changed, as `ui_click` and `click_at` do.
+
+**Related.** BUG-445 (the golden path), BUG-441 (unverified results spoken as done).
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-463 — MYTHOS steers ordinary conversation back to bugs and goals (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** At 14:56:23: *"Anything else on your mind right now? Perhaps about those bugs you were working on."* At 14:57:11 the operator: *"Every time I tell you something, why do you circle back to, you know, bugs, goals? If I have bugs to be solved, I will."* Earlier (14:51:35) its recollection of the day before led with *"system updates, maybe that landing page design, and you were keeping tabs on some bugs"*.
+
+**Mechanism, not traced.** BUG-446 (D10) removed open commitments from unrelated turns. The remaining source is likely the operator profile or reflection-learned context describing the operator as someone working on bugs.
+
+**Attribution:** attended run 2026-09-24.
+
+## BUG-464 — a permanent memory was saved without the operator asking (filed 2026-09-24)
+
+**Status:** 🐞 OPEN — filed 2026-09-24 from the attended run (build bd4df360). Evidence from `.cache/windows-operator/attended-2026-09-24/` (gitignored, this machine only) and the vault's `Audit/`, `Episodic/` and `Incidents/2026-09-24.jsonl`; times are local.
+
+**Evidence.** At 14:53:37 `remember("User has not been feeling well and needs to rest …")` ran after the operator described being ill the day before. No "remember" or "note that" was said, and RULES' MEMORY RULE requires an explicit ask. At 14:55:27 the operator: *"You don't have to remember that. I was just testing"*, followed by `forget_fact`. A later `remember` at 14:55:56 was requested and is not part of this ticket.
+
+Minor; the same class as the MEMORY RULE's own examples.
+
+**Attribution:** attended run 2026-09-24.
 
 ## BUG-441 — a result flagged unverified is spoken as a completed action (CODED 2026-09-16; partial evidence 2026-09-23; filed 2026-09-11)
 
@@ -2487,7 +3079,41 @@ vault row; whether the operator can now say "play S2 EP6" and get EP6 is one att
 
 ## BUG-437 — closing the app left processes in Task Manager and wrote no quit line (PARTIAL — the shell half is LIVE-VERIFIED 2026-09-23; the server's own shutdown hangs; filed 2026-09-10)
 
-**Status:** 🟡 PARTIAL, 2026-09-23. **Live-verified:** the shell now waits for the server and leaves no process behind. **Still open:** the server's own graceful shutdown hangs on its second step, is hard-killed after 6 s, and the checkpoint, episodic flush and audit flush never run. Tray and in-app quits not yet exercised.
+**Status:** 🔧 CODED 2026-09-23 (server half). The shell half was LIVE-VERIFIED earlier the same day. The server's saving steps now run before reflection, under one deadline; the repair is below. The ticket closes on the attended three-way quit (X, tray, in-app) from the root launch.
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** **The window-X quit path worked.** At 15:12:53 the shell sent `mythos:shutdown`: server-close 2 ms, stop-loops 20 ms, episodic-flush 2 ms, checkpoint-write 3 ms (`Checkpoints/latest.json` rewritten at 15:12:53.104), audit-flush 1 ms. The reflection pass ran out its 5.47 s budget and its late answer was fenced ("nothing was written"), so `shutdown.complete` read `clean=false` for that step alone; exit code 0; the shell logged "every recorded identity is gone", and no Electron process was left. The tray and in-app quit paths were not tried.
+
+
+### Repair, server half (CODED 2026-09-23)
+
+**What changed.**
+
+- **`src/core/lifecycle/shutdown-steps.js` (new) owns the order,** and `main.js` no longer registers steps itself (1373 -> 1361 lines). The order is: stop-loops, episodic-flush, checkpoint-write, audit-flush, then **reflection-final-pass LAST**. `main.js`'s own D-07 comment never listed reflection; it had been inserted second later.
+- **`src/core/lifecycle/index.js`: every step, and the server drain, runs under ONE absolute deadline.** The deadline is the shell's 6,000 ms minus a 500 ms reserve, and the drain is capped at 1,500 ms.
+  - A step that loses the race is logged `timeout` with `elapsedMs`, its AbortSignal fires, and the sequence moves on.
+  - `complete` carries `clean` and the list of steps that were not `ok`.
+  - A second signal gets the same promise. Before, it got `undefined`, so its handler's `exit(0)` ran mid-save.
+  - The hard exit calls the injected `proc`, not the global one. The red run found this: on the old code, the new tests (b) and (c) killed the test runner itself.
+- **`identity/reflection.js`: `runNow(reason, { signal })` hands the signal to the brain and checks it before every write.** An answer that arrives after the deadline writes nothing (`reflection.fenced`). The cadence path passes no signal and is unchanged.
+- **Stated, not coded:** fs-store writes are temp-then-rename. A Windows EPERM on the rename loses that write instead of tearing the file, so the next boot recovers from the previous checkpoint.
+
+**Proof.**
+
+- **Red first:** `test/bug-437-shutdown-saves-before-reflecting.test.js` against 2a252e0b. (a) and (g) failed because the steps were inline in main.js with reflection second. (b) and (c) failed because a stalled drain or step reached the hard exit. (e) failed because the second IPC message exited mid-save. (d) failed because a late reflection answer still wrote.
+- **Mutation probes:** eight, each applied, restored sha256-identical and each reddening a named test; the table is in the test file. The first M2 run hung instead of failing, so every shutdown wait in the test is now bounded.
+- **Full suite:** 7937 tests, 7937 pass, 0 fail, 0 skipped, exit 0.
+
+**Headless, measured 2026-09-23.** The real `src/main.js` was forked with an IPC channel, as the shell does, and sent `{channel:'mythos:shutdown', timeoutMs:6000}` (`.cache/bug437/ipc-quit-probe.js`, gitignored). Every step logged `ok` in the new order: server-close 3 ms, stop-loops 27 ms, episodic-flush 2 ms, checkpoint-write 1 ms, audit-flush 1 ms, reflection-final-pass 2 ms. `complete clean=true` came at 36 ms, and `Checkpoints/latest.json` was written DURING the quit.
+
+**Found by that probe, and handed to BUG-422 rather than fixed here.** After `lifecycle.process-exit code:0` the process takes ~4 s to die and dies with **0xC0000409**.
+
+- It is **pre-existing**: the pre-change build (2a252e0b, in a worktree) does the same, 2 of 2 runs, and so does this one, 2 of 2.
+- The same log shows `tts.provider-failed kokoro-tts "kokoro shut down"` during the quit: a Kokoro synthesis was cut by the shutdown. That is BUG-422's "terminate mid-inference" cell.
+- The shell's 7 s escalation still covers the ~4 s, so no process is left behind. But the exit code is a crash, not 0.
+
+**Not verified.** The desktop quit three ways from the root launch (X, tray, in-app), each with `app quit: orderly exit`, `lifecycle.shutdown.complete clean=true`, a fresh checkpoint and a process snapshot. The attended shutdown session closes this ticket.
+
+**Earlier status (2026-09-23 morning), kept for the record:** 🟡 PARTIAL. **Live-verified:** the shell now waits for the server and leaves no process behind. **Still open then:** the server's own graceful shutdown hung on its second step and was hard-killed after 6 s, so the checkpoint, episodic flush and audit flush never ran.
 
 **Attended run 2026-09-23 — X-button quit.** `ipc:mythos:shutdown` 14:13:55.160 → `shutdown.start` → `step=stop-loops status=ok` 14:13:55.192 → **nothing for exactly 6.000 s** → `lifecycle.shutdown.hard-exit` (ERR) + `process-exit code=1` at 14:14:01.161 → shell: `mythos child exited (code=1) during shutdown — not restarting` → **`quit: terminated-confirmed — every recorded identity is gone`** (14:14:01.725) → `app quit: orderly exit, code=0` (14:14:01.870). Independent check afterwards with the full `Win32_Process` list: **no MYTHOS, Electron, Node, PowerShell or Python process of the app survived** — the only Brave processes pre-dated the boot and were the operator's own.
 
@@ -9240,7 +9866,26 @@ All three shipped pins re-run green 14/14. **What is genuinely left in BUG-276 i
 - **Invented identifiers, stated with confidence.** *"I've located the 'Xiaomi made an iPhone duo' video right here with reference f5e1718"* — `f5e1718` had been rejected by the tool 16 s earlier as never having been in any snapshot; the real reference was `f5e1600`. Root cause is BUG-445 (the model could not see the real reference), but the confident false claim is this ticket's class.
 - **Claims that cannot be audited afterwards.** A `screen_look` result reached the model at **1,351 characters** (`live.text-injected chars=1351`) but was stored in Episodic at **600**, cut mid-sentence. MYTHOS then described the screen's right-hand panel as "a discussion about React component structure and performance optimization"; whether that was grounded or invented cannot be determined, because the part of the result that would say was not kept. The in-memory ledger got a bounded digest on 2026-09-02; the vault record did not.
 
+### 2026-09-23 shapes — CODED 2026-09-23
+
+**1. Stale knowledge stated as current, with no search.** New `src/core/voice/unsearched-current-fact.js`, a SILENT anomaly (`unsearched-current-fact`), for the same reason H1 is silent: it judges the content of prose, and a false positive spoken aloud would make MYTHOS retract a true statement.
+
+- **The replay came first, as the plan required.** Two whole vault days — 2026-08-19 (this entry's evidence session, now archived; 606 reply sentences) and 2026-09-23 (167) — with every hit read. The first draft MISSED the 09-23 answer, because an unrelated `screen_read_text` in the evidence window counted as "looked it up", and it matched questions and "checking … now" promises. The shipped rule counts only web lookups (`web_search`, `web_fetch`, `browser_get_text`, `browser_snapshot`) and skips questions and promises. Result: 10 shape matches; 7 had a web lookup and stay silent; 3 had none — 2 real (the 09-23 Nothing Phone answer; 08-19 08:35 "Latest version is ChatGLM 5.2" while the operator said 5.3 had shipped) and 1 false positive about MYTHOS's own browser launch, pinned by a test rather than fitted away.
+- **Reproducible:** `node scripts/replay-ranked-detectors.js <day> --verbose` now runs this pass over every reply and reads an archived day.
+- **The healer acknowledges the kind**, so the explainer's model call and speech never run.
+
+**2. The screen description.** The filed premise — "reached the model at 1,351 characters but stored in Episodic at 600" — is **refuted by the row itself**: the vault holds the whole result the model saw (the 600-character description, 12 OCR lines, counts), and 1,351 was that whole result. The real defect is one step earlier: `from-pc.js` cut the vision description with a plain slice, so the model read "…verifying that the Brave browser and expected side effects" and was left to finish the sentence. New `src/core/util/cut-evidence.js` (reusing the TTS path's sentence cutter) cuts at a sentence end, falls back to a word boundary with an ellipsis when a sentence end would keep under half, and the result now carries `descriptionTruncated`.
+
+**3. A wiring gap found by a probe.** The silent detectors now share one call site, `src/core/voice/silent-turn-anomalies.js`, instead of calls folded onto one line of the adapter. Probing that move showed **H1's wiring was never tested**: removing it left every test green, before and after. `test/bug-275-h1-promoted-ranked-entity.test.js` (k) now drives H1 through the real adapter.
+
+**Proof.** `test/bug-275-unsearched-current-fact.test.js`, 15 tests, red first against 23de0491 (all 15; the screen test for its stated reason). 13 mutations, each reddening a named test; two further wiring probes (one survived first and produced the H1 test). Tables in the file.
+
+**Still open, by scope.** Making the model search BEFORE it answers, and H1/H2-class prevention, need the validated text lane (plan decision D7, deferred). A stale fact phrased without one of the detector's shapes, or stated in a turn where a web lookup ran for something else, passes.
+
 **Status:** 🔴 PARTIALLY FIXED — H2, H3 and H4 are closed with detectors and a
+
+**Attended session 2026-09-24 (build bd4df360, launched from source; timeline in `.cache/windows-operator/attended-2026-09-24/`, gitignored).** Asked about "GPT-6 Astra" and the Nothing Phone 4a Pro's price, the model searched before answering both (`web_search` at 14:58:05 and 15:04:30). When a misheard query ("Nothing Phone (1) Pro") found nothing, it said so — *"I'm not seeing any reliable pricing … It might not actually be a model that officially exists"* — instead of inventing a price. The prevention sub-claims still wait on the validated text lane.
+
 mutation-proven test suite (2026-09-02); **H5 and H7 are REFUTED and were never
 defects**; H1's stated mechanism was measured and is WRONG; H1 remains
 genuinely open. All three of this entry's own "check first" items were answered
@@ -9958,6 +10603,35 @@ its provenance, and the wake word still fires at the measured detection rate. A 
 that quietly degrades detection is worse than the licence problem it solves.
 **Owner:** this is real work (data generation + training), not a config change. Size it before
 starting.
+
+#### T3 options note — for the operator and a lawyer (written 2026-09-23, plan decision D8)
+
+**What this is not.** It is not a legal conclusion, and none is written here or anywhere in a
+tracked file (root CLAUDE.md). It sets out the choices, what each costs in engineering, and the
+questions only a lawyer can answer. The decision stays with the operator.
+
+**The facts the choice rests on, read from the repo on 2026-09-23.**
+- The weights (`melspectrogram.onnx`, `embedding_model.onnx`, `hey_jarvis_v0.1.onnx`) are never
+  committed and never bundled into the installer. `scripts/setup-wakeword.js` downloads them from
+  the upstream project's GitHub releases onto the operator's own machine, into the userData model
+  directory. `THIRD_PARTY_NOTICES.md` records them as CC BY-NC-SA 4.0 (non-commercial), and the
+  code that runs them (`ui/public/js/voice/wakeword.js`) is a port of openWakeWord's Apache-2.0
+  pipeline code — a separate artefact under separate terms.
+- A hands-free alternative exists already: the desktop app's global push-to-talk hotkey
+  (Alt+Space by default, `electron/main.js` → `app.js`), plus clicking the orb.
+
+**The options.**
+
+| option | engineering work | what the operator gives up | question for the lawyer |
+|---|---|---|---|
+| **A. Keep today's arrangement** — the operator's own setup step fetches the upstream weights | none | nothing | Does a paid product that runs non-commercial weights the *user* fetched count as commercial use by the vendor, the user, or neither? Does it matter that the product ships the code that loads them? |
+| **B. Train weights MYTHOS owns**, with Apache-2.0 tooling (`livekit/livekit-wakeword` preferred; openWakeWord's own training path as fallback) | real: synthetic data generation, training, and a measured detection-rate comparison against today's model before it replaces it | a training project; a detection rate that must be re-earned | The licences of whatever produces the training data (for example a TTS engine used to synthesise samples) — do they allow the resulting weights to be used commercially? |
+| **C. License weights commercially** — from the weights' author, or buy a commercial wake-word engine | integration; per-seat or per-device fees | money, and a vendor dependency (Porcupine was already evaluated and rejected in this entry's table) | The licence terms themselves. |
+| **D. Paid tier without a wake word** — push-to-talk and click only; the wake word stays a free/personal feature, or goes | small: hide the wake-word setting and skip `setup-wakeword.js` in paid builds | hands-free activation in the paid product | Is a free tier that runs the NC weights separable enough from the paid product? (CLAUDE.md already records that a free demo sharing a codebase with the paid product does not rescue the gate by itself.) |
+
+**If it helps to sequence them:** D is available today and B is the only option that removes the
+question rather than answering it. A and C need the lawyer first. Nothing here is started; this
+ticket stays open until the operator chooses.
 
 ### T4 (P1) — find out why AEC3 is not working, THEN go full-duplex
 
@@ -22183,6 +22857,9 @@ those records remain owed (this section is the index until then).
   also held a tool result, so a reply said "I haven't found a price" while the price sat in the
   queue for 15 s; the 15 s hold limit forced 4 interruptions. Keep the flag off until tool
   results bypass the queue. Full entry above.
+  **RE-CODED 2026-09-23 from that measurement:** the answer never waits behind a notice; nothing is
+  forced into a reply (the 15 s ceiling is gone); announcements older than 60 s are dropped. Flag still
+  OFF until an attended comparison.
 - BUG-433 - the boot greeting goes into a Live session the HUD is not listening to
   until the first wake word; the packaged app starts silent. Diagnosed 2026-09-10; no code change yet.
   **CLOSED 2026-09-23 — live-verified in the attended run:** armed only after unlock, delivered
@@ -22201,6 +22878,10 @@ those records remain owed (this section is the index until then).
   the model never answered, the server was healthy. One 3 s zero-CPU freeze ended as the
   debug-browser launch returned; its PowerShell runs through execFileSync, which the profiler
   likely cannot see (destructured before the patch — unconfirmed). Full entry above.
+  **Delivery half CODED 2026-09-23 (with BUG-432):** a result finishing mid-rotation reaches the resumed
+  session once, instead of plain TTS outside Live.
+  **Blocking half CODED 2026-09-23:** every synchronous child-process call reachable after boot is async
+  and bounded, with a derived guard; attended run with the stall profiler owed.
 - BUG-437 - closing the app left processes in Task Manager and no quit line was written.
   FRAGILITY CODED 2026-09-16 (full entry above): on Windows a GUI quit never ran the
   server's shutdown steps because child.kill() is TerminateProcess; the shell now sends
@@ -22210,6 +22891,9 @@ those records remain owed (this section is the index until then).
   process behind. Still open: the server hangs on its second shutdown step (an LLM
   reflection call) and is hard-killed at 6 s, so the checkpoint, episodic flush and audit
   flush never run. Tray and in-app quits not yet exercised.
+  **CODED 2026-09-23 (server half):** the saving steps run before reflection under one deadline;
+  a forked-IPC quit of the real server ran every step clean and wrote the checkpoint during the
+  quit. Its exit then crashes 0xC0000409 ~4 s later, pre-existing, handed to BUG-422.
 - BUG-438 - open_web opened a DIFFERENT YouTube video from the one asked for and
   reported it as opened. Asked twice for "INDIA'S GOT LATENT S2 EP6 ft. Rakhi Sawant,
   Ashneer Grover, Kushagra"; both calls returned watch?v=c35fpGWqXnk titled "... S2 EP2
@@ -22220,6 +22904,9 @@ those records remain owed (this section is the index until then).
   call. CODED 2026-09-11 (a season/episode guard refuses a non-matching result).
   LIVE-VERIFIED 2026-09-16 (attended): open_web refused honestly, rendered nothing, and
   EP6 was then opened in Brave (window title). CLOSED.
+  **Attended 2026-09-24:** the window-X quit saved every record within 30 ms and left no process behind; tray and in-app quit still to try.
+  **Attended 2026-09-24:** goAway was held twice with no answer lost; no stall during either browser launch; one 1.9 s low-CPU stall is still unattributed (the profiler was off).
+  **Attended 2026-09-24:** the price answer was delivered with the flag off; every slow tool still costs a silent gap, filed as BUG-456. The A/B with the flag on is still owed.
 
 - BUG-439 - cua_click is dispatched before the cua_get_window_state it depends on
   returns. CODED 2026-09-16 (full entry above): on a "not in cache" refusal cua_click now
@@ -22272,40 +22959,92 @@ those records remain owed (this section is the index until then).
   every browser the operator has logged in from and cannot be revoked for one of them
   without rotating it for the phone node too. Filed 2026-09-18 from the BUG-442 security
   review; deliberately outside that ticket's scope. Full entry above.
+  **CODED 2026-09-23 with the PIN removal:** a random session id under a new cookie name, stored hashed
+  beside config.json, revocable per browser; the raw-token cookie is only ever cleared. Attended
+  startup/access session pending.
+  **Attended 2026-09-24:** opened straight into the HUD with no PIN or token prompt; the old PIN key was ignored; the greeting played once. Second-device login and rotation still to try.
 
 - BUG-445 - the voice model is shown only the first 4,000 characters of a browser snapshot.
   YouTube spends ~3,400 on its header, so only the FIRST video is ever addressable; asked for
   any other, the model guesses references and clicks the wrong thing. This is the golden-path
   test ("play the third video"). Same class as BUG-397, browser path. Filed 2026-09-23 from
   the attended run. Full entry above.
+  **CODED 2026-09-23:** a bounded, paged, main-first list whose accepted refs are exactly the refs it
+  printed; results bounded as a structure, never cut as text. Attended browser-targets session pending.
+  **Attended 2026-09-24:** clicking by ref played a video the operator named; the "third video" case is still unproven, and one click was reported as starting a video that never opened (BUG-462).
 
 - BUG-446 - paused, over-budget "commitment" goals from 2026-09-11 executed at boot on
   2026-09-23 while the HUD was PIN-locked: 9 tool calls across 5 goals, including a tier-2
   launch_app brave. The budget-exhausted stop was healed 9 ms after it fired. A promise of
   "right now" carries no expiry. Filed 2026-09-23. Full entry above.
+  **CODED 2026-09-23:** they were proposed commitments that sync() activated; sync() no longer activates
+  an unchecked row, autonomous work is gated on status and budget where it executes, and commitments
+  are listed only when asked. Headless seeded-vault boot passed (old build ran 4 steps, the new build ran 0);
+  the spoken D10 half is pending.
+  **Attended 2026-09-24:** nothing ran by itself at boot (0 active of 242), and "what have you promised" gave the true answer. Dismissal still to try with a real commitment.
 
 - BUG-447 - system-initiated speech crowds out the live conversation: 15 of 51 turns were
   started by the system, 15 were interrupted, and heal announcements were spoken in log
   vocabulary ("cortex-stall on tick-loop"). The operator's question lost. Filed 2026-09-23.
   Full entry above.
+  **PARTLY CODED 2026-09-23:** successful heals are never spoken (the announcer is deleted, D5);
+  the greeting knows a returning operator. **Resume after a barge-in CODED 2026-09-24:** a read-only
+  tool returns the part of the answer the operator did not hear, once. Open: the Spanish
+  transcription (no audio kept), and the two halves that ride on BUG-432.
+  **Attended 2026-09-24:** heals stayed silent and the greeting knew the operator. Still broken: the Gmail line was read aloud verbatim with a shell command in it; the resume tool fired on "hold on" and returned an older answer's words; "hold on" was transcribed in French.
 
 - BUG-448 - the claim checker's window-control category matches "opening a Notepad window"
   but lacks launch_app among its backing tools, so a true statement was retracted aloud
   ("that Notepad window didn't actually open"). Fifth recorded instance of this class, each
   earlier one patched by adding a tool to one category. Filed 2026-09-23. Full entry above.
+  **CODED 2026-09-23:** overlapping category matches are one action judged together, and a slow
+  tool's stale "started" row no longer hides its own finished call. Attended speech session owed.
+  **Attended 2026-09-24:** the Notepad case held; a true "sent the keystroke to play it" was retracted, another category missing a tool.
 
 - BUG-449 - the voice model spoke raw tool-call syntax aloud ("call:web_search{maxResults:5,
   query:…") and the call it named was never dispatched. Seen once. Filed 2026-09-23.
   Full entry above.
+  **Detector CODED 2026-09-23:** a silent spoken-tool-syntax anomaly, never executed and never
+  spoken. Prevention stays open by decision D7 (the validated text lane).
 
 - BUG-450 - the TTS chain retries known-dead engines on every sentence (Gemini 429 on every
   call, Kokoro timing out), so proactive audio lagged its text by up to 51 s and the speech
   lock ceiling fired 8 times. Filed 2026-09-23. Full entry above.
+  **CODED 2026-09-23:** one circuit per engine — a dead engine is paid for once per outage, parked
+  (429 for Google's retry delay), shared across chain rebuilds, won back by one probe after cooldown.
+  **Attended 2026-09-24:** one quota refusal parked Gemini for Google's 42 s with no retry; text and audio arrived together. Kokoro's park was not exercised.
 
 - BUG-451 - lessons are recorded from symptoms: a healer lesson and a model-written note both
   say clicking by reference is what fails, and the model saved "rapid re-rendering" as the
   cause. Both are false; the cause is the truncation in BUG-445. The records were left in the
   operator's vault on purpose. Filed 2026-09-23. Full entry above.
+  **CODED 2026-09-23:** server-assigned provenance — a stated cause is a hypothesis, nothing can claim
+  verified, and the planner reads observations only. The three wrong records are the operator's to remove.
+  **Attended 2026-09-24:** an incident recorded a false limitation as fact, and a spoken explanation invented a cause; incidents carry no provenance.
+
+- BUG-452 - a web page on another site could drive the local API of any install with no PIN and no token:
+  CORS only set headers and never refused a foreign Origin. CODED 2026-09-23 (a cross-origin guard on /api).
+  Attended check pending. Full entry above.
+
+- BUG-455 - MYTHOS hears itself: the echo filter had no reference words at any of 58 checks over two sessions, and the mic gate's ceiling reopens the microphone mid-reply, so its own voice is taken as the operator. Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-456 - every tool slower than 1.5 s leaves a silent gap and its late result cuts the turn it lands in, so answers arrive 5 to 15 s late and the operator hears pauses and stops. Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-457 - a late tool result arrives as user-role text with no speech, and the model narrated it aloud twice ("user transcription failed, but I am still responding"). Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-458 - the reasoning lane counts an empty answer as a success, so no fallback model is tried; two of four think_deeply calls returned nothing. Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-459 - open_web's description opens by saying it never browses, so the model refused twice to open a link and to click a video, both of which its tools can do. Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-460 - a one-word command the model had already obeyed ("further") was flagged as unintelligible, and MYTHOS then said it had missed what the operator said. Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-461 - background noise was transcribed as "Yep, can you play", and MYTHOS clicked a video the operator had not asked for. Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-462 - browser_click reported success on a YouTube result that never opened, and MYTHOS told the operator the video was starting. Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-463 - MYTHOS keeps steering ordinary conversation back to bugs and goals; the operator objected. The source is not traced yet. Filed 2026-09-24 from the attended run. Full entry above.
+
+- BUG-464 - a permanent memory ("not feeling well") was saved without the operator asking, against the memory rule. Filed 2026-09-24 from the attended run. Full entry above.
 
 
 - BUG-422 - the server child exits silently mid-session and never restarts.
@@ -22319,6 +23058,9 @@ those records remain owed (this section is the index until then).
   code, 6 s after the fourth Kokoro synthesis timeout. Prime suspect: the Kokoro worker thread
   is terminated mid-inference inside the server's own process. Restart ran in 1 s. Hypothesis
   until a standalone repro reproduces the exit code. Full entry above.
+  **CONTAINED 2026-09-23:** a mid-inference kill of the in-process Kokoro worker thread is
+  reproduced as the killer (0xC0000409; mid-session after the second of four kills); Kokoro now
+  runs in a child process and the same matrix exits 0. Open: the attended 0xE06D7363 itself.
 
 - BUG-423 - Unavailable tools reach the model on every setup, measured progressive claims are detected, and greeting facts are constrained. Three active Reddit promises are covered; the fourth quoted waiting-for-direction sentence remains a negative control. Local replay and socket tests pass; attended voice behavior remains untested.
   **FIXED 2026-09-10 — Missing tool facts now reach each Live setup; measured progressive claims and greeting facts are checked. Local regression proof; attended behavior remains untested.**
@@ -22356,6 +23098,11 @@ those records remain owed (this section is the index until then).
 - BUG-431 - The measured CDP drops followed close_window calls. Attached-browser closure is refused; offline transitions use the existing announcement ladder. Slow outcomes survive closed/rejected Live delivery, and final artifact fallback-model evidence reaches jobs/cards/speech. Local wire/mutation tests pass; attended behavior remains untested.
   **FIXED 2026-09-10 — Attached-browser closure is guarded, offline loss is announced, and slow/fallback work reports its outcome. Local regression proof; attended behavior remains untested.**
 
+- BUG-406 - the half-duplex gate held the operator's microphone for 40% of a conversation (267.7 s of
+  ~11 minutes), 7 of 34 releases at a ceiling. Diagnosed 2026-09-03; the gate is deliberately unchanged.
+  **Recorder CODED 2026-09-23:** VOICE_GATE_RECORDER=true records the synchronised mic level, gates,
+  playback and audio clocks around every release, numbers only, under .cache/. Study and repair stay
+  open by decision D9. (This bullet was missing from the register until 2026-09-23.) Full entry above.
 - BUG-420 - **FIXED 2026-09-10 in code; live verification remains pending.**
   The retired Cerebras gemma model is removed from every default lane. Real 403/404 refusals now bench only provider:model for 24h; 401/402 remain account-wide. Registry modelFailures exposes the verdict. Code checks passed; new vendor calls remain untested.
   indefinitely, because only account-level refusals (401/402/403) are recorded.
@@ -22399,6 +23146,10 @@ those records remain owed (this section is the index until then).
   search ("they're on the Phone (2a) right now" — stale by a generation); a confidently
   invented element reference; and a screen_look result stored at 600 of the 1,351 characters
   the model saw, so a claim about it cannot be audited. Full entry above.
+  **2026-09-23 shapes CODED:** an unsearched current fact is a silent anomaly (replayed first: 2 real hits,
+  1 false positive in 773 sentences); the screen description is cut at a sentence and marked. Prevention
+  stays open by decision D7.
+  **Attended 2026-09-24:** it searched before stating current facts (a model name, a phone price) and said "not found" instead of inventing one.
 
 - BUG-274 - dependency and licence remediation. **OPEN ON ONE ITEM ONLY, and
   the earlier "NOT STARTED" reading was false — corrected 2026-08-28.** T1
@@ -22411,3 +23162,5 @@ those records remain owed (this section is the index until then).
   amount of engineering closes it. Declared here as BUG-394 step 1 so the state
   does not rest on a nested bullet about another ticket. Full entry, with the
   per-item evidence table, is at the top of this file.
+  **T3 options note written 2026-09-23** (keep user-fetched weights / train our own / license / paid tier
+  without a wake word), with the question each needs a lawyer to answer. No choice made; operator decision.
