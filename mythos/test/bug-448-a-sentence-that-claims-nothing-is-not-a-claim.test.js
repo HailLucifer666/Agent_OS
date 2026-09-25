@@ -76,7 +76,8 @@ describe('what must still be judged', () => {
     assert.deepEqual(flagged('Navigating to YouTube now to select that third video.', [row('list_windows'), row('focus_window')]), ['opening']);
     assert.deepEqual(flagged('I am opening it now.', [failed('open_artifact'), failed('open_artifact')]), ['opening']);
     assert.deepEqual(flagged("Glad to hear the text copy worked, and I've noted your standard preference for Ctrl+Alt+X."), ['logging']);
-    assert.deepEqual(flagged("My visual systems are having a spot of trouble finding it again, but I've sent the click order anyway.", [failed('see_and_click')]), ['sending']);
+    // B2b-2 (2026-09-26): still flagged, now as a sent CALL ("dispatch") rather than a message.
+    assert.deepEqual(flagged("My visual systems are having a spot of trouble finding it again, but I've sent the click order anyway.", [failed('see_and_click')]), ['dispatch']);
     assert.deepEqual(flagged('Opening it now in a fresh tab for playback.That diagnostic search failed, sir.'), ['opening']);
     assert.deepEqual(flagged('Opening a browser to the YouTube search results for the GTA 6 trailer right now.', [], [failed('browser_task')]), ['opening']);
     assert.deepEqual(flagged("I'm retrying the command right now to open up reddit com for real this time."), ['opening']);

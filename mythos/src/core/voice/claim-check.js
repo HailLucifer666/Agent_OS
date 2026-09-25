@@ -39,13 +39,13 @@
 // positives everywhere, and a noisy honesty alarm is one nobody reads.
 //
 // UNVERIFIED DECISION — a call that ran but could not be confirmed
-// (outcome.unverified) does NOT count as backing a claim. This mirrors the
-// Wave 0 evidence contract already enforced throughout live-tool-adapter.js
-// (evaluateOutcome: `ok: dispatchOk && !isUnverified`) — actionsThisTurn
-// entries already fold `unverified` into `ok`, so this module only needs to
-// check `ok === true` and the unverified case falls out for free. Treating
-// "ran but unconfirmed" as sufficient backing for a claim of success would
-// undermine the exact discipline BUG-068/Wave 0 exist to enforce.
+// (outcome.unverified) does NOT back a claim that it WORKED ("I've opened it").
+// It does back a claim about the act itself — "I clicked", "I pressed", "I've
+// sent the command", "opening it now" — because the act happened (operator
+// decision 2026-09-26, B2b-2; it reverses BUG-441's first pin). Which rows back
+// which sentence, and why, is claim-backing.js; what a row did is
+// action-semantics.js. Treating "ran but unconfirmed" as backing for SUCCESS
+// would still undermine the discipline BUG-068/Wave 0 exist to enforce.
 
 // Claim categories, mapped to the REAL tool names registered in this repo
 // (grepped from the effector files, not guessed):
@@ -66,10 +66,11 @@
 // would silently turn every query into a false positive.
 // (The BUG-275 ranked-entity detector and its evidence-digest dependency moved
 // to ranked-claim-check.js when this file reached the 800-line ceiling.)
-// [2026-09-23: the one require is now claim-overlap.js (BUG-448) — also a pure
-// sibling, so the purity promise above still holds.]
+// [2026-09-23: claim-overlap.js (BUG-448); 2026-09-26: claim-shape.js and claim-backing.js
+// (B2b) — pure siblings; claim-backing reads the browser driver's alias table, no IO.]
 
 const { unexcusedHits, groupOverlapping } = require('./claim-overlap'); const { claimView } = require('./claim-shape'); // BUG-448; B2b-1: the part of a sentence that claims anything
+const { backs, DISPATCH_OBJECT, DISPATCH_CLAIM_RE } = require('./claim-backing'); // B2b-2: which row makes which sentence true
 
 const CLAIM_CATEGORIES = [
   {
@@ -110,8 +111,8 @@ const CLAIM_CATEGORIES = [
     //     after the API send failed, and guessing which it meant risks the one
     //     error this file must never make (telling MYTHOS to retract the truth).
     backingTools: ['ui_type', 'send_key'],
-    // BUG-448 residual: "sent the keystroke" belongs to key-press, below.
-    re: /\b(?:i(?:'ve| have) |i )(sent|texted|emailed|messaged)\b(?!\s+(?:the |a |that )?(?:key(?:stroke|press)?s?|shortcut|hotkey|\S{1,12} key)\b)/i,
+    // BUG-448: "sent the keystroke" is key-press's; B2b-2: "sent the play command" is dispatch's.
+    re: new RegExp("\\b(?:i(?:'ve| have) |i )(sent|texted|emailed|messaged)\\b(?!\\s+(?:the |a |that )?(?:key(?:stroke|press)?s?|shortcut|hotkey|\\S{1,12} key)\\b|\\s+" + DISPATCH_OBJECT + ')', 'i'),
     // A3 (2026-08-14): the measured false claim was "Message sent to Alex, sir."
     // at 17:29:26, in the same turn as whatsapp_send=FAIL — and the mandatory
     // first-person prefix above missed it, exactly as this file's header predicts
@@ -146,7 +147,7 @@ const CLAIM_CATEGORIES = [
     // is the F1b regression exactly (the searching category listing only the two
     // code-search tools), one category over, and it was live. Both names exist in
     // TIER_TABLE and neither was claimed elsewhere.
-    tools: ['launch_app', 'browser_navigate', 'open_web', 'navigate', 'open_folder', 'open_file'],
+    tools: ['launch_app', 'browser_navigate', 'open_web', 'navigate', 'open_folder', 'open_file', 'open_artifact', 'browser_launch_debug'], // B2b-2: the last two back only their own target (claim-backing.js)
     re: /\b(?:i(?:'ve| have) |i )(opened|launched|navigated(?: to)?|went to)\b/i,
     // BUG-398 row 4 — 2026-09-02. THE PROGRESSIVE TIER. Measured verbatim:
     // "Rectifying that now — Google News is opening on a new tab, for real this
@@ -168,6 +169,7 @@ const CLAIM_CATEGORIES = [
     name: 'window-control',
     incidentProgressiveRe: /^(?:closing|dismissing|spawning)\b|\bi(?:'m| am)\s+retrying\b[^.]{0,70}\b(?:close|dismiss|spawn)\b|\bi(?:'m| am)\s+working on\b[^.]{0,70}\b(?:closed|dismissed|spawned|close|dismiss|spawn)\b/i,
     tools: ['close_panel', 'close_window', 'manage_widget', 'spawn_widget'],
+    backingTools: ['browser_tabs'], // B2b-2: a tab CLOSE of the tab named, never a list (claim-backing.js)
     re: /\b(?:i(?:'ve| have) |i )(closed|dismissed|opened up|spawned)\b[^.]{0,30}\b(widget|panel|window|card)\b|\b(?:the\s+)?(widget|panel|window|card)\b[^.]{0,20}\b(?:has been|is now)\s+(?:closed|dismissed|open)\b/i,
     progressiveRe: /\b(?:closing|dismissing|opening|spawning)\b[^.]{0,40}\b(widget|panel|window|card)\b|\b(?:is|am|'m)\s+(?:now\s+)?(?:closing|dismissing)\b/i,
   },
@@ -203,8 +205,12 @@ const CLAIM_CATEGORIES = [
     // step if that residual is measured to matter.
     name: 'clicking',
     tools: ['browser_click', 'ui_click', 'click_at', 'right_click_at', 'see_and_click', 'cua_click'],
+    backedByDispatch: true, // B2b-2, operator 2026-09-26: a DELIVERED click makes "I clicked" true (header)
     re: /\b(?:i(?:'ve| have) |i )(clicked|tapped)\b/i,
   },
+  // B2b-2: "I've sent the play command to Spotify" is a claim that a CALL went out, not a
+  // message; the replay found 13 true ones retracted as sends. Backed by what the call did.
+  { name: 'dispatch', tools: [], byOp: true, re: DISPATCH_CLAIM_RE },
   {
     // BUG-448 residual, 2026-09-24 15:11:53 (sixth of its class): "I've sent the keystroke"
     // after an ok browser_press_key("k") was retracted, because `sending` owned "sent".
@@ -384,13 +390,6 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
   const current = Array.isArray(actionsThisTurn) ? actionsThisTurn : [];
   const recent = Array.isArray(recentActions) ? recentActions : [];
   const actions = current.concat(recent);
-  const successfulTools = new Set(
-    actions.filter((a) => a && a.ok === true).map((a) => a.tool),
-  );
-  // BUG-448 residual: delivered, proven or not — for claims about the dispatch itself.
-  const dispatchedTools = new Set(
-    actions.filter((a) => a && (a.ok === true || a.dispatchOk === true)).map((a) => a.tool),
-  );
   // A3: tools from this category that WERE attempted this turn and did not
   // succeed (failed, pending, unverified). This is the gate on the elliptical
   // tier — see the sending category's comment. `ok !== true` is the same test
@@ -411,14 +410,11 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
   // tier for the whole category after the tool had finished — at 13:59:49 on
   // 2026-09-23 that removed `opening` from the judgement entirely, and a FAILED
   // launch would have been excused the same way.
-  const returnedTraces = new Set(
-    actions.filter((a) => a && a.traceId && (a.ok === true || a.ok === false)).map((a) => a.traceId),
+  const returnedTraces = new Set( // B2b-2: a confirm row carries ok:false itself and is NOT its own return
+    actions.filter((a) => a && a.traceId && !a.started && !a.confirmPending && (a.ok === true || a.ok === false)).map((a) => a.traceId),
   );
-  const pendingTools = new Set(
-    actions.filter((a) => a && a.tool && !(a.traceId && returnedTraces.has(a.traceId))
-      && (a.started === true || a.confirmPending === true || a.ok === null || a.ok === undefined))
-      .map((a) => a.tool),
-  );
+  const pendingRows = actions.filter((a) => a && a.tool && !(a.traceId && returnedTraces.has(a.traceId))
+    && (a.started === true || a.confirmPending === true || a.ok === null || a.ok === undefined));
   // BUG-448: tools that FAILED in this turn. Direct counter-evidence about the
   // action a category claims, which a sibling category's success must never
   // overrule (see the grouping below). This turn only, and failed only — a
@@ -446,7 +442,7 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       const gate = (category.gateTools && category.gateTools.length)
         ? category.gateTools : category.tools;
       let match = category.re ? category.re.exec(sentence) : null;
-      let elliptical = false;
+      let elliptical = false, progressiveTier = false;
       if (!match && category.ellipticalRe
           && gate.some((tool) => attemptedUnproven.has(tool))) {
         match = category.ellipticalRe.exec(sentence);
@@ -472,12 +468,12 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
         // before. It is now also RECORDED, so an overlapping description of the
         // same action ("… a new Notepad window") is judged with it below rather
         // than alone.
-        if (progressive && gate.some((tool) => pendingTools.has(tool))) {
+        if (progressive && backs(category, sentence, progressive, pendingRows, { pending: true })) {
           hits.push({ category, gate, match: progressive, backed: true, counterEvidence: false,
             start: progressive.index, end: progressive.index + progressive[0].length });
           continue;
         }
-        match = progressive;
+        match = progressive; progressiveTier = !!progressive;
       }
       if (!match) continue;
       // A fact-finding tool that SUCCEEDED backs the claim. This is what stops
@@ -499,9 +495,7 @@ function detectUnbackedClaims(assistantText, actionsThisTurn, recentActions, opt
       // succeed: that is direct counter-evidence about the very action claimed,
       // and a backing tool is not entitled to overrule it. The first-person and
       // progressive tiers carry no such counter-evidence, so they are backed.
-      const backers = category.backedByDispatch ? dispatchedTools : successfulTools;
-      const backed = gate.some((tool) => backers.has(tool))
-        || (!elliptical && (category.backingTools || []).some((tool) => backers.has(tool)));
+      const backed = backs(category, sentence, match, actions, { elliptical, progressive: progressiveTier, current }); // B2b-2
       hits.push({ category, gate, match, backed, start: match.index, end: match.index + match[0].length,
         // The elliptical tier fires ONLY because an owned tool was attempted and
         // did not succeed, so its match is counter-evidence by construction.

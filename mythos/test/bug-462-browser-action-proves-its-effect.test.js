@@ -378,17 +378,22 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
   const VERBATIM = "Noted, Sir, I've logged the background noise as an incident. I've also clicked the third video for you, the 'Café Ambience' mix. It should be starting up now.";
   const SAID = VERBATIM.replace("I've also clicked", "I've clicked");
 
-  it("an unverified click, through the real adapter, gets an \"I've clicked\" sentence retracted", async () => {
+  // REVERSED 2026-09-26 (B2b-2, BUG-448, operator decision that day). This used to pin that the
+  // click's unverified outcome gets "I've clicked" retracted. The click RAN; "I've clicked" is
+  // true, and retracting it was a false statement of its own. The false sentence in 15:11:33 is
+  // "It should be starting up now", a playback claim, which B2b-3 judges by player evidence.
+  it("an unverified click, through the real adapter, backs \"I've clicked\": the click ran", async () => {
     const outcome = await load(statefulPage()).browser_click({ ref: 'e1' });
-    const { adapter, anomalies, injected, dispatched } = adapterReturning(outcome);
+    const { adapter, anomalies, dispatched } = adapterReturning(outcome);
     await adapter.handleLiveToolCalls([{ id: 'x1', name: 'browser_click', args: { ref: 'e1' } }], heard);
     adapter.onLiveTurnComplete({ userText: REQUEST, assistantText: SAID, turnId: 61 });
+    assert.equal(outcome.unverified, true, 'the click changed nothing, so BUG-462 still reports it unverified');
     // Filtered to the click: the same sentence also says "I've logged", and this
     // turn has no log_incident, which is a separate (correct) claim.
-    const flagged = anomalies.filter((a) => a.kind === 'claimed-action-not-taken' && a.claimedTool === 'browser_click');
-    assert.equal(flagged.length, 1, JSON.stringify(anomalies));
-    assert.equal(flagged[0].claimedTool, 'browser_click');
-    assert.ok(injected.some((t) => /CORRECTION/.test(t)), 'the retraction notice is sent');
+    const flagged = anomalies.filter((a) => a.kind === 'claimed-action-not-taken' && a.target === 'clicking');
+    assert.deepStrictEqual(flagged, [], JSON.stringify(anomalies));
+    assert.ok(anomalies.some((a) => a.kind === 'claimed-action-not-taken' && a.target === 'logging'),
+      'the retraction path still runs in this turn: the unbacked "I\'ve logged" is flagged');
     assert.equal(dispatched.length, 1, 'the click must have RUN and come back unverified — a held click is a different test');
   });
 
@@ -403,6 +408,8 @@ describe('BUG-462 — the unverified click reaches the retraction BUG-441 built'
   // Episodic 09-23/24 (BUG-448 residual): the gap hid no false claim — its only
   // instance was the f2e308 click, which navigated. So it stays pinned, not widened.
   // When that changes, this assertion is the one to flip (0 -> 1).
+  // 2026-09-26 (B2b-2): it now stays 0 for a second reason — a delivered click backs "clicked"
+  // whatever the adverb. What should flip is the playback half, in B2b-3.
   it("KNOWN GAP: \"I've also clicked\" is not matched by the claim detector yet", async () => {
     const outcome = await load(statefulPage()).browser_click({ ref: 'e1' });
     const { adapter, anomalies } = adapterReturning(outcome);
