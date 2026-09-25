@@ -3230,6 +3230,28 @@ Around them:
 
 **Proof (BUG-461 and BUG-464, `test/bug-461-464-ask-before-acting.test.js`, 59 tests).** The verbatim transcripts run through the pure rules AND the real Live adapter with the real confirm registry (two routes, one answer). The goal is reached, not just the refusal observed: asked, then "Yes.", the stored click runs once with the stored arguments and the model hears the outcome; the same through the re-issue route and through a typed yes; a read-back memory saved to the real store through the real dispatcher. Unrelated, stale, changed-argument, cancelled and withdrawn-policy cases, and the three hops the operator's words and the consent take (session to adapter, adapter to server wrapper, wrapper to dispatcher to tool), each have their own test. Negative control, the eight runtime files at 17f01961 with the new modules kept: 28 of 59 red, every test that goes through the runtime. 41 mutations, each applied once and diffed, restored from a copy and hash-verified: 39 turned their marked test red. 2 survive by construction, and the tests say so: reading consent from the model's arguments (a token is bound to the exact arguments, so it can never sign the arguments that carry it), and the gate's own "was it presented" check (the registry checks it again). Found by attacking the change before commit, and fixed: a typographic apostrophe ("didn’t", as a phone keyboard types it) slipped past every contraction; "Right." counted as a yes (it is a filler, and one of the measured noise fragments); a check on the question's own sentence was defeated by a read-back's own full stops; and the audit said "allowed" for a click that was then held. Existing tests changed on purpose: in `bug-448-460` and `bug-462` the fake turns now pass the operator's words at call time, as the real session does; three of them would otherwise have passed on a held call for the wrong reason. `from-memory.test.js` now passes a minted consent, because those tests are about what the tool does with a save. `bug-124-live-turn-id` pins the exact shape of a Live turn record, and it gained one key (`typedText`); its expected object was updated with a dated note, and turn pairing is unchanged. Full suite 8262/8262/0/0 (8203 at 17f01961 plus these 59). NOT verified live. `golden-path.js` line owed.
 
+**S1 of the Stage 1 repair campaign (2026-09-25, branch `fix/s1-authority-consent`, audit F01, F02, F04, F05 in `mythos/docs/PLAN-AUDIT-2026-09-25.md`).** The rules above checked the shape of the operator's words, not what they asked for. Reproduced in memory against `main` `f456217d`: "Please do not click that button" proceeded (the word "please" is a request form); "Could you explain why this happens" proceeded for a click, a type and a key press; "Shall I play the other video instead?" presented a click on a video it never named. The four-root vault replay found the real version of F02: five `close_window` calls after "Can you open Brave?", one after "can you show us", and a click after "take a screenshot".
+
+Coded:
+- A prohibition holds the operation it names ("don't", "do not", "never", "stop clicking"; commas, capitals and doubled spaces included). "Type it but do not press enter" holds the key press and not the typing.
+- A request must name what THIS call does. Each gated tool maps to an operation family (`TOOL_OPERATION`), and a tool with no family asks. The set of gated tools is derived from the real leash in test (g4), so a new trusted tool cannot slip past. Typing the operator's own words for an on-screen request also counts ("play the GTA 6 trailer" types "GTA 6 trailer"). "Go ahead" and "try again" carry the operator's previous words' operation, if those are recent and pass.
+- Quoted and hypothetical requests are mentioned, not made.
+- A question presents a click only if it names the target: the browser snapshot's label for the ref (`from-browser.js labelForRef`, injected as `describeBrowserRef`), `see_and_click`'s text, a key or what the key does (`KEY_WORDS`, derived against the effector's key lists in test g5). A click with nothing to name (coordinates, element index, pid) cannot be approved by a yes; the model is told to get the operator's own words, and those run it.
+- A read-back counts only if the room heard it: `live-session.js` now puts `interrupts` and `audioParts` on every turn, and a cut, a silent turn or no report presents nothing. The HUD's `voice-unheard` report un-presents the read-back of that turn (`authority-gate.js onUnheard`, `confirm.js unmarkPresented`).
+
+**Measured effect (Gate A, read-only replay of all four vault roots, 15,587 Episodic rows, script kept in the worktree's `.cache/s1/`).** Of 294 gated calls, 158 ran straight away under the old rules and 126 do now. All 32 that now ask were read. Nothing that asked before now runs.
+
+**Proof.** `test/bug-461-464-authority-binds-operation-and-content.test.js`, 39 tests, including two through the real `live-session.js` frames into the real adapter. With the seven changed runtime files put back as they are at `f456217d`, 32 of its first 36 tests failed (26 on their own assertion, 6 because the seam did not exist yet); the files were then restored and checked by hash. Nine targeted mutations of the new guards were each caught (record in the test file). `test/bug-461-464-ask-before-acting.test.js`: 17 tests changed with the contract, each commented where it changed. The KNOWN GAP test was flipped to the safe behaviour, and its reproducing input was kept.
+
+**Not covered, stated.**
+- (1) The typed/batch path (`voice-agent.js`, used when Live is off) still has no trusted-action word check, only the memory gate. This is a sibling gap and predates S1.
+- (2) These are English lexical rules. Bengali and Hindi commands ask; nothing here understands them.
+- (3) A read-back that Gemini did not cut but the HUD played only partly, cut by less than 400 ms (`MIN_UNHEARD_MS`), still counts.
+- (4) Five words of a long title may not tell two parts of one series apart. That is BUG-471's.
+- (5) The positive half of the operator's 2026-09-25 answer, that short commands naming their action run without asking, is B2's. Here "refresh the page" is still held as short input, but "Shall I refresh the page?" now presents F5.
+
+Attended check still owed.
+
 **Attribution:** attended run 2026-09-24.
 
 ## BUG-462 — browser_click reported success when nothing opened, and MYTHOS said the video was starting (filed 2026-09-24; CODED 2026-09-24)
@@ -3349,6 +3371,21 @@ Negation (the operator's own 14:55:27 "You don't have to remember that"), quotat
 **Closed 2026-09-25 by the operator's decision (BUG-463):** step 3b now writes no `user-facts` unless `MEMORY_AUTO_USER_FACTS=true`. The paragraph below is the record from before the decision. **Not closed then, by decision (DECISION OWED).** `memory/index.js` step 3b still asks the memory lane to "Extract durable facts about the user" from recent conversation, and writes them to `user-facts` directly. No request is involved, and it does not use the tool. It ran on this machine on 2026-09-24: `user-facts.md`'s metadata header carries its exact signature (confidence 0.7, no sources). "The operator really enjoys playing jazz piano" (BUG-080) came in that way. The operator's "lock it" was asked about the `remember` case only, so this route is named and pinned by a test rather than closed unasked. Also not changed: `note_take` and `write_note` (a different store; the 09-23 14:11:40 unrequested note is the adjacent instance), and `forget_fact`.
 
 Proof: see BUG-461, shared.
+
+**S1 of the Stage 1 repair campaign (2026-09-25, branch `fix/s1-authority-consent`, audit F03 and F05).** The explicit-request path checked the form of the ask and any numbers, never the words saved. Reproduced against `main` `f456217d`: with "Remember my favorite color is blue", saving "My favorite color is green" proceeded. The read-back test counted 60% of English words of four letters or more. It passed "I will not remember your favorite color is blue", "red" read back for "blue", and "meeting at 6" read back for "Meeting at 5". It could not see Bengali or Hindi at all.
+
+Coded, in the new pure `src/core/voice/authority-words.js` and used by `judgeMemoryWrite` and the read-back check:
+- Every word of the text to save must be in the operator's words, in the same order, with a negation exactly when theirs has one. So "I owe Ravi 500" cannot become "Ravi owes me 500", attacked before shipping.
+- The subject of the request clause must survive: "my sister's name is Priya" saved as "User's name is Priya" asks.
+- Pronouns, "User"/"operator" and the model's "Current date:" suffix are ignored. Any other paraphrase, translation or added fact is read back, never refused.
+- A read-back must carry every word in order, every number, and no other number or negation.
+- The typed/batch memory gate takes the same rule.
+
+**Measured effect.** Of the 47 remember calls in the vault, 3 proceeded under the old rules and 2 do now. The third saved "on a new browser tab" as "in a new browser tab", a paraphrase, so it is now read back.
+
+**Proof.** See BUG-461's S1 paragraph: the same new test file, sections F03, F05, the real-store adapter tests (s1) to (s5), and (x2) through the real Live session.
+
+**Bound.** A paraphrase now costs one read-back. "Is called Priya" for "name is Priya" asks, where it used to write at once. That is the rev 8 S1 contract: exact extraction proceeds, anything else is confirmed.
 
 **Attribution:** attended run 2026-09-24.
 

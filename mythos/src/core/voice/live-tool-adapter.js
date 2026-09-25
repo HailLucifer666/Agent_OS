@@ -248,7 +248,7 @@ function createLiveToolAdapter(deps) {
   }
 
   const livePendingConfirms = new Map(); // confirmId -> {name, callId, createdAt, spoken?}
-  const authorityGate = createAuthorityGate({ leash, connectionId, pendingConfirms: livePendingConfirms, dispatchAction, logger, audit: memory && memory.audit,
+  const authorityGate = createAuthorityGate({ leash, connectionId, pendingConfirms: livePendingConfirms, dispatchAction, logger, audit: memory && memory.audit, describeRef: deps.describeBrowserRef, // S1/F04: a click by ref is named by the snapshot
     resolveConfirm: (...a) => resolveLiveConfirm(...a), isNegative: (t) => NEGATIVE_RE.test(String(t || '')) });
   const liveTurnActions = [];            // AD-4: reconciled on turnComplete
   const recentActionLedger = createRecentActionLedger(); // BUG-357: cross-turn evidence
@@ -1181,8 +1181,8 @@ function createLiveToolAdapter(deps) {
     decision.args = Object.assign({}, decision.args, { text: text + UNBACKED_NOTE_STAMP });
   }
 
-  function onLiveTurnComplete({ userText, assistantText, turnId, typedText }) {
-    authorityGate.onTurnComplete({ userText, assistantText, typedText }); // BUG-461/464: presents, approves on a yes, or drops
+  function onLiveTurnComplete({ userText, assistantText, turnId, typedText, interrupts, audioParts }) {
+    authorityGate.onTurnComplete({ userText, assistantText, typedText, turnId, interrupts, audioParts }); // BUG-461/464: presents (only if heard in full, S1), approves on a yes, or drops
     // B3 — before any of this turn's ORDINARY handling (history append,
     // episodic write, reflection), a spoken "no" cancels whatever is pending.
     // Doing this first means the cancellation itself lands in liveTurnActions
@@ -1440,7 +1440,7 @@ function createLiveToolAdapter(deps) {
     handleLiveToolCalls,
     releaseHeldReplies: () => heldReplies.releaseAll(), // BUG-457: server calls this before any typed text goes out
     resolveLiveConfirm,
-    onLiveTurnComplete,
+    onLiveTurnComplete, onUnheard: (entry) => authorityGate.onUnheard(entry), // S1/F05: the HUD's cut report un-presents a read-back
     // test-only introspection — never used by production wiring
     _internal: { livePendingConfirms, liveTurnActions },
   };
