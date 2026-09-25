@@ -205,9 +205,12 @@ test('(j) pcm-player flush() returns the speech it discarded, and 0 when the tai
 test('(k) the bridge wiring: both flush sites feed the meter, the drop and play paths count, idle resumes, turn end reports, stop resets', () => {
   const code = read('ui/public/js/voice/s2s-bridge.js');
   const stopSpeech = /function stopAssistantSpeech\(reason\) \{[^}]*\}/.exec(code);
-  assert.ok(stopSpeech && /unheard\.cut\(player\.flush\(\)\)/.test(stopSpeech[0]), 'a local barge-in must record its cut');
+  // B1 (2026-09-25): each flush now runs inside speechEnd.during(...) so its release is
+  // logged with the stop's reason; the cut is still recorded from the same flush.
+  const FLUSH_CUT = /unheard\.cut\(speechEnd\.during\((?:reason|'[a-z-]+'), \(\) => player\.flush\(\)\)\)/;
+  assert.ok(stopSpeech && FLUSH_CUT.test(stopSpeech[0]), 'a local barge-in must record its cut');
   const onInterrupted = /onInterruptedMsg = \(\) => \{[^}]*\}/.exec(code);
-  assert.ok(onInterrupted && /unheard\.cut\(player\.flush\(\)\)/.test(onInterrupted[0]), 'a cut by Gemini\'s own VAD must record its cut');
+  assert.ok(onInterrupted && FLUSH_CUT.test(onInterrupted[0]), 'a cut by Gemini\'s own VAD must record its cut');
   const onAudio = /if \(suppressAudioOut\) \{[^}]*\}\s*player\.enqueue\(msg\.data\);\s*unheard\.played\(msg\.data\);/.exec(code);
   assert.ok(onAudio && /unheard\.dropped\(msg\.data\)/.test(onAudio[0]), 'dropped and played chunks must both count toward the turn');
   assert.match(code, /if \(how === 'idle'\) unheard\.resumed\(\)/);

@@ -55,7 +55,10 @@ describe('F2b — the HUD must show when MYTHOS is speaking', () => {
     // half-duplex gate. Dropping the gate here would feed MYTHOS's own voice
     // back into Gemini's VAD, which is the F3 defect.
     assert.match(bridge, /onSpeakStart:\s*\(\)\s*=>\s*\{\s*holdOwnVoiceGate\(\)/);
-    assert.match(bridge, /onSpeakEnd:\s*\(\)\s*=>\s*\{\s*releaseOwnVoiceGate\('own-voice-ended'\)/);
+    // B1 (2026-09-25): the release reason is no longer a literal — a flush-fired end
+    // carries the stop's reason (test/bug-469-an-interruption-is-logged-as-one.test.js).
+    // What this pins is unchanged: the speak-end edge releases the gate.
+    assert.match(bridge, /onSpeakEnd:\s*\(\)\s*=>\s*\{\s*releaseOwnVoiceGate\(speechEnd\.ended\(\)\)/);
   });
 
   test('listening and speaking are not the same colour', () => {
