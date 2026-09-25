@@ -212,11 +212,21 @@ describe('BUG-272 T3/T4 — smaller honesty gaps', () => {
   });
 
   it('the Live-path open_web description no longer predates the browser flag', () => {
-    const src = fs.readFileSync(
-      path.resolve(__dirname, '../src/core/voice/voice-agent.js'), 'utf8'
-    );
-    const entry = src.slice(src.indexOf("name: 'open_web'"));
-    const decl = entry.slice(0, entry.indexOf('danger:'));
+    // RE-POINTED 2026-09-24 (BUG-459). This used to read voice-agent.js's own
+    // open_web entry by source slice — the override that REPLACED the hub text on
+    // its way to Live, and whose first sentence said open_web does NOT open a
+    // browser. That entry is deleted, so the slice would read nothing; what Live
+    // gets is the emitted declaration, and that is what is read now.
+    const { buildTools } = require('../src/core/effectors/from-dashboard');
+    const { buildFunctionDeclarations } = require('../src/core/voice/live-tools');
+    const tools = buildTools({
+      goalsEffector: {}, pipeline: {}, kanban: {}, agentActions: {}, buildRunner: {},
+      vault: {}, config: {}, bus: { emit() {} }, probes: { getStatus: async () => ({}) },
+    }).TOOLS;
+    const hub = { catalog: () => tools.map((t) => ({ name: t.name, description: t.description, params: t.params })) };
+    const found = buildFunctionDeclarations(hub, {}).declarations.find((d) => d.name === 'open_web');
+    assert.ok(found, 'open_web must be declared to Live');
+    const decl = found.description;
     assert.match(decl, /browser/,
       'a Live session reading this catalog never learned browser:true existed, so it could not '
       + 'have opened a real browser even once');

@@ -6,6 +6,8 @@ const browserAgent = require('../../../adapters/browser-agent');
 const { effectorFromTool } = require('./adapter');
 const evidenceModule = require('./evidence');
 const snapshotView = require('./snapshot-view');
+const effect = require('./browser-effect'); // BUG-462: did the action do what it was for
+const { remedy } = evidenceModule;
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
 const { spawn } = require('child_process');
 const { childRuntimeDir, childCommand, waitForSpawn } = require('../util/child-runtime');
@@ -135,6 +137,11 @@ async function waitReady(page, selector) {
 let snapshotGeneration = 0;
 let snapshotRefs = new Set();
 let snapshotPageUrl = null;
+// BUG-462 — the TAB the snapshot was read from. withPage() acts on the first tab
+// (adapters/browser-agent), so once that tab closes the next action lands on a
+// neighbour, and a url comparison lets a same-url neighbour through. The Page
+// object is the pin; a reconnect mints new objects, which fails safe.
+let snapshotPage = null;
 // BUG-445: the capture a generation was read from, kept so page 2 of it is page 2
 // of the SAME tree. Re-capturing for page 2 could renumber the refs page 1 issued.
 let snapshotYaml = null;
@@ -177,6 +184,7 @@ async function browser_snapshot({ screenshot, page: viewPage, generation } = {})
       snapshotGeneration += 1;
       snapshotRefs = new Set();
       snapshotPageUrl = page.url();
+      snapshotPage = page;
     }
     // Surface a human-verification challenge in the snapshot itself: a model
     // that has to call a second tool to notice a CAPTCHA will sometimes not, and
@@ -223,6 +231,12 @@ function checkRef(ref, page) {
       'ref from the fresh output.'
     );
   }
+  if (page && snapshotPage && page !== snapshotPage) {
+    invalidateSnapshotRefs('tab-changed');
+    return { ok: false, result: `ref "${ref}" belongs to a tab that is no longer the one in front — it may have ` +
+      'closed — so I did not act on the neighbouring tab. Call browser_snapshot to read the tab in front now.',
+      remedy: remedy('browser_snapshot', {}, 'read the tab that is actually in front before acting') };
+  }
   const moved = page ? pageMoved(page) : null;
   if (moved) {
     invalidateSnapshotRefs('page-moved');
@@ -246,85 +260,14 @@ function invalidateSnapshotRefs(reason) {
   if (snapshotRefs.size === 0) return;
   snapshotRefs = new Set();
   snapshotPageUrl = null;
+  snapshotPage = null;
   return reason;
 }
 
-// Phase 3 — the verify half of act-then-verify. After a ref action, read the
-// page back and report what it says, as an oracle-backed `evidence` field
-// rather than a bare ok:true. A full re-snapshot stays the model's explicit
-// choice (call browser_snapshot again); charging every click for a second tree
-// would make the common case expensive to prove the uncommon one.
-//
-// Every probe is individually guarded: a page object that cannot answer one
-// question must not cost us the answers to the others, and an evidence capsule
-// that throws would turn a successful click into a reported failure.
-async function captureStateCapsule(page, ref) {
-  const capsule = {};
-  try { capsule.url = page.url(); } catch (_) {}
-  try { capsule.title = await page.title(); } catch (_) {}
-  if (ref) {
-    // Did the thing we clicked survive the click? Both answers are informative:
-    // a dismissed dialog SHOULD be gone, a toggled button should still be there.
-    try { capsule.refStillPresent = (await refLocator(page, ref).count()) > 0; } catch (_) {}
-  }
-  if (typeof page.evaluate === 'function') {
-    try {
-      const dom = await page.evaluate(() => {
-        const active = document.activeElement;
-        const video = document.querySelector('video');
-        return {
-          focused: active ? {
-            tag: active.tagName ? active.tagName.toLowerCase() : null,
-            role: active.getAttribute ? active.getAttribute('role') : null,
-            name: (active.getAttribute && (active.getAttribute('aria-label') || active.getAttribute('name'))) ||
-              (active.textContent || '').trim().slice(0, 60) || null,
-          } : null,
-          // The video oracle the plan calls for: "is it actually playing" is a
-          // property of the media element, not of the click that started it.
-          // Only reported when the page HAS a video, so a normal page's capsule
-          // stays small.
-          video: video ? { playing: !video.paused, currentTime: video.currentTime, duration: video.duration } : null,
-        };
-      });
-      if (dom && dom.focused) capsule.focused = dom.focused;
-      if (dom && dom.video) capsule.video = dom.video;
-    } catch (_) { /* a page that refuses evaluate still gives us url/title */ }
-  }
-  return capsule;
-}
-
-function describeCapsule(capsule) {
-  const bits = [];
-  if (capsule.url) bits.push('url ' + capsule.url);
-  if (capsule.title) bits.push('title "' + capsule.title + '"');
-  if (capsule.focused && capsule.focused.tag) {
-    bits.push('focus on <' + capsule.focused.tag + '>' + (capsule.focused.name ? ' "' + capsule.focused.name + '"' : ''));
-  }
-  if (capsule.video) bits.push('video ' + (capsule.video.playing ? 'PLAYING' : 'paused'));
-  if (capsule.refStillPresent === false) bits.push('the clicked element is no longer on the page');
-  return bits.join('; ');
-}
-
-// NOTE ON SHAPE, and it is load-bearing: this returns the effector's WHOLE
-// result — `{ok, unverified, evidence, result}` — not something to pass to
-// ok(). Wrapping it (`ok(await withStateCapsule(...))`) buries `unverified` and
-// `evidence` one level down inside `.result`, where dispatch-action and
-// live-tool-adapter's evaluateOutcome do not look; the outcome then reads as a
-// plain ok:true and the voice layer speaks an unproven action as done. That is
-// the exact flattening the evidence contract exists to prevent, and it was
-// briefly live here before this comment existed. Return it directly.
-async function withStateCapsule(page, payload, ref) {
-  const capsule = await captureStateCapsule(page, ref);
-  const observed = describeCapsule(capsule);
-  const result = Object.assign({}, payload, { url: capsule.url, state: capsule });
-  if (!observed) {
-    // No oracle answered. Say so rather than dressing the call's own return up
-    // as proof — verifiedOk would (correctly) throw on an empty observation.
-    return evidenceModule.unverified({ result },
-      'the action was dispatched but the page reported nothing back, so I cannot confirm it changed anything');
-  }
-  return evidenceModule.verifiedOk({ result }, { oracle: 'page-state', observed });
-}
+// The verify half of act-then-verify lives in browser-effect.js (BUG-462): the
+// page is read BEFORE and after each action and the difference is judged against
+// what that action is for. Its results are the effector's WHOLE result — never
+// wrap one in ok(), or `unverified` and `evidence` sink into .result unread.
 
 // agent-browser's lesson, and this repo's own (BUG-107, whose dead-end refusal
 // survived a fix because only one of two sites named a remedy): a failure the
@@ -348,6 +291,7 @@ function __resetSnapshotStateForTest() {
   snapshotGeneration = 0;
   snapshotRefs = new Set();
   snapshotPageUrl = null;
+  snapshotPage = null;
   snapshotYaml = null;
   snapshotViewChars = null;
 }
@@ -415,8 +359,9 @@ async function browser_navigate({ url, newTab, browser }) {
 //
 // A ladder, with every rung named in the result so the operator hears WHICH
 // route worked rather than a bare success:
-//   1. visible wait -> scrollIntoViewIfNeeded -> native page.click. Fully
-//      verified: Playwright's actionability check IS the oracle.
+//   1. visible wait -> scrollIntoViewIfNeeded -> native page.click, then the
+//      effect judged before/after. Actionability proves the click COULD land,
+//      not what it did (BUG-462).
 //   2. attached wait -> el.click() in page context. A JS click bypasses
 //      hit-testing, so it can "succeed" against a covered element that a real
 //      user could never have clicked. That is a weaker oracle than rung 1, so
@@ -438,11 +383,12 @@ async function browser_click({ selector, ref }) {
     return browserAgent.withPage(async (page) => {
       const moved = checkRef(ref, page);
       if (moved) return moved;
-      // Native Playwright click on the resolved locator — the actionability
-      // check (visible, stable, receives events, not covered) IS the oracle, so
-      // this path never needs the unverified downgrade the JS-click rung takes.
-      await refLocator(page, ref).click();
-      return await withStateCapsule(page, { clicked: ref, via: 'ref-click' }, ref);
+      // Playwright's actionability check (visible, stable, not covered) proves the
+      // click COULD land; it says nothing about what the click did (BUG-462). What
+      // it did is judged from the page before and after, in browser-effect.js.
+      const target = refLocator(page, ref);
+      return await effect.actWithEvidence(page, { intent: { kind: 'click' }, ref, locator: target,
+        payload: { clicked: ref, via: 'ref-click' }, act: () => target.click(), settle: true });
     }).catch(err => fail(refFailure(ref, 'click', err)));
   }
 
@@ -462,8 +408,8 @@ async function browser_click({ selector, ref }) {
       // a scroll that cannot run must not lose us the click that would have.
       try { await page.locator(selector).first().scrollIntoViewIfNeeded({ timeout: 2000 }); } catch (_) {}
       stagesTried.push('native-click');
-      await page.click(selector);
-      return ok({ clicked: selector, url: page.url(), via: 'native-click', stages: stagesTried });
+      return await effect.actWithEvidence(page, { intent: { kind: 'click' },
+        payload: { clicked: selector, via: 'native-click', stages: stagesTried }, act: () => page.click(selector), settle: true });
     }
 
     // Rung 2 — attached but not actionable. This is the lazy-hydration case.
@@ -506,9 +452,9 @@ async function browser_type({ selector, text, clearFirst, ref }) {
       const locator = refLocator(page, ref);
       // fill() replaces, type() appends — the same distinction the selector
       // path makes, kept identical so moving to refs changes targeting only.
-      if (clearFirst) await locator.fill(String(text));
-      else await locator.type(String(text));
-      return await withStateCapsule(page, { typed: String(text).length, into: ref, via: 'ref-type' }, ref);
+      return await effect.actWithEvidence(page, { intent: { kind: 'type', text: String(text), clearFirst: !!clearFirst },
+        ref, locator, field: true, payload: { typed: String(text).length, into: ref, via: 'ref-type' },
+        act: () => (clearFirst ? locator.fill(String(text)) : locator.type(String(text))) });
     }).catch(err => fail(refFailure(ref, 'type into', err)));
   }
 
@@ -521,9 +467,9 @@ async function browser_type({ selector, text, clearFirst, ref }) {
     if (!(await waitReady(page, selector))) {
       return fail(`Element not ready (not visible within ${pageWaitMs()}ms): ${selector}`);
     }
-    if (clearFirst) await page.fill(selector, text);
-    else await page.type(selector, text);
-    return ok({ typed: text.length, into: selector, url: page.url() });
+    return await effect.actWithEvidence(page, { intent: { kind: 'type', text: String(text), clearFirst: !!clearFirst },
+      locator: effect.fieldLocator(page, selector), field: true, payload: { typed: text.length, into: selector },
+      act: () => (clearFirst ? page.fill(selector, text) : page.type(selector, text)) });
   }).catch(err => fail(err.message));
 }
 
@@ -578,7 +524,7 @@ async function browser_fill_form({ fields }) {
         }
         try {
           await refLocator(page, f.ref).fill(String(f.value));
-          results.push({ index: i, ref: f.ref, ok: true });
+          results.push({ index: i, ref: f.ref, ok: true, readsBack: await effect.readsBack(() => refLocator(page, f.ref), f.value) });
         } catch (err) {
           results.push({ index: i, ref: f.ref, ok: false, error: refFailure(f.ref, 'fill', err) });
         }
@@ -597,13 +543,19 @@ async function browser_fill_form({ fields }) {
           continue;
         }
         await page.fill(f.selector, String(f.value));
-        results.push({ index: i, selector: f.selector, ok: true });
+        results.push({ index: i, selector: f.selector, ok: true, readsBack: await effect.readsBack(() => page.locator(f.selector), f.value) });
       } catch (err) {
         results.push({ index: i, selector: f.selector, ok: false, error: (err && err.message) || 'fill failed' });
       }
     }
     const filled = results.filter((r) => r.ok).length;
-    return ok({ fields: results, filled: filled, total: fields.length, url: page.url() });
+    const res = ok({ fields: results, filled: filled, total: fields.length, url: page.url() });
+    // BUG-462: fill() resolving is not the field holding the value. Values are
+    // never echoed back (a form holds passwords); only whether each one matches.
+    const unconfirmed = results.filter((r) => r.ok && r.readsBack !== true).length;
+    if (!filled) return res;
+    return unconfirmed ? evidenceModule.unverified(res, unconfirmed + ' of the ' + filled + ' filled fields do not read back as the value sent')
+      : evidenceModule.verifiedOk(res, { oracle: 'page-state', observed: 'all ' + filled + ' filled fields read back as the values sent' });
   }).catch(err => fail(err.message));
 }
 
@@ -664,8 +616,8 @@ async function browser_scroll({ direction }) {
 
   return browserAgent.withPage(async (page) => {
     const amount = dir === 'down' ? 600 : -600;
-    await page.evaluate((y) => window.scrollBy(0, y), amount);
-    return ok({ scrolled: dir, amount });
+    return await effect.actWithEvidence(page, { intent: { kind: 'scroll', direction: dir },
+      payload: { scrolled: dir, amount }, act: () => page.evaluate((y) => window.scrollBy(0, y), amount) });
   }).catch(err => fail(err.message));
 }
 
@@ -743,8 +695,10 @@ async function browser_go_back() {
   if (guard) return guard;
 
   return browserAgent.withPage(async (page) => {
-    await page.goBack({ waitUntil: 'domcontentloaded' });
-    return ok({ url: page.url(), title: await page.title() });
+    // BUG-462: going back from the first page in a tab resolves without moving,
+    // and used to be reported as a success on the page it never left.
+    return await effect.actWithEvidence(page, { intent: { kind: 'back' }, payload: {},
+      act: () => page.goBack({ waitUntil: 'domcontentloaded' }) });
   }).catch(err => fail(err.message));
 }
 
@@ -1194,10 +1148,9 @@ async function browser_upload_file({ ref, selector, path: filePath }) {
   return browserAgent.withPage(async (page) => {
     const t = await resolveTarget(page, { ref, selector }, 'upload a file');
     if (t.failure) return t.failure;
-    await t.locator.setInputFiles(sandboxed.resolved);
-    return await withStateCapsule(page,
-      { uploaded: path.basename(sandboxed.resolved), from: sandboxed.resolved, into: t.target, via: 'set-input-files' },
-      t.ref);
+    return await effect.actWithEvidence(page, { intent: { kind: 'upload', expected: path.basename(sandboxed.resolved) },
+      ref: t.ref, locator: t.locator, field: true, act: () => t.locator.setInputFiles(sandboxed.resolved),
+      payload: { uploaded: path.basename(sandboxed.resolved), from: sandboxed.resolved, into: t.target, via: 'set-input-files' } });
   }).catch(err => fail(t_err(ref, selector, 'upload to', err)));
 }
 
@@ -1223,9 +1176,10 @@ async function browser_select_option({ ref, selector, value, label }) {
     // click to choose, which the snapshot already exposes. Saying so in the
     // failure is what stops the model retrying this tool forever.
     const chosen = label !== undefined ? { label: String(label) } : { value: String(value) };
-    const applied = await t.locator.selectOption(chosen);
-    return await withStateCapsule(page,
-      { selected: applied, on: t.target, via: 'select-option' }, t.ref);
+    let applied = null;
+    return await effect.actWithEvidence(page, { intent: () => ({ kind: 'select', expected: applied }),
+      ref: t.ref, locator: t.locator, field: true, act: async () => { applied = await t.locator.selectOption(chosen); },
+      payload: () => ({ selected: applied, on: t.target, via: 'select-option' }) });
   }).catch(err => fail(
     t_err(ref, selector, 'select an option on', err) +
     ' If this is a custom dropdown rather than a real <select>, click it open with browser_click and ' +
@@ -1306,11 +1260,8 @@ async function browser_press_key({ key, ref, selector }) {
     // BUG-174: reload before anything else — ref/selector and the focus guard
     // are both meaningless for an action the page never sees.
     if (isReload) {
-      await page.reload({ waitUntil: 'domcontentloaded' });
-      return await withStateCapsule(page, {
-        reloaded: true, via: 'page.reload',
-        evidence: 'reloaded ' + page.url(),
-      }, null);
+      return await effect.actWithEvidence(page, { intent: { kind: 'reload' }, payload: { reloaded: true, via: 'page.reload' },
+        act: () => page.reload({ waitUntil: 'domcontentloaded' }) });
     }
     if (isPlayerKey) {
       // Checked for the ref/selector path too: pressing on a located element
@@ -1335,11 +1286,11 @@ async function browser_press_key({ key, ref, selector }) {
     if (ref || selector) {
       const t = await resolveTarget(page, { ref, selector }, 'press a key');
       if (t.failure) return t.failure;
-      await t.locator.press(match);
-      return await withStateCapsule(page, { pressed: match, on: t.target, via: 'ref-press' }, t.ref);
+      return await effect.actWithEvidence(page, { intent: { kind: 'key', key: match, onElement: true }, ref: t.ref, locator: t.locator,
+        payload: { pressed: match, on: t.target, via: 'ref-press' }, act: () => t.locator.press(match), settle: true });
     }
-    await page.keyboard.press(match);
-    return await withStateCapsule(page, { pressed: match, on: 'focused element', via: 'keyboard-press' }, null);
+    return await effect.actWithEvidence(page, { intent: { kind: 'key', key: match },
+      payload: { pressed: match, on: 'focused element', via: 'keyboard-press' }, act: () => page.keyboard.press(match), settle: true });
   }).catch(err => fail(t_err(ref, selector, 'press a key on', err)));
 }
 
@@ -1350,10 +1301,10 @@ async function browser_hover({ ref, selector }) {
   return browserAgent.withPage(async (page) => {
     const t = await resolveTarget(page, { ref, selector }, 'hover');
     if (t.failure) return t.failure;
-    await t.locator.hover();
     // Hovering usually exists to REVEAL something, so the useful next step is
     // another snapshot. Say so rather than leaving the model to guess.
-    const result = await withStateCapsule(page, { hovered: t.target, via: 'ref-hover' }, t.ref);
+    const result = await effect.actWithEvidence(page, { intent: { kind: 'hover' }, ref: t.ref, locator: t.locator,
+      payload: { hovered: t.target, via: 'ref-hover' }, act: () => t.locator.hover() });
     result.result.hint = 'If this was meant to open a menu, call browser_snapshot again to see what appeared.';
     return result;
   }).catch(err => fail(t_err(ref, selector, 'hover over', err)));

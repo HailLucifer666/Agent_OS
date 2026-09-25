@@ -3,6 +3,7 @@ var effectorFromTool = require('./adapter').effectorFromTool;
 var { reasonText } = require('../util/reason-text');
 var { dayKey } = require('../util/day-key');
 var { resumeInterruptedAnswer } = require('../voice/unheard-answer'); // BUG-447
+var { verifyConsent } = require('../leash/consent'); // BUG-464
 function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
@@ -45,18 +46,31 @@ function buildTools(ctx){
   var IDENTITY_CLAIM_RE = /\b(call (?:me|the operator|him|her|them)\b|my name is\b|the operator'?s? name is\b|prefers? to be called\b|address (?:me|the operator) as\b)/i;
   var IDENTITY_QUARANTINE_CONFIDENCE = 0.3;
 
-  async function remember(args){
+  // BUG-464 (2026-09-24): the lock. A save needs a consent token for exactly
+  // these arguments, minted by the server after the operator's own words asked
+  // for it or approved a read-back (voice/authority-gate.js). It arrives in the
+  // dispatch context, which the model cannot write; a `consent` key in args is
+  // ignored. With no token nothing is written — including from the autonomous
+  // loop, which has no operator words at all. The label now says which of the
+  // two happened: before this, every line said 'voice-explicit', asked or not.
+  async function remember(args, callCtx){
     var text=(args&&(args.text||args.fact||args.note)||'').trim();
     if(!text) return fail('text required — the fact or instruction to remember');
     var STT_NOISE = /^(that you like|the|a|uh+|um+|hmm+)[\s.,!?]*$/i;
     if (text.length < 10 || STT_NOISE.test(text) || !/[a-z]{3,}/i.test(text)) {
       return fail('Rejected: too short or looks like transcription noise.');
     }
+    var consent = verifyConsent(callCtx && callCtx.consent, 'remember', args);
+    if (!consent.ok) {
+      return fail('Not saved (' + consent.reason + '): permanent memory is written only when the operator asks for it '
+        + 'in their own words, or says yes after the exact text is read back to them.');
+    }
     if(!semantic||typeof semantic.write!=='function') return fail('memory store unavailable');
     try{
       var isIdentityClaim = IDENTITY_CLAIM_RE.test(text);
       var confidence = isIdentityClaim ? IDENTITY_QUARANTINE_CONFIDENCE : 0.9;
-      var sources = isIdentityClaim ? ['voice-explicit','identity-unconfirmed'] : ['voice-explicit'];
+      var basisSource = consent.basis === 'approved-proposal' ? 'operator-approved' : 'voice-explicit';
+      var sources = isIdentityClaim ? [basisSource,'identity-unconfirmed'] : [basisSource];
       var res=semantic.write('user-facts',[text],{confidence:confidence,append:true,sources:sources});
       if(res&&res.degraded) return fail('memory write degraded — disk error');
       // If text looks like a stated preference, also populate Learned Preferences

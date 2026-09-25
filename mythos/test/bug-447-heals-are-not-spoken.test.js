@@ -98,11 +98,13 @@ describe('BUG-447 — a heal that worked is never spoken (operator decision D5)'
   test('(1d) ADJACENT: what NEEDS the operator is still spoken, once, in its own words', async () => {
     const h = chain();
     h.bus.emit('health.anomaly', { kind: 'gmail-reauth-required', target: 'gmail', needsOperator: true,
+      // 2026-09-25: the sentence the real sensor now sends, and what is spoken (BUG-447).
+      sayToOperator: 'Gmail has stopped working because its Google sign-in expired, and it needs you to sign in again.',
       reason: 'Gmail needs re-authorising: run the Google sign-in again.' });
     await h.settle();
     h.stop();
     assert.equal(h.spoken.length, 1, 'removing the heal speaker must not silence the operator\'s one real instruction');
-    assert.match(h.spoken[0], /re-authoris/);
+    assert.match(h.spoken[0], /needs you to sign in again/);
   });
 });
 

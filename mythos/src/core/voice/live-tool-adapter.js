@@ -56,6 +56,9 @@ const {
 // BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
 // the file-size ratchet; full rationale in that module.
 const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger');
+const { isAssertionOnUnintelligibleInput } = require('./fragment-guard'); // BUG-299 / BUG-460
+const { createAuthorityGate } = require('./authority-gate'); // BUG-461 / BUG-464: ask before acting on words that did not ask
+const { createHeldReplies, TOOL_RESULT_HOLD_MAX_MS, cancelledNotice } = require('./held-reply'); // BUG-457: hold a slow reply instead of injecting it as user text
 // BUG-398 R5a: the five claim sentences moved to their own module when adding a
 // fifth pushed this file past the size ratchet's ceiling. Pure text, no closure
 // use — the comments explaining each one moved with it, verbatim, because they
@@ -80,7 +83,11 @@ function createLiveToolAdapter(deps) {
     sanitizeErrorForClient,
     goals,                          // BUG-113: raw GoalSystem, optional — commitment ledger only
     toolAckDeadlineMs,              // BUG-128: test seam only — see TOOL_ACK_DEADLINE_MS
+    onToolWait,                     // BUG-456: ({ callId, pending }) — the HUD's one soft chime (ui/public/js/voice/wait-chime.js)
+    toolResultHoldMaxMs,            // BUG-457: test seam only — see held-reply.js TOOL_RESULT_HOLD_MAX_MS; 0 selects today's path
   } = deps;
+  // BUG-456: a call answered "started" begins a silent wait; its late result ends it. Advisory only — never breaks dispatch.
+  const toolWait = (callId, pending) => { if (typeof onToolWait === 'function') { try { onToolWait({ callId: String(callId), pending }); } catch (_) { /* advisory */ } } };
 
   if (!leash || typeof leash.check !== 'function') throw new Error('createLiveToolAdapter requires leash');
   if (typeof dispatchAction !== 'function') throw new Error('createLiveToolAdapter requires dispatchAction(decision, ctx)');
@@ -174,14 +181,17 @@ function createLiveToolAdapter(deps) {
   // the ids it asked about, and re-issued the whole batch. BUG-120's dedup is
   // keyed on call.id by design, so fresh ids sail straight past it.
   //
-  // The general fix is to stop letting ANY call outlive its turn unanswered:
-  // whatever has not resolved by this deadline gets the same status:'started'
-  // reply SLOW_TOOLS gets, and its real outcome arrives later on the same
-  // [SYSTEM] channel. SLOW_TOOLS stays because it acks instantly — the model is
+  // The general fix is to stop letting ANY call outlive its turn unanswered.
+  // Since BUG-457 a call unresolved at this deadline is held for its real reply
+  // (the model waits for it); past the hold it gets SLOW_TOOLS' status:'started'
+  // and a late [SYSTEM] notice, as before. SLOW_TOOLS stays because it acks instantly — the model is
   // told "say what you are doing" without the operator hearing 1.5s of silence
   // first. This is the net underneath it, not a replacement for it.
   const TOOL_ACK_DEADLINE_MS = Number.isFinite(toolAckDeadlineMs) ? toolAckDeadlineMs : 1500;
   const DEADLINE_EXCEEDED = Symbol('tool-ack-deadline-exceeded');
+  // BUG-457: past the deadline the reply is HELD for the rest of this budget, then today's path. A cancellation (the operator spoke) ends the hold early — see held-reply.js.
+  const HOLD_BUDGET_MS = Math.max(0, (Number.isFinite(toolResultHoldMaxMs) ? toolResultHoldMaxMs : TOOL_RESULT_HOLD_MAX_MS) - TOOL_ACK_DEADLINE_MS);
+  const heldReplies = createHeldReplies(); if (bus && typeof bus.subscribe === 'function') bus.subscribe('voice.live.toolcancel', (e) => heldReplies.cancel(e && e.payload && e.payload.ids));
 
   // Settle to {outcome} | {error} | DEADLINE_EXCEEDED. The timer is cleared on
   // the fast path so a resolved dispatch never holds the event loop open for
@@ -237,7 +247,9 @@ function createLiveToolAdapter(deps) {
     return false;
   }
 
-  const livePendingConfirms = new Map(); // confirmId -> {name, callId, createdAt}
+  const livePendingConfirms = new Map(); // confirmId -> {name, callId, createdAt, spoken?}
+  const authorityGate = createAuthorityGate({ leash, connectionId, pendingConfirms: livePendingConfirms, dispatchAction, logger, audit: memory && memory.audit,
+    resolveConfirm: (...a) => resolveLiveConfirm(...a), isNegative: (t) => NEGATIVE_RE.test(String(t || '')) });
   const liveTurnActions = [];            // AD-4: reconciled on turnComplete
   const recentActionLedger = createRecentActionLedger(); // BUG-357: cross-turn evidence
   // Security-review fix: onToolCall (live-session.js) is fire-and-forget, so a
@@ -431,6 +443,9 @@ function createLiveToolAdapter(deps) {
       // sets both on the same object.
       confirmedStep: isUnverified && typeof outcome.confirmedStep === 'string' && outcome.confirmedStep
         ? outcome.confirmedStep : null,
+      // BUG-460: an ORACLE proved the effect, not merely "returned ok" — what
+      // fragment-guard.js accepts as proof the operator was understood.
+      verified: require('../effectors/evidence').isVerified(outcome),
     };
   }
 
@@ -476,14 +491,14 @@ function createLiveToolAdapter(deps) {
   }
 
   const suggestedProcedures = createProcedureAttribution();
-  async function handleLiveToolCalls(calls, { sendToolResponse }) {
+  async function handleLiveToolCalls(calls, { sendToolResponse, userTextSoFar, typedTextSoFar } = {}) {
     sweepPendingConfirms();
     // BUG-128 instrumentation: a re-issued batch carries fresh call ids, so the
     // only way to recognise one in a log is by its CONTENT. Logging the shape
     // hash next to the ids makes "same batch, different ids, 28 seconds apart"
     // readable straight from the log instead of reconstructable from the audit.
     logBatch(calls);
-    const myGeneration = turnGeneration;
+    const myGeneration = turnGeneration; const heldAnswered = []; // BUG-457: held calls answered in this batch, re-routed if the session refuses the reply
     function commitAction(entry) {
       recentActionLedger.record(entry); // BUG-357, before the check below: late arrivals are exactly the cross-turn facts kept
       // Late arrival after this turn already completed — do not misattribute
@@ -676,6 +691,8 @@ function createLiveToolAdapter(deps) {
         responses.push({ id: call.id, name: call.name, response: { status: 'denied', reason: verdict.reason } });
         continue;
       }
+      const held = authorityGate.hold(call, decision, verdict, { spoken: userTextSoFar, typed: typedTextSoFar }); // BUG-461/464
+      if (held.response) { commitAction(held.row); responses.push({ id: call.id, name: call.name, response: held.response }); continue; }
 
       // WAVE 3 — tools that take longer than a Live turn get an explicit
       // started/done split instead of being awaited inside the turn.
@@ -696,33 +713,39 @@ function createLiveToolAdapter(deps) {
         commitAction(pendingAck(call.name, call.id));
         responses.push({ id: call.id, name: call.name, response: {
           status: 'started', message: STARTED_MESSAGE,
-        }});
+        }}); toolWait(call.id, true);
         // Deliberately not awaited: the whole point is that the turn does not wait.
-        dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id })
+        dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent })
           .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
           .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
         continue;
       }
 
       try {
-        // BUG-128: await, but not without a bound. Anything still running at
-        // TOOL_ACK_DEADLINE_MS is answered now and reconciled later, exactly
-        // like a SLOW_TOOLS call — the model never reaches turnComplete with an
-        // unanswered call id, which is the only reason it re-issues a batch.
+        // BUG-128: await, but not without a bound. Since BUG-457 (2026-09-24) a call
+        // still running at TOOL_ACK_DEADLINE_MS is HELD (held-reply.js) and answered
+        // with its real result; only past the hold, on a cancellation or on typed
+        // words is it answered "started" and reconciled later, like a SLOW_TOOLS call.
         const pending = dispatchAction(decision, {
-          tier: verdict.tier, channel: 'voice-live', traceId: call.id,
+          tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent,
         });
-        const settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
+        let settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
         if (settled === DEADLINE_EXCEEDED) {
           logger.info('live.tool-ack-deadline', { tool: call.name, callId: call.id, deadlineMs: TOOL_ACK_DEADLINE_MS });
-          commitAction(pendingAck(call.name, call.id));
-          responses.push({ id: call.id, name: call.name, response: {
-            status: 'started', message: STARTED_MESSAGE,
-          }});
-          pending
-            .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
-            .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
-          continue;
+          toolWait(call.id, true); // BUG-456: the chime covers the silent hold
+          const started = { id: call.id, name: call.name, response: { status: 'started', message: STARTED_MESSAGE } };
+          const kept = HOLD_BUDGET_MS > 0 ? await heldReplies.hold(call.id, pending, HOLD_BUDGET_MS, { onRelease: () => { responses.push(started); sendToolResponse(responses.splice(0)); } }) : { kind: 'hold-max', heldMs: 0 };
+          if (HOLD_BUDGET_MS > 0) logger.info('live.tool-held', { tool: call.name, callId: call.id, heldMs: kept.heldMs, end: kept.kind }); // BUG-457
+          if (kept.kind === 'outcome' || kept.kind === 'error') { settled = kept; heldAnswered.push({ name: call.name, id: call.id, kept, startedAt }); toolWait(call.id, false); } // a real toolResponse follows below, not an injection
+          else {
+            commitAction(pendingAck(call.name, call.id));
+            if (kept.kind === 'hold-max') responses.push(started); // 'released' already sent it; a cancelled id needs no reply
+            if (kept.kind === 'cancelled') sendSystemNotice(cancelledNotice(call.name), '', { site: 'held-call-cancelled', tool: call.name }); // the net: live, the model once invented a cancelled call's result
+            pending
+              .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
+              .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
+            continue;
+          }
         }
         if (settled.error) throw settled.error;
         const outcome = settled.outcome;
@@ -785,7 +808,7 @@ function createLiveToolAdapter(deps) {
         // BUG-297: confirmedStep travels too, so the late-for-turn re-narration can
         // tell a partial hand-off from a wholly unproven outcome exactly as the other
         // three paths do.
-        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified,
+        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, verified: ev.verified,
           abortedInFlight: ev.abortedInFlight, confirmedStep: ev.confirmedStep, summary,
           // BUG-398 row 2. `ok` here is EVIDENCE-level ("proven"), while the
           // Audit row's `outcome` is DISPATCH-level ("the effector returned
@@ -810,7 +833,7 @@ function createLiveToolAdapter(deps) {
       }
     }
     for (const row of responses) if (row.name === 'web_search' && recentActionLedger.searchStormDetected()) row.response.message = (row.response.message ? row.response.message + ' ' : '') + 'four searches in two minutes and nothing read — web_fetch one result or tell the operator you cannot find it';
-    if (responses.length) sendToolResponse(responses);
+    if (responses.length && sendToolResponse(responses) === false) for (const a of heldAnswered) reportLateOutcome(a.name, a.kept.kind === 'error' ? { ok: false, result: sanitize(a.kept.error) } : a.kept.outcome, a.id, a.startedAt); // BUG-457: a rotation refused the held reply (pinned door); deliver it today's way, never lose it
   }
 
   // WAVE 3 — deliver a slow tool's real outcome after its turn has ended.
@@ -818,6 +841,7 @@ function createLiveToolAdapter(deps) {
   // arrival is EXPECTED, so it must not raise the late-for-turn anomaly that
   // exists to catch accidental misattribution.
   function reportLateOutcome(toolName, outcome, traceId, startedAt) {
+    toolWait(traceId, false); // BUG-456: the wait is over whatever the outcome — the chime must not play after the result
     const ev = evaluateOutcome(outcome);
     let verdict;
     // BUG-116: the closing instruction is what the model is allowed to SAY about
@@ -871,7 +895,7 @@ function createLiveToolAdapter(deps) {
     // session — more breaches than calls. A digest on the awaited path only
     // would go quietly missing on exactly the slow lookups most likely to be
     // narrated from memory.
-    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified,
+    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified, verified: ev.verified,
       abortedInFlight: ev.abortedInFlight, summary: verdict,
       dispatchOk: ev.dispatchOk, traceId: traceId || null,
       evidence: evidenceFor(toolName, ev.result) };
@@ -1019,7 +1043,8 @@ function createLiveToolAdapter(deps) {
     // the audit, not just the model, so a socket that closed while the human was
     // deciding must not erase what happened. reportLateOutcome already ordered
     // it this way.
-    const resolvedEntry = { tool: pending.name, ok: ok && !unverified, unverified, summary: verdict };
+    const resolvedEntry = { tool: pending.name, ok: ok && !unverified, unverified, summary: verdict,
+      verified: require('../effectors/evidence').isVerified(outcome) };
     liveTurnActions.push(resolvedEntry);
     recentActionLedger.record(resolvedEntry);
 
@@ -1093,7 +1118,7 @@ function createLiveToolAdapter(deps) {
   function notifySpokenGoAheadWhilePending(text) {
     if (!livePendingConfirms.size) return;
     const notice = buildSpokenGoAheadNotice(text,
-      [...livePendingConfirms.values()].map((e) => e.name),
+      [...livePendingConfirms.values()].filter((e) => !e.spoken).map((e) => e.name), // a spoken proposal IS approved by a spoken yes (authority-gate.js)
       { negative: NEGATIVE_RE.test(String(text || '')) });
     if (notice) sendSystemNotice(notice.verdict, notice.instruction,
       { site: 'spoken-go-ahead-no-dispatch', tool: notice.tool, claim: 'awaiting-click' });
@@ -1102,20 +1127,7 @@ function createLiveToolAdapter(deps) {
   // AD-4 enforcement on turnComplete — reuses the exact history/episodic
   // shape handleUtterance already uses, so recall/audit stay consistent
   // whether a turn came through the batch or Live path.
-  // BUG-299's classifier, kept separate and thresholds named, because every number
-  // in it is a judgement call that a later reader will want to argue with.
-  //
-  // FRAGMENT: a single token, no internal whitespace, short. "आदिए" is four
-  // characters. Deliberately measured in code points rather than words — the
-  // operator speaks Bengali, Hindi and English, and a word count is meaningless
-  // for scripts this STT segments badly.
-  //
-  // SUBSTANTIVE: long enough that it cannot be an acknowledgement. "Okay, Sir."
-  // and "ঠিক আছে।" are 10 and 9; the fabricated match report was 63. 40 sits well
-  // clear of both, and erring high is the safe direction — a missed correction
-  // leaves the existing behaviour, a false one interrupts a working turn.
-  const FRAGMENT_MAX_CHARS = 8;
-  const SUBSTANTIVE_MIN_CHARS = 40;
+  // BUG-299's classifier and its named thresholds live in fragment-guard.js.
 
   // BUG-300 — the DURABLE half of the same fabrication. MYTHOS did not only say
   // "মোহনবাগান জিতে গেছে"; it said "আমি নোট করে রাখলাম" and wrote it down. A spoken
@@ -1169,18 +1181,8 @@ function createLiveToolAdapter(deps) {
     decision.args = Object.assign({}, decision.args, { text: text + UNBACKED_NOTE_STAMP });
   }
 
-  function isAssertionOnUnintelligibleInput(userText, assistantText) {
-    const heard = String(userText || '').trim();
-    // An EMPTY transcript is not a fragment. MYTHOS speaks unprompted on
-    // proactive and entity-initiated turns, and treating those as garbled would
-    // fire this correction on every one of them.
-    if (!heard) return false;
-    if (heard.length > FRAGMENT_MAX_CHARS) return false;
-    if (/\s/.test(heard)) return false;
-    return String(assistantText).trim().length >= SUBSTANTIVE_MIN_CHARS;
-  }
-
-  function onLiveTurnComplete({ userText, assistantText, turnId }) {
+  function onLiveTurnComplete({ userText, assistantText, turnId, typedText }) {
+    authorityGate.onTurnComplete({ userText, assistantText, typedText }); // BUG-461/464: presents, approves on a yes, or drops
     // B3 — before any of this turn's ORDINARY handling (history append,
     // episodic write, reflection), a spoken "no" cancels whatever is pending.
     // Doing this first means the cancellation itself lands in liveTurnActions
@@ -1222,7 +1224,7 @@ function createLiveToolAdapter(deps) {
     // model: live-session.js's invariant that a log line carries no transcript
     // text is binding here too, and quoting the garbage at the model only invites
     // it to interpret the garbage.
-    if (assistantText && isAssertionOnUnintelligibleInput(userText, assistantText)) {
+    if (assistantText && isAssertionOnUnintelligibleInput(userText, assistantText, actionsThisTurn)) {
       if (bus && typeof bus.emit === 'function') {
         bus.emit('health.anomaly', {
           kind: 'assertion-on-unintelligible-input',
@@ -1436,6 +1438,7 @@ function createLiveToolAdapter(deps) {
 
   return {
     handleLiveToolCalls,
+    releaseHeldReplies: () => heldReplies.releaseAll(), // BUG-457: server calls this before any typed text goes out
     resolveLiveConfirm,
     onLiveTurnComplete,
     // test-only introspection — never used by production wiring

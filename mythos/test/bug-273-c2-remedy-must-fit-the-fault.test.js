@@ -78,6 +78,8 @@ const GMAIL_ANOMALY = {
   kind: 'gmail-reauth-required',
   target: 'gmail',
   needsOperator: true,
+  // 2026-09-25 (BUG-447): the real sensor now also sends the sentence that is spoken.
+  sayToOperator: 'Gmail has stopped working because its Google sign-in expired, and it needs you to sign in again.',
   reason: 'Gmail has stopped working and it will not recover on its own: the Google refresh '
     + 'token is expired or revoked. Re-authorise by running `node scripts/google-auth.js`.',
 };
@@ -98,12 +100,16 @@ describe('BUG-273 C2 — a remedy must be able to fix the fault it is chosen for
     const h = harness();
     await h.fire(GMAIL_ANOMALY);
     assert.equal(h.spoken.length, 1);
-    assert.match(h.spoken[0], /needs your attention/,
+    assert.match(h.spoken[0], /needs you to sign in again/,
       'the live session said "I am re-probing the AI providers now" for a dead Google token');
     assert.doesNotMatch(h.spoken[0], /re-probing/);
-    // The reason survives — it carries the actual command, and it is the whole point
-    // of the sensor half of C2.
-    assert.match(h.spoken[0], /google-auth.js/);
+    // 2026-09-25, operator decision (BUG-447): the command is no longer READ ALOUD; the
+    // spoken line points at the Anomalies list, which now shows the reason for a row
+    // that needs the operator. This assertion used to pin the command in speech. That
+    // the steps still reach the operator is pinned by
+    // test/bug-447-needs-you-in-one-sentence.test.js (d) and (g).
+    assert.doesNotMatch(h.spoken[0], /google-auth\.js/);
+    assert.match(h.spoken[0], /The steps are in the Anomalies list\./);
   });
 
   it('probe_provider is REFUSED for a target that is not an AI provider', async () => {

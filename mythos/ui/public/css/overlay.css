@@ -124,6 +124,8 @@
 .health-anomaly-time { color: var(--text-faint); font-size: 10px; flex-shrink: 0; }
 .health-anomaly-kind { color: var(--status-degraded); flex-shrink: 0; }
 .health-anomaly-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* BUG-447: steps the operator must follow wrap instead of ending in an ellipsis. */
+.health-anomaly-msg--steps { white-space: normal; overflow-wrap: anywhere; }
 
 /* audit view rows (new P9 view) */
 .audit-row {

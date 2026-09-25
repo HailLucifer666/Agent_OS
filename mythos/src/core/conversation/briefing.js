@@ -360,4 +360,16 @@ function greetingRelationshipClause(previousBootAt) {
   return 'This is your first boot with this operator: introduce yourself in half a sentence, then give the status. ';
 }
 
-module.exports = { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause };
+// BUG-463 (2026-09-25, operator decision "startup greeting only"): notes the operator
+// saved for startup ("Upon boot, give a status update on ...") reach the greeting and
+// nothing else (memory/startup-facts.js). They are instructions, not facts, so they
+// come AFTER the fact list and cannot license a status the greeting was not given:
+// GREETING_FACT_DISCIPLINE still decides what may be stated.
+function startupInstructionsClause(notes) {
+  const list = (Array.isArray(notes) ? notes : []).map((s) => String(s).trim()).filter(Boolean);
+  if (!list.length) return '';
+  return 'The operator\'s standing instructions for this greeting (follow them using only the facts listed above; '
+    + 'where they ask for something that is not listed, leave it out rather than guess):\n- ' + list.join('\n- ') + '\n';
+}
+
+module.exports = { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause, startupInstructionsClause };

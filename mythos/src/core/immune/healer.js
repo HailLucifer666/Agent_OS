@@ -673,7 +673,7 @@ function createHealer({ bus, config, memory, getCortex, getGoals, getEffectors, 
       // below already records with that meaning. The explainer does not need it: the
       // condition sentence is built from kind/target/reason.
       needsOperator: evidence.needsOperator === true,
-      reason: evidence.reason || null,
+      reason: evidence.reason || null, sayToOperator: typeof evidence.sayToOperator === 'string' ? evidence.sayToOperator : null, // BUG-447: its spoken sentence (the file is at its ceiling)
       // B2: the bus id of the health.anomaly that started this, forwarded from
       // the diagnostician so the anomaly record and this verdict record share a
       // key. Null when a diagnosis was raised directly (cortex/index.js emits

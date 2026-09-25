@@ -91,7 +91,6 @@ const CATALOG_RAW = [
   { name: 'reminder_list', description: 'List upcoming pending reminders with times and text.', params: {}, danger: false },
   { name: 'reminder_cancel', description: 'Cancel a pending reminder by ID or text match.', params: { query: 'string' }, danger: false },
   { name: 'use_skill', description: 'Load the full guidance text for a skill (methodology or design guide) by name. Use when a task fits a skill from SKILLS AVAILABLE — e.g. ui-ux-pro-max before building a UI, writing-plans before starting a project, test-driven-development before writing tests. Returns the complete skill instructions.', params: { name: 'string - the skill name from SKILLS AVAILABLE' }, danger: false },
-  { name: 'open_web', description: 'Renders a card INSIDE the MYTHOS dashboard — this does NOT open a browser window and is NOT your real browser. Despite the name, open_web never browses: use browser_navigate for "search the web". For a plain "open this site in my browser", pass browser:true WITH url:. type:"youtube" plays a video (pass query — the song/topic to search for). type:"weather" shows conditions (pass location). type:"search" shows search result cards (pass query). type:"flights" shows flight results (pass query like "NYC to Tokyo"). type:"image" shows image results (pass query). type:"web" embeds a direct URL (pass url). YouTube and web open as full panels; search/weather/flights open as floating widgets. Use with needs_result:false — it opens a view.', params: { type: 'string - youtube|weather|search|flights|image|web', browser: 'boolean (optional) - true opens the url in the real browser, requires url', query: 'string (optional)', url: 'string (optional, for type:web)', location: 'string (optional, for type:weather)', title: 'string (optional)' }, danger: false },
   { name: 'spotify_play', description: 'Play a specific track on Spotify. Provide either a search query (song name, artist) or a Spotify track ID.', params: { query: 'string (optional) - search query like "Bohemian Rhapsody Queen"', trackId: 'string (optional) - Spotify track ID like "3z8h0TU7ReDPLIbEnYhWZb"' }, danger: true },
   { name: 'spotify_search', description: 'Search Spotify for tracks/artists/albums and return results.', params: { query: 'string - search query' }, danger: true },
   { name: 'spotify_play_pause', description: 'Toggle play/pause on Spotify.', params: {}, danger: false },
@@ -118,10 +117,19 @@ const CATALOG = buildCatalog();
 // capture_screenshot — silently never reaches the voice channel unless someone
 // remembers to add a matching line here).
 //
-// Hub-sourced params always win for a name the hub knows about — CATALOG_RAW's
-// copy of that tool becomes inert (kept only for hub-less fallback below, plus
-// the odd deliberate voice-facing description override, e.g. navigate's route
-// enum/"no news route" warning). Any hub-registered effector with no CATALOG_RAW
+// Hub-sourced params always win for a name the hub knows about. The DESCRIPTION
+// does not: a CATALOG_RAW entry's description REPLACES the hub's (line below,
+// `override.description || meta.description`), and this is the text both voice
+// paths send to the model. This comment used to call that "the odd deliberate
+// override". Measured 2026-09-24 against the real hub: 46 of 189 tools, 42 of
+// them declared to Live, most of them SHORTER than the hub text they replace —
+// so a fix to a hub description never reached the voice model. BUG-459 is the
+// case that cost a turn: open_web's copy here opened with "does NOT open a
+// browser window", and at 15:05:37 the model told the operator it had no tool to
+// open a link. open_web's entry is gone; the rest are listed, and can only
+// shrink, in test/bug-459-live-catalog-is-the-canonical-copy.test.js. A
+// deliberate voice-only wording (navigate's route enum) is kept on purpose, but
+// it is a decision per tool, not the default. Any hub-registered effector with no CATALOG_RAW
 // entry at all (a brand new tool) is added automatically. Any CATALOG_RAW entry
 // with no hub match at all passes through unchanged — a genuine voice-only
 // pseudo-tool, not drift.
@@ -266,7 +274,7 @@ WEB PANEL RULE: When the user asks to watch or play a video, see weather, or vie
 
 DESKTOP APP RULE: When the user asks to "open" an application that has a real installed desktop client (Slack, Discord, Teams, VS Code, Notepad, Spotify, etc.), call launch_app with that app's name — NOT browser_navigate or open_web. Only use the browser for actual web pages, or for apps/services that have no desktop client at all. "Open Slack" means launch the Slack app.
 
-BROWSER RULE (open_web is not a browser): "search the web for X", "look that up", "browse to X", "open <site>" all mean browser_navigate — a REAL browser window. open_web opens nothing: it renders a card on the MYTHOS dashboard, and its name is the only thing about it that suggests otherwise. Use open_web ONLY when the user asked to SEE something at a glance on the HUD, or for the WEB PANEL RULE's visual types. If the user would be surprised not to see a browser, you picked the wrong tool.
+BROWSER RULE (open_web is not a browser): "search the web for X", "look that up", "browse to X", "open <site>" all mean browser_navigate — a REAL browser window. open_web never browses: it renders a dashboard card, and with browser:true only hands one url to the default browser. Use open_web ONLY when the user asked to SEE something at a glance on the HUD, or for the WEB PANEL RULE's visual types. If the user would be surprised not to see a browser, you picked the wrong tool.
 
 BROWSER CONTROL RULE: When the user wants to CONTROL a real browser — "open the browser", "go to <url>", "browse/navigate to X", "close that tab" — and they name a destination, call ONLY browser_navigate with that url; the one call loads the page AND handles the tab. Never call browser_tabs first and rely on a follow-up to load the site — a dropped follow-up leaves a blank tab, which has happened. Set newTab:true when the user says "new tab"/"new browser"/"separate tab"; omit it to reuse the current tab. Call browser_tabs (action:'new') alone only for a deliberately blank tab with NO destination. These drive the real browser (a separate debug-profile session). If a browser_* call returns OFFLINE, the browser auto-launches — retry the same call. Never say a site was opened unless this turn's actions include a browser_navigate for it. (open_web vs browser_navigate: see BROWSER RULE above.)
 
@@ -398,6 +406,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   if (!leash || typeof leash.check !== 'function') throw new Error('createVoiceAgent requires leash');
   if (typeof dispatch !== 'function') throw new Error('createVoiceAgent requires dispatch(decision, ctx)');
   if (!bus) throw new Error('createVoiceAgent requires bus');
+  const typedMemoryGate = require('./authority-gate').createTypedMemoryGate(); // BUG-464: remember needs the operator's own words
 
   // BUG-017: when the real effector hub is available (always true at real boot —
   // see server/index.js), build the catalog from it so every registered effector
@@ -457,7 +466,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
   // is unchanged in shape; the difference is that the accept now comes from a
   // human.
 
-  async function executeAction(action, { connectionId, traceId, channel } = {}) {
+  async function executeAction(action, { connectionId, traceId, channel, said } = {}) {
     // H4: Guard against empty/invalid args before dispatch.
     if (!action || !action.tool) return { tool: '?', args: {}, ok: false, summary: 'no tool specified' };
     if (action.args && typeof action.args === 'object') {
@@ -530,7 +539,8 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
       return { tool: decision.tool, args: decision.args, ok: false, summary: `Denied: ${verdict.reason}.` };
     }
 
-    const outcome = await dispatch(decision, { tier: verdict.tier, traceId: traceId });
+    const heldMemory = typedMemoryGate.hold(decision, said, connectionId); if (heldMemory.refuse) return { tool: decision.tool, args: decision.args, ok: false, summary: heldMemory.refuse };
+    const outcome = await dispatch(decision, { tier: verdict.tier, traceId: traceId, consent: heldMemory.consent });
     const ok = Boolean(outcome && outcome.ok);
     const raw = outcome && outcome.result;
     // WAVE 3 — carry `unverified` onto the action. Without this the flag died here:
@@ -735,7 +745,7 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
         if (signal && signal.aborted) {
           return { say: finalSay, actions: executedActions, aborted: true };
         }
-        const result = await executeAction(action, { connectionId: ctx.connectionId, traceId: ctx.traceId, channel: ctx.channel });
+        const result = await executeAction(action, { connectionId: ctx.connectionId, traceId: ctx.traceId, channel: ctx.channel, said: text });
         executedActions.push(result);
         // B2: Track failures across all iterations.
         if (result && result.ok === false && !result.confirmPending) allFailedActions.push(result);

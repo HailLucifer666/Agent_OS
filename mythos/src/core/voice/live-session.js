@@ -235,7 +235,7 @@ function createLiveSession(deps) {
   let resumeHandle = null;       // from sessionResumptionUpdate
   let idleTimer = null, maxTimer = null;
   let turnStallTimer = null;     // BUG-131, see TURN_STALL_MS
-  let userText = '', assistantText = '';
+  let userText = '', assistantText = '', typedText = ''; // BUG-461: typedText = the operator's HUD-typed words (sendText operator:true), kept apart from the spoken transcript on purpose
   let closedByUs = false; let socketGeneration = 0; let lastFlushedFrames = 0; // BUG-432: generation scopes a release to the socket that earned it; lastFlushedFrames tells resume() whether the operator's buffered speech already owns the floor.
   let idleRotationsWithoutSpeech = 0;
   // Audio captured while the socket is down between rotations — see sendAudio.
@@ -560,7 +560,8 @@ function createLiveSession(deps) {
       return false;
     }
     const key = process.env.GOOGLE_API_KEY;
-    if (!key) { setState('closed', 'no-key'); return false; }
+    const refused = !key ? 'no-key' : require('../brain/route-policy').refusalFor({ provider: 'google', model: MODEL, endpoint: WS_URL, mode: 'live' }, bus); // Wave 0c: GEMINI_LIVE_MODEL judged by MODEL_BILLING_POLICY; why the reason also goes to the bus is in refusalFor
+    if (refused) { setState('closed', refused); return false; }
 
     setState('opening');
     closedByUs = false;
@@ -802,9 +803,9 @@ function createLiveSession(deps) {
         // with the same turnId and the question stops being a guess.
         turnCounter += 1;
         const turn = {
-          userText: userText.trim(), assistantText: assistantText.trim(), turnId: turnCounter,
+          userText: userText.trim(), assistantText: assistantText.trim(), turnId: turnCounter, typedText: typedText.trim(),
         };
-        userText = ''; assistantText = '';
+        userText = ''; assistantText = ''; typedText = '';
         // Snapshot before the reset below — Wave 0 (2026-08-13) needs these on
         // the health.anomaly emit further down, not just the log line here.
         const scFieldsSnapshot = turnFrameFields ? Array.from(turnFrameFields).sort().join(',') : '';
@@ -935,7 +936,7 @@ function createLiveSession(deps) {
     // have a tool handler wired says nothing about whether Gemini answered.
     if (msg.toolCall) { disarmTurnStall(); turnToolCallOpen = true; } // BUG-436: waiting on our toolResponse = a turn in flight
     if (msg.toolCall && Array.isArray(msg.toolCall.functionCalls) && onToolCall) {
-      Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse, sendText }))
+      Promise.resolve(onToolCall(msg.toolCall.functionCalls, { sendToolResponse: ((g) => (r) => g === socketGeneration && sendToolResponse(r))(socketGeneration), sendText, userTextSoFar: userText.trim(), typedTextSoFar: typedText.trim() })) // BUG-461: this turn's echo-accepted spoken words and typed words, both server-owned. BUG-457: the reply door is pinned to THIS socket — a reply held across a rotation returns false instead of reaching a socket that never issued the id
         .catch((err) => logger.warn('live.toolcall-failed', { error: err.message }));
     }
     if (msg.toolCallCancellation && bus && typeof bus.emit === 'function') {
@@ -1136,7 +1137,7 @@ function createLiveSession(deps) {
     // The log moved to AFTER sendRaw and carries `accepted`: it used to be written first, so every refused frame was recorded as injected — in the very field BUG-432's own measurement is counted from.
     const fromOperator = m.operator === true; const prior = turnSystemInitiated;
     if (!fromOperator) turnSystemInitiated = true;
-    const ok = sendRaw({ realtimeInput: { text: String(text) } }); if (ok === false && !fromOperator) turnSystemInitiated = prior;
+    const ok = sendRaw({ realtimeInput: { text: String(text) } }); if (ok === false && !fromOperator) turnSystemInitiated = prior; if (ok !== false && fromOperator) typedText += (typedText ? ' ' : '') + String(text);
     logger.info('live.text-injected', injectionFields(m, text, turnCounter, ok !== false));
     return ok;
   }

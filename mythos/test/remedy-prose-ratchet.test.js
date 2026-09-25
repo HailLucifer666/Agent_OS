@@ -28,7 +28,18 @@ const PROSE_BASELINE = {
   // 7 sites. The hashed literal is the whole RULES block; its BROWSER INTERACTION
   // RULE now says browser_snapshot LISTS items with a ref like e12 (it no longer
   // returns a tree of [ref=e12] markers), which rehashes the block. No new advice.
-  "voice-agent.js": ["0389baa340c47aa1", "a769c4ee72490ffc", "8266b6bf213bc2b9", "37bb0d112fd86208", "829d84f969b61a66", "4ef68331d4e70f3f", "57ac9c3a016ac87a"],
+  // 2026-09-24, BUG-459: three more SWAPS, not additions — each file keeps its
+  // site count (voice-agent 7, from-dashboard 18, from-computer 8), measured
+  // before and after. voice-agent.js "4ef68331d4e70f3f" -> "22e41c1daa991f8c" is
+  // the RULES block again (BROWSER RULE: "open_web opens nothing" corrected).
+  // from-computer.js "92609290b800395b" -> "05a12d3d27dcab6a" is think_deeply's
+  // description, trimmed under the 1024-char Live cut. from-dashboard.js
+  // "e705dca568dfd4e8" -> "229a5b530dea374a" is NOT open_web's description: this
+  // scanner is out of step with that file (ten of its 18 "sites" are code spans
+  // between two quotes, and open_web's own description is not counted at all), and
+  // the rehashed span is a comment fragment that happens to reach past the edit.
+  // Recorded honestly rather than fixed here; flagged as its own task.
+  "voice-agent.js": ["0389baa340c47aa1", "a769c4ee72490ffc", "8266b6bf213bc2b9", "37bb0d112fd86208", "829d84f969b61a66", "22e41c1daa991f8c", "57ac9c3a016ac87a"],
   "browser-intent-remedy.js": [
     "49a97d7d71bc722c",
     "50518bdca0531d56"
@@ -75,7 +86,7 @@ const PROSE_BASELINE = {
     "e299246974cda7c0",
     "52f45bb33bb4f0c9",
     "b4b209450216ba82",
-    "92609290b800395b"
+    "05a12d3d27dcab6a"
   ],
   "from-cua.js": [
     "609c393db0a597b0",
@@ -124,7 +135,7 @@ const PROSE_BASELINE = {
     // than fixed here, because re-baselining the scanner while repairing a
     // regression is how a measurement gets adjusted to fit a result.
     // Net across both files this commit: 35 recorded sites -> 34.
-    "e705dca568dfd4e8"
+    "229a5b530dea374a"
   ],
   "from-desktop.js": [
     "458175d1e982f809"

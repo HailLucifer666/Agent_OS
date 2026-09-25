@@ -74,7 +74,7 @@ const TIER_TABLE = {
   'commitment_list':       0,  // BUG-446 / D10 — read-only: MYTHOS's own open commitments, when asked
   'commitment_dismiss':    1,  // BUG-446 / D10 — local write on MYTHOS's own ledger; marks nothing done
   'use_skill':             0,  // read-only — loads a skill's guidance text from disk
-  'open_web':              0,  // read-only — opens a dashboard view (no destructive action)
+  'open_web':              0,  // no local write, not read-only: a dashboard card, or with browser:true one url handed to the default browser (BUG-459)
   'recall_memory':         0,  // read-only — searches existing memory (recallHybrid), writes nothing
   'suggest_procedures':    0,  // BUG-358: guidance only; individual actions retain their own tiers.
   'resume_interrupted_answer': 0, // BUG-447 — read-only: returns the part of MYTHOS's own last answer the room did not hear; runs nothing

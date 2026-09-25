@@ -216,7 +216,9 @@ function createBrain({ config, bus, identity }) {
         };
       } catch (err) {
         if (err.chainExhausted) {
-          return { content: null, offline: true, lane };
+          // BUG-458: emptyReplies > 0 means providers DID answer, with no text —
+          // callers that can say so should, rather than calling it "offline".
+          return { content: null, offline: true, lane, emptyReplies: err.emptyReplies || 0 };
         }
         if (err.name === 'AbortError') {
           return { content: null, aborted: true, lane };

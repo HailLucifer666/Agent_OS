@@ -171,6 +171,7 @@ const SITE_CLASSES = Object.freeze({
   'confirm-rejected-by-voice': 'outcome',
   'ask-answer-to-live': 'outcome',
   'reply-routed-to-live': 'outcome',
+  'held-call-cancelled': 'outcome', // BUG-457: must reach the model before it guesses the cancelled call's result
   'ad4-correction-premature': 'correction',
   'ad4-correction-retract': 'correction',
   'ad4-correction-unheard': 'correction',
@@ -508,6 +509,7 @@ function createNoticeQueueFromEnv(deps) {
 }
 
 module.exports = {
+  noticeClass,
   createNoticeQueue,
   createNoticeQueueFromEnv,
   createUndeliveredHandler,

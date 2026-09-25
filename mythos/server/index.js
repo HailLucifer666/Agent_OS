@@ -21,7 +21,8 @@ const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = r
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
-const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause } = require('../src/core/conversation/briefing');
+const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause, startupInstructionsClause } = require('../src/core/conversation/briefing');
+const { isStartupOnlyFact, startupOnlyFacts } = require('../src/core/memory/startup-facts'); // BUG-463
 const { TOOL_RESPONSE_DISCIPLINE } = require('../src/core/voice/narration-claims');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
@@ -312,7 +313,8 @@ function createServer(deps) {
       if (config.LIVE_MEMORY_INJECT !== false) {
         const semantic = memory && memory.semantic;
         const factsTopic = (semantic && typeof semantic.topic === 'function') ? semantic.topic('user-facts') : null;
-        const facts = factsTopic && Array.isArray(factsTopic.facts) ? factsTopic.facts : [];
+        // BUG-463: a note saved for startup ("Upon boot, ...") goes to the boot greeting only; this frame is rebuilt on every open and rotation.
+        const facts = (factsTopic && Array.isArray(factsTopic.facts) ? factsTopic.facts : []).filter((f) => !isStartupOnlyFact(f));
         if (facts.length) {
           const header = 'OPERATOR FACTS (as of session-start — durable memory, may have changed since; ' +
             'use recall_memory for anything not here):';
@@ -2118,8 +2120,11 @@ function createServer(deps) {
         idx++;
       }
       let proactiveSynthesized = 0;
+      // BUG-447: a caller's isCurrent() is re-asked before each chunk and after each
+      // synthesis; a no aborts the rest through the same controller a barge-in uses.
+      const stale = () => { if (!ctrl.signal.aborted && opts?.isCurrent && !opts.isCurrent()) { ctrl.abort(); logger.info('proactive.withdrawn', { reqId, sent: idx }); } return ctrl.signal.aborted; };
       for (let i = 0; i < textChunks.length; i++) {
-        if (ctrl.signal.aborted) break;
+        if (stale()) break;
         let audioB64 = null;
         let chunkMime;
         if (ttsUp) {
@@ -2132,7 +2137,7 @@ function createServer(deps) {
           }
         }
         if (audioB64) proactiveSynthesized++;
-        if (ctrl.signal.aborted) break;
+        if (stale()) break;
         sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] }, targetWs);
         idx++;
       }
@@ -2192,6 +2197,7 @@ function createServer(deps) {
       surface: ctx.surface,
       acceptedScope: ctx.acceptedScope,
       origin: ctx.origin, // BUG-446: a cortex-raised confirm is re-checked at execution
+      consent: ctx.consent, // BUG-464: the operator's consent token, minted server-side (voice/authority-gate.js)
     });
   }
 
@@ -2251,18 +2257,19 @@ function createServer(deps) {
     // critical health speech is untouched, and the anomaly still reaches the HUD,
     // the log and the audit either way — this drops one spoken interruption, not
     // the record of it.
-    if (e.payload.internalDiagnostic) {
-      const ws = lastActiveWs;
-      const live = (ws && typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
-      if (live && live.isOpen()) {
-        logger.info('immune-explain.not-spoken-during-live', {
-          kind: e.payload.kind || null,
-          reason: 'a Live conversation is in progress — the anomaly is in the log, the audit and the HUD',
-        });
-        return;
-      }
+    const liveConversationOpen = () => { const ws = lastActiveWs; const live = (ws && typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null; return !!(live && live.isOpen()); };
+    if (e.payload.internalDiagnostic && liveConversationOpen()) {
+      logger.info('immune-explain.not-spoken-during-live', {
+        kind: e.payload.kind || null,
+        reason: 'a Live conversation is in progress — the anomaly is in the log, the audit and the HUD',
+      });
+      return;
     }
-    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
+    // BUG-447 (2026-09-25): checked again before every chunk, not only here. On 09-24 a
+    // line requested at 14:49:58, before voice mode opened, played at 14:51:12 over the
+    // operator's turn: the TTS chain took 73 s. isCurrent withdraws what is still unspoken.
+    const opts = e.payload.internalDiagnostic ? { isCurrent: () => !liveConversationOpen() } : undefined;
+    proactiveSpeak(e.payload.text, undefined, opts).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // ---- Boot greeting (JARVIS-style) ----
@@ -2456,6 +2463,7 @@ function createServer(deps) {
               greetingRelationshipClause(previousBootAt) + // BUG-447: a first meeting is not the hundredth
               (config.LIVE_VOICE_HONESTY_ENABLED === false ? '' : GREETING_FACT_DISCIPLINE) + 'Facts you may use:\n- ' +
               facts.join('\n- ') + '\n' +
+              startupInstructionsClause(startupOnlyFacts(memory && memory.semantic)) + // BUG-463: the operator's notes for startup, here only
               'If a "Last time we spoke" fact is present, open by picking up that thread in half a sentence, ' +
               'the way someone resumes a conversation rather than starting one.\n' +
               'Reply with ONLY the spoken greeting: one to three short sentences, plain natural speech, no markdown, no quotes.',
@@ -2790,7 +2798,7 @@ function createServer(deps) {
     let liveSession = null;
     let liveAdapter = null;
     // BUG-447: where each Live answer's audio was cut, so "go ahead" can resume what the room did not hear.
-    const unheardTracker = unheardAnswer.createUnheardTracker({ remember: (entry) => unheardAnswer.rememberUnheard(connectionId, entry) });
+    const unheardTracker = unheardAnswer.createUnheardTracker({ remember: (entry) => unheardAnswer.rememberUnheard(connectionId, entry), forget: () => unheardAnswer.forgetUnheard(connectionId) }); // BUG-447: a heard answer retires an older remainder
     // BUG-433: the HUD registers its onBroadcast('live-audio-out') handler inside
     // s2s-bridge start() (:1031) and only then sends live-open (:1039), so the
     // message is a faithful proxy for "this client can play Live audio" — and
@@ -2855,6 +2863,7 @@ function createServer(deps) {
           // Fix-plan 2.3: the schema key the .env.example doc points at —
           // without this the documented dial silently did nothing.
           toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS, config,
+          onToolWait: ({ callId, pending }) => send({ type: 'live-tool-wait', callId, pending: pending === true }), // BUG-456: ids and a boolean only; the HUD plays one soft chime
         });
         liveAdaptersByConnection.set(connectionId, liveAdapter);
       }
@@ -3688,13 +3697,13 @@ function createServer(deps) {
           // (which is what an unlabelled call does) silently exempts the turn from the
           // half-blind-transcript check, i.e. from the one monitor that notices when
           // the operator was not heard.
-          liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
+          if (liveAdapter) liveAdapter.releaseHeldReplies(); liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true }); // BUG-457: release held replies first, or the typed words cancel the call
           send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
         } else {
           const typedText = String(msg.text || '');
           liveForSpeech().then((live) => {
             if (live && live.isOpen()) {
-              live.sendText(typedText, { site: 'operator-typed', operator: true });
+              if (liveAdapter) liveAdapter.releaseHeldReplies(); live.sendText(typedText, { site: 'operator-typed', operator: true }); // BUG-457
               send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
             } else {
               queueTurn(function() { return handleUtterance(msg); });
@@ -3739,6 +3748,7 @@ function createServer(deps) {
       // diagnosis a server-side record of every suspend/clear instead of only
       // inferring it after the fact from a blind turn.
       else if (msg.type === 'voice-unheard') { const entry = unheardTracker.unheard(msg); logger.info('live.unheard-report', { remembered: !!entry, chars: entry ? entry.text.length : 0, turnId: entry ? entry.turnId : null }); } // BUG-447: positions only; the text comes from this server's own transcript
+      else if (msg.type === 'voice-wait-chime') { logger.info('voice.wait-chime', { waitedMs: Number.isFinite(msg.waitedMs) ? Math.round(msg.waitedMs) : null }); } // BUG-456: when the chime played (first SOUND, not first answer); one number, nothing else from the message
       else if (msg.type === 'voice-gate-recording') { gateRecordingSink.handle(msg).catch(() => {}); } // BUG-406: the mic-gate recorder's windows; the sink itself is off unless VOICE_GATE_RECORDER=true
       else if (msg.type === 'voice-capture-suspend') {
         // BUG-271: the own-voice-release transition also carries the ring/gate
@@ -3773,7 +3783,7 @@ function createServer(deps) {
         // actually sends and fails if any would be dropped. Third occurrence is where
         // patching instances stops and the assertion gets written.
         for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms',
-          'bargeVetoed', 'bargeVetoTier', 'bleedFloor',
+          'bargeVetoed', 'bargeVetoTier', 'bleedFloor', 'playbackWaits', 'playbackStalled', // BUG-455: the watchdog now waits on playback
           // BUG-274: the policy's own veto reason and the level it refused. bargeVetoTier
           // alone names the blocked BACKSTOP tier, which is the same string whichever of
           // the four policy causes fired — and those causes want opposite fixes. The
@@ -3995,7 +4005,7 @@ function createServer(deps) {
       }
       else if (msg.type === 'live-close') { clientLiveRequested = false; if (liveSession) liveSession.close('client-request'); }
       else if (msg.type === 'live-text') {
-        if (liveSession) liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
+        if (liveSession) { if (liveAdapter) liveAdapter.releaseHeldReplies(); liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true }); } // BUG-457
       }
     });
 

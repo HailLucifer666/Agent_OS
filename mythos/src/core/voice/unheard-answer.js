@@ -120,13 +120,23 @@ function unheardSpan(turn, cutMs, heardAgainMs) {
 
 // Per connection. Fed from server/index.js's existing Live callbacks: audio as it
 // is forwarded, the turn as it completes, and the HUD's report after it.
-function createUnheardTracker({ remember, now = Date.now } = {}) {
+//
+// BUG-447 (2026-09-25): `forget` is required, not optional. Live, 2026-09-24
+// 15:08:07: "hold on" got the unheard tail of an answer from 15:06:56, because a
+// newer answer (15:07:16) played in full and sent no report, and nothing else ever
+// replaced the stored one. A remainder is only true of the answer the room heard
+// last, so every turn that carried audio retires the stored one when it ends; the
+// HUD's report for that turn, if any, arrives after and stores its own. A turn with
+// no audio (a silent tool turn) retires nothing: the room heard nothing newer.
+function createUnheardTracker({ remember, forget, now = Date.now } = {}) {
   if (typeof remember !== 'function') throw new Error('createUnheardTracker requires remember(entry)');
+  if (typeof forget !== 'function') throw new Error('createUnheardTracker requires forget(): a stale remainder must be retirable');
   let audioMs = 0;
   let last = null;
   return {
     audio(b64) { audioMs += pcmBase64Ms(b64); },
     turnEnd(turn) {
+      if (audioMs > 0) forget();
       last = { text: String((turn && turn.assistantText) || ''), audioMs, turnId: turn ? turn.turnId : null };
       audioMs = 0;
     },
