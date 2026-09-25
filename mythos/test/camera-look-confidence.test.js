@@ -101,7 +101,7 @@ describe('F4 — low confidence takes a second look and refuses to merge the two
 
   it('the result instructs the SPOKEN answer, not just the metadata', () => {
     // rules/core.md §11.3 — the existing note failed precisely because it read as
-    // metadata. truncateForModel JSON-stringifies the whole result, so the field
+    // metadata. boundForModel passes the whole result (as a structure), so the field
     // does reach the model; what it says is what decides whether it changes the
     // sentence.
     return harness([

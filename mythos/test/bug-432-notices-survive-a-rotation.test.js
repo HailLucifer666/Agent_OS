@@ -41,6 +41,13 @@
 // reasoning, not measurement. Nothing here is evidence that a real Gemini
 // rotation behaves this way, and the BUG-432 entry says so.
 //
+// 2026-09-23 (BUG-432 measured pass, BUG-436): the per-item 15 s DEADLINE this
+// file pinned in (e)/(f)/(g) is gone — it forced held notices into live turns.
+// Those tests are re-pointed below, each with its own dated note: (e) now pins
+// that a notice's AGE survives a rotation, (f) that an idle release sends one at
+// a time, (g) that a held correction still waits out the post-resume grace.
+// LIVE_NOTICE_HOLD_MAX_MS no longer exists, so (a) no longer shortens anything.
+//
 // Run: cd mythos && node --test test/bug-432-notices-survive-a-rotation.test.js
 
 const { test, describe } = require('node:test');
@@ -112,7 +119,9 @@ function withFlag(value, fn) {
 describe('BUG-432 — a held notice survives the socket it was held on', () => {
   test('(a) an UNSOLICITED drop suspends delivery — the ceiling cannot fire into a dead socket', async () => {
     await withFlag('true', async () => {
-      process.env.LIVE_NOTICE_HOLD_MAX_MS = '25';
+      // 2026-09-23: this used to set LIVE_NOTICE_HOLD_MAX_MS=25 so the old
+      // ceiling would fire mid-rotation. The ceiling and the variable are gone;
+      // the live.notice-suspended assertion below is what carries M1 now.
       const { session, sockets, logs } = harness();
       const first = await openSession(session, sockets, 0);
       beginModelTurn(first);
@@ -206,47 +215,46 @@ describe('BUG-432 — a held notice survives the socket it was held on', () => {
     allow = true; // unrelated queue, kept so the linter sees the variable used
   });
 
-  test('(e) ORIGINAL deadlines are preserved across a rotation, not restarted', () => {
+  // RE-POINTED 2026-09-23. It pinned the remaining time of a 15 s forced-release
+  // deadline across a rotation. That deadline is gone; what survives a rotation now
+  // is a notice's AGE, counted from when it was offered, against NOTICE_MAX_AGE_MS.
+  test('(e) a notice\'s ORIGINAL age survives a rotation, not restarted by it', () => {
     let t = 1000;
     const scheduled = [];
     const q = createNoticeQueue({
       inFlight: () => true,
       send: () => true,
-      holdMaxMs: 15000,
-      now: () => t,
-      setTimer: (fn, ms) => { scheduled.push(ms); return { fn, ms }; },
-      clearTimer: () => {},
-    });
-    q.offer('first', { site: 'a' });          // deadline 16000
-    assert.equal(scheduled[0], 15000, 'armed for its own deadline');
-
-    t = 11000;                                 // 10s later the socket drops
-    q.suspend('rotation');
-    t = 14000;                                 // 3s of reconnect
-    q.resume({ generation: 2, audioFlushed: false });
-
-    const last = scheduled[scheduled.length - 1];
-    assert.equal(last, 2000,
-      'the remaining 2s of the ORIGINAL 15s deadline — not a fresh 15s. The old code armed a flat '
-      + 'holdMaxMs and re-armed a full one after every release, so three notices held together came '
-      + 'out at ~15s, ~30s and ~45s');
-  });
-
-  test('(f) an expired backlog does not drain in one callback', () => {
-    let t = 1000;
-    const sent = [];
-    const scheduled = [];
-    const q = createNoticeQueue({
-      inFlight: () => true,
-      send: (text) => { sent.push(text); return true; },
-      holdMaxMs: 100,
       now: () => t,
       setTimer: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
       clearTimer: () => {},
     });
+    q.offer('first', { site: 'proactive-speak' });   // offered at t=1000
+    t = 11000; q.suspend('rotation');
+    t = 14000; q.resume({ generation: 2, audioFlushed: false });
+
+    t = 60000; scheduled[scheduled.length - 1].fn();
+    assert.equal(q.size(), 1, 'aged 59 s: still held');
+    t = 61000; scheduled[scheduled.length - 1].fn();
+    assert.equal(q.size(), 0,
+      'aged 60 s from its ORIGINAL offer, it is dropped — a rotation at 11 s did not buy it another minute');
+  });
+
+  // RE-POINTED 2026-09-23. The backlog used to drain when its forced deadlines
+  // expired together; nothing is forced now, so the same bound is pinned where a
+  // backlog CAN still go at once — the moment the model falls quiet.
+  test('(f) a backlog does not drain in one callback when the model falls quiet', () => {
+    let speaking = true;
+    const sent = [];
+    const scheduled = [];
+    const q = createNoticeQueue({
+      inFlight: () => speaking,
+      send: (text) => { sent.push(text); return true; },
+      setTimer: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
+      clearTimer: () => {},
+    });
     q.offer('one', {}); q.offer('two', {}); q.offer('three', {});
-    t = 99999;                                  // all three deadlines long past
-    scheduled[scheduled.length - 1].fn();       // fire the ceiling once
+    speaking = false;                           // the turn ended without a turnComplete
+    scheduled[scheduled.length - 1].fn();       // fire the idle tick once
     assert.deepEqual(sent, ['one'], 'exactly ONE notice per callback');
     assert.equal(q.size(), 2, 'the rest wait for a turn or another gap');
     const next = scheduled[scheduled.length - 1];
@@ -255,20 +263,22 @@ describe('BUG-432 — a held notice survives the socket it was held on', () => {
       + 'back-to-back interruption this whole file exists to prevent');
   });
 
-  test('(g) buffered operator audio wins the floor — resume never releases synchronously', () => {
+  // 2026-09-23: a CORRECTION now (it was an unlabelled item, i.e. a notice, which
+  // at t=99999 would be past its 60 s age). Resume still releases nothing but an
+  // outcome synchronously; outcomes have their own test in bug-432-outcome-outbox.
+  test('(g) buffered operator audio wins the floor — resume never releases a correction synchronously', () => {
     let t = 1000;
     const sent = [];
     const scheduled = [];
     const q = createNoticeQueue({
       inFlight: () => true,
       send: (text) => { sent.push(text); return true; },
-      holdMaxMs: 100,
       now: () => t,
       setTimer: (fn, ms) => { scheduled.push({ fn, ms }); return scheduled.length; },
       clearTimer: () => {},
     });
-    q.offer('correction', {});
-    t = 99999;                                  // deadline already expired
+    q.offer('correction', { site: 'ad4-correction-retract' });
+    t = 99999;                                  // long held
     q.suspend('rotation');
     q.resume({ generation: 3, audioFlushed: true });
     assert.deepEqual(sent, [], 'resume() sends nothing itself');
@@ -445,6 +455,8 @@ describe('BUG-432 — a held notice survives the socket it was held on', () => {
 //   M1  remove the setState suspend hook                  -> fail 1  (a)
 //   M2  release() shifts BEFORE sending (the old order)   -> fail 2  (d)(f)
 //   M3  re-arm a flat holdMaxMs, not the item's deadline  -> fail 3  (e)(f)(g)
+//       [2026-09-23: M3 is obsolete — there is no deadline to re-arm. (e) now
+//       reddens if a rotation restarts a notice's age; see the outbox file.]
 //   M4  drop the MIN_RELEASE_GAP_MS floor                 -> fail 2  (f)(g)
 //   M5  release synchronously from resume()               -> fail 4  (e)(g)(h)(l)
 //   M6  drop the socket-generation check                  -> fail 1  (h)

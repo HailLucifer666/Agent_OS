@@ -31,11 +31,9 @@
 //     verified. express.static normalises, but this must not be the layer that
 //     waves a '..' through on the way there.
 //   * Constant-time comparison (crypto.timingSafeEqual, length-guarded).
-//   * IT DOES NOT BYPASS THE PIN LAYER. When PIN_SESSION_ENFORCE is on, the
-//     server requires the bearer token AND an unlocked PIN session, on
-//     deliberately separate channels. A signature substitutes for the BEARER
-//     TOKEN only. A signed URL that skipped both would be a downgrade dressed
-//     as a convenience.
+//   * A signature substitutes for the bearer token and nothing else. (It used
+//     to be barred from substituting for the PIN session too; the PIN was
+//     removed on 2026-09-23, so the token is the only credential left.)
 //   * No secret configured (loopback-only mode) means no signature is ever
 //     minted and the middleware is a pass-through — behaviour identical to
 //     before this file existed. Absence of a secret must never become an
@@ -115,10 +113,8 @@ function verifyArtifactSignature(rel, exp, sig, secret) {
 // Express middleware for /vault/builds. Admits a correctly signed request;
 // otherwise hands the request to the existing token check unchanged.
 //
-// deps.requireToken       — the server's own middleware, called on fall-through
-// deps.pinSessionRequired — () => boolean
-// deps.pinSessionValid    — (req) => boolean
-// deps.secret             — MYTHOS_AUTH_TOKEN, or falsy for loopback-only mode
+// deps.requireToken — the server's own middleware, called on fall-through
+// deps.secret       — MYTHOS_AUTH_TOKEN, or falsy for loopback-only mode
 function createArtifactAccess(deps) {
   var d = deps || {};
   return function artifactAccess(req, res, next) {
@@ -128,14 +124,8 @@ function createArtifactAccess(deps) {
       // signed value is rebuilt the same way vault-url.js constructs it.
       var rel = 'builds' + String(req.path || '').replace(/\\/g, '/');
       var v = verifyArtifactSignature(rel, q.exp, q.sig, d.secret);
-      if (v.ok) {
-        // The signature stands in for the bearer token. It does NOT stand in for
-        // the PIN session — when both layers are enforced, both are still
-        // required.
-        var pinNeeded = typeof d.pinSessionRequired === 'function' ? d.pinSessionRequired() : false;
-        if (!pinNeeded) return next();
-        if (typeof d.pinSessionValid === 'function' && d.pinSessionValid(req)) return next();
-      }
+      // The signature stands in for the bearer token.
+      if (v.ok) return next();
     }
     return d.requireToken(req, res, next);
   };

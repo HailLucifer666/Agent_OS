@@ -71,37 +71,37 @@ function fakePowerShell(rows) {
   const calls = [];
   return {
     calls,
-    execFileSync(exe, args) {
+    execFile(exe, args) {
       calls.push({ exe, script: args[args.length - 1] });
       return Buffer.from(rows.map((r) => r.pid + '=' + r.name).join('\r\n'), 'utf8');
     },
   };
 }
 
-test('(a1) a Brave profile yields Brave\'s pid', () => {
+test('(a1) a Brave profile yields Brave\'s pid', async () => {
   const ps = fakePowerShell([
     { pid: 4242, name: 'brave.exe' },
     { pid: 4243, name: 'brave.exe' },
   ]);
-  const pid = browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, ps);
+  const pid = (await browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, ps));
   assert.strictEqual(pid, 4242,
     'measured live 2026-09-09: launchLocal started brave.exe and this returned null, '
     + 'so .browser-agent.pid was never written and the orphan reap was disarmed');
 });
 
-test('(a2) every browser the launcher can start is one this can find', () => {
+test('(a2) every browser the launcher can start is one this can find', async () => {
   // Derived from the launcher's own table, so a fourth browser added there
   // fails this test until the lookup is told about it.
   for (const name of browserTarget.BROWSER_SEARCH_ORDER) {
     const sub = browserTarget.BROWSER_SUBPATHS[name];
     const leaf = String(sub[sub.length - 1]);
     const ps = fakePowerShell([{ pid: 777, name: leaf }]);
-    assert.strictEqual(browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, ps), 777,
+    assert.strictEqual((await browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, ps)), 777,
       'the launcher can start ' + leaf + ' but the pid lookup would never recognise it');
   }
 });
 
-test('(a3) the crashpad handler is NOT mistaken for the browser', () => {
+test('(a3) the crashpad handler is NOT mistaken for the browser', async () => {
   // It carries --user-data-dir and no --type=, so it passes the query's filter
   // and arrives first. Returning it would be worse than returning nothing: the
   // .bat's provenance check passes, it tree-kills crashpad, and the orphaned
@@ -110,16 +110,16 @@ test('(a3) the crashpad handler is NOT mistaken for the browser', () => {
     { pid: 9001, name: 'brave_crash_handler.exe' },
     { pid: 9002, name: 'brave.exe' },
   ]);
-  assert.strictEqual(browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, ps), 9002);
+  assert.strictEqual((await browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, ps)), 9002);
 
   const onlyCrashpad = fakePowerShell([{ pid: 9001, name: 'brave_crash_handler.exe' }]);
-  assert.strictEqual(browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, onlyCrashpad), null,
+  assert.strictEqual((await browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, onlyCrashpad)), null,
     'with no browser row the honest answer is null, never a plausible wrong pid');
 });
 
-test('(a4) the query itself does not filter on process name', () => {
+test('(a4) the query itself does not filter on process name', async () => {
   const ps = fakePowerShell([{ pid: 1, name: 'brave.exe' }]);
-  browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, ps);
+  (await browserAgent.findChromePidByUserDataDir(BRAVE_PROFILE, ps));
   assert.strictEqual(ps.calls.length, 1, 'expected exactly one PowerShell call');
   const script = ps.calls[0].script;
   assert.ok(!/\$_\.Name\s*-eq/.test(script),
@@ -128,10 +128,10 @@ test('(a4) the query itself does not filter on process name', () => {
   assert.ok(script.includes('brave-debug-profile'), 'the profile dir is not in the filter:\n' + script);
 });
 
-test('(a5) the adjacent case: a directory that is not a MYTHOS debug profile is refused', () => {
+test('(a5) the adjacent case: a directory that is not a MYTHOS debug profile is refused', async () => {
   const ps = fakePowerShell([{ pid: 5, name: 'brave.exe' }]);
   const real = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'BraveSoftware', 'Brave-Browser', 'User Data');
-  assert.strictEqual(browserAgent.findChromePidByUserDataDir(real, ps), null,
+  assert.strictEqual((await browserAgent.findChromePidByUserDataDir(real, ps)), null,
     'the operator\'s real browser profile must never be queried');
   assert.strictEqual(ps.calls.length, 0, 'it should not even reach PowerShell');
 });

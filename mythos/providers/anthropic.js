@@ -185,6 +185,7 @@ module.exports = {
   isAvailable,
   getStatus,
   getModel,
+  getBaseURL,   // for brain/route-policy.js — every chat lane reports the host it calls
   // Seams: both are pure, and both encode a difference from the OpenAI shape
   // that a reader would otherwise have to take on trust.
   splitMessages,

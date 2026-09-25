@@ -217,3 +217,30 @@ describe('BUG-275 H1 — a name given a rank its source never gave it', () => {
     assert.match(rules, /a passing mention is not a ranking/i);
   });
 });
+
+// ADDED 2026-09-23. A probe found this detector's WIRING unpinned: removing its
+// call from the adapter's silent path (now silent-turn-anomalies.js) left every
+// test green, before and after that path was extracted, because every test above
+// calls the detector or its reporter directly. (k) drives the real adapter.
+describe('BUG-275 H1 — through the real adapter', () => {
+  test('(k) a real web_search result, then the measured reply: the adapter reports the anomaly, silently', async () => {
+    const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter');
+    const { summarizeActionsForResult } = require('../src/core/voice/action-outcome-summary');
+    const anomalies = []; const notices = [];
+    const adapter = createLiveToolAdapter({
+      leash: { check: () => ({ allow: true, requireConfirm: false, tier: 0, reason: 'within-autonomous-max' }), confirm: { create: () => 'c', reject() {} } },
+      dispatchAction: async () => ({ ok: true, result: BENCHLM_RESULT }),
+      bus: { emit: (t, p) => { if (t === 'health.anomaly') anomalies.push(p); } }, logger: { info() {}, warn() {} },
+      connectionId: 'conn-275-h1', memory: { working: { tick: 1 }, episodic: { write: async () => {} } }, historyAppend: () => {},
+      reflection: null, summarizeActionsForResult, config: {},
+      getLiveSession: () => ({ isOpen: () => true, sendText: (text, meta) => { notices.push(meta && meta.site); return true; } }),
+    });
+    await adapter.handleLiveToolCalls([{ id: 'c-h1', name: 'web_search', args: { query: BENCHLM_RESULT.query } }], { sendToolResponse: () => {} });
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 5));
+    adapter.onLiveTurnComplete({ userText: 'what are the top coding models', assistantText: H1_REPLY });
+    const row = anomalies.find((a) => a.kind === 'promoted-ranked-entity');
+    assert.ok(row, 'the adapter did not run the H1 detector: ' + JSON.stringify(anomalies.map((a) => a.kind)));
+    assert.deepEqual(row.promoted, ['Gemini CLI']);
+    assert.ok(!notices.some((site) => /promoted|rank/.test(String(site))), 'and nothing was injected for it');
+  });
+});

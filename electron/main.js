@@ -463,7 +463,7 @@ function resolveAuthTokenForPriming() {
 // install has no token at all (/health reports authRequired:false) and never
 // sends an exchange request, per AD-8.
 //
-// A failure here (bad token, rate limit, combined-PIN 409, server not up yet)
+// A failure here (bad token, rate limit, server not up yet)
 // must still land the operator on the existing gate with the server's
 // verbatim message: nothing is swallowed, and nothing beyond a status code is
 // ever logged — the token itself must never reach a URL, a log line, or an
@@ -493,14 +493,15 @@ async function primeAuthSession(win, token, port) {
   }
   log('auth.session-prime:', { outcome: 'exchanged', status: res.status });
   const setCookie = res.headers.get('set-cookie') || '';
-  const value = (/mythos_token=([^;]+)/.exec(setCookie) || [])[1];
+  // BUG-444: a random session id comes back, never the token, so none reaches the renderer.
+  const value = (/mythos_session=([^;]+)/.exec(setCookie) || [])[1];
   if (!value) {
     return log('auth.session-prime:', { outcome: 'failed', stage: 'cookie-read', reason: 'missing-cookie' });
   }
   try {
     await win.webContents.session.cookies.set({
-      url: `http://127.0.0.1:${port}`, name: 'mythos_token', value,
-      httpOnly: true, sameSite: 'lax',
+      url: `http://127.0.0.1:${port}`, name: 'mythos_session', value,
+      httpOnly: true, sameSite: 'strict',
     });
     log('auth.session-prime:', { outcome: 'cookie-installed' });
   } catch (_) {
@@ -1877,7 +1878,7 @@ function promptInstall(autoUpdater, version) {
       + 'Replacing the installed files can take several minutes — the last upgrade took about eight. '
       + 'You will not be asked anything: no licence page, no install location, no component list. '
       + 'MYTHOS reopens by itself when the progress bar finishes.\n\n'
-      + 'Your vault, keys and PIN are untouched by an update.';
+      + 'Your vault and keys are untouched by an update.';
     // Only trust updateReleaseNotes when its version matches the one this
     // dialog is about — otherwise notes captured for a superseded update could
     // show up attached to the wrong version's install prompt.
@@ -2393,9 +2394,8 @@ if (!gotLock) {
 // ---- Push-to-talk hotkey ------------------------------------------------------
 // Talk to MYTHOS without finding its window: the accelerator toggles the same
 // voice path as clicking the orb or saying the wake word (app.js toggleVoice(),
-// which owns transport choice AND the PIN-gate check — the hotkey deliberately
-// goes through it rather than touching the mic directly, so a locked HUD cannot
-// be made to listen by a keypress).
+// which owns transport choice and mic exclusivity — the hotkey deliberately
+// goes through it rather than touching the mic directly).
 //
 // Deliberately does NOT steal focus or raise the window. The point of a global
 // hotkey is talking while working in another app; yanking focus would defeat it,
@@ -2514,8 +2514,8 @@ function registerOcrGrabHotkey() {
         // Grep these three lines in order after one press. Missing 1 means the
         // accelerator never registered or another app holds it; 1-without-2 is
         // the fork IPC channel; 2 with empty text is GDI capture or WinRT OCR;
-        // 2-without-3 is the broadcast wiring; 3 reporting the gate closed means
-        // the PIN lock ate it; 3 rendering fine means this is not a pipeline bug
+        // 2-without-3 is the broadcast wiring; 3 rendering fine means this is not a
+        // pipeline bug
         // and the gap is the operator's expectation, which is a scoping question
         // rather than a defect.
         //

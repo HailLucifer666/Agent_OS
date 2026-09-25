@@ -10,6 +10,8 @@
 // Vectors from different providers are NEVER comparable — every result
 // carries {provider, dim} and vector-index.js partitions by provider.
 
+const routePolicy = require('../src/core/brain/route-policy');
+
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 const MISTRAL_URL = process.env.MISTRAL_API_URL || 'https://api.mistral.ai/v1';
@@ -71,7 +73,7 @@ async function embedMistral(text) {
 async function embedGoogle(text) {
   const key = process.env.GOOGLE_API_KEY;
   if (!key) throw new Error('google embeddings: GOOGLE_API_KEY is not set');
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GOOGLE_EMBED_MODEL}:embedContent?key=${key}`, {
+  const res = await fetch(`${GOOGLE_EMBED_BASE}/${GOOGLE_EMBED_MODEL}:embedContent?key=${key}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -93,11 +95,28 @@ async function embedGoogle(text) {
 // memory and text lanes, so a burst of memory writes must not be what exhausts
 // the quota the operator hears. It is the rung that keeps recall alive when the
 // two ahead of it are gone, not the one that carries normal traffic.
+// `route` is what MODEL_BILLING_POLICY judges (Wave 0c, brain/route-policy.js):
+// the model and the host each rung will actually call, after env overrides.
+const GOOGLE_EMBED_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const CHAIN = [
-  { name: 'ollama', fn: embedOllama },
-  { name: 'mistral', fn: embedMistral },
-  { name: 'google', fn: embedGoogle },
+  { name: 'ollama', fn: embedOllama, route: { provider: 'ollama', model: OLLAMA_EMBED_MODEL, endpoint: OLLAMA_URL, mode: 'embed' } },
+  { name: 'mistral', fn: embedMistral, route: { provider: 'mistral', model: MISTRAL_EMBED_MODEL, endpoint: MISTRAL_URL, mode: 'embed' } },
+  { name: 'google', fn: embedGoogle, route: { provider: 'google', model: GOOGLE_EMBED_MODEL, endpoint: GOOGLE_EMBED_BASE, mode: 'embed' } },
 ];
+
+// A refused rung is skipped like a cooling one, but said once — this function
+// never throws and has no other channel, and a rung that silently stops being
+// tried is how the chain went one-deep unnoticed on 2026-09-11 (above).
+const refusalsReported = new Set();
+function refusedByPolicy(entry) {
+  const d = routePolicy.decide(entry.route);
+  if (d.allowed) return false;
+  if (!refusalsReported.has(d.reason)) {
+    refusalsReported.add(d.reason);
+    try { console.warn('[embeddings] ' + d.reason); } catch (_) {}
+  }
+  return true;
+}
 
 // embed(text) -> { provider, dim, vec: Float32Array } | null. Never throws.
 async function embed(text) {
@@ -106,6 +125,7 @@ async function embed(text) {
   const now = Date.now();
   for (const entry of CHAIN) {
     if (now < cooldownUntil[entry.name]) continue;
+    if (refusedByPolicy(entry)) continue;
     try {
       return await entry.fn(t.slice(0, 4000));
     } catch {
@@ -122,4 +142,4 @@ async function getStatus() {
     : { available: false, provider: null, dim: 0 };
 }
 
-module.exports = { embed, getStatus, _internal: { embedOllama, embedMistral, embedGoogle, cooldownUntil } };
+module.exports = { embed, getStatus, _internal: { embedOllama, embedMistral, embedGoogle, cooldownUntil, CHAIN } };

@@ -32,6 +32,10 @@
 //     -> (4) red: three notices arrive as one burst a turn later.
 //   remove the ceiling timer
 //     -> (5) red: a turn that never completes silences a correction forever.
+//   [2026-09-23: the ceiling itself is gone — BUG-432's measured pass found it
+//   FORCED 4 held notices into live turns. (5) is re-pointed to the idle tick
+//   that replaced it: it releases only when nothing is in flight. The current
+//   rules and their probes are in test/bug-432-outcome-outbox.test.js.]
 //   cancel() draining on a NON-final close too
 //     -> (7) red: a rotation would lose the notices it is supposed to carry.
 //
@@ -39,7 +43,10 @@
 // order, never one merged paragraph: merging means deciding which of six honest
 // statements to drop or how to fuse them, and getting that wrong turns a true
 // report into a summary — the failure the whole turn-audit family exists to
-// prevent. Ordering is the half that was measured. Also not wired: routing a
+// prevent. Ordering is the half that was measured. [2026-09-23: the next
+// sentences are superseded — a held ANSWER is now handed back to the server on a
+// final close (createUndeliveredHandler); corrections and notices still are not.]
+// Also not wired: routing a
 // drained notice to the adapter's speakWhenClosed fallback. It needs a new
 // dependency threaded through server/index.js, which is at its own ratchet
 // ceiling, so a notice held when the session finally closes is logged
@@ -50,7 +57,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { createLiveSession } = require('../src/core/voice/live-session');
-const { createNoticeQueue, createNoticeQueueFromEnv, DEFAULT_HOLD_MAX_MS } = require('../src/core/voice/notice-queue');
+const { createNoticeQueue, createNoticeQueueFromEnv, NOTICE_MAX_AGE_MS } = require('../src/core/voice/notice-queue');
 
 // ---- the pure queue, with hand-driven timers -----------------------------
 
@@ -117,13 +124,22 @@ describe('BUG-432 — system notices take turns instead of interrupting each oth
     assert.equal(queue.release(), false, 'an empty queue releases nothing and says so');
   });
 
-  test('(5) the ceiling releases a notice a turn that never completes would bury', () => {
-    const { queue, sent, expire, armed } = queueRig({ inFlight: () => true, holdMaxMs: 15000 });
-    queue.offer('correction', { site: 'turn-audit' });
-    assert.ok(armed(), 'holding arms the ceiling');
+  // RE-POINTED 2026-09-23. This test used to pin a 15 s ceiling that released a
+  // held notice whether or not the model was speaking. The measured pass showed
+  // that ceiling forcing 4 notices into live turns, each cutting a reply off, so
+  // it was removed; the timer that remains is an idle tick that never sends into
+  // a turn in flight.
+  test('(5) a turn that never completes: the held correction is never FORCED in, and goes once nothing is in flight', () => {
+    let speaking = true;
+    const { queue, sent, expire, armed } = queueRig({ inFlight: () => speaking });
+    queue.offer('correction', { site: 'ad4-correction-retract' });
+    assert.ok(armed(), 'holding arms the idle tick');
     expire();
-    assert.deepEqual(sent.map((s) => s.text), ['correction']);
-    assert.equal(DEFAULT_HOLD_MAX_MS, 15000, 'the documented default and the code agree');
+    assert.deepEqual(sent, [], 'the model is still speaking, so nothing is sent into its turn');
+    speaking = false;
+    expire();
+    assert.deepEqual(sent.map((s) => s.text), ['correction'], 'the turn ended without a turnComplete reaching us; the tick still delivers');
+    assert.equal(NOTICE_MAX_AGE_MS, 60000, 'the documented notice age and the code agree');
   });
 
   test('(6) the ceiling is disarmed when the queue empties, and not left to fire on nothing', () => {

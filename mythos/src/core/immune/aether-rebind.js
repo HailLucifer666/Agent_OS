@@ -31,9 +31,9 @@
 // `no-match`, not a retry.
 //
 // So the cap is a GUARD, not a fix for an observed loop, and it is worth having
-// because the healer's own design assumes anomalies repeat: immune/announcer.js
-// records that probes re-emit health.anomaly every 4s and that "healer.js's
-// cooldown is the dedup". This playbook declares no verifyMs, so it never
+// because the healer's own design assumes anomalies repeat: probes re-emit
+// health.anomaly every 4s and healer.js's cooldown is the dedup (recorded in the
+// immune announcer before BUG-447 deleted it, 2026-09-23). This playbook declares no verifyMs, so it never
 // creates a pendingVerifications entry, never trips the recurrence detector and
 // can never emit heal-failed — meaning if any future source did start repeating
 // this kind, it would retry every 15 seconds forever with nothing recording that

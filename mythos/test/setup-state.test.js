@@ -28,11 +28,11 @@ const SRC = fs.readFileSync(
 );
 const factory = new Function(`${SRC.replace(/^export /gm, '')}
   return { deriveSetupNeed, planGapActions, extractKeyNames, validateKeyValue, interpretStoreResult,
-           shouldRetryProbe, retryDelayMs, chooseSetupScreen, validatePinPair, interpretPinSetResult,
+           shouldRetryProbe, retryDelayMs, chooseSetupScreen,
            buildProviderCatalog, wizardCanFinish };`);
 const {
   deriveSetupNeed, planGapActions, extractKeyNames, validateKeyValue, interpretStoreResult,
-  shouldRetryProbe, retryDelayMs, chooseSetupScreen, validatePinPair, interpretPinSetResult,
+  shouldRetryProbe, retryDelayMs, chooseSetupScreen,
   buildProviderCatalog, wizardCanFinish,
 } = factory();
 
@@ -237,16 +237,18 @@ describe('chooseSetupScreen', () => {
   const need = { show: true };
 
   it('opens the wizard when nothing has ever been configured here', () => {
-    assert.equal(chooseSetupScreen({ need, keyStoreNames: [], pinConfigured: false }), 'wizard');
+    assert.equal(chooseSetupScreen({ need, keyStoreNames: [] }), 'wizard');
   });
 
   it('keeps the gap list for a configured machine that has drifted', () => {
-    assert.equal(chooseSetupScreen({ need, keyStoreNames: ['GROQ_API_KEY'], pinConfigured: false }), 'gaps');
-    assert.equal(chooseSetupScreen({ need, keyStoreNames: [], pinConfigured: true }), 'gaps');
+    assert.equal(chooseSetupScreen({ need, keyStoreNames: ['GROQ_API_KEY'] }), 'gaps');
+    // A set PIN used to count as "configured" too. The PIN was removed on
+    // 2026-09-23, so a stale caller passing the old field changes nothing.
+    assert.equal(chooseSetupScreen({ need, keyStoreNames: [], pinConfigured: true }), 'wizard');
   });
 
   it('paints nothing when there is no required gap to report', () => {
-    assert.equal(chooseSetupScreen({ need: { show: false }, keyStoreNames: [], pinConfigured: false }), 'none');
+    assert.equal(chooseSetupScreen({ need: { show: false }, keyStoreNames: [] }), 'none');
   });
 });
 
@@ -267,41 +269,6 @@ describe('extractKeyNames', () => {
   });
 });
 
-describe('validatePinPair', () => {
-  it('mirrors pin-lock.js (4–12 digits) so a bad PIN costs no round-trip', () => {
-    assert.equal(validatePinPair('1234', '1234').ok, true);
-    assert.equal(validatePinPair('123', '123').ok, false);
-    assert.equal(validatePinPair('1234567890123', '1234567890123').ok, false);
-    assert.equal(validatePinPair('12ab', '12ab').ok, false);
-  });
-
-  it('names the field to focus, and never echoes the PIN in the error', () => {
-    const mismatch = validatePinPair('1234', '5678');
-    assert.equal(mismatch.ok, false);
-    assert.equal(mismatch.field, 'confirm');
-    assert.doesNotMatch(mismatch.error, /1234|5678/);
-  });
-});
-
-describe('interpretPinSetResult', () => {
-  it('confirms only on the server saying ok', () => {
-    assert.equal(interpretPinSetResult({ status: 200 }, { ok: true }).ok, true);
-    assert.equal(interpretPinSetResult({ status: 200 }, {}).ok, false,
-      'a 200 without ok:true is not a confirmation');
-  });
-
-  it('passes the server refusal through instead of rewording it', () => {
-    const res = interpretPinSetResult({ status: 400 }, { error: 'Incorrect PIN.' });
-    assert.equal(res.ok, false);
-    assert.match(res.message, /Incorrect PIN/);
-  });
-
-  it('reports lockout, an unwired deployment, and a dead server distinctly', () => {
-    assert.match(interpretPinSetResult({ status: 429 }, { error: 'locked for 42s' }).message, /42s/);
-    assert.match(interpretPinSetResult({ status: 404 }, {}).message, /no PIN lock/i);
-    assert.match(interpretPinSetResult(null, null).message, /did not answer/i);
-  });
-});
 
 describe('buildProviderCatalog', () => {
   const body = {

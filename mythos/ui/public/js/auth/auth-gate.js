@@ -28,11 +28,9 @@ import { trapFocus } from '../a11y/focus-trap.js';
 import { deriveAuthGate, interpretExchangeResponse, validateTokenInput } from './auth-gate-state.js';
 import { advanceRecoveryGeneration, clearUnauthorized, onUnauthorized, setTokenRequired } from './auth-state.js';
 
-// The PIN overlay lives in its own root at a lower z-index. If both were ever
-// live at once they would fight for focus, so the token gate — which must be
-// satisfied first, since the PIN check itself needs an authenticated /api —
-// makes that root inert while it is up.
-const INERT_SELECTOR = '#hud-canvas, #core-orb, #hud-a11y-root, #widget-root, #overlay-root, #confirm-root, #compose-bar, #camera-preview, #pin-root';
+// Everything the operator could otherwise reach behind the token prompt is made
+// inert while it is up. (#pin-root left this list on 2026-09-23 with the PIN.)
+const INERT_SELECTOR = '#hud-canvas, #core-orb, #hud-a11y-root, #widget-root, #overlay-root, #confirm-root, #compose-bar, #camera-preview';
 
 let openCurrentGate = null;
 
@@ -163,8 +161,7 @@ export function mountAuthGate(root, opts) {
         reloadImpl();
         return;
       }
-      // Server text verbatim: 'Incorrect token.', the real 429 line, or the
-      // 409 explaining that a combined PIN+token deployment needs the header.
+      // Server text verbatim: 'Incorrect token.' or the real 429 line.
       message.textContent = state.message;
       input.focus();
     }

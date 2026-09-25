@@ -14,7 +14,6 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const { createLimiter } = require('./rate-limit');
 const { createTtsChain } = require('../providers/tts');
-const { unauthorizedHint } = require('./auth-hint');
 const { mountTtsVoiceRoutes } = require('./routes/tts-voices');
 const { recordLiveVoiceSwitch, popPreviousLiveVoice } = require('../src/core/config/voice-choice');
 const sttChain = require('../providers/stt');
@@ -22,7 +21,8 @@ const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = r
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
-const { buildBriefingFacts, GREETING_FACT_DISCIPLINE } = require('../src/core/conversation/briefing');
+const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause, startupInstructionsClause } = require('../src/core/conversation/briefing');
+const { isStartupOnlyFact, startupOnlyFacts } = require('../src/core/memory/startup-facts'); // BUG-463
 const { TOOL_RESPONSE_DISCIPLINE } = require('../src/core/voice/narration-claims');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
@@ -34,6 +34,7 @@ const { _PATTERNS: LOG_SECRET_PATTERNS } = require('../src/core/effectors/creden
 // S2S (V2 §6-§10, merged-order step 4, Phase 5 wiring): Gemini Live transport,
 // hub->functionDeclarations conversion, and the tool-adapter safety seam.
 const { createLiveSession } = require('../src/core/voice/live-session');
+const unheardAnswer = require('../src/core/voice/unheard-answer'); // BUG-447
 // Installer parity (2026-08-11): do not DECLARE a tool whose adapter or
 // credentials do not exist on this machine — the fresh install fired
 // gmail_unread/media_status/spotify_status against neither. See tool-capability.js.
@@ -64,10 +65,9 @@ const androidChildAdapter = require('../adapters/android-child');
 const version = require('../src/core/identity/version');
 const { getUpdateReport } = require('../src/core/identity/update-report');
 const { isProviderDown } = require('../src/core/immune/probes');
-const { createPinSessionStore } = require('../src/core/security/pin-session');
-// BUG-442: one owner for both cookie names, the channel rules and the policy.
+// BUG-442/BUG-444: one owner for the cookie names, the channel rules and the policy.
 const credentials = require('./credentials');
-const { pinCookieOptions } = require('./routes/pin');
+const { createAuthSessionStore } = require('./auth-sessions');
 
 // WS v2 message types — exact strings, do not paraphrase:
 // IN (reqId):  'utterance', 'command', 'confirm-reply', 'subscribe', 'stop', 'vision-query'
@@ -220,7 +220,6 @@ function createServer(deps) {
   const getCapabilityDigest = deps.getCapabilityDigest; // B2 — pre-context live capability digest (may be undefined in tests)
   const stopBrowserOfflineNotice = browserAgentAdapter.onOffline(p => { if (config.LIVE_VOICE_HONESTY_ENABLED !== false) bus.emit('health.anomaly', { kind: 'browser-automation-offline', reason: p.reason, target: 'browser automation' }); });
   const identity = deps.identity;                      // S2S (Phase 5) — identity.persona() for buildLiveSystemInstruction (may be undefined in tests)
-  const pinLock = deps.pinLock;                        // §7.3 — local PIN lock (may be undefined in tests)
   // Voice Nodes — the per-phone Aether scanner-proxy (src/core/aether/
   // scanner-proxy.js), undefined unless AETHER_PROXY_ENABLED. The server's only
   // job here is transport: a phone's inbound 'node-reading' becomes an
@@ -314,7 +313,8 @@ function createServer(deps) {
       if (config.LIVE_MEMORY_INJECT !== false) {
         const semantic = memory && memory.semantic;
         const factsTopic = (semantic && typeof semantic.topic === 'function') ? semantic.topic('user-facts') : null;
-        const facts = factsTopic && Array.isArray(factsTopic.facts) ? factsTopic.facts : [];
+        // BUG-463: a note saved for startup ("Upon boot, ...") goes to the boot greeting only; this frame is rebuilt on every open and rotation.
+        const facts = (factsTopic && Array.isArray(factsTopic.facts) ? factsTopic.facts : []).filter((f) => !isStartupOnlyFact(f));
         if (facts.length) {
           const header = 'OPERATOR FACTS (as of session-start — durable memory, may have changed since; ' +
             'use recall_memory for anything not here):';
@@ -646,87 +646,23 @@ function createServer(deps) {
     }
   }
 
-  // Track B1 — the PIN-unlock session store. Always constructed (cheap: one
-  // closure, no I/O) so tokenOk() below has a stable thing to ask; whether it
-  // can ever actually gate a request depends on pinSessionRequired() below,
-  // which stays false (see it) unless the operator has both opted in via
-  // PIN_SESSION_ENFORCE AND configured a real PIN.
-  const pinSession = createPinSessionStore({ ttlMs: config.PIN_SESSION_TTL_MS });
-
-  // True only once there is something real to enforce: the operator opted
-  // in AND a PIN actually exists. Guards against two failure modes: (1) the
-  // flag flipped on with no PIN yet would otherwise lock the operator out of
-  // their own fresh install with no way to unlock; (2) a deployment with no
-  // pinLock wired at all (tests, or a build that never constructs one) must
-  // not change behavior just because the flag happens to be set.
-  function pinSessionRequired() {
-    return !!config.PIN_SESSION_ENFORCE && !!pinLock && typeof pinLock.isConfigured === 'function' && pinLock.isConfigured();
-  }
+  // One credential (2026-09-23: the PIN was removed on the operator's decision,
+  // and BUG-444 replaced the raw-token cookie with a session id). The policy,
+  // cookie names and 401 sentence live in server/credentials.js; sessions in
+  // server/auth-sessions.js. With no token configured every request passes —
+  // which is only ever a loopback bind (guard above), so the cross-origin and
+  // Host guards below are what stop a web page from driving the API.
+  const authSessions = createAuthSessionStore({
+    authToken: AUTH_TOKEN,
+    file: deps.authSessionsFile,
+    ttlMs: config.AUTH_SESSION_COOKIE_TTL_MS,
+    logger,
+  });
 
   // Timing-safe compare — the one place in this file where timing matters.
-  // No token configured => loopback-only mode, every request passes (total
-  // back-compat: the default config exercises none of the branches below).
-  //
-  // Track B1 extends this rather than adding a fourth parallel auth
-  // mechanism: a valid PIN-session token (issued by POST /api/pin/verify,
-  // see routes/pin.js) travels through the EXACT SAME extractToken() chain
-  // as the bearer token below (Authorization header -> ?token= -> the
-  // mythos_token cookie) and is accepted here as an alternative credential
-  // WHEN ONLY ONE of the two layers is actually active for this deployment.
-  //
-  // H1 FIX (security audit, 2026-08-08): when BOTH layers are actually active
-  // — MYTHOS_AUTH_TOKEN is set AND pinSessionRequired() is true — neither
-  // credential alone is accepted any more. Presenting the bearer token used
-  // to short-circuit tokenOk() before pinSessionRequired() was ever
-  // consulted, so an operator who explicitly turned PIN_SESSION_ENFORCE on
-  // got zero benefit from it as long as MYTHOS_AUTH_TOKEN was also set — the
-  // exact "one subsuming the other" the old comment here disclaimed while
-  // the code below it did precisely that.
-  //
-  // The fix cannot mean "one presented string satisfies both" — a single
-  // merged extractor resolves to one credential per request. The two layers are
-  // therefore pinned to DISTINCT channels, and since BUG-442 (2026-09-18) those
-  // channels are distinct COOKIES rather than a header/cookie split:
-  //   - the bearer secret arrives via Authorization header, ?token= query, or
-  //     the `mythos_token` cookie;
-  //   - the PIN session arrives via its own `mythos_pin` cookie, and on a
-  //     deployment with no bearer configured also via header/query.
-  // Both names and both channel rules live in server/credentials.js.
-  //
-  // THE ORIGINAL SPLIT WAS FORCED BY A NAMING COLLISION, AND THAT COLLISION WAS
-  // ITSELF THE BUG. routes/pin.js's session cookie and the back-compat
-  // bearer-via-cookie path shared the literal name `mythos_token`, so the
-  // combined case had to bar the bearer from the cookie channel to avoid one
-  // credential overwriting the other. Giving the PIN its own name removes the
-  // collision at the root instead of routing around it — which also let the
-  // combined-mode 409 in routes/auth.js go, since a browser on a combined
-  // deployment can now hold both cookies at once. Historical note, kept because
-  // the reasoning still applies to any future second credential:
-  // a browser can send both a query/header bearer token AND its session
-  // cookie on the same request (including a WS upgrade, which sends normal
-  // headers/cookies even though it can't be scripted to set arbitrary ones
-  // after the fact), so this is satisfiable by a real client, not just in
-  // theory.
-  //
-  // Four combinations, stated explicitly:
-  //   token unset,  PIN not required -> open (no credential needed) — unchanged.
-  //   token unset,  PIN required     -> valid PIN session (any channel) — unchanged.
-  //   token set,    PIN not required -> valid bearer token (any channel) — unchanged.
-  //   token set,    PIN required     -> valid bearer (header/query) AND
-  //                                      valid PIN session (cookie) — THE FIX.
-  // Never "PIN session alone" when a token is configured: that would let
-  // anyone who can reach POST /api/pin/verify (deliberately unauthenticated,
-  // for lockout-avoidance — see routes/pin.js) obtain full access without
-  // ever knowing MYTHOS_AUTH_TOKEN, making the PIN's 5-attempt lockout the
-  // entire remaining attack surface on a network-exposed instance. That would
-  // be worse than the bug being fixed, not a fix.
-  //
-  // MYTHOS_AUTH_TOKEN and ONLY MYTHOS_AUTH_TOKEN — no PIN-session alternative,
-  // no "unset means open" back-compat. Used by the AETHER_NODE_TRUST branch of
-  // verifyClient, where both of those leniencies would be wrong (see there).
-  // Everything else keeps using tokenOk(). Untouched by the H1 fix: it never
-  // consulted pinSessionRequired() and still doesn't — voice nodes have no PIN
-  // concept.
+  // MYTHOS_AUTH_TOKEN and ONLY it: the AETHER node-trust branch of verifyClient
+  // uses this directly, because a browser session proves nothing about being an
+  // enrolled device on the LAN.
   function authTokenMatches(presented) {
     if (!AUTH_TOKEN) return false;
     const a = Buffer.from(String(presented || ''));
@@ -734,51 +670,35 @@ function createServer(deps) {
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   }
 
-  // BUG-442 (2026-09-18): the four extractors and the policy moved to
-  // server/credentials.js, which owns both cookie names so they cannot silently
-  // become one again. Every path here uses isValidNoSlide() — asking whether a
-  // session is valid must not be what keeps it alive. requireToken() is the
-  // ONLY renewer, and re-issues the cookie from the same expiry it slides.
   function credentialCheck(req) {
-    return credentials.evaluate(req, {
-      authToken: AUTH_TOKEN,
-      authTokenMatches,
-      pinRequired: pinSessionRequired(),
-      pinValid: (presented) => pinSession.isValidNoSlide(presented),
-    });
+    return credentials.evaluate(req, { authToken: AUTH_TOKEN, authTokenMatches, sessionValid: authSessions.isValid });
   }
 
   function tokenOk(req) {
     return credentialCheck(req).ok;
   }
 
-  // Kept as a named export of this closure because verifyClient's node-trust
-  // branch wants the bearer specifically, not "whatever credential arrived".
+  // The bearer specifically (header or query) — verifyClient's node-trust branch.
   function extractToken(req) {
     return credentials.extractBearer(req);
   }
 
   function requireToken(req, res, next) {
     const verdict = credentialCheck(req);
-    if (!verdict.ok) {
-      // BUG-400 gave this a human hint; BUG-442 adds the machine-readable half.
-      // The client has to choose between relocking the PIN screen and opening
-      // the token prompt, and it was previously guessing from the URL alone.
-      const hint = unauthorizedHint({ hasToken: !!AUTH_TOKEN, pinRequired: pinSessionRequired() });
-      return res.status(401).json({ error: hint, missing: verdict.missing });
-    }
-    // Authorized, and a PIN session carried part of that authorization: slide
-    // the server window and re-issue the browser's cookie from the SAME expiry.
-    // Two clocks derived from one number cannot drift apart, which is the whole
-    // of BUG-442's live symptom.
-    if (pinSessionRequired() && verdict.pinPresented) {
-      const renewed = pinSession.renew();
-      if (renewed) {
-        // no-store is load-bearing: the PIN credential now rides ordinary GET
-        // /api responses that carry no freshness headers, and a caching proxy
-        // would serve one client's session cookie to another (review 2026-09-18).
-        res.setHeader('Cache-Control', 'no-store');
-        res.cookie(credentials.PIN_COOKIE, verdict.pinPresented, pinCookieOptions(req, renewed.maxAgeMs));
+    if (!verdict.ok) return res.status(401).json({ error: credentials.UNAUTHORIZED_HINT, missing: verdict.missing });
+    next();
+  }
+
+  // A cookie that was once a credential — the raw token (BUG-444) or the removed
+  // PIN session — is cleared on sight and never read. Logged by NAME, once per
+  // name per process; the value never reaches a log line.
+  const legacyCookiesLogged = new Set();
+  function clearLegacyCookies(req, res, next) {
+    for (const name of credentials.legacyCookiesPresent(req)) {
+      res.clearCookie(name, { path: '/' });
+      if (!legacyCookiesLogged.has(name)) {
+        legacyCookiesLogged.add(name);
+        logger.warn('auth.legacy-cookie-rejected', { cookie: name });
       }
     }
     next();
@@ -930,6 +850,11 @@ function createServer(deps) {
     } catch (_) { /* best-effort — never block a REST response on audit */ }
   }
 
+  // Refuse a request another website made (boot-guards.js explains why the PIN
+  // removal made this load-bearing), before CORS headers or any handler. The same
+  // instance guards /vault/builds below (security review 2026-09-23).
+  const crossOriginGuard = require('../src/core/server/boot-guards.js').createCrossOriginGuard({ allowedOrigins: ALLOWED_ORIGINS, logger });
+  app.use('/api', crossOriginGuard);
   app.use('/api', (req, res, next) => {
     const origin = req.headers.origin;
     if (origin && ALLOWED_ORIGINS.has(origin)) {
@@ -955,32 +880,20 @@ function createServer(deps) {
   // OPEN and unauthenticated: a remote browser must be able to load the app
   // before it can enter a token, and no secret lives in those assets (AD-8).
   //
-  // Track B1 exemption: /api/pin/status and /api/pin/verify must stay
-  // reachable with NO session, or PIN_SESSION_ENFORCE creates a lockout with
-  // no way in — the lock screen can't even check whether a PIN is configured,
-  // and the operator can't submit the PIN that would unlock everything else.
-  // This is the standard "login endpoint stays public" shape, deliberately
-  // narrow: /api/pin/set (changing an existing PIN) is NOT exempted, so once
-  // a PIN is configured, changing it requires an already-unlocked session on
-  // top of pin-lock.js's own currentPin proof. Both routes still pass
-  // through globalLimit above (rate-limited) and pinLock's own 5-attempt/60s
-  // lockout (src/core/security/pin-lock.js) unchanged.
-  // NOTE: req.path inside an app.use('/api', ...) handler is already
-  // relative to that mount point (e.g. '/pin/verify', not '/api/pin/verify')
-  // — matched against the full path here would silently never hit and this
-  // exemption would do nothing.
-  //
-  // /auth/session joins them for the same reason, one layer up: it is the
-  // login endpoint for the bearer token itself (routes/auth.js). Gating the
-  // route that hands out the credential behind that credential would be a
-  // closed loop — the browser tab that has nothing yet could never get
-  // anything. It presents the secret in its own body and rate-limits itself.
-  const PIN_UNLOCK_EXEMPT_PATHS = new Set(['/pin/status', '/pin/verify', '/auth/session']);
+  // /auth/session is the one exempt path: it is the login endpoint for the
+  // token itself (routes/auth.js), so gating it behind that token would be a
+  // closed loop. It presents the secret in its own body and rate-limits itself.
+  // NOTE: req.path inside app.use('/api', ...) is relative to the mount point
+  // ('/auth/session', not '/api/auth/session').
+  const AUTH_EXEMPT_PATHS = new Set(['/auth/session']);
+  app.use('/api', clearLegacyCookies);
   app.use('/api', (req, res, next) => {
-    if (PIN_UNLOCK_EXEMPT_PATHS.has(req.path)) return next();
+    if (AUTH_EXEMPT_PATHS.has(req.path)) return next();
     return requireToken(req, res, next);
   });
-  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken, pinSessionRequired, pinSessionValid: (r) => pinSession.isValidNoSlide(credentials.extractPin(r, { allowHeaderQuery: !AUTH_TOKEN })) })); // BUG-317: a signed artifact link substitutes for the bearer token, never for the PIN session. BUG-442: reads the PIN's own cookie. NOTE (security review 2026-09-18): the no-slide applies to the SIGNED-LINK branch only — an unsigned request falls through to requireToken(), which renews like any other, so an <img src="/vault/builds/…"> from a same-site page does slide the session. Stated rather than claimed otherwise; narrowing it belongs with the open question of whether a background request should count as presence at all
+  // BUG-317: a signed artifact link substitutes for the bearer token.
+  app.use('/vault/builds', crossOriginGuard);
+  app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken }));
 
   // ---- static asset delivery: compression + caching -----------------------
   //
@@ -1293,23 +1206,15 @@ function createServer(deps) {
   // ---- /api/memory + /api/audit/recent (W9: extracted to routes/memory.js) ----
   require('./routes/memory').mountMemoryRoutes(app, { memory });
 
-  // ---- /api/pin — §7.3 local PIN lock (separate from Task 6's token gate
-  // both of these routes already sit behind). pinSession (Track B1) lets a
-  // successful /api/pin/verify issue the real session tokenOk() above
-  // checks, so the PIN screen becomes actual access control instead of a
-  // visual deterrent. ----
-  require('./routes/pin').mountPinRoutes(app, { pinLock, pinSession });
-
-  // ---- /api/auth/session — exchange MYTHOS_AUTH_TOKEN for the mythos_token
-  // cookie server/credentials.js already reads. Without this the HUD
-  // (a plain browser tab, which cannot set an Authorization header on its own
-  // navigation and cannot set headers on a WebSocket upgrade at all) had no
-  // way to authenticate on a token-configured deployment. See routes/auth.js. ----
+  // ---- /api/auth/session + /api/auth/logout — sign a browser in with the
+  // token and out again (BUG-444: the cookie is a session id, never the token).
+  // Logout closes that session's sockets, tagged in the 'connection' handler. ----
   require('./routes/auth').mountAuthRoutes(app, {
     authToken: AUTH_TOKEN,
     authTokenMatches,
-    pinSessionRequired,
-    cookieTtlMs: config.AUTH_SESSION_COOKIE_TTL_MS,
+    sessions: authSessions,
+    onSessionRevoked: (hash) => closeSocketsForSession(hash),
+    logger,
   });
 
   // ---- /api/setup/status — what this machine is still missing ----
@@ -1414,7 +1319,9 @@ function createServer(deps) {
   // AbortController, so barge-in is unaffected, and no provider holds per-chain
   // state that would need tearing down (kokoro's model cache is a module-level
   // singleton, the rest are stateless HTTP wrappers).
-  let ttsChainRef = deps.ttsChain || createTtsChain({ config, logger });
+  // BUG-450: the SHARED circuit registry, so the voice-picker rebuild below
+  // (routes/tts-voices.js) inherits what is parked instead of paying for it again.
+  let ttsChainRef = deps.ttsChain || createTtsChain({ config, logger, circuits: require('../providers/tts-circuit').sharedCircuits });
   function currentTts() { return ttsChainRef; }
   function setTtsChain(next) {
     if (!next) return;
@@ -1661,10 +1568,10 @@ function createServer(deps) {
         return callback(false, 403, 'Forbidden');
       }
       // ...and the credential really is MYTHOS_AUTH_TOKEN and nothing else.
-      // tokenOk() below would also accept a live PIN-session token, which exists
-      // to gate LOCAL PHYSICAL PRESENCE (pin-session.js) — a different claim
-      // entirely from "I am an enrolled device on this LAN". Accepting it here
-      // would mean a PIN session leaked from the HUD (XSS, or a capture on the
+      // tokenOk() below would also accept a browser session cookie (BUG-444),
+      // which proves a browser once signed in — a different claim entirely from
+      // "I am an enrolled device on this LAN". Accepting it here would mean a
+      // session leaked from the HUD (XSS, or a capture on the
       // deliberately-unencrypted LAN of PROTOCOL.md §11.4) authenticates a
       // remote socket, which is exactly the widening this branch is supposed not
       // to be. So the node path checks the shared secret directly.
@@ -1695,6 +1602,11 @@ function createServer(deps) {
   // closes the socket with code 1009, which is loud, not silent.
   const WS_MAX_PAYLOAD = Number(process.env.WS_MAX_PAYLOAD_BYTES) || 16 * 1024 * 1024;
   const wss = new WebSocketServer({ server: httpServer, path: '/ws', verifyClient, maxPayload: WS_MAX_PAYLOAD });
+
+  // BUG-444: logout closes the sockets its session opened (tagged on connection).
+  function closeSocketsForSession(hash) {
+    wss.clients.forEach((client) => { if (hash && client._mythosAuthSession === hash) client.close(4401, "signed out"); });
+  }
 
   function broadcastAll(msg) {
     const payload = JSON.stringify(msg);
@@ -1799,6 +1711,7 @@ function createServer(deps) {
   // Live session that raised it, the same way handleConfirmReply already does
   // for an explicit accept/reject on this same connection's closure.
   const liveAdaptersByConnection = new Map();
+  const gateRecordingSink = require('./voice-gate-recording').createGateRecordingSink({ logger }); // BUG-406: writes nothing unless VOICE_GATE_RECORDER=true
   // The Aether aggregator's current election owner, cached from the sensor's
   // perception. Read at speak time rather than passed in, because the sensor
   // starts in a later boot step than the server and the owner changes as the
@@ -2207,8 +2120,11 @@ function createServer(deps) {
         idx++;
       }
       let proactiveSynthesized = 0;
+      // BUG-447: a caller's isCurrent() is re-asked before each chunk and after each
+      // synthesis; a no aborts the rest through the same controller a barge-in uses.
+      const stale = () => { if (!ctrl.signal.aborted && opts?.isCurrent && !opts.isCurrent()) { ctrl.abort(); logger.info('proactive.withdrawn', { reqId, sent: idx }); } return ctrl.signal.aborted; };
       for (let i = 0; i < textChunks.length; i++) {
-        if (ctrl.signal.aborted) break;
+        if (stale()) break;
         let audioB64 = null;
         let chunkMime;
         if (ttsUp) {
@@ -2221,7 +2137,7 @@ function createServer(deps) {
           }
         }
         if (audioB64) proactiveSynthesized++;
-        if (ctrl.signal.aborted) break;
+        if (stale()) break;
         sendSpeechChunk(sendOut, speechTarget, { type: 'speech-chunk', reqId, index: idx, total: totalChunks, audioB64, mime: chunkMime, text: textChunks[i] }, targetWs);
         idx++;
       }
@@ -2280,6 +2196,8 @@ function createServer(deps) {
       // handleConfirmReply and dispatch-action.js's audit write.
       surface: ctx.surface,
       acceptedScope: ctx.acceptedScope,
+      origin: ctx.origin, // BUG-446: a cortex-raised confirm is re-checked at execution
+      consent: ctx.consent, // BUG-464: the operator's consent token, minted server-side (voice/authority-gate.js)
     });
   }
 
@@ -2339,18 +2257,19 @@ function createServer(deps) {
     // critical health speech is untouched, and the anomaly still reaches the HUD,
     // the log and the audit either way — this drops one spoken interruption, not
     // the record of it.
-    if (e.payload.internalDiagnostic) {
-      const ws = lastActiveWs;
-      const live = (ws && typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null;
-      if (live && live.isOpen()) {
-        logger.info('immune-explain.not-spoken-during-live', {
-          kind: e.payload.kind || null,
-          reason: 'a Live conversation is in progress — the anomaly is in the log, the audit and the HUD',
-        });
-        return;
-      }
+    const liveConversationOpen = () => { const ws = lastActiveWs; const live = (ws && typeof ws.getLiveSession === 'function') ? ws.getLiveSession() : null; return !!(live && live.isOpen()); };
+    if (e.payload.internalDiagnostic && liveConversationOpen()) {
+      logger.info('immune-explain.not-spoken-during-live', {
+        kind: e.payload.kind || null,
+        reason: 'a Live conversation is in progress — the anomaly is in the log, the audit and the HUD',
+      });
+      return;
     }
-    proactiveSpeak(e.payload.text).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
+    // BUG-447 (2026-09-25): checked again before every chunk, not only here. On 09-24 a
+    // line requested at 14:49:58, before voice mode opened, played at 14:51:12 over the
+    // operator's turn: the TTS chain took 73 s. isCurrent withdraws what is still unspoken.
+    const opts = e.payload.internalDiagnostic ? { isCurrent: () => !liveConversationOpen() } : undefined;
+    proactiveSpeak(e.payload.text, undefined, opts).catch((err) => logger.warn('proactive.speak-failed', { error: err.message }));
   });
 
   // ---- Boot greeting (JARVIS-style) ----
@@ -2541,8 +2460,10 @@ function createServer(deps) {
               'The correct greeting for right now is exactly "' + salutation + '" — open with it or a natural ' +
               'equivalent for that same time of day, and do not invent, guess, or state a different time of day ' +
               '(do not say "morning" if the salutation says afternoon or evening, and so on). ' +
+              greetingRelationshipClause(previousBootAt) + // BUG-447: a first meeting is not the hundredth
               (config.LIVE_VOICE_HONESTY_ENABLED === false ? '' : GREETING_FACT_DISCIPLINE) + 'Facts you may use:\n- ' +
               facts.join('\n- ') + '\n' +
+              startupInstructionsClause(startupOnlyFacts(memory && memory.semantic)) + // BUG-463: the operator's notes for startup, here only
               'If a "Last time we spoke" fact is present, open by picking up that thread in half a sentence, ' +
               'the way someone resumes a conversation rather than starting one.\n' +
               'Reply with ONLY the spoken greeting: one to three short sentences, plain natural speech, no markdown, no quotes.',
@@ -2814,8 +2735,10 @@ function createServer(deps) {
     }
   }
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
     const connectionId = crypto.randomUUID();
+    const authVerdict = credentialCheck(req);
+    ws._mythosAuthSession = authVerdict.via === 'session' ? authSessions.hashOf(authVerdict.sessionId) : null;
     const subscriptions = new Set(); // which OUT types this client wants relayed
 
     // A2 FIX: prevent unhandled 'error' events from crashing the process.
@@ -2874,6 +2797,8 @@ function createServer(deps) {
     // gate and compatibility with server fixtures that never exercise voice.
     let liveSession = null;
     let liveAdapter = null;
+    // BUG-447: where each Live answer's audio was cut, so "go ahead" can resume what the room did not hear.
+    const unheardTracker = unheardAnswer.createUnheardTracker({ remember: (entry) => unheardAnswer.rememberUnheard(connectionId, entry), forget: () => unheardAnswer.forgetUnheard(connectionId) }); // BUG-447: a heard answer retires an older remainder
     // BUG-433: the HUD registers its onBroadcast('live-audio-out') handler inside
     // s2s-bridge start() (:1031) and only then sends live-open (:1039), so the
     // message is a faithful proxy for "this client can play Live audio" — and
@@ -2938,6 +2863,7 @@ function createServer(deps) {
           // Fix-plan 2.3: the schema key the .env.example doc points at —
           // without this the documented dial silently did nothing.
           toolAckDeadlineMs: config.TOOL_ACK_DEADLINE_MS, config,
+          onToolWait: ({ callId, pending }) => send({ type: 'live-tool-wait', callId, pending: pending === true }), // BUG-456: ids and a boolean only; the HUD plays one soft chime
         });
         liveAdaptersByConnection.set(connectionId, liveAdapter);
       }
@@ -2954,6 +2880,7 @@ function createServer(deps) {
           browserAgentAdapter, cuaDriverAdapter, pcChild, androidChildAdapter,
           conversationToolAllowed: require('./desktop-connection').conversationToolAllowed });
         const outputGeneration = liveOutputGeneration;
+        unheardTracker.reset(); // a new session starts a new audio timeline, as the HUD's does
         liveSession = createLiveSession({
           // liveConfigNow() carries a voice picked in the HUD since boot.
           // live-session.js reads GEMINI_LIVE_VOICE ONCE, at construction
@@ -2963,6 +2890,8 @@ function createServer(deps) {
           // using Live, which is now the default whenever a Google key exists.
           config: liveConfigNow(), bus, logger, spend, breakers: geminiLiveBreakers,
           createSocket: createLiveSocket, // test-only seam; undefined in production
+          // BUG-436: an answer still held when the session FINALLY closes goes into the history and, if it has a spoken form, out over TTS — see createUndeliveredHandler.
+          onNoticeUndelivered: require('../src/core/voice/notice-queue').createUndeliveredHandler({ historyAppend, speak: (text) => proactiveSpeak(text, ws, { skipLive: true }).catch((err) => logger.warn('proactive.speak-failed', { error: err.message })), logger }),
           // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
           // buildSetup() calls it fresh on every open()/reconnect so the local
           // time (and anything else composed here) never goes stale across a
@@ -2975,6 +2904,7 @@ function createServer(deps) {
           onAudioOut: (b64) => {
             if (outputGeneration !== liveOutputGeneration) return;
             send({ type: 'live-audio-out', data: b64, ...(desktop ? { operatorReqId } : {}) });
+            unheardTracker.audio(b64);
             if (liveTurnUserSpeechAt !== null && !liveTurnAudioRecorded) {
               voiceLatencyTracker.record(Date.now() - liveTurnUserSpeechAt);
               liveTurnAudioRecorded = true;
@@ -2988,6 +2918,7 @@ function createServer(deps) {
           onState: (s) => { if (outputGeneration === liveOutputGeneration) send({ type: 'live-state', state: s.state, reason: s.reason }); },
           onTurnComplete: (turn) => {
             if (outputGeneration !== liveOutputGeneration) return;
+            unheardTracker.turnEnd(turn); // before 'live-turn-complete' below: the HUD's report answers it
             operatorLivePending = false;
             liveAdapter.onLiveTurnComplete(turn);
             liveTurnUserSpeechAt = null;
@@ -3668,7 +3599,7 @@ function createServer(deps) {
         // on a T3+ popup), not the voice agent deciding on its own — label it
         // as such instead of the wrapper's default, and correlate it back to
         // the specific confirm popup that was approved.
-        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', traceId: confirmId, surface: surface, acceptedScope: acceptedScope });
+        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', origin: action.origin, traceId: confirmId, surface: surface, acceptedScope: acceptedScope });
         // S2S (Phase 5): feed the real outcome back to the Live session as a
         // realtimeInput text turn, so the model reports what ACTUALLY
         // happened (AD-4) rather than whatever it assumed while waiting. A
@@ -3766,13 +3697,13 @@ function createServer(deps) {
           // (which is what an unlabelled call does) silently exempts the turn from the
           // half-blind-transcript check, i.e. from the one monitor that notices when
           // the operator was not heard.
-          liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
+          if (liveAdapter) liveAdapter.releaseHeldReplies(); liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true }); // BUG-457: release held replies first, or the typed words cancel the call
           send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
         } else {
           const typedText = String(msg.text || '');
           liveForSpeech().then((live) => {
             if (live && live.isOpen()) {
-              live.sendText(typedText, { site: 'operator-typed', operator: true });
+              if (liveAdapter) liveAdapter.releaseHeldReplies(); live.sendText(typedText, { site: 'operator-typed', operator: true }); // BUG-457
               send({ type: 'done', reqId: msg.reqId, say: '', routedToLive: true });
             } else {
               queueTurn(function() { return handleUtterance(msg); });
@@ -3816,6 +3747,9 @@ function createServer(deps) {
       // fire-and-forget, no reply expected. Gives Wave 2's lost-transcript
       // diagnosis a server-side record of every suspend/clear instead of only
       // inferring it after the fact from a blind turn.
+      else if (msg.type === 'voice-unheard') { const entry = unheardTracker.unheard(msg); logger.info('live.unheard-report', { remembered: !!entry, chars: entry ? entry.text.length : 0, turnId: entry ? entry.turnId : null }); } // BUG-447: positions only; the text comes from this server's own transcript
+      else if (msg.type === 'voice-wait-chime') { logger.info('voice.wait-chime', { waitedMs: Number.isFinite(msg.waitedMs) ? Math.round(msg.waitedMs) : null }); } // BUG-456: when the chime played (first SOUND, not first answer); one number, nothing else from the message
+      else if (msg.type === 'voice-gate-recording') { gateRecordingSink.handle(msg).catch(() => {}); } // BUG-406: the mic-gate recorder's windows; the sink itself is off unless VOICE_GATE_RECORDER=true
       else if (msg.type === 'voice-capture-suspend') {
         // BUG-271: the own-voice-release transition also carries the ring/gate
         // diagnostics the client has computed since 36561bd (and framesZeroed
@@ -3849,7 +3783,7 @@ function createServer(deps) {
         // actually sends and fails if any would be dropped. Third occurrence is where
         // patching instances stops and the assertion gets written.
         for (const k of ['ownVoiceGate', 'prerollFrames', 'prerollCap', 'heldMs', 'framesDropped', 'framesZeroed', 'peakRms',
-          'bargeVetoed', 'bargeVetoTier', 'bleedFloor',
+          'bargeVetoed', 'bargeVetoTier', 'bleedFloor', 'playbackWaits', 'playbackStalled', // BUG-455: the watchdog now waits on playback
           // BUG-274: the policy's own veto reason and the level it refused. bargeVetoTier
           // alone names the blocked BACKSTOP tier, which is the same string whichever of
           // the four policy causes fired — and those causes want opposite fixes. The
@@ -3985,7 +3919,7 @@ function createServer(deps) {
         }
       }
       // BUG-433: the client tells us whether it can actually PLAY proactive
-      // speech — socket up, PIN explicitly unlocked, voice config loaded,
+      // speech — socket up, voice config loaded,
       // playback wired. A playback hint, never an authentication claim: the
       // server decides what this socket IS (`isNode` below), the message does
       // not get to say. An old HUD never sends this and is therefore never
@@ -4071,7 +4005,7 @@ function createServer(deps) {
       }
       else if (msg.type === 'live-close') { clientLiveRequested = false; if (liveSession) liveSession.close('client-request'); }
       else if (msg.type === 'live-text') {
-        if (liveSession) liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true });
+        if (liveSession) { if (liveAdapter) liveAdapter.releaseHeldReplies(); liveSession.sendText(String(msg.text || ''), { site: 'operator-typed', operator: true }); } // BUG-457
       }
     });
 
@@ -4088,6 +4022,7 @@ function createServer(deps) {
       desktop?.close().catch(error => logger.warn('desktop.disconnect-failed', { error: error.message }));
       if (liveSession) liveSession.close('ws-closed');
       liveAdaptersByConnection.delete(connectionId);
+      unheardAnswer.forgetUnheard(connectionId);
       // Drop this node's registration — but ONLY if the map still points at THIS
       // socket. A phone that reconnected before its old socket's close event
       // landed has already overwritten the entry, and unconditionally deleting

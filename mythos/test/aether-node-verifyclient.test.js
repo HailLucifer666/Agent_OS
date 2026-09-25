@@ -218,86 +218,62 @@ test('flag ON with a token configured: the correct token connects — this is th
   });
 });
 
-test('a PIN-session token is NOT a node credential — only MYTHOS_AUTH_TOKEN is', async (t) => {
+// REWRITTEN 2026-09-23. This used to prove that a PIN session could not open the
+// node door. The PIN is gone; the credential that could now be mistaken for a
+// node's is a BROWSER SESSION (BUG-444: a random id in the mythos_session
+// cookie, minted by POST /api/auth/session). The property is unchanged: a proof
+// that some browser once signed in is not a proof of being an enrolled device on
+// the LAN, and PROTOCOL.md §11.4 leaves that LAN unencrypted, so a leaked cookie
+// is not a stretch. Only MYTHOS_AUTH_TOKEN, on the header or query channel,
+// opens the node door (credentials.extractBearer never reads a cookie).
+test('a browser session is NOT a node credential — only MYTHOS_AUTH_TOKEN is', async (t) => {
   const ip = await nonLoopbackHost(t);
   if (!ip) return;
-  // Found by the security review of this diff. tokenOk() accepts a live
-  // PIN-session token as well as the bearer token, and it is checked FIRST. A
-  // node branch that simply fell through to tokenOk() would therefore let a
-  // leaked PIN session — a credential that only ever claimed "someone is
-  // physically at this machine" (pin-session.js) — authenticate a socket from
-  // anywhere on the LAN. PROTOCOL.md §11.4 deliberately leaves that LAN
-  // unencrypted, so "leaked" is not a stretch.
   const bus = createBus({ historySize: 50 });
-  const deps = baseDeps(bus, { MYTHOS_BIND: ip, MYTHOS_AUTH_TOKEN: TOKEN, AETHER_NODE_TRUST: true });
-  // A PIN lock that accepts one known PIN, so /api/pin/verify can mint a real
-  // session token from the real store rather than a hand-made string.
-  deps.pinLock = {
-    isConfigured: () => true,
-    hasWindowsHello: () => false,
-    setPin: () => ({ ok: true }),
-    verifyPin: (pin) => (pin === '1234' ? { ok: true } : { ok: false, error: 'nope' }),
-  };
-  const server = createServer(deps);
+  const server = createServer(baseDeps(bus, { MYTHOS_BIND: ip, MYTHOS_AUTH_TOKEN: TOKEN, AETHER_NODE_TRUST: true }));
   try {
     await server.ready;
     const { port } = server.httpServer.address();
 
-    // Mint a genuine PIN session and pull the cookie the server set.
-    const pinToken = await new Promise((resolve, reject) => {
-      const body = JSON.stringify({ pin: '1234' });
+    // Mint a genuine session the way a browser does, and pull its cookie.
+    const sessionId = await new Promise((resolve, reject) => {
+      const body = JSON.stringify({ token: TOKEN });
       const req = require('node:http').request({
-        host: ip, port, path: '/api/pin/verify', method: 'POST',
-        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), authorization: `Bearer ${TOKEN}` },
+        host: ip, port, path: '/api/auth/session', method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
       }, (res) => {
         res.resume();
-        const setCookie = [].concat(res.headers['set-cookie'] || []);
-        const m = /mythos_pin=([^;]+)/.exec(setCookie.join(';'));
+        const m = /mythos_session=([^;]+)/.exec([].concat(res.headers['set-cookie'] || []).join(';'));
         res.on('end', () => resolve(m ? decodeURIComponent(m[1]) : null));
       });
       req.on('error', reject);
       req.end(body);
     });
-    assert.ok(pinToken, 'precondition failed: no PIN session was minted, so this test proves nothing');
+    assert.ok(sessionId, 'precondition failed: no session was minted, so this test proves nothing');
 
-    // CHANGED 2026-09-18 BY BUG-442, and the change is the point.
-    //
-    // This used to assert 'opened' here: a PIN session token, presented alone
-    // by a browser, authenticated an ordinary client EVEN THOUGH a bearer token
-    // was configured. That was the substitution BUG-442 removed — tokenOk()
-    // accepted a PIN session instead of the bearer whenever PIN enforcement was
-    // off, contradicting the four-combination policy written above it. A proof
-    // of standing at the machine is not a proof of knowing the secret.
-    //
-    // So the browser is refused too now, and this half is kept rather than
-    // deleted because it is what distinguishes "the node door is shut" from
-    // "every door is shut for some unrelated reason".
-    const asHudOutcome = await new Promise((resolve) => {
-      // Same host:port as the node dial below — the ONLY difference is that a
-      // browser sends an Origin, which is precisely the distinction under test.
-      // (ALLOWED_ORIGINS is built from config.MYTHOS_PORT, which is 0 here, so
-      // the allowlisted value is literally 'http://localhost:0'.)
-      const ws = new WebSocket(`ws://${ip}:${port}/ws?token=${encodeURIComponent(pinToken)}`, {
-        origin: 'http://localhost:0',
-      });
+    // POSITIVE CONTROL: the session is real — it opens the HUD socket (a browser,
+    // with an allow-listed Origin). Without this, "the node door is shut" could
+    // just mean every door is shut for an unrelated reason.
+    const asHud = await new Promise((resolve) => {
+      const ws = new WebSocket(`ws://${ip}:${port}/ws`, { origin: 'http://localhost:0', headers: { Cookie: `mythos_session=${sessionId}` } });
       ws.on('open', () => { try { ws.close(); } catch (_) {} resolve('opened'); });
       ws.on('unexpected-response', (req, res) => resolve(res.statusCode));
       ws.on('error', () => resolve('error'));
     });
-    assert.equal(asHudOutcome, 401,
-      'BUG-442: with a bearer token configured, a PIN session alone authorizes nothing — not even a browser');
+    assert.equal(asHud, 'opened', 'fixture check: the minted session authenticates a browser');
 
-    // ...and it must certainly not open the no-Origin/non-loopback node door.
-    //
-    // GATE F, stated rather than left silent: the node branch's own
-    // authTokenMatches() check is now REDUNDANT with tokenOk() in every
-    // configuration, because tokenOk() no longer accepts a PIN session in place
-    // of a bearer. It is deliberately KEPT — it is the check that makes the
-    // node door's rule local and readable instead of inherited, and a security
-    // boundary that depends on a distant function continuing to behave is the
-    // kind that quietly stops holding. This assertion still pins it.
-    const asNodeOutcome = await upgradeOutcome(ip, port, `?token=${encodeURIComponent(pinToken)}`);
-    assert.equal(asNodeOutcome, 401, 'a PIN session must not authenticate a remote voice node');
+    // The node door: no Origin, non-loopback. The cookie must not open it...
+    const asNodeByCookie = await new Promise((resolve) => {
+      const ws = new WebSocket(`ws://${ip}:${port}/ws`, { headers: { Cookie: `mythos_session=${sessionId}` } });
+      ws.on('open', () => { try { ws.close(); } catch (_) {} resolve('opened'); });
+      ws.on('unexpected-response', (req, res) => resolve(res.statusCode));
+      ws.on('error', () => resolve('error'));
+    });
+    assert.equal(asNodeByCookie, 401, 'a browser session cookie must not authenticate a remote voice node');
+
+    // ...and neither must the same id presented where a node puts its token.
+    const asNodeByQuery = await upgradeOutcome(ip, port, `?token=${encodeURIComponent(sessionId)}`);
+    assert.equal(asNodeByQuery, 401, 'a session id is not the token, on any channel');
   } finally {
     await server.stop();
   }

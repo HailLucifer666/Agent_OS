@@ -20,7 +20,24 @@ const BOOT_TIMEOUT_MS = 30000;
 const HEALTH_POLL_MS = 500;
 
 // Print a colored status line. keep it simple — no chalk, no deps.
+//
+// Silent inside a `node --test` child, and only there (the runner sets
+// NODE_TEST_CONTEXT in each file's process). In that process stdout is not a
+// terminal: it is the runner's binary report channel, one frame per test
+// event — marker bytes FF 0F, a 4-byte length, the payload. Node 26.1's parser
+// assumes whatever follows a frame in the same pipe read is another frame, so
+// when this line lands right behind one it reads the line's bytes 2-5 as the
+// length. `🔌` is F0 9F 94 8C; 0x94 << 24 is negative in 32-bit JS arithmetic,
+// the "enough bytes buffered?" check passes, and V8 is handed text to
+// deserialize: "Unable to deserialize cloned data due to invalid or unsupported
+// version". The file dies and its remaining tests vanish from the count.
+// Measured 2026-09-23: 6 of 15 standalone runs of verify-lib-attach.test.js;
+// the same line in ASCII crashed 0 of 8, the emoji line 7 of 8. Upstream fixed
+// the sign in nodejs/node#64706. NODE_ENV=test is deliberately not a trigger —
+// it does not make stdout a channel, and a harness a human runs must still talk.
+// Nothing reads these lines under test: failures carry their own messages.
 function log(emoji, msg) {
+  if (process.env.NODE_TEST_CONTEXT) return;
   console.log(`${emoji}  ${msg}`);
 }
 

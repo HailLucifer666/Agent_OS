@@ -49,9 +49,17 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
     });
   }
 
-  async function runNow(reason) {
+  // BUG-437 (2026-09-23): at shutdown this runs LAST, under the step's deadline.
+  // `opts.signal` is that deadline. It is handed to the brain, and checked
+  // before EVERY write: a pass whose answer arrives after the deadline writes
+  // nothing, because by then the process is exiting and a half-applied profile
+  // rewrite (a preference written, the profile not) is worse than none. The
+  // cadence path passes no signal and is unchanged.
+  async function runNow(reason, opts) {
     if (running) return { skipped: 'already-running' };
     running = true;
+    var signal = opts && opts.signal;
+    var fenced = function() { return !!(signal && signal.aborted); };
     try {
       var convos = [];
       try {
@@ -109,13 +117,19 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
       var result = await brain.think({
         lane: 'reasoning',
         messages: [{ role: 'user', content: prompt }],
-        source: 'reflection:' + (reason || 'cadence')
+        source: 'reflection:' + (reason || 'cadence'),
+        signal: signal || undefined
       });
+      if (fenced()) {
+        log.warn('reflection.fenced', { reason: reason || 'cadence', note: 'the answer arrived after the shutdown deadline; nothing was written' });
+        return { skipped: 'shutdown-deadline' };
+      }
       if (!result || result.offline || !result.parsed) return { skipped: 'brain-unavailable' };
 
       var written = 0;
       var prefs = Array.isArray(result.parsed.preferences) ? result.parsed.preferences.slice(0, 3) : [];
       for (var i = 0; i < prefs.length; i++) {
+        if (fenced()) return { skipped: 'shutdown-deadline', written: written };
         var p = String(prefs[i] || '').trim();
         if (p.length < 8 || p.length > 200) continue;
         if (isNearDuplicate(p, known)) continue;
@@ -128,6 +142,7 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
 
       var styleWritten = false;
       var style = typeof result.parsed.style === 'string' ? result.parsed.style.trim() : '';
+      if (fenced()) return { skipped: 'shutdown-deadline', written: written };
       if (style && style.length >= 8 && typeof identity.setOperatorStyle === 'function') {
         styleWritten = identity.setOperatorStyle(style).ok === true;
       }
@@ -136,6 +151,7 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
       // rewrite is treated as "the model had nothing", not as a deletion.
       var profileWritten = false;
       var profile = typeof result.parsed.profile === 'string' ? result.parsed.profile.trim() : '';
+      if (fenced()) return { skipped: 'shutdown-deadline', written: written, styleUpdated: styleWritten };
       if (profile && profile.length >= 8 && typeof identity.setOperatorProfile === 'function') {
         profileWritten = identity.setOperatorProfile(profile).ok === true;
       }

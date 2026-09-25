@@ -155,13 +155,39 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
    * @returns {object|null}
    */
   function get(ref) {
-    // Scan from the start of the current month to catch most recent entries
+    return getMany([ref]).get(ref) || null;
+  }
+
+  /**
+   * Retrieve several episodes in ONE newest-first walk of the current month.
+   *
+   * BUG-436 (2026-09-25): get() used to read and parse the whole month for
+   * every call, and recallHybrid() calls it once per vector hit — eight hits
+   * were 1.4-1.5 s of CPU in one tick on the operator's 32 MB vault, the
+   * CPU-bound stalls of 2026-09-24. This walks newest-first (fs-store's
+   * readDirLinesReverse, the 2026-08-19 fix for the same freeze in Audit/) and
+   * stops once every ref is found. A ref not in the current month still costs
+   * one full walk of the month, once, rather than once per ref.
+   *
+   * @param {string[]} refs
+   * @returns {Map<string, object>} ref -> newest record with that id
+   */
+  function getMany(refs) {
+    const wanted = new Set((refs || []).filter(Boolean));
+    const found = new Map();
+    if (!wanted.size) return found;
     const since = fs.todayKey().replace(/\d{2}$/, '01');
-    const entries = fs.readDirLines('Episodic', { since: since });
-    for (let i = entries.length - 1; i >= 0; i--) {
-      if (entries[i] && entries[i].id === ref) return entries[i];
-    }
-    return null;
+    fs.readDirLinesReverse('Episodic', {
+      since: since,
+      limit: wanted.size,
+      // Newest first, so the first copy of an id is the newest — what get() returned.
+      match: function(e) {
+        if (!e || !wanted.has(e.id) || found.has(e.id)) return false;
+        found.set(e.id, e);
+        return true;
+      },
+    });
+    return found;
   }
 
   /**
@@ -239,6 +265,7 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
     write,
     recall,
     get,
+    getMany,
     tail,
     prune,
     consolidate,

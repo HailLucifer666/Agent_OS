@@ -335,7 +335,12 @@ function createFsStore(vaultRootFn, bus) {
     opts = opts || {};
     const limit = opts.limit || 100;
     const match = opts.match || function() { return true; };
-    const files = listFiles(relDir, '.jsonl');
+    // opts.since (YYYY-MM-DD), BUG-436: episodic.get() looks only in the current
+    // month, as it always has; without the bound a missing ref would walk every
+    // day file ever kept.
+    const files = listFiles(relDir, '.jsonl').filter(function(f) {
+      return !opts.since || f.name.replace('.jsonl', '') >= opts.since;
+    });
     files.sort(function(a, b) { return b.name.localeCompare(a.name); }); // newest first
     const out = [];
     for (let i = 0; i < files.length && out.length < limit; i++) {

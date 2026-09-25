@@ -650,12 +650,16 @@ describe('Wave 1: partial-success turns get a per-tool corrective clause for unb
   it('names the tool that actually failed even though the corrective pass still claims full success', async () => {
     // Both tools are in the default CATALOG (whatsapp_send/launch_app are
     // hub-registered, not in this test's bare catalog) — gmail_send
-    // ('sending' category) succeeds, open_web ('opening' category) fails.
+    // ('sending' category) succeeds, navigate ('opening' category) fails.
+    // navigate, not open_web, since 2026-09-24: BUG-459 deleted open_web's
+    // voice-agent copy (it replaced the hub text Live is sent), so the hub-less
+    // default CATALOG no longer carries it and it would fail as an unknown tool
+    // instead of the dispatch failure this test is about.
     const firstReply = {
       say: 'Doing both now.',
       actions: [
         { tool: 'gmail_send', args: { to: 'a@b.com', subject: 'hi', body: 'hi' } },
-        { tool: 'open_web', args: { type: 'web', url: 'https://example.com' } },
+        { tool: 'navigate', args: { route: 'kanban' } },
       ],
       needs_result: false,
     };
@@ -682,7 +686,7 @@ describe('Wave 1: partial-success turns get a per-tool corrective clause for unb
     assert.match(result.say, /I sent the email\./, 'the true sentence about the succeeded tool stays');
     assert.doesNotMatch(result.say, /I opened the page for you/,
       'BUG-441 D3: the false sentence is replaced, not spoken and then corrected');
-    assert.match(result.say, /open_web did not succeed/, 'the failed tool must be named');
+    assert.match(result.say, /navigate did not succeed/, 'the failed tool must be named');
     assert.match(result.say, /no browser session available/, 'the real reason must reach the operator');
     assert.doesNotMatch(result.say, /gmail_send did not succeed/, 'the tool that actually succeeded must not be scolded');
   });
@@ -745,7 +749,7 @@ describe('Wave 1: partial-success turns get a per-tool corrective clause for unb
       say: 'Doing both now.',
       actions: [
         { tool: 'gmail_send', args: { to: 'a@b.com', subject: 'hi', body: 'hi' } },
-        { tool: 'open_web', args: { type: 'web', url: 'https://example.com' } },
+        { tool: 'navigate', args: { route: 'kanban' } },
       ],
       needs_result: false,
     };

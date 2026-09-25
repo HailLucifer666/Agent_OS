@@ -18,14 +18,11 @@
 
 // BUG-442 (2026-09-18): a second channel, and a generation counter.
 //
-// THE SECOND CHANNEL. A 401 was only ever announced one way, so every
-// subscriber heard "the token is wrong" — including when the missing
-// credential was a PIN session. That is precisely how a PIN cookie expiring at
-// its hard 30-minute Max-Age, while the server's own window was still sliding,
-// asked the operator for their ACCESS TOKEN mid-conversation. The server now
-// says WHICH credential is missing (server/credentials.js), and this store
-// routes each to the thing that can actually satisfy it: the token prompt, or
-// relocking the PIN screen.
+// THE SECOND CHANNEL existed so a lapsed PIN session relocked the PIN screen
+// instead of asking for the ACCESS TOKEN. The PIN was removed on 2026-09-23,
+// so the server now only ever names 'token' (server/credentials.js) and the
+// channel is gone. The structured `missing` list stays, because reading the
+// server's own list beats parsing its English.
 //
 // THE GENERATION. Several fetches are usually in flight when a credential
 // lapses, so one lapse produces a burst of 401s. Without a fence, the ones
@@ -37,7 +34,6 @@
 // every socket open and tracks socket/probe freshness; sharing it would mean an
 // ordinary reconnect silently suppressed a real, current HTTP failure. Two
 // different facts, two different counters.
-const pinListeners = new Set();
 let recoveryGeneration = 0;
 
 const listeners = new Set();
@@ -60,8 +56,8 @@ export function clearUnauthorized() {
 }
 
 // Learned from GET /health. Passing false also clears any flag a 401 raised
-// while the probe was still in flight — that 401 was a PIN 401, not a token
-// one, and leaving it set would keep the banner's "Enter token" alive.
+// while the probe was still in flight — on a deployment with no token, a 401
+// is not a token signal, and leaving it set would keep "Enter token" alive.
 // Listeners are deliberately NOT notified on clear: their contract is "became
 // unauthorized", and auth-gate.js's listener opens the prompt on notify.
 export function setTokenRequired(value) {
@@ -90,23 +86,16 @@ export function currentRecoveryGeneration() {
 }
 
 // Called after a credential has actually been re-established — a successful
-// token exchange or a successful PIN unlock. Everything already in flight is
+// token exchange. Everything already in flight is
 // now stale news about a problem that has been solved.
 export function advanceRecoveryGeneration() {
   recoveryGeneration += 1;
 }
 
-export function onPinSessionLost(fn) {
-  pinListeners.add(fn);
-  return () => pinListeners.delete(fn);
-}
-
 /**
  * Route a structured authorization failure to whatever can satisfy it.
  *
- * `missing` is the server's own list, never parsed out of English prose — the
- * client choosing between "relock the PIN" and "ask for the token" by reading
- * an error message is the guessing this replaces.
+ * `missing` is the server's own list, never parsed out of English prose.
  *
  * A failure whose captured generation predates the current one is DROPPED: the
  * operator has re-authenticated since that request left, and reopening the
@@ -117,11 +106,5 @@ export function onPinSessionLost(fn) {
 export function markCredentialsMissing(missing, capturedGeneration) {
   if (typeof capturedGeneration === 'number' && capturedGeneration < recoveryGeneration) return;
   const names = Array.isArray(missing) ? missing : [];
-  // Token first when both are missing: on a combined deployment the PIN check
-  // itself runs through an authenticated /api call, so an unsatisfied token
-  // gate would make the PIN screen unable to succeed.
   if (names.includes('token')) markUnauthorized();
-  if (names.includes('pin')) {
-    pinListeners.forEach((fn) => { try { fn(); } catch (_) { /* one bad listener must not stop the rest */ } });
-  }
 }

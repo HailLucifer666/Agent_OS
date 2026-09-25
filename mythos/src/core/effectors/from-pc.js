@@ -15,6 +15,7 @@ const { resolveSandboxed, open_folder } = require('./from-computer');
 const evidence = require('./evidence');
 const { withWindowList } = require('./window-recovery');
 const { reasonText } = require('../util/reason-text');
+const { cutEvidence } = require('../util/cut-evidence'); // BUG-275: never hand the model half a sentence
 const { visionThink } = require('./vision-call');
 // The window a pid-omitted ui_type/ui_click aims at. Was a bare module-scope
 // `lastLaunchedPid` here that any launch overwrote and nothing expired (BUG-353).
@@ -533,6 +534,8 @@ async function set_app_mute({ name, pid, mute }) {
   return delegate({ cmd: 'set_app_mute', name: name || '', pid: targetPid, mute: wantMute });
 }
 
+// The vision description's share of the model's view of the screen (BUG-275).
+var SCREEN_DESCRIPTION_CHARS = 600;
 async function screen_look({ query }) {
   var shot = await delegate({ cmd: 'screen_look' });
   if (!shot.ok) return shot;
@@ -630,8 +633,12 @@ async function screen_look({ query }) {
     }
   }
 
+  // BUG-275 (2026-09-23): 600 is what the model sees and what the vault keeps; a
+  // plain slice ended mid-sentence, so both held half a fact. See cut-evidence.js.
+  var shown = cutEvidence(description, SCREEN_DESCRIPTION_CHARS);
   return ok({
-    description: description.slice(0, 600),
+    description: shown.text,
+    descriptionTruncated: shown.truncated,
     // Literal screen text, so the voice layer can quote what is actually there
     // instead of paraphrasing a model's guess about it.
     ocrSample: ocrLines.slice(0, 12),

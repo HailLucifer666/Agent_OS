@@ -25,6 +25,8 @@
 // to claim it beats Whisper on real room audio, which is what BUG-406's corpus
 // is for.
 
+const routePolicy = require('../src/core/brain/route-policy');
+
 const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 // One sentence of speech is a small request, but a long dictation is not, and a
@@ -62,6 +64,8 @@ async function transcribe(buffer, mimeType) {
   const key = getApiKey();
   if (!key) throw new Error('gemini-stt: GOOGLE_API_KEY is not set');
   const model = process.env.GEMINI_STT_MODEL || DEFAULT_MODEL;
+  // Wave 0c: GEMINI_STT_MODEL is operator-settable; judged before the request.
+  routePolicy.assertAllowed({ provider: 'google', model, endpoint: BASE, mode: 'stt' });
 
   const res = await fetch(`${BASE}/${model}:generateContent?key=${key}`, {
     method: 'POST',

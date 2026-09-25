@@ -44,6 +44,7 @@ function harness(overrides) {
     summarizeActionsForResult,
     getLiveSession: () => session,
     toolAckDeadlineMs: opts.deadlineMs === undefined ? 40 : opts.deadlineMs,
+    toolResultHoldMaxMs: 0, // BUG-457 (2026-09-24): replies are now held up to 12 s; this pins the late path, now the fallback (past the hold, a cancellation, typed words). 0 selects it.
   });
   return { adapter, dispatched, injected, logs };
 }
@@ -102,6 +103,7 @@ describe('BUG-128 — no call may reach turnComplete unanswered', () => {
       summarizeActionsForResult,
       getLiveSession: () => ({ isOpen: () => true, sendText: (t) => injected.push(t) }),
       toolAckDeadlineMs: 20,
+      toolResultHoldMaxMs: 0, // BUG-457 (2026-09-24): replies are now held up to 12 s; this pins the late path, now the fallback (past the hold, a cancellation, typed words). 0 selects it.
     });
     const responses = await call(failing, 'call-boom', 'open_web', { url: 'https://example.com' });
     assert.equal(responses[0].response.status, 'started');

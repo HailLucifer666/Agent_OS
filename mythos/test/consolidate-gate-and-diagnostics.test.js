@@ -216,7 +216,10 @@ describe('fix-plan 3.1 — every consolidation skip says why', () => {
     const { memory, skips } = await memoryWithSkips(brain, [
       { kind: 'conversation', summary: 'important thing', salience: 0.8 },
     ]);
-    assert.equal(skips.length, 0, 'a successful distillation must not emit skip diagnostics');
+    // 2026-09-25 (BUG-463): the conversation note-taker (step 3b) is off by default and
+    // says so on every pass, as every skip here must. That is the ONLY skip allowed: a
+    // successful distillation still emits none of its own.
+    assert.deepEqual(skips.map((s) => s.reason), ['auto-user-facts-off'], 'a successful distillation must not emit skip diagnostics');
     const wrote = fsNode.readdirSync(path.join(tmpDir, 'Semantic')).some((n) => /^consolidated-/.test(n));
     assert.ok(wrote, 'the distilled topic lands in Semantic/');
     void memory;
