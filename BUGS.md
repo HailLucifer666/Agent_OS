@@ -3404,6 +3404,15 @@ Gemini heard the operator only when the hold ended at the real end of playback (
 
 **Attribution:** attended run 2026-09-25.
 
+**B1b, 2026-09-26 — the session report grades what a stop cut (branch `fix/b1b-voice-report-counts-what-was-left`, operator decision C1 row 13).** `scripts/verify-voice-session.js` graded each barge-in stop by `suppressedChunks`, the audio that arrived after the stop. When that was 0 it printed "fired with nothing left to cut — the reply had already finished". It never saw what the stop itself discarded.
+
+On the 09-25 log it said this of 7 of the 8 stops. The mic-gate recorder showed 398–5080 ms queued at all 8. The recorder's figure can include up to 250 ms of start-of-reply cushion, so at least six of the seven certainly had speech to cut. The same line blamed the missing release reasons on "the gate is not held". On 09-25 every release was written, 0–1 ms before its stop, as `own-voice-ended` (see B1).
+
+- **Fix.** The HUD bridge now logs `discardedMs` on each suppression line. It is `player.flush()`'s own return, summed over every stop in the episode: the eager and flush tiers fire on the same frame, and the second stop flushes nothing. The server allowlists the field. The report grades each stop as cut (queued speech discarded, or later audio dropped), nothing left to cut (both measured as zero), or cannot be graded (a log without the field). New pure modules: `ui/public/js/voice/stop-tally.js` and `scripts/stop-door-verdict.js`.
+- **Proof.** `mythos/test/bug-469-the-report-grades-what-a-stop-discarded.test.js` has 8 tests. They cover the 09-25 shape through the real script, the new grading, malformed values, the landed branch, the real player's flush, the real backstop's same-frame double stop, the meter, and the bridge wiring. Negative control: 6 of 8 fail on main's sources. 13 mutation probes, all caught. Real browser: the bridge module loads, and a stop on 3 s of queued speech logs 3000 ms while the second stop adds nothing.
+- **Corrected elsewhere.** The same counter produced BUG-274 T4's "exactly ONE cut real audio" and Stage 3's "1 of 11, then 1 of 5". Those are floors; there is a dated note there. The comments in `barge-in-policy.js` and in two BUG-274 tests are corrected.
+- **Not covered.** Old logs cannot be graded; the recorder file could grade them, but the report does not read it. The "stopped playback" count is unchanged; the grade beside it says which stops cut speech. No live session has produced the new field yet, so the next sitting is its first real run.
+
 ## BUG-470 — "active goals" counts paused goals: the HUD said "14 ACTIVE" and the greeting "Fourteen goals humming in the background" with none active (filed 2026-09-25)
 
 **Status:** 🐞 OPEN — filed 2026-09-25 from the attended run (build fee97e18). Evidence from `.cache/windows-operator/attended-2026-09-25/` and the mic-gate recorder windows (gitignored, this machine only); times are local.
@@ -11381,6 +11390,7 @@ stop door; ONE cut real audio (9 chunks, ~900ms); the other NINE fired with noth
 The reply had already finished, so interrupting changed nothing audible — which is what the
 operator experiences as "interruption does not work", and it is a different fault from the
 authorisation failures steps 1–3 fixed.
+*(Corrected 2026-09-26, B1b: this count read only audio arriving after each stop, so it is a floor, and "nothing left to cut" is unsupported. See the note after the Stage 3 table.)*
 
 **FINDING 3 — the barge-in policy is refusing loud, clear speech.** 24 vetoes, reasons
 `{pending-sustaining: 11, protected-window: 1}`. Veto **levels** were `0.0537, 0.0746, 0.1414,
@@ -11430,6 +11440,7 @@ interruption ("stop", "wait, no") is **200-400ms** of speech, and could not clea
 the backstop's 3-frame cadence. Counted honestly, **11 barge-ins reached the stop door and exactly
 ONE cut real audio**; the other ten were authorised only after the reply had already ended, which
 is precisely what "sometimes it keeps talking" sounds like.
+*(Corrected 2026-09-26, B1b: this count read only audio arriving after each stop, so it is a floor, and "nothing left to cut" is unsupported. See the note after the Stage 3 table.)*
 
 **PRE-CHANGE BASELINE, to compare the next session against:** self-interruption **26/89 turns =
 29.2%** (at most **15/89 = 16.9%** genuinely self-caused) · **26** vetoes · **11** stop-door
@@ -11492,6 +11503,8 @@ Superseding the "NOT live-verified" line this entry shipped with.
 landings went from 1-in-11 to 1-in-5, and a landing now cuts two full seconds instead of under one.
 The turn-boundary wiring held (`missedTurnEnds` 0). Audio was clean — **0/28 turns starved** — so
 the cushion's growth path was **not exercised** this session and remains unverified live.
+
+**Corrected 2026-09-26 (B1b, BUG-469).** Several readings above were counted from `suppressedChunks`: "barge-ins that cut audio" in this table, "landings went from 1-in-11 to 1-in-5", and "the other nine/ten fired with nothing left to cut". That field counts only audio that arrived *after* a stop. The speech the stop itself threw out of the speaker's queue was never logged. So those rows are a floor, and "the reply had already finished" is unsupported. On 2026-09-25 the same counter called 7 of 8 stops "nothing left to cut", while the mic-gate recorder showed 0.4–5.1 s queued at all 8. Stage 3's other evidence does not depend on this counter and stands: the halved `pending-sustaining` vetoes and the operator's own reports. From B1b the bridge logs `discardedMs`, and `verify-voice-session.js` grades each stop as cut, nothing left, or cannot be graded.
 
 **And the predicted counter-failure landed.** Self-interruption rose from **16.9% to 28.6%**
 genuinely self-caused. The mechanism is plausible rather than pure noise: a faster local

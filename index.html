@@ -343,11 +343,11 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-25",
+  "generated": "2026-09-26",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8370,
+      "value": 8378,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -365,21 +365,21 @@
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-26"
     },
     "registered": {
       "value": 189,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-26"
     },
     "voiceReachable": {
       "value": 128,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-26"
     },
     "untriaged": {
       "value": 1,
@@ -6222,8 +6222,9 @@
         "shape": "entry",
         "state": "open",
         "title": "talking over MYTHOS does not stop it: during an own-voice hold the barge-in backstop never even attempts (filed 2026-09-25)",
-        "detail": {},
-        "excerpt": "**Status:** 🐞 OPEN — filed 2026-09-25 from the attended run (build fee97e18). Evidence from `.cache/windows-operator/attended-2026-09-25/` and the mic-gate recorder windows (gitignored, this machine only); times are local. **Evidence.** From 02:15:14 to 02:15:22 MYTHOS spoke, and the own-voice gate held the mic for 8.2 s. The operator talked over it (\"it's working flawlessly… log it\", said, by their count, four times). The recorder window for that hold shows 19 frames above the 0.035 bleed floor while the gate held and the player was speaking, with a peak of 0.157 and a run of five consecutive 100 ms frames above 0.05. `bargeVetoed` was 0 on that hold and on all 41 holds of the session: the backstop never even reached the policy. Gemini heard the operator only when the hold ended at the real end of playback (`live.interrupted` 02:15:23.057). The operator, at 02:15:41: \"I said this for t…",
+        "detail": {
+          "fix": "The HUD bridge now logs `discardedMs` on each suppression line. It is `player.flush()`'s own return, summed over every stop in the episode: the eager and flush tiers fire on the same frame, and the second stop flushes nothing. The server allowlists the field. The report grades each stop as cut (queued speech discarded, or later audio dropped), nothing left to cut (both measured as zero), or cannot be graded (a log without the field). New pure modules: `ui/public/js/voice/stop-tally.js` and `scripts/stop-door-verdict.js`. -"
+        },
         "campaign": {
           "disposition": "currently reproduced",
           "evidence": "[FILED 2026-09-25 from the attended run] Talking over MYTHOS does not stop it. During an 8.2 s hold the recorder shows 19 frames above the 0.035 bleed floor (peak 0.157, a 500 ms run above 0.05), bargeVetoed=0 on all 41 holds, and Gemini heard the operator only when playback ended. Remaining evidence: why the backstop never attempts at these levels.",

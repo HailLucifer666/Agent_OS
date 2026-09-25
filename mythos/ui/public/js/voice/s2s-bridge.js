@@ -47,6 +47,7 @@ import { createEchoVerdictTracker } from './echo-verdict.js';
 import { createGateRecorder, isGateRelease } from './gate-recorder.js'; // BUG-406: numbers-only mic-gate recorder, off unless configured
 import { arrayBufferToBase64 } from './pcm-base64.js';
 import { createUnheardMeter } from './unheard-meter.js'; // BUG-447: where a barge-in cut the answer, so "go ahead" can resume it
+import { createStopTally } from './stop-tally.js'; // B1b: how much queued speech a stop threw away, for the log
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -874,7 +875,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // So stopping the speech has to be local and has to outlast the flush: for the rest
   // of this model turn, arriving audio is DROPPED instead of played.
   function stopAssistantSpeech(reason) {
-    if (player) unheard.cut(player.flush());
+    if (player) stopTally.stopped(unheard.cut(player.flush()));
     armAudioOutSuppression();
     releaseOwnVoiceGate(reason);
   }
@@ -891,6 +892,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   const SUPPRESS_IDLE_MS = 2000;
   let suppressAudioOut = false;
   let suppressedChunks = 0;
+  const stopTally = createStopTally(); // what the stops' flushes discarded; reset when the episode's line is written
   let suppressStartedAt = 0;
   let suppressIdleTimer = null;
 
@@ -920,14 +922,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (!suppressAudioOut) return;
     suppressAudioOut = false;
     if (how === 'idle') unheard.resumed(); // the turn carries on, and from here the room hears it
-    // The cushion diagnostics used to be added here and were moved to
-    // logSuspendTransition() itself on 2026-08-20: on this line they only ever
-    // reached the log for turns the operator interrupted, which is the least likely
-    // shape of session for the transport to be the fault. They now ride every
-    // transition. Nothing is lost from this line — it still carries them.
+    // The cushion diagnostics ride every transition from logSuspendTransition() itself
+    // (moved there 2026-08-20; on this line they reached the log only for interrupted turns).
     logSuspendTransition({
       reason: 'barge-in-suppression-' + how,
-      suppressedChunks: suppressedChunks,
+      suppressedChunks: suppressedChunks, // audio that ARRIVED after the stop; not what the stop cut
+      discardedMs: stopTally.ended(), // B1b: what the stop cut from the queue. Chunks alone read "nothing left to cut" at 7 stops with 0.4-5.1 s queued (2026-09-25)
       suppressedMs: suppressStartedAt ? Date.now() - suppressStartedAt : 0,
     });
     suppressedChunks = 0;

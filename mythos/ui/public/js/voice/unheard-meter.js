@@ -37,7 +37,8 @@ export function createUnheardMeter({ sampleRate = 24000 } = {}) {
     },
     // discardedMs is player.flush()'s return: the queued speech it threw away
     // (0 when its tail guard let the last word finish). Playback was cut that far
-    // back from the end of what has arrived.
+    // back from the end of what has arrived. Returns the sanitised amount, which the
+    // bridge also tallies for the episode's log line (B1b, stop-tally.js).
     cut(discardedMs) {
       const discarded = Number(discardedMs) > 0 ? Number(discardedMs) : 0;
       // A second cut after playback came back starts a new unheard stretch; the
@@ -46,6 +47,7 @@ export function createUnheardMeter({ sampleRate = 24000 } = {}) {
       if (heardAgainMs !== null) { cutMs = null; heardAgainMs = null; unheardMs = 0; }
       if (cutMs === null) cutMs = Math.max(0, turnMs - discarded);
       unheardMs += discarded;
+      return discarded;
     },
     resumed() { if (cutMs !== null && heardAgainMs === null) heardAgainMs = turnMs; },
     // The report for the turn that just ended, or null; the meter is reset either way.
