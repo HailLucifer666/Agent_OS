@@ -23,9 +23,11 @@
 //     "background noise") stops the action. Catches both measured clicks.
 //   - Four words or fewer is too little to act on. The longest measured noise
 //     transcripts are four words ("Yep, can you play", "What do you think?").
-//     This also asks on real short commands ("further", "Mute the volume.") —
+//     This also asked on real short commands ("further", "Mute the volume.") —
 //     the operator chose that trade on 2026-09-24: "repeating it back costs a
-//     second, guessing wrong brings the wrong dish".
+//     second, guessing wrong brings the wrong dish". Changed 2026-09-26 (B2c):
+//     a short command that starts with its verb and names THIS call's key or
+//     typed words runs; see shortCommandNames() below.
 //   - A longer transcript must contain a request form. The 09-11 16:37:13 click
 //     rode on 34 words of a news video's own audio.
 //   - A turn with no operator words (started by MYTHOS's own late-result notice)
@@ -151,6 +153,61 @@ const KEY_WORDS = Object.freeze({
 // "Try again", "do the same", "go ahead": no operation of their own, so they
 // carry the operator's previous words' operation, if those are recent and pass.
 const RETRY_RE = /\b(?:try (?:it |that |this )?again|try that|do (?:the same|it again|that again)|one more time|retry|go ahead)\b/i;
+// B2c: the same, said as a whole short utterance. 09-24 15:11:06 "further", nine
+// seconds after "Scroll down a bit.", asked for one more of the same press.
+const CONTINUE_RE = /^(?:(?:a (?:bit|little) )?(?:further|more)|keep going|continue|again|once more)[.!]?$/i;
+
+// B2c (2026-09-26, BUG-461, campaign C1 row 8). The operator's answer after the
+// 09-25 sitting: a short command whose own words name the action runs without
+// asking. Rev 8 bounds it: the words must match the operation AND its argument.
+// Measured first (.cache/b2c/, read-only): of 122 short live utterances naming an
+// action word, the one that was noise and reached a gated tool was "Yep, can you
+// play" — a yes-word, then a question with no object. Every real one begins with
+// its verb ("refresh the page", "Mythos, pause the song."). So a short command is
+// a verb first, after at most these leads, and never after a yes-word or "can you".
+const COMMAND_LEAD = '(?:(?:hey\\s+)?(?:mythos|jarvis)|please|now|and|also|just|ok(?:ay)?|so|then)';
+const COMMAND_VERB = '(?:press|hit|refresh|reload|scroll|page|pause|play|resume|stop|mute|unmute|skip|next|previous|rewind'
+  + '|fast|go|exit|escape|enter|submit|zoom|copy|paste|undo|redo|close|type|write|search|fill|put|input|insert|clear|answer'
+  + '|reply|look)';
+const SHORT_COMMAND_RE = new RegExp('^(?:' + COMMAND_LEAD + '[\\s,.!]+)*' + COMMAND_VERB + '\\b', 'i');
+// send_key names its keys in lower case ("pagedown"); these are the browser names
+// that KEY_WORDS describes. The player letters and Space are left out on purpose:
+// in a desktop app they type a character, whatever YouTube does with them.
+const SEND_KEY_NAMES = Object.freeze({ pagedown: 'PageDown', pageup: 'PageUp', up: 'ArrowUp', down: 'ArrowDown',
+  left: 'ArrowLeft', right: 'ArrowRight', escape: 'Escape', enter: 'Enter', tab: 'Tab', home: 'Home', end: 'End',
+  delete: 'Delete', backspace: 'Backspace', f5: 'F5' });
+
+// The phrases that name THIS key: its own name ("PageDown" is "page down"), and
+// what it does, from the same table a question is checked against (KEY_WORDS).
+function keyPhrases(tool, key) {
+  const k = typeof key === 'string' ? key.trim() : '';
+  if (!k) return [];
+  const named = tool === 'send_key' ? SEND_KEY_NAMES[k.toLowerCase()] : k;
+  const own = (named || k).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[+_]/g, ' ').toLowerCase();
+  return [own, ...((named && KEY_WORDS[named]) || [])];
+}
+
+function saysPhrase(said, phrase) {
+  const re = new RegExp('\\b' + phrase.trim().split(/\s+/).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+') + '\\b', 'i');
+  return re.test(said);
+}
+
+// Does a short command name what THIS call does, to what? A key press: the key or
+// its effect. Typing: a typing verb and every word and number typed. Anything else
+// (a click on a ref, a window by pid, an option, an upload) has no argument the
+// operator's words can be matched to, so it still asks — pinned in the tests.
+function shortCommandNames(said, tool, args) {
+  const s = unquoted(said).trim();
+  if (!SHORT_COMMAND_RE.test(s)) return false;
+  const family = TOOL_OPERATION[tool];
+  if (family === 'key') return keyPhrases(tool, (args || {}).key).some((p) => saysPhrase(s, p));
+  if (family === 'text') {
+    const text = typedTextOf(tool, args);
+    return Boolean(text.trim()) && OPERATION_RES.text.test(s) && !unsupportedWords(text, s).length
+      && !unsupportedNumbers(text, s).length;
+  }
+  return false;
+}
 
 const REQUEST_PHRASE_RE = new RegExp([
   /\b(?:can|could|would|will) (?:you|we)\b/.source, /\bshall we\b/.source, /\bplease\b/.source,
@@ -169,9 +226,36 @@ const IMPERATIVE_RE = new RegExp(
 // WAVE 8 AFFIRMATIVE_RE is the precedent): "Yep, can you play" is not a yes.
 // Not "right": a bare "Right." is a filler — it is one of the fragments the
 // 2026-09-23 replay measured — and WAVE 8's list does not take it either.
-const AFFIRM_WORD = "(?:ok(?:ay)?|yes|yeah|yep|yup|sure|correct|exactly|absolutely|affirmative|please|go|go on|go ahead|do it|do that|that one|that'?s right|that'?s it)";
+// B2c added "proceed", "approved" and "try again": measured replies to MYTHOS's own
+// questions ("Yes, proceed. Approved.", "Yes, go ahead proceed.", "Yeah, try again.").
+const AFFIRM_WORD = "(?:ok(?:ay)?|yes|yeah|yep|yup|sure|correct|exactly|absolutely|affirmative|please|go|go on|go ahead|do it|do that|that one|that'?s right|that'?s it"
+  + '|proceed|approved|try (?:it |that )?again)';
 const AFFIRM_ECHO = '(?:(?:please )?(?:remember|save|note|play|click|type|press|open|close) (?:it|that|this)|scroll)';
 const AFFIRMATIVE_REPLY_RE = new RegExp('^(?:(?:' + AFFIRM_WORD + '|' + AFFIRM_ECHO + ')[\\s,.!]*)+$', 'i');
+
+// B2c: a yes that goes on — the 09-25 02:19:42 residual, "Yes, refresh the web
+// page". Measured (.cache/b2c/, M2): of 47 replies to MYTHOS's action questions
+// that began with a yes-word, about half were not approvals at all: "Yeah, I
+// heard two voices", "Okay. Moving on, what's the price…", "Yes, first find the
+// path and then try to open it". So this only hands back the rest, for the caller
+// to judge as a request for THIS call on its own words; a contrast, a sequence, a
+// deferral, another target or a question anywhere makes it no yes at all.
+const LEAD_YES_RE = /^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|absolutely|correct)\b[\s,.!]+(\S.*)$/i;
+const NOT_A_CLEAN_YES_RE = /\b(?:but|not|no|never|instead|first|then|before|after|later|wait|maybe|else|other|another|different|next time|moving on|actually)\b|n't\b|\?/i;
+function yesAndRest(text) {
+  const s = plain(text).trim();
+  const m = LEAD_YES_RE.exec(s);
+  return m && !NOT_A_CLEAN_YES_RE.test(s) ? m[1] : null;
+}
+
+// Does the rest of a yes name THIS call and its argument by itself, as a short
+// command must? Only a key or typed words can be matched. "Yes, play the third
+// video" after "Shall I click 'Café Ambience'?" names another target in words a
+// page label cannot be checked against (attacked 2026-09-26), so only a whole yes
+// approves a click.
+function restNamesCall(rest, tool, args) {
+  return !DENIAL_RE.test(plain(rest)) && !prohibits(rest, tool) && shortCommandNames(rest, tool, args);
+}
 
 // An explicit ask to keep something. Each form is imperative or addressed to
 // MYTHOS; "I remember when…", "do you remember…" and "can you remember what…"
@@ -245,11 +329,13 @@ function prohibits(said, tool) {
 // `typed`: the words came from the HUD text box, not the microphone. Typing
 // cannot be background noise, so only the too-short rule — which exists for
 // noise — is skipped; an objection, a prohibition or a non-request still asks.
-function judgeWords(said, typed, tool) {
+function judgeWords(said, typed, tool, args) {
   const s = plain(said);
   if (DENIAL_RE.test(s)) return { proceed: false, reason: 'operator-objected' };
   if (prohibits(said, tool)) return { proceed: false, reason: 'operator-prohibited' };
-  if (!typed && countWords(said) <= SHORT_INPUT_MAX_WORDS) return { proceed: false, reason: 'short-input' };
+  if (!typed && countWords(said) <= SHORT_INPUT_MAX_WORDS) {
+    return shortCommandNames(said, tool, args) ? { proceed: true, reason: 'short-command' } : { proceed: false, reason: 'short-input' };
+  }
   if (ACTION_HYPOTHETICAL_RE.test(s) || !hasRequestForm(said)) return { proceed: false, reason: 'not-a-request' };
   return { proceed: true, reason: 'operator-request' };
 }
@@ -279,9 +365,11 @@ function namesOperation(said, tool, args) {
   return { proceed: false, reason: 'not-this-action' };
 }
 
+// A short command has already been matched to this call's operation and argument,
+// which is stricter than namesOperation's family match.
 function judgeCall(words, tool, args) {
-  const verdict = judgeWords(words.said, words.typed, tool);
-  return verdict.proceed ? namesOperation(words.said, tool, args) : verdict;
+  const verdict = judgeWords(words.said, words.typed, tool, args);
+  return verdict.proceed && verdict.reason !== 'short-command' ? namesOperation(words.said, tool, args) : verdict;
 }
 
 // The words that speak for this turn: its own, or — only when it has none —
@@ -306,9 +394,11 @@ function judgeTrustedAction(input) {
   if (!words) return { proceed: false, reason: 'no-operator-words' };
   const before = words.from === 'previous';
   const verdict = judgeCall(words, i.tool, i.args);
-  if (verdict.proceed) return { proceed: true, reason: before ? 'continuation' : 'operator-request' };
-  // "Try again" names no operation; the operator's previous words may.
-  if (!before && verdict.reason === 'not-this-action' && RETRY_RE.test(plain(words.said))) {
+  if (verdict.proceed) return { proceed: true, reason: before ? 'continuation' : verdict.reason };
+  // "Try again" names no operation; the operator's previous words may. So may a
+  // whole "further" (B2c), and only for the same call: one hop, never a chain.
+  const s = plain(words.said).trim();
+  if (!before && ((verdict.reason === 'not-this-action' && RETRY_RE.test(s)) || (verdict.reason === 'short-input' && CONTINUE_RE.test(s)))) {
     const earlier = wordsFor({ previous: i.previous, previousAgeMs: i.previousAgeMs, previousTyped: i.previousTyped });
     if (earlier && judgeCall(earlier, i.tool, i.args).proceed) return { proceed: true, reason: 'retry' };
   }
@@ -382,6 +472,6 @@ function judgeMemoryWrite({ text, current, previous, previousAgeMs, today } = {}
 module.exports = {
   SHORT_INPUT_MAX_WORDS, CONTINUATION_WINDOW_MS, TOOL_OPERATION, KEY_WORDS,
   DENIAL_RE, AFFIRMATIVE_REPLY_RE,
-  countWords, hasRequestForm, isAffirmativeReply, prohibits,
+  countWords, hasRequestForm, isAffirmativeReply, yesAndRest, restNamesCall, prohibits,
   judgeTrustedAction, judgeMemoryWrite, findMemoryRequest, unsupportedNumbers, readBackMatches, leadingWords,
 };

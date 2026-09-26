@@ -343,43 +343,43 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-25",
+  "generated": "2026-09-26",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8410,
+      "value": 8430,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-26"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-26"
     },
     "withheld": {
       "value": 61,
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-26"
     },
     "registered": {
       "value": 189,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-26"
     },
     "voiceReachable": {
       "value": 128,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-26"
     },
     "untriaged": {
       "value": 1,
@@ -6112,11 +6112,12 @@
         "state": "open",
         "title": "background noise was transcribed as a command, and MYTHOS acted on it (filed 2026-09-24; CODED 2026-09-24)",
         "detail": {
-          "limits": "At 02:19:42 \"Yes, refresh the web page\" (transcribed \"Yes, we face the web page.\") was not taken as a yes (`authority-proposal-dropped reason=other-speech`). F5 never ran, while MYTHOS said \"F5 it is then\". A yes followed by a restatement of the same request must count as a yes."
+          "limits": "At 02:19:42 \"Yes, refresh the web page\" (transcribed \"Yes, we face the web page.\") was not taken as a yes (`authority-proposal-dropped reason=other-speech`). F5 never ran, while MYTHOS said \"F5 it is then\". A yes followed by a restatement of the same request must count as a yes.",
+          "fix": ", in `operator-authority.js` and `authority-gate.js`: - a spoken command of four words or fewer runs when it starts with its verb (after at most \"Mythos\", \"please\", \"now\", \"okay\" and the like, never after a yes-word or \"can you\") and names THIS call's argument. For a key press, that means the key's name or what it does (`KEY_WORDS`, the table a question is checked against); send_key's Space and player letters are excluded, because in a desktop app they type a character. For typing, it means a typing verb and every word and number typed; - a whole \"further\" (or \"more\", \"again\") carries the operator's last command for the same call, if under 60 s old, one hop only; - \"proceed\", \"approved\" and \"try again\" join the whole-utterance yes words; - a yes may go on only when the rest names the same key or typed words by itself (\"Yes, refresh the web page\" for a proposed F5; for a memory, the exact…"
         },
         "campaign": {
           "disposition": "blocked",
-          "evidence": "[LIVE 2026-09-25: two short commands held and asked about; a plain \"no\" cancelled one. Residual: \"Yes, refresh the web page\" was not taken as a yes (dropped as other-speech), so F5 never ran while MYTHOS said \"F5 it is then\"] [CODED 2026-09-24] A trusted click, type or key press runs only on operator words that ask for it; otherwise MYTHOS asks and a plain yes runs exactly that call. Replayed first: the click was a turn later than filed, under an objection, and a second instance exists (09-23). Remaining evidence: an attended noise case and a golden-path line.",
+          "evidence": "[B2c 2026-09-26: a short command that starts with its verb and names the call's key or typed words runs (\"refresh the page\" presses F5); \"Yes, refresh the web page\" approves the proposed F5; clicks and window closes still ask. Replay: 6 of 315 gated calls newly run, all the operator's own; none newly asks.] [LIVE 2026-09-25: two short commands held and asked about; a plain \"no\" cancelled one. Residual: \"Yes, refresh the web page\" was not taken as a yes (dropped as other-speech), so F5 never ran while MYTHOS said \"F5 it is then\"] [CODED 2026-09-24] A trusted click, type or key press runs only on operator words that ask for it; otherwise MYTHOS asks and a plain yes runs exactly that call. Replayed first: the click was a turn later than filed, under an objection, and a second instance exists (09-23). Remaining evidence: an attended noise case and a golden-path line.",
           "source": "mythos/test/bug-461-464-ask-before-acting.test.js; mythos/src/core/voice/operator-authority.js; mythos/src/core/voice/authority-gate.js; mythos/src/core/leash/confirm.js"
         }
       },

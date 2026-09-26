@@ -84,12 +84,22 @@ describe('BUG-461 — the operator\'s words decide whether a trusted click, type
     assert.deepEqual(trusted({ current: '', previous: NOISE_0924, previousAgeMs: 5000 }), { proceed: false, reason: 'short-input-before' });
   });
 
-  it('(t5) BOUND, pinned: real short commands are asked about too — the operator chose "ask first"', () => {
+  it('(t5) REVERSED IN PART 2026-09-26 (B2c): a real short command runs when its words name the call and its argument', () => {
+    // Until B2c this test pinned that every one of these asks: the operator chose
+    // "ask first" on 2026-09-24. After the 09-25 sitting the operator decided that
+    // short commands whose own words name the action run without asking (campaign
+    // C1 row 8). With no call to match, each still asks, as before.
     for (const s of ['further', 'Mute the volume.', 'Close brief', 'pause', 'Scroll down a bit.']) {
       assert.equal(trusted({ current: s }).proceed, false, s);
     }
-    // "pause" gets no exemption: nothing on this path can see the player, and a
-    // toggle key on a misheard word is how noise toggled the video on 09-11.
+    // With the call each one drove, three run; "Close brief" (a window by pid) still
+    // asks, and "further" runs only after a recent command for the same key
+    // (test/bug-461-a-short-command-that-names-its-action.test.js (c2), (c5), (c7)).
+    assert.equal(trusted({ current: 'Mute the volume.', tool: 'browser_press_key', args: { key: 'm' } }).proceed, true);
+    assert.equal(trusted({ current: 'pause', tool: 'browser_press_key', args: { key: 'k' } }).proceed, true);
+    assert.equal(trusted({ current: 'Scroll down a bit.', tool: 'browser_press_key', args: { key: 'PageDown' } }).proceed, true);
+    assert.equal(trusted({ current: 'Close brief', tool: 'close_window', args: { pid: 4120 } }).proceed, false);
+    assert.equal(trusted({ current: 'further', tool: 'browser_press_key', args: { key: 'PageDown' } }).proceed, false);
   });
 
   it('(t6) ADJACENT, must proceed: the operator\'s real requests from the replay, each with the tool it drove', () => {
