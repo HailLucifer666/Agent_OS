@@ -3,7 +3,7 @@
 *Under 100 lines, by rule. The roadmap is the archive; this file is the position.
 Rewrite in place, never append.*
 
-## Position (2026-09-25, evening)
+## Position (2026-09-26)
 
 **One workflow, until it is boring.** Stage 1 only. Stages 2 to 7 stay paused until the
 golden path holds 10 consecutive PASS lines across two cold boots for a week.
@@ -15,11 +15,11 @@ means the full suite green AND the app run and used. Only then is it merged, and
 good `main` is tagged `good-YYYY-MM-DD`. Merges are the operator's click; the
 session's permission check refuses `gh pr merge`.
 
-**Five campaign branches wait for Codex review, then the operator's merge**, each one
-commit on `main` `f456217d`, in this order (C1 row 10): this docs branch, then
-`fix/s1-authority-consent` `f819adac`, `fix/s2-lesson-integrity` `eab6c27a`,
-`fix/b1-interrupt-reason` `9f459d12` and `fix/b2a-acknowledgement-is-not-a-fragment`
-`6311ebee`. All five rewrite the generated docs, so before its merge each later one is
+**Nine campaign PRs wait for Codex review, then the operator's merge**, in this order
+(C1 rows 10 and 19): #123 this docs branch, #124 S1 `f819adac`, #125 S2 `eab6c27a`,
+#126 B1 `9f459d12`, #127 B2a `6311ebee`, #128 B1b `f8071071`, #129 B2b-1 `a99329cd`,
+#130 B2b-2 `c49c8ec9`, #131 B2b-3 `01cd1439`. #129–#131 are stacked, so each merges after
+the one before; the rest sit on `main` `f456217d`. All rewrite the generated docs, so before its merge each later one is
 updated from `main`, regenerated and re-run. The `good-2026-09-25` tag is `ae88f424`
 and is never moved; `f456217d` is not tagged yet (operator's go-ahead after a smoke run).
 
@@ -42,8 +42,9 @@ targeted retries) → B8 (the operator's merges, then the Stage 1 week). One `fi
 branch per change; Claude builds, Codex reviews each branch before the operator merges.
 
 B0 done 2026-09-25: base `f456217d`, worktree `.claude/worktrees/stage1`, baseline
-8370/8370, 0 fail, 0 skipped, runner exit 0, five docs gates exit 0, 35 open. S1, S2, B1
-and B2a are built on their branches (campaign progress log). B2 is split into B2a–B2d.
+8370/8370, 0 fail, 0 skipped, runner exit 0, five docs gates exit 0, 35 open. S1, S2, B1,
+B2a, B1b and B2b (in three parts) are built on their branches (campaign progress log).
+B2 is split into B2a–B2d.
 
 ## The golden path
 
@@ -72,20 +73,22 @@ bullet closes that ticket. CI is manual dispatch: once, on a final commit.
 
 ## Operator decisions
 
-All answered 2026-09-25 (campaign C1 rows 4 and 9–15, with sources). Still the operator's:
-**tag `f456217d`** after its smoke run, and each merge click. **Operator actions:** remove
-BUG-451's three records (the session supplies the steps); say "forget the note about bugs
+All answered (campaign C1 rows 4 and 9–19, with sources). Added 2026-09-26: a delivered
+click backs "I clicked", and a delivered open backs "opening it now"; "it's playing" needs
+the player's reading or the operator's own words, else "not confirmed". Still the operator's:
+**tag `f456217d`** after its smoke run, and each merge click. **Operator actions:** delete
+BUG-451's two remaining records by hand (C1 row 12); say "forget the note about bugs
 439" (sessions do not edit the vault); re-authorise Gmail (`invalid_grant`) if a sitting
 needs it; confirm the Mistral console is on the free tier; the wake-word licence goes to a lawyer.
 
 ## NEXT ACTION
 
-**B1b** (C1 row 13): `scripts/verify-voice-session.js` says "nothing left to cut" from
-`suppressedChunks`, which counts audio arriving after the stop; the recorder showed
-0.4–5.1 s queued at all 8 barge-ins. Fix the verdict, on its own branch from `f456217d`.
-Then B2b (448: a claim backed by the wrong action), B2c (461 short-command positives,
-plus measuring which Bengali/Hindi words are transcribed) and B2d (457: one delivery
-record per result). Not yet exercised live: web_search, recall_memory and crash containment.
+**B2c** (BUG-461, C1 rows 8 and 15): short commands whose own words name the action.
+First measure, read-only, which Bengali and Hindi words the transcriber actually returned
+in the operator's sessions, and bring the operator a proposal before changing how they are
+treated; until then they keep asking first. Then B2d (457: one delivery record per result),
+then B3. Owed at B5: the typed path still treats a delivered click as unbacked. Not yet
+exercised live: web_search, recall_memory, crash containment, and every B1b/B2b change.
 
 ## Where the detail lives
 
