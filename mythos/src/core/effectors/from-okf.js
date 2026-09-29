@@ -8,9 +8,11 @@
 // accepts a bundle somebody else produced.
 //
 // Tools:
-//   okf_export (tier 0) — write a bundle under vault/Knowledge/<bundle>/.
+//   okf_export (tier 2) — write a bundle under vault/Knowledge/<bundle>/.
 //   okf_list   (tier 0) — list bundles and their concepts.
-//   okf_import (tier 2) — read a bundle back into structured records.
+//   okf_import (tier 0) — read a bundle back into structured records.
+// (leash/tiers.js is the source; this header had export and import swapped
+// until 2026-09-29.)
 //
 // EXPORT IS A COPY, NOT A MOVE. Nothing here mutates or removes what it read.
 // A copy also goes stale, so exported concepts are marked `generated: true`
@@ -33,14 +35,45 @@ function fail(m, extra) { return { ok: false, result: Object.assign({ error: m }
 
 var KNOWLEDGE_ROOT = 'Knowledge';
 var MAX_CONCEPTS = 500;          // one export call; a bigger corpus is a paging problem, not a single call
+// One path segment. A generated concept name is at most 91 ("<80-char slug>-concept.md"),
+// so 100 leaves room for a hand-written one. This is a bound on the segment, not a
+// guarantee about the full path: vault root + Knowledge + a 100-character bundle +
+// a 100-character file + writeText's .tmp suffix can pass Windows' 260-character
+// MAX_PATH, which then works only where long paths are enabled (they are on the
+// machine this was measured on). Where they are not, the write fails and the concept
+// is reported as rejected, not lost.
+var MAX_NAME_LENGTH = 100;
+// Characters Windows gives meaning to. ":" is the dangerous one: "notes.md:x.exe"
+// is not refused by the filesystem, it creates an NTFS alternate data stream —
+// measured 2026-09-29, notes.md listed as 0 bytes with the content hidden in a
+// stream nothing here reads. The rest fail to write anyway; refusing them here
+// says why, instead of surfacing an EINVAL.
+var WINDOWS_RESERVED_CHARS = /[<>:"|?*\u0000-\u001f]/;
 
-// Bundle/concept names become path segments. Refuse anything that could escape.
+// Bundle/concept names become path segments. Refuse anything that could escape,
+// hide data, or leave a file Windows cannot open (B2b, 2026-09-29 audit).
 function badSegment(name) {
   var s = String(name || '');
   if (!s) return 'empty name';
   if (/[\\/]/.test(s)) return 'path separator in name: ' + s;
   if (s.indexOf('..') !== -1) return 'traversal in name: ' + s;
   if (/^[.\s]|[.\s]$/.test(s)) return 'name may not start or end with a dot or space: ' + s;
+  if (s.length > MAX_NAME_LENGTH) return 'name longer than ' + MAX_NAME_LENGTH + ' characters';
+  if (WINDOWS_RESERVED_CHARS.test(s)) return 'reserved character in name (one of : < > " | ? * or a control character): ' + JSON.stringify(s);
+  if (okf.isWindowsDeviceName(s)) return 'reserved device name: ' + s;
+  return null;
+}
+
+// A concept file is markdown and nothing else. okf_export is tier 2, which the
+// default autonomy ceiling (AUTONOMOUS_MAX_TIER=2) allows with no confirmation,
+// so without this a custom filename of "run.bat" put an executable-typed file
+// into the vault (measured 2026-09-29). Checked on the FINAL name, custom or
+// generated — a generated one always passes (200,000 fuzzed titles, independent
+// review, same day).
+function badConceptFilename(name) {
+  var bad = badSegment(name);
+  if (bad) return bad;
+  if (!/\.md$/i.test(String(name))) return 'a concept filename must end in .md: ' + name;
   return null;
 }
 
@@ -89,8 +122,9 @@ function buildTools(ctx) {
         continue;
       }
       var filename = c.filename ? String(c.filename) : okf.conceptFilename(c.title || type + '-' + (i + 1));
-      var badFile = badSegment(filename);
-      if (badFile) { rejected.push({ index: i, error: 'invalid filename — ' + badFile }); continue; }
+      var badFile = badConceptFilename(filename);
+      // The remedy is in the message (src/core/CLAUDE.md, Refusals): the model reads prose.
+      if (badFile) { rejected.push({ index: i, error: 'invalid filename — ' + badFile + '. Omit `filename` and a safe one is generated from the title.' }); continue; }
       if (okf.isReservedFilename(filename)) {
         rejected.push({ index: i, error: filename + ' is a reserved OKF filename (index.md / log.md)' });
         continue;
@@ -163,24 +197,28 @@ function buildTools(ctx) {
     var a = args || {};
 
     if (a.bundle) {
-      var badB = badSegment(String(a.bundle));
+      // Trimmed like okf_export and okf_import, so "notes " lists the bundle
+      // export wrote as "notes" instead of refusing it (independent review,
+      // 2026-09-29; the mismatch predates B2b).
+      var listBundle = String(a.bundle).trim();
+      var badB = badSegment(listBundle);
       if (badB) return fail('invalid bundle name — ' + badB);
       var files;
       try {
-        files = vault.listFiles(bundleRel(String(a.bundle)));
+        files = vault.listFiles(bundleRel(listBundle));
       } catch (_) {
         files = [];
       }
       var mdFiles = (files || []).filter(function(f) { return /\.md$/i.test(f.name || f); });
-      if (!mdFiles.length) return ok({ bundle: a.bundle, concepts: [], note: 'bundle is empty or does not exist' });
+      if (!mdFiles.length) return ok({ bundle: listBundle, concepts: [], note: 'bundle is empty or does not exist' });
       var concepts = mdFiles.map(function(f) {
         var name = f.name || f;
-        var parsed = okf.parse(vault.readText(bundleRel(String(a.bundle), name), ''));
+        var parsed = okf.parse(vault.readText(bundleRel(listBundle, name), ''));
         return parsed.ok
           ? { file: name, type: parsed.doc.type, title: parsed.doc.title || null, reserved: okf.isReservedFilename(name) }
           : { file: name, error: parsed.error };
       });
-      return ok({ bundle: a.bundle, concepts: concepts, count: concepts.length });
+      return ok({ bundle: listBundle, concepts: concepts, count: concepts.length });
     }
 
     var dirs;
@@ -286,5 +324,6 @@ module.exports = {
   registerFromOkf: registerFromOkf,
   buildTools: buildTools,
   // Exported for tests:
-  badSegment: badSegment
+  badSegment: badSegment,
+  badConceptFilename: badConceptFilename
 };
