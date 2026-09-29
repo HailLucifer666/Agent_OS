@@ -343,43 +343,43 @@
 
 <script type="application/json" id="map-data">
 {
-  "generated": "2026-09-25",
+  "generated": "2026-09-29",
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8370,
+      "value": 8391,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-29"
     },
     "fail": {
       "value": 0,
       "label": "tests fail",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-29"
     },
     "withheld": {
       "value": 61,
       "label": "withheld from voice",
       "tone": "warn",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-29"
     },
     "registered": {
       "value": 189,
       "label": "registered tools",
       "tone": "ok",
       "source": "computeEffectorTools()",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-29"
     },
     "voiceReachable": {
       "value": 128,
       "label": "reachable by voice",
       "tone": "ok",
       "source": "live-tools.js DEFAULT_ALLOWLIST",
-      "measuredAt": "2026-09-25"
+      "measuredAt": "2026-09-29"
     },
     "untriaged": {
       "value": 1,
@@ -5985,7 +5985,7 @@
         "title": "a web page on another site could drive the local API of any install with no PIN and no token (CODED 2026-09-23)",
         "detail": {
           "cause": "The `/api` CORS middleware in `server/index.js` only ever SET `Access-Control-Allow-*` headers for an allow-listed Origin; it never refused one. CORS decides whether a page may READ the response, not whether the request RUNS, so a form POST, a `fetch(..., { mode: 'no-cors' })` or an `\u003cimg src>` from any website reached every handler. With no token configured, `tokenOk()` passes every request, so that was the full tool surface. The DNS-rebinding guard (BUG-337) did not help: a foreign page is not rebound, its Host header is honestly 127.0.0.1.",
-          "fix": "`createCrossOriginGuard` in `src/core/server/boot-guards.js`, mounted on `/api` before CORS and every handler. A browser-shaped request is refused when its `Origin` names neither this request's own Host nor an `ALLOWED_ORIGINS` entry (the scheme is not compared, so a TLS-terminating proxy still works; `Origin: null` never parses to a host), or when `Sec-Fetch-Site` is anything but `same-origin` or `none`. `same-site` is refused on purpose: another localhost port is same-site. A non-browser client sends neither header and is unaffected.",
+          "fix": "`createCrossOriginGuard` in `src/core/server/boot-guards.js`, mounted on `/api` before CORS and every handler. A browser-shaped request is refused when its `Origin` names neither this request's own Host nor an `ALLOWED_ORIGINS` entry (the scheme was not compared until 2026-09-29; since audit step B3a it is, so a TLS-terminating proxy lists its https:// origin on `ALLOWED_ORIGINS`, as the WebSocket already required; `Origin: null` never parses to a host), or when `Sec-Fetch-Site` is anything but `same-origin` or `none`. `same-site` is refused on purpose: another localhost port is same-site. A non-browser client sends neither header and is unaffected.",
           "verification": "`test/pin-removal-access.test.js`: the full Origin × Sec-Fetch-Site matrix cell by cell, then a real server proving the MECHANISM — a foreign request is 403 and the handler never ran (call counter) — with the HUD's own origin and a plain client as the adjacent cases. Probes M9 (guard unmounted), M10 (`same-site` allowed) and M12 (unmounted from `/vault/builds`) in BUG-444's table each redden it."
         },
         "campaign": {
