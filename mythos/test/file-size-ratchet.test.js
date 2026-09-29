@@ -94,7 +94,7 @@ const BASELINE = {
   'mythos/test/brain.test.js': 1097,
   'mythos/ui/public/js/voice/voice-loop.js': 1075,
   'mythos/ui/public/js/neural-map/hud-canvas.js': 1027,
-  'mythos/src/core/effectors/from-computer.js': 997,
+  'mythos/src/core/effectors/from-computer.js': 867, // B2c: open_file moved to open-file.js
   'mythos/scripts/spike-dsh-build.js': 967,
   'mythos/adapters/dsh-agent/index.js': 929,
   'mythos/src/core/effectors/web-search.js': 862,

@@ -392,7 +392,9 @@ function createLeash(deps) {
         return failClosedIfUnwritable(tier, unprepWrite, { allow: false, requireConfirm: false, tier: tier, reason: 'not-prepared' });
       }
       if (prep.approval === 'refuse') {
-        var refuseReason = 'target-unresolved: ' + prep.detail;
+        // A tool may name its refusal (B2c: open_file refuses a file that resolved
+        // fine, for what it is); an unnamed one is a target that did not resolve.
+        var refuseReason = (prep.code || 'target-unresolved') + ': ' + prep.detail;
         var refuseWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'deny', { reason: refuseReason });
         return failClosedIfUnwritable(tier, refuseWrite, { allow: false, requireConfirm: false, tier: tier, reason: refuseReason, detail: prep.detail, remedy: prep.remedy });
       }
@@ -568,7 +570,7 @@ function createLeash(deps) {
       target = { resolved: false, reason: 'prepare failed: ' + (err && err.message) };
     } finally { clearTimeout(timer); }
     var verdict = effector.approvalFor(target, action.args || {});
-    prepared.remember(action, { target: target, approval: verdict.approval, detail: verdict.detail, remedy: verdict.remedy });
+    prepared.remember(action, { target: target, approval: verdict.approval, detail: verdict.detail, remedy: verdict.remedy, code: verdict.code });
     return action;
   }
 
