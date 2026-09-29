@@ -1239,7 +1239,8 @@ function createServer(deps) {
   // existing MYTHOS on this machine. The scan is read-only and the import writes
   // only what the operator confirms; secret values are never carried. See
   // routes/import-existing.js and src/core/setup/import-existing.js. ----
-  require('./routes/import-existing').mountImportRoutes(app, { config, logger });
+  // B3b: every import is confirmed in Electron's native dialog first.
+  require('./routes/import-existing').mountImportRoutes(app, { config, logger, confirmImport: (summary) => confirmImportInElectron(summary) });
 
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/
@@ -4227,6 +4228,21 @@ function createServer(deps) {
         pending.resolve(Boolean(msg.closed));
         return;
       }
+      if (msg && msg.channel === 'mythos:confirm-import-answer' && pendingImportConfirm) {
+        pendingImportConfirm.settle(String(msg.answer || 'no'));
+        return;
+      }
+      // B3b (2026-09-29 audit): Electron is showing a key/settings confirmation
+      // dialog. Until it says otherwise, pc-child refuses keyboard and mouse
+      // commands, so MYTHOS's own input tools cannot answer the operator's dialog.
+      if (msg && msg.channel === 'mythos:input-inhibit') {
+        require('../adapters/input-inhibit').setInputInhibited(msg.on === true);
+        // Acked only once no input command is still inside pc-child (at most 2 s),
+        // and with the request's own sequence number (B3b review).
+        const ack = () => { try { process.send({ channel: 'mythos:input-inhibit-ack', on: msg.on === true, seq: msg.seq }); } catch (_) { /* Electron shows the dialog without the ack */ } };
+        if (msg.on === true) pcChild.whenInputIdle(2000).then(ack, ack); else ack();
+        return;
+      }
       // BUG-272 T2 — the ack for mythos:open-external. Same single-pending-slot
       // shape as close-media-window above: one browser hand-off at a time, so a
       // reqId-keyed Map would be more machinery than the problem needs.
@@ -4339,6 +4355,21 @@ function createServer(deps) {
         clearTimeout(timer);
         resolve({ opened: false, reason: err.message });
       }
+    });
+  }
+
+  // B3b review: /api/setup/import asks Electron to confirm before it writes. One
+  // at a time; 'no-shell' when there is no Electron to ask (headless). A dialog
+  // left unanswered for ten minutes counts as Cancel.
+  let pendingImportConfirm = null;
+  function confirmImportInElectron(summary) {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') { resolve('no-shell'); return; }
+      if (pendingImportConfirm) { resolve('busy'); return; }
+      const timer = setTimeout(() => { if (pendingImportConfirm) pendingImportConfirm.settle('no'); }, 10 * 60 * 1000);
+      pendingImportConfirm = { settle: (answer) => { clearTimeout(timer); pendingImportConfirm = null; resolve(answer); } };
+      try { process.send({ channel: 'mythos:confirm-import', summary }); }
+      catch (_) { pendingImportConfirm.settle('no'); }
     });
   }
 

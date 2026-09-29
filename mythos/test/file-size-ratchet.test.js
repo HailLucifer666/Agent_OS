@@ -77,7 +77,7 @@ const DELIBERATE = {
 // a file has genuinely shrunk; never raise one to make a red run go green.
 const BASELINE = {
   'mythos/server/index.js': 4680,
-  'electron/main.js': 2606,
+  'electron/main.js': 2580, // B3b (2026-09-29): the settings channels moved to electron/settings-ipc.js
   // 1627 -> 1610 (BUG-407..411, 2026-09-03): the browser resolver moved to
   // browser-target.js and the launch plan to browser-launch-plan.js, so the fix
   // fitted under the ceiling instead of raising it. Recorded DOWN, per this

@@ -285,14 +285,17 @@ function sendRequest(method, params) {
   });
 }
 
+const inputInhibit = require('../input-inhibit');
+const READ_ONLY_TOOLS = new Set(['list_windows', 'get_window_state']);
+
 // B2e (2026-09-29 audit, review 2026-09-30): cua-driver's clicks never reach
 // ps-automation.ps1's input gate, so the same judgement runs here, at this
 // adapter's one door, for every tool that is not a read: the window the call
-// acts in (named by its pid — without one there is nothing to check, so it is
+// acts in (named by its pid - without one there is nothing to check, so it is
 // refused) is asked of pc-child's read-only input_target; MYTHOS's own window and
 // an unidentifiable one are refused; a command window runs only inside the
 // operator's approval scope for that exact window (pc-child/input-approval.js).
-// Every caller is covered — cua_click and spotify_play's direct clicks alike.
+// Every caller is covered - cua_click and spotify_play's direct clicks alike.
 const CUA_NOT_INPUT = new Set(['list_windows', 'get_window_state', 'bring_to_front']);
 async function inputGate(toolName, args) {
   if (CUA_NOT_INPUT.has(toolName)) return null;
@@ -309,7 +312,7 @@ async function inputGate(toolName, args) {
   if (w.kind === 'command') {
     const approved = inputApproval.currentApproved() || [];
     const same = approved.some((a) => a.pid === Number(w.pid) && a.start === String(w.start || '') && (!a.hwnd || a.hwnd === Number(w.hwnd)));
-    if (!same) return 'Refused: pid ' + pid + ' is ' + (w.process || 'a program') + ' — ' + w.why + '. Input there can run commands, so it needs the operator\'s approval for this one call.';
+    if (!same) return 'Refused: pid ' + pid + ' is ' + (w.process || 'a program') + ' - ' + w.why + '. Input there can run commands, so it needs the operator\'s approval for this one call.';
   }
   return null;
 }
@@ -319,6 +322,13 @@ async function inputGate(toolName, args) {
 // ({ content, structuredContent, isError }) so callers can read
 // structuredContent.elements etc.; on failure result is an error string.
 async function invoke(toolName, args) {
+  // B3b: while a MYTHOS confirmation dialog is open, only the read tools run
+  // (adapters/input-inhibit.js). Everything else could click or focus.
+  // Runs BEFORE the identity gate: it needs no pid and no round-trip, so it
+  // answers the cheapest, most absolute refusal first.
+  if (inputInhibit.isInputInhibited() && !READ_ONLY_TOOLS.has(toolName)) {
+    return { ok: false, result: inputInhibit.REFUSAL };
+  }
   const refusal = await inputGate(toolName, args);
   if (refusal) return { ok: false, result: refusal };
   if (state !== 'ONLINE') {
