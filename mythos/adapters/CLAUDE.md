@@ -9,6 +9,15 @@ pointer) — this file adds what's specific to this directory.
 
 ## Hard-won platform gotchas (do not re-learn these)
 
+- **While a MYTHOS confirmation dialog is open, no synthetic input is sent (B3b,
+  2026-09-29 audit).** `adapters/input-inhibit.js` holds one flag, set by
+  server/index.js when Electron is about to show a key/settings confirmation and
+  cleared when it is answered. pc-child refuses every input command while it is
+  set, checked when the command is SENT (processQueue) so one queued before the
+  dialog opened is refused too, and the server acks only once none is in flight; and cua-driver's `invoke()` refuses every tool but
+  its reads. A new input command must join pc-child's `INHIBITED_WHILE_CONFIRMING`
+  (`test/electron-settings-confirm.test.js` lists them).
+
 - **PowerShell 5.1 + pipes**: stdout defaults to the OEM codepage, which
   best-fits curly quotes (U+201C/D) into ASCII `"`, corrupting JSON in
   transit. `ps-automation.ps1` sets UTF-8 console encoding AND escapes

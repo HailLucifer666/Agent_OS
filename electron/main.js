@@ -60,6 +60,9 @@ const { recryptForeignStore } = require('./keystore-recrypt');
 const { createNoWindowRelaunchPrompt } = require('./relaunch-no-window');
 const { rotateLogIfOver } = require('./log-rotate');
 const { createHudTrust, hudOriginFor } = require('./hud-trust');
+// B3b: a native confirmation before any key or setting changes (see the file).
+const { createSettingsConfirm, createChildInputInhibit, isProviderKeyName, CANCELLED, BUSY, NOT_A_KEY } = require('./settings-confirm');
+const { registerSettingsIpc } = require('./settings-ipc');
 const settingsStore = require('../mythos/src/core/config/settings-store');
 
 // ---- ONE app identity -----------------------------------------------------------
@@ -557,6 +560,15 @@ const hudTrust = createHudTrust({ // hudOriginFor never throws: this runs while 
   origin: hudOriginFor(BIND, PORT),
 });
 
+// B3b (2026-09-29 audit): native confirmations, input refused while open (./settings-confirm.js).
+const childInputInhibit = createChildInputInhibit({ getChild: () => child, log });
+const settingsConfirm = createSettingsConfirm({
+  // dialog is required at the use site, like shell/session/screen elsewhere here.
+  showMessageBox: (...args) => require('electron').dialog.showMessageBox(...args),
+  getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+  inhibitInput: childInputInhibit.inhibit,
+});
+
 // Denylist for env-injection vectors: `name` is written verbatim into the
 // forked server child's env (see decryptedKeysForChild()/startChild()), and the
 // charset validator below (letters/digits/underscore) does not exclude these.
@@ -579,18 +591,21 @@ ipcMain.handle('mythos:set-key', async (event, name, value) => {
   if (!hudTrust.ipc(event).ok) {
     throw new Error('mythos:set-key: denied — sender is not the HUD window');
   }
-  // security-reviewer MEDIUM: validate the name charset/length and reject the
-  // prototype-poisoning reserved names. name becomes a child env var verbatim,
-  // so keep it to a conservative identifier shape.
+  // security-reviewer MEDIUM: validate the name charset/length and reject reserved names.
+  // name becomes a child env var verbatim, so keep it to a conservative identifier shape.
   if (typeof name !== 'string' || !/^[A-Za-z0-9_]{1,64}$/.test(name)) {
     return { ok: false, error: 'invalid key name (use letters, digits, underscore; max 64)' };
   }
   if (ENV_INJECTION_DENYLIST.has(name.toUpperCase())) {
     return { ok: false, error: 'this key name is reserved (env-injection vector) and cannot be stored' };
   }
+  if (!isProviderKeyName(name)) return { ok: false, error: NOT_A_KEY }; // B3b review: settings-confirm.js
   if (typeof value !== 'string') {
     return { ok: false, error: 'invalid key value' };
   }
+  // B3b: a native dialog naming the key (never its value) answers 'yes', 'no' or 'busy'.
+  const keyAnswer = await settingsConfirm.confirmKey(name);
+  if (keyAnswer !== 'yes') return { ok: false, error: keyAnswer === 'busy' ? BUSY : CANCELLED };
   const store = loadStore();
   if (safeStorage.isEncryptionAvailable()) {
     // security-reviewer HIGH: serialize the Buffer as base64, not as JSON's
@@ -665,49 +680,9 @@ function settingsPath() {
   return path.join(app.getPath('userData'), 'config.json');
 }
 
-// Reading is a value-returning channel, which the key store deliberately does
-// NOT have (AD-8). That is not a contradiction: these keys are non-secret by
-// construction, and settings-store.js's own secret filter is applied again here
-// so a hand-written secret in config.json still never reaches the renderer.
-ipcMain.handle('mythos:get-settings', async (event) => {
-  if (!hudTrust.ipc(event).ok) {
-    throw new Error('mythos:get-settings: denied — sender is not the HUD window');
-  }
-  const read = settingsStore.readSettings({ settingsPath: settingsPath() });
-  const values = {};
-  for (const [name, value] of Object.entries(read.values)) {
-    if (settingsStore.isSecretShaped(name)) continue; // presence is the server's story to tell
-    values[name] = value;
-  }
-  return {
-    file: read.file,
-    values,
-    unknown: read.unknown,
-    dropped: read.dropped,
-    error: read.error || null,
-  };
-});
-
-ipcMain.handle('mythos:set-setting', async (event, name, value) => {
-  if (!hudTrust.ipc(event).ok) {
-    throw new Error('mythos:set-setting: denied — sender is not the HUD window');
-  }
-  // The name lands verbatim in the child's env at fork() (startChild below), so
-  // the env-injection denylist that guards mythos:set-key guards this too. In
-  // practice no schema key collides with it, which is exactly why the check must
-  // be here rather than assumed.
-  if (typeof name === 'string' && ENV_INJECTION_DENYLIST.has(name.toUpperCase())) {
-    return { ok: false, error: 'this key name is reserved (env-injection vector) and cannot be stored' };
-  }
-  const res = settingsStore.writeSetting({ name, value, settingsPath: settingsPath() });
-  if (!res.ok) return res;
-  // Deliberately does NOT restart the server. The wizard/panel calls
-  // mythos:restart-server once, after a batch of edits — one re-fork for ten
-  // changed keys, not ten. Saying "saved" while the running child still has the
-  // old value is the same dishonesty interpretStoreResult already refuses, so
-  // the flag is returned rather than hidden.
-  return { ok: true, needsRestart: true, cleared: res.cleared === true };
-});
+// The settings channels (get-settings, set-setting, set-settings) live in
+// ./settings-ipc.js since B3b gave every write a native confirmation.
+registerSettingsIpc({ ipcMain, hudTrust, settingsStore, settingsPath, settingsConfirm, ENV_INJECTION_DENYLIST, CANCELLED });
 
 // Stage 5 (BUG-075) — routes 'ui.open-web' (relayed from the server child over
 // the fork() IPC channel below — see server/index.js's process.send() call in
@@ -986,6 +961,8 @@ function startChild() {
   // closes it and acks back so close_panel can report what really happened.
   child.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return;
+    if (msg.channel === 'mythos:input-inhibit-ack') { childInputInhibit.heardAck(msg); return; }
+    if (msg.channel === 'mythos:confirm-import') { settingsConfirm.confirmImport(msg.summary).then((answer) => { try { child.send({ channel: 'mythos:confirm-import-answer', answer }); } catch (_) { /* the server times out as Cancel */ } }); return; }
     if (msg.channel === 'mythos:ocr-result') {
       // BUG-268 D4 (2026-09-16): the OCR hotkey's result, toasted and copied
       // from HERE because the HUD is unfocused when the hotkey fires and the

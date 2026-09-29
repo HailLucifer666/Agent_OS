@@ -80,7 +80,7 @@ function mountImportRoutes(app, deps) {
     }
   });
 
-  app.post('/api/setup/import', (req, res) => {
+  app.post('/api/setup/import', async (req, res) => {
     const body = req.body || {};
     const dir = typeof body.dir === 'string' ? body.dir : '';
     const overwrite = body.overwrite === true;
@@ -102,6 +102,25 @@ function mountImportRoutes(app, deps) {
     const source = scan.sources.find((s) => path.resolve(s.dir) === path.resolve(dir));
     if (!source) {
       return res.status(400).json({ error: 'that directory is not one of the sources the scan found' });
+    }
+
+    // B3b review (2026-09-30): this reshapes the configuration AND the identity
+    // (boundaries.md, contacts, skills) in one call, and any same-origin page could
+    // make it. So the operator confirms it in Electron's native dialog first
+    // (electron/settings-confirm.js confirmImport), asked for by THIS route — a
+    // page cannot skip it. A headless run has no desktop to ask on and proceeds as
+    // before, behind the token when one is set.
+    if (typeof d.confirmImport === 'function') {
+      const answer = await d.confirmImport({
+        from: source.dir, label: source.label || null, overwrite,
+        settings: wantSettings ? Object.keys(source.settings || {}).sort() : [],
+        vaultFiles: wantVault && source.vault ? Number(source.vault.files) || 0 : 0,
+      });
+      if (answer !== 'yes' && answer !== 'no-shell') {
+        return res.status(409).json({ error: answer === 'busy'
+          ? 'not imported: another MYTHOS confirmation is already open — answer that one first'
+          : 'not imported: the operator chose Cancel in MYTHOS\'s confirmation dialog' });
+      }
     }
 
     const out = { dir: source.dir, settings: null, vault: null };

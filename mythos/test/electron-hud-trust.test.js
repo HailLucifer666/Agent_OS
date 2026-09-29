@@ -194,10 +194,19 @@ describe('electron/main.js routes every authority callback through the predicate
     // Every registration shape, not only the two in use today (independent
     // review, 2026-09-29): a future handleOnce/once, or a double-quoted channel,
     // must not escape the gate.
-    const handlers = [...MAIN.matchAll(/ipcMain\.(handle|handleOnce|on|once)\(\s*['"`]([^'"`]+)/g)].map((m) => ({ at: m.index, name: m[2] }));
+    // In EVERY electron/*.js file, not only main.js (B3b, 2026-09-29): the settings
+    // channels moved to settings-ipc.js, and a sweep of main.js alone would have
+    // stopped seeing them — a guard that only reads the file it shipped with.
+    const dir = path.join(ROOT, 'electron');
+    const handlers = [];
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.js'))) {
+      const src = fs.readFileSync(path.join(dir, f), 'utf8');
+      for (const m of src.matchAll(/ipcMain\.(handle|handleOnce|on|once)\(\s*['"`]([^'"`]+)/g)) handlers.push({ src, at: m.index, name: f + ':' + m[2] });
+    }
     assert.ok(handlers.length >= 8, `found ${handlers.length}`);
+    assert.ok(handlers.some((h) => h.name === 'settings-ipc.js:mythos:set-settings'), 'the sweep reaches the moved channels');
     for (const h of handlers) {
-      const body = MAIN.slice(h.at, h.at + 400);
+      const body = h.src.slice(h.at, h.at + 400);
       assert.match(body, /hudTrust\.ipc\(event\)\.ok/, `${h.name} must check the IPC sender through hudTrust`);
     }
     assert.doesNotMatch(MAIN, /isHudContents\(event\.sender\)/, 'the window-only check is gone from IPC');

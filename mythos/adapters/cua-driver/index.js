@@ -285,11 +285,19 @@ function sendRequest(method, params) {
   });
 }
 
+const inputInhibit = require('../input-inhibit');
+const READ_ONLY_TOOLS = new Set(['list_windows', 'get_window_state']);
+
 // Call a cua-driver MCP tool (names confirmed against 0.8.3 — see header).
 // Returns { ok, result } where result is the FULL MCP tool result object
 // ({ content, structuredContent, isError }) so callers can read
 // structuredContent.elements etc.; on failure result is an error string.
 async function invoke(toolName, args) {
+  // B3b: while a MYTHOS confirmation dialog is open, only the read tools run
+  // (adapters/input-inhibit.js). Everything else could click or focus.
+  if (inputInhibit.isInputInhibited() && !READ_ONLY_TOOLS.has(toolName)) {
+    return { ok: false, result: inputInhibit.REFUSAL };
+  }
   if (state !== 'ONLINE') {
     return { ok: false, result: hint || 'cua-driver unavailable' };
   }

@@ -132,12 +132,10 @@ function readSettings(opts) {
 // stored '' would pin the key at empty forever instead of letting the .env /
 // derived / default layers underneath it speak again — which is exactly the
 // difference between "I cleared this" and "I want this blank".
-function writeSetting(opts) {
-  const o = opts || {};
-  const fs = o.fs || fsDefault;
-  const file = o.settingsPath || resolveSettingsPath(o);
-  const name = o.name;
-
+// Every rule a setting must pass, with no file touched — so a confirmation can
+// be shown for exactly what WILL be written (B3b review, 2026-09-30: the batch
+// dialog used to show entries that were only rejected after the click).
+function validateSetting(name, value) {
   if (typeof name !== 'string' || !KEY_RE.test(name)) {
     return { ok: false, error: 'invalid setting name (letters, digits, underscore; max 64)' };
   }
@@ -152,14 +150,29 @@ function writeSetting(opts) {
   if (!Object.prototype.hasOwnProperty.call(SCHEMA, name)) {
     return { ok: false, error: `${name} is not a MYTHOS setting` };
   }
-  if (typeof o.value !== 'string') {
+  if (typeof value !== 'string') {
     return { ok: false, error: 'invalid setting value (expected a string)' };
   }
-  if (o.value.length > MAX_VALUE_LEN) {
+  if (value.length > MAX_VALUE_LEN) {
     return { ok: false, error: 'that value is too long for a setting' };
   }
-  if (/[\r\n]/.test(o.value)) {
+  if (/[\r\n]/.test(value)) {
     return { ok: false, error: 'a setting value cannot span lines' };
+  }
+  return { ok: true };
+}
+
+// A batch, all or nothing: every entry is validated first, and the file is
+// written ONCE with all of them, so a confirmed batch never lands half-written.
+function writeSettings(opts) {
+  const o = opts || {};
+  const fs = o.fs || fsDefault;
+  const file = o.settingsPath || resolveSettingsPath(o);
+  const changes = Array.isArray(o.changes) ? o.changes : [];
+  if (!changes.length) return { ok: false, error: 'no settings to write' };
+  for (const c of changes) {
+    const v = validateSetting(c && c.name, c && c.value);
+    if (!v.ok) return { ok: false, error: String(c && c.name) + ': ' + v.error };
   }
 
   // Start from the file's RAW contents, not from readSettings' filtered view:
@@ -177,8 +190,10 @@ function writeSetting(opts) {
     return { ok: false, error: `existing settings file is unreadable, refusing to overwrite it: ${err.message}` };
   }
 
-  if (o.value === '') delete current[name];
-  else current[name] = o.value;
+  for (const c of changes) {
+    if (c.value === '') delete current[c.name];
+    else current[c.name] = c.value;
+  }
 
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -188,13 +203,22 @@ function writeSetting(opts) {
   } catch (err) {
     return { ok: false, error: `could not write ${file}: ${err.message}` };
   }
-  return { ok: true, file, cleared: o.value === '' };
+  return { ok: true, file, cleared: changes.filter((c) => c.value === '').map((c) => c.name) };
+}
+
+function writeSetting(opts) {
+  const o = opts || {};
+  const res = writeSettings({ fs: o.fs, settingsPath: o.settingsPath, vaultRoot: o.vaultRoot, env: o.env, changes: [{ name: o.name, value: o.value }] });
+  if (!res.ok) return { ok: false, error: res.error.replace(String(o.name) + ': ', '') };
+  return { ok: true, file: res.file, cleared: o.value === '' };
 }
 
 module.exports = {
   resolveSettingsPath,
   readSettings,
   writeSetting,
+  writeSettings,
+  validateSetting,
   isSecretShaped,
   SETTINGS_KEY_RE: KEY_RE,
 };
