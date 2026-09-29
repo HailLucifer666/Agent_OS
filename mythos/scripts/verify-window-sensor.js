@@ -91,7 +91,10 @@ async function main() {
     driver.startPcChild();
     let launchRes = null;
     try {
-      launchRes = await driver.sendCommand({ cmd: 'launch_app', name: 'cmd' });
+      // B2a: pc-child launches only a resolved record. 'command prompt' is the
+      // Start Apps name; plain 'cmd' resolves to whatever else contains it (Git CMD).
+      const resolvedCmd = await driver.sendCommand({ cmd: 'resolve_app', name: 'command prompt' });
+      launchRes = await driver.sendCommand({ cmd: 'launch_app', name: 'cmd', target: resolvedCmd.result });
     } catch (err) {
       log('❌', `launch_app failed: ${err.message}`);
       pass = false;

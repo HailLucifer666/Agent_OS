@@ -79,6 +79,8 @@ function effectorFromTool(tool) {
     id: tool.name,
     tier: tierOf(tool.name),
     dangerWhen: tool.dangerWhen,           // read by leash.check() at gate time — not here
+    prepare: tool.prepare,                 // B2a: async resolution, run by leash.prepare() before check()
+    approvalFor: tool.approvalFor,         // B2a: resolved target -> { approval: 'none'|'required'|'refuse', detail }
     describe: function() { return tool.description; },
     // BUG-017: expose the tool's real {name, description, params} so callers (the
     // effector hub's catalog(), in turn the voice agent) can build a tool catalog

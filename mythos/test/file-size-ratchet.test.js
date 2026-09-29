@@ -83,7 +83,7 @@ const BASELINE = {
   // fitted under the ceiling instead of raising it. Recorded DOWN, per this
   // file's own rule — the ceiling only ever tightens.
   'mythos/src/core/effectors/from-browser.js': 1610,
-  'mythos/src/core/effectors/from-pc.js': 1552,
+  'mythos/src/core/effectors/from-pc.js': 1390, // B2a (2026-09-29): launch_app moved to launch-app.js
   'mythos/src/core/voice/live-tool-adapter.js': 1449,
   'mythos/src/core/effectors/from-dashboard.js': 1418,
   'mythos/src/main.js': 1373,

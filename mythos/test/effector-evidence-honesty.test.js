@@ -10,6 +10,7 @@
 // (02:21:27) instead of a rule. In every case the evidence already existed
 // inside the effector — this pins that it reaches the result.
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -151,7 +152,7 @@ describe('(c) launch_app reports unverified:true when no matching window appears
   it('an unresolvable launch (no pid, no title candidate) is unverified:true, never a bare ok', async () => {
     const mock = {
       getStatus: () => ({ state: 'ONLINE' }),
-      sendCommand: async () => ({
+      sendCommand: async (c) => answersResolve(c) || ({
         ok: true,
         result: { name: 'Proton VPN', launched: true, resolved: false, note: 'No process named like "Proton VPN" owns a window.' },
       }),
@@ -167,7 +168,7 @@ describe('(c) launch_app reports unverified:true when no matching window appears
   it('a title-only match (candidatePid, no pid) is unverified:true and names the unrelated window', async () => {
     const mock = {
       getStatus: () => ({ state: 'ONLINE' }),
-      sendCommand: async () => ({
+      sendCommand: async (c) => answersResolve(c) || ({
         ok: true,
         result: {
           name: 'Proton VPN', launched: true, resolved: false, matchedBy: 'title',
@@ -186,7 +187,7 @@ describe('(c) launch_app reports unverified:true when no matching window appears
   it('a real process-window match is verifiedOk, not unverified', async () => {
     const mock = {
       getStatus: () => ({ state: 'ONLINE' }),
-      sendCommand: async () => ({
+      sendCommand: async (c) => answersResolve(c) || ({
         ok: true,
         result: { name: 'notepad', launched: true, resolved: true, matchedBy: 'process', pid: 5150 },
       }),

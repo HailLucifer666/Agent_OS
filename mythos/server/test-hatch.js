@@ -130,9 +130,13 @@ async function handleCommand(msg, deps) {
 
   // Lock 3. Same call shape server/routes/media.js uses — leash.check owns the
   // audit write for the denial (AD-2), so a refusal here is recorded too.
+  // B2a: one decision object, prepared before it is checked, so the record
+  // leash.prepare() resolves is the one dispatch hands the effector.
+  const decision = { tool, args };
   let verdict;
   try {
-    verdict = leash.check({ tool, args }, { goalId: null, connectionId: connectionId || null });
+    if (leash.prepare) await leash.prepare(decision);
+    verdict = leash.check(decision, { goalId: null, connectionId: connectionId || null });
   } catch (err) {
     return refuse(msg, send, 'The leash could not evaluate that: ' + (err && err.message));
   }
@@ -155,7 +159,7 @@ async function handleCommand(msg, deps) {
 
   // Lock 4.
   try {
-    const result = await dispatchAction({ tool, args }, { tier: verdict.tier, channel: 'test-hatch' });
+    const result = await dispatchAction(decision, { tier: verdict.tier, channel: 'test-hatch' });
     send({ type: 'done', reqId: msg.reqId, tool, tier: verdict.tier, result: result });
   } catch (err) {
     send({ type: 'done', reqId: msg.reqId, error: true, tool, say: 'Dispatch failed: ' + (err && err.message) });

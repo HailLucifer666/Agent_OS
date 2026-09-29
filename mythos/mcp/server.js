@@ -122,6 +122,7 @@ function createMcpServer({ hub, leash, dispatch, bus, config, logger }) {
     var decision = { tool: toolName, args: args };
 
     // THE SECURITY GATE — goalId is always null over MCP. See file header.
+    if (leash.prepare) await leash.prepare(decision); // B2a: resolve before authorizing
     var leashResult = leash.check(decision, { goalId: null });
 
     if (!leashResult.allow) {

@@ -147,6 +147,31 @@ file adds the invariants specific to this layer.
   only when `MEMORY_AUTO_USER_FACTS=true`: off by default since 2026-09-25,
   on the operator's decision (BUG-463). Do not turn it back on by default.
 
+- **Prepare, then check (B2a, 2026-09-29 audit).** A tool may declare
+  `prepare(args)` (async resolution) and `approvalFor(target, args)`. Every call site
+  must `await leash.prepare(decision)` before `leash.check(decision)`; the
+  resolved record lives in `leash/prepared.js`'s WeakMap keyed by the decision
+  object, so the model cannot forge it and a copied decision is "not prepared"
+  (refused). `check()` then authorizes on the RESOLVED target, after the
+  credential scan, `boundaries.md` and `DRY_RUN`, and BEFORE the ceiling, goal
+  grants, trust and session grants: `approval: 'required'` returns
+  `requireConfirm` with reason `execution-sensitive-requires-approval` and
+  `perCallApproval: true`, which nothing but the operator's CLICK can satisfy —
+  `AUTONOMOUS_MAX_TIER` can reach 4, so "T4 always confirms" would not have been
+  enough. On accept, `authority-gate.js`'s `approvalConsentFor()` mints a one-use
+  token bound to the target; its one caller is the click path in
+  `server/index.js` (a spoken yes never reaches a per-call approval), and the
+  effector refuses without it. The cortex and the engagement executor DENY a
+  `perCallApproval` verdict rather than park it: they can only park 'system'
+  confirms, which the server accepts only up to tier 2. `leash.prepare()` waits
+  at most 3 s (pc-child runs one command at a time; Live awaits it outside its
+  own deadline) and a late answer is refused, never launched. A refusal's
+  `detail` is the whole sentence naming the next tool — the deny reason is the
+  only text Live and the voice agent pass on. `launch_app` is the first such tool
+  (`effectors/launch-app.js`, `launch-policy.js`); `test/launch-app-authorization.test.js`
+  sweeps `src/`, `server/` and `mcp/` for any `leash.check(` not preceded by
+  `leash.prepare(`. Do not add a check site without the prepare.
+
 ## Dispatch (`effectors/dispatch-action.js`)
 
 - **Single shared sequence** used by both the cortex autonomous loop and the

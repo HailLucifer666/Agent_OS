@@ -31,6 +31,21 @@
 const { judgeTrustedAction, judgeMemoryWrite, isAffirmativeReply, yesAndRest, restNamesCall, readBackMatches, leadingWords,
   KEY_WORDS } = require('./operator-authority');
 const { mintConsent, signatureOf } = require('../leash/consent');
+const { preparedOf } = require('../leash/prepared');
+
+// B2a (2026-09-29 audit): the consent token for a call the leash held for its
+// per-call approval (an execution surface, or an app not on the reviewed list).
+// Bound to the TARGET leash.prepare() resolved — the thing the operator was shown
+// — not to the name the model typed, and minted only when the operator accepted
+// that very confirm: server/index.js's click accept is the one caller (a spoken
+// yes never reaches a per-call approval; see runApproved). Null for anything that
+// was not held for approval. Minted here because this file is the only one
+// allowed to mint (test-pinned).
+function approvalConsentFor(decision) {
+  const prep = preparedOf(decision);
+  if (!prep || prep.approval !== 'required') return null;
+  return mintConsent({ tool: decision.tool, args: { target: prep.target }, basis: 'approved-proposal' });
+}
 
 // The leash reasons that exist only because a human connection is driving
 // (leash/index.js: isOperatorPresent). That premise is what BUG-461 broke.
@@ -258,6 +273,10 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
     const decision = action.decision || action;
     let verdict;
     try { verdict = leash.check(decision, { connectionId: key, goalId: null }); } catch (err) { verdict = { allow: false, reason: 'gate failure' }; }
+    // No per-call approval (B2a) comes through here: a proposal exists only for a
+    // call the leash ALLOWED, and a prepared record is frozen, so its re-check
+    // cannot turn into an approval hold. That approval is click-only, through
+    // server/index.js (B2a review, 2026-09-29, which removed a branch for it here).
     if (!verdict || !verdict.allow) {
       return Promise.resolve(resolveConfirm(confirmId, { ok: false, result: 'no longer permitted: ' + ((verdict && verdict.reason) || 'unknown') }, true));
     }
@@ -353,4 +372,4 @@ function createTypedMemoryGate({ now = Date.now } = {}) {
   return { hold };
 }
 
-module.exports = { createAuthorityGate, createTypedMemoryGate, HUMAN_PREMISE_REASONS, MEMORY_TOOLS, SPOKEN_APPROVAL_TTL_MS };
+module.exports = { createAuthorityGate, createTypedMemoryGate, approvalConsentFor, HUMAN_PREMISE_REASONS, MEMORY_TOOLS, SPOKEN_APPROVAL_TTL_MS };
