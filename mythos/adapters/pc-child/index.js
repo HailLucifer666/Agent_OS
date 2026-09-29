@@ -23,6 +23,8 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const { createLogger } = require('../../src/core/logger');
+// B2e: the only route an operator's approval takes onto an input command.
+const inputApproval = require('./input-approval');
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
 const RING_BUFFER_MAX_LINES = 100;
@@ -255,7 +257,9 @@ function sendCommand(cmdObj) {
       reject(new Error('PC automation offline'));
       return;
     }
-    commandQueue.push({ cmd: cmdObj, resolve, reject });
+    // B2e: stamped HERE, in the caller's own async context — once queued, the
+    // command leaves that context. See input-approval.js.
+    commandQueue.push({ cmd: inputApproval.stamp(cmdObj), resolve, reject });
     processQueue();
   });
 }
@@ -308,6 +312,10 @@ function recentStderr(maxLines = 20) {
     .slice(-maxLines);
 }
 
+function ownPids() {
+  return [process.pid, process.ppid].filter((n) => Number.isInteger(n) && n > 0).join(',');
+}
+
 function spawnChild() {
   const scriptPath = resolveScriptPath();
   if (!fs.existsSync(scriptPath)) {
@@ -325,6 +333,10 @@ function spawnChild() {
     '-NonInteractive',
     '-ExecutionPolicy', 'Bypass',
     '-File', scriptPath,
+    // B2e: MYTHOS's own processes — this server and the process that started it
+    // (Electron's main process, which owns the HUD window). ps-automation.ps1
+    // refuses any keystroke or click into their windows. Fixed for the child's life.
+    '-InputOwnPids', ownPids(),
   ];
 
   const proc = (spawnImpl || spawn)('powershell.exe', args, {

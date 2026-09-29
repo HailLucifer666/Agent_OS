@@ -173,6 +173,19 @@ file adds the invariants specific to this layer.
   would run is refused, a non-document needs the click); `test/launch-app-authorization.test.js`
   sweeps `src/`, `server/` and `mcp/` for any `leash.check(` not preceded by
   `leash.prepare(`. Do not add a check site without the prepare.
+- **Keyboard and mouse tools are prepared too (B2e, 2026-09-29 audit).**
+  `effectors/input-target.js` gives ui_type, send_key, ui_click, click_at,
+  right_click_at, scroll_at, drag, see_and_click and cua_click a prepare() that
+  asks pc-child which window the input would reach, at the one door every tool
+  registration passes (`effectorFromTool`). MYTHOS's own window is refused; a
+  command window (terminal, Run box, Explorer, an editor with a terminal) is a
+  per-call approval that operator-present trust cannot skip. The ENFORCEMENT is
+  in ps-automation.ps1 (see `adapters/CLAUDE.md`), which judges every pc-child
+  input command before its handler AND every SendInput as it is sent, internal
+  flows included, and at cua-driver's own door for its clicks (a pid is
+  required there); the approval reaches both only through
+  `adapters/pc-child/input-approval.js`. After an approval, a keystroke tool first
+  brings the approved window forward. `test/input-gate.test.js`.
 
 ## Dispatch (`effectors/dispatch-action.js`)
 
