@@ -222,11 +222,58 @@ describe('the release workflow', () => {
     // nothing and latest.yml's releaseNotes field goes back to being empty.
     const text = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
     const notesIdx = text.indexOf('node scripts/build-release-notes.js');
-    const buildIdx = text.indexOf('Build and publish the installer');
+    const buildIdx = text.indexOf('Build the installer (publishing disabled)');
     assert.notEqual(notesIdx, -1, 'the workflow must run scripts/build-release-notes.js');
-    assert.notEqual(buildIdx, -1, 'the workflow must still have its build/publish step');
+    assert.notEqual(buildIdx, -1, 'the workflow must still have its build step');
     assert.ok(notesIdx < buildIdx,
       'release notes must be generated BEFORE the build step reads build/release-notes.md');
+  });
+
+  it('builds with publishing disabled, scans, then uploads only the scanned artifacts', () => {
+    const text = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
+    const code = text.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const build = code.indexOf('npx electron-builder --win --publish never');
+    const scan = code.indexOf('node mythos/scripts/verify-package-contents.js --dist dist --receipt dist/package-scan.json');
+    const upload = code.indexOf('node scripts/publish-scanned-release.js');
+    assert.ok(build >= 0 && scan >= 0 && upload >= 0, `build=${build} scan=${scan} upload=${upload}`);
+    assert.ok(build < scan && scan < upload, 'the order must be build, scan, upload');
+    assert.doesNotMatch(code, /--publish\s+(always|onTag|onTagOrDraft)/,
+      'no step may let electron-builder upload by itself — it would skip the scan');
+    // The build step holds no upload rights: GH_TOKEN appears only on steps after the scan.
+    const firstToken = code.indexOf('GH_TOKEN:');
+    assert.ok(firstToken > scan, 'GH_TOKEN must not be in scope for the build or the scan');
+  });
+
+  // Widened 2026-09-29 after independent review: the first version checked only
+  // the upload line, while the tag-check and draft-check steps still pasted the
+  // free-text workflow_dispatch input straight into pwsh source. So this now
+  // holds over EVERY line: an expression may appear only as the value of a key
+  // that is not shell source.
+  it('never splices an expression into a run: script — the tag travels by environment', () => {
+    const text = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
+    const code = text.split('\n').filter((l) => !/^\s*#/.test(l));
+    const spliced = code.filter((l) => l.includes('${{') && !/^\s*(ref|GH_TOKEN|RELEASE_TAG):\s/.test(l));
+    assert.deepEqual(spliced, [], 'a ${{ }} outside an input/env value is pasted into the script before the shell parses it');
+    assert.match(text, /\n {4}env:\n {6}RELEASE_TAG: \$\{\{ github\.event\.inputs\.tag \|\| github\.ref_name \}\}\n/,
+      'the tag must be set once, at job level, for every step');
+    assert.equal((text.match(/\$env:RELEASE_TAG/g) || []).length, 3, 'tag check, upload and draft check all read it from the environment');
+  });
+
+  it('does not leave the write token on disk for the build to read', () => {
+    const text = fs.readFileSync(WORKFLOW, 'utf8').replace(/\r\n/g, '\n');
+    // Read as lines, not one regex: the first version was
+    //   /checkout@v4\n\s+with:\n(?:\s+[^\n]*\n)*?\s+persist-credentials: false\n/
+    // and because \s also matches "\n", every line could be split between the two
+    // quantifiers several ways — so when the key was ABSENT the match backtracked
+    // exponentially and the test hung instead of failing. Found by mutation probe
+    // R17 on 2026-09-29 (it ran for 14 minutes before it was noticed).
+    const lines = text.split('\n');
+    const at = lines.findIndex((l) => /^\s*- uses: actions\/checkout@v4\s*$/.test(l));
+    assert.ok(at >= 0, 'the checkout step must exist');
+    const block = [];
+    for (let i = at + 1; i < lines.length && !/^\s*- /.test(lines[i]); i += 1) block.push(lines[i].trim());
+    assert.ok(block.includes('persist-credentials: false'),
+      'actions/checkout persists the contents:write token in .git/config unless told not to');
   });
 
   it('checks out full history, which build-release-notes.js needs for git log', () => {
@@ -291,16 +338,109 @@ describe('releaseSteps — the ORDER, which is the part that was wrong', () => {
   const isBuild = ([, args]) => args.some((a) => /electron-builder/.test(String(a)));
   const isTagPush = ([cmd, args]) => cmd === 'git' && args[0] === 'push' && args[2] === 'v1.2.3';
   const isMainPush = ([cmd, args]) => cmd === 'git' && args[0] === 'push' && args[2] === 'main';
+  const isScan = ([, args]) => /verify-package-contents\.js$/.test(String(args[0]));
+  const isUpload = ([, args]) => /publish-scanned-release\.js$/.test(String(args[0]));
 
-  it('pushes the tag BEFORE the build that publishes against it', () => {
+  it('pushes the tag BEFORE the upload that publishes against it', () => {
     const tagPush = idx(isTagPush);
-    const build = idx(isBuild);
+    const upload = idx(isUpload);
     assert.ok(tagPush >= 0, 'the tag must still be pushed');
-    assert.ok(build >= 0, 'the build step must still exist');
-    assert.ok(tagPush < build,
-      `the tag push is at ${tagPush} and the publishing build at ${build}. With releaseType "release", `
+    assert.ok(upload >= 0, 'the upload step must still exist');
+    assert.ok(tagPush < upload,
+      `the tag push is at ${tagPush} and the upload at ${upload}. With releaseType "release", `
       + 'GitHub 422s a published release whose tag it has never seen — so this order must never invert.');
   });
+
+  // 2026-09-29 audit, B1. The build used to be last and to upload as it went
+  // ("--publish always"), so nothing could look at the installer before it was
+  // public — and the 2026-09-23 local build carried four .env backups.
+  // Mutation-probed the same day, each red here: the build without
+  // "--publish never"; the scan moved after the pushes; the upload moved before
+  // the tag push; release.yml's build set to "--publish always"; release.yml's
+  // tag spliced into the command line.
+  // After independent review (Opus), same day, six more, each red: no origin
+  // re-check after the build; the recovery not printed; the tag spliced into the
+  // draft-check step; checkout persisting its token; `npm run dist` without
+  // --receipt; the workflow search exempting any line containing "install". The
+  // persisted-token probe first HUNG this file for 14 minutes — the assertion's
+  // regex backtracked exponentially once the key was missing — so that test now
+  // reads lines instead.
+  it('builds and scans BEFORE any push', () => {
+    const build = idx(isBuild);
+    const scan = idx(isScan);
+    const firstPush = idx(([cmd, args]) => cmd === 'git' && args[0] === 'push');
+    assert.ok(build >= 0 && scan >= 0, 'the build and the scan must both exist');
+    assert.equal(scan, build + 1, 'the scan must run directly after the build it inspects');
+    assert.ok(scan < firstPush, `the scan is at ${scan} and the first push at ${firstPush}`);
+  });
+
+  // Independent review, 2026-09-29: the first B1 draft built AFTER committing and
+  // tagging, so a red scan left a local tag — and a tag that exists makes this
+  // script's preflight refuse the re-run. Now a red scan leaves only package.json.
+  it('builds and scans BEFORE the commit and the tag, so a red scan leaves no commit and no tag', () => {
+    const scan = idx(isScan);
+    const firstGitWrite = idx(([cmd, args]) => cmd === 'git' && ['add', 'commit', 'tag'].includes(args[0]));
+    assert.ok(scan >= 0 && firstGitWrite >= 0);
+    assert.ok(scan < firstGitWrite, `the scan is at ${scan} and the first git write at ${firstGitWrite}`);
+  });
+
+  it('re-checks origin/main after the build and before the commit', () => {
+    // The build takes minutes and a second machine pushes to this repo.
+    const scan = idx(isScan);
+    const fetch = idx(([cmd, args]) => cmd === 'git' && args[0] === 'fetch');
+    const ancestor = idx(([cmd, args]) => cmd === 'git' && args.join(' ') === 'merge-base --is-ancestor origin/main HEAD');
+    const commit = idx(([cmd, args]) => cmd === 'git' && args[0] === 'commit');
+    assert.ok(scan < fetch && fetch < ancestor && ancestor < commit, `scan=${scan} fetch=${fetch} ancestor=${ancestor} commit=${commit}`);
+  });
+
+  it('every step carries its own recovery, and none before the tag tells the operator to delete one', () => {
+    const all = steps();
+    const tagAt = all.findIndex(([cmd, args]) => cmd === 'git' && args[0] === 'tag');
+    all.forEach(([cmd, args, recovery], i) => {
+      assert.ok(typeof recovery === 'string' && recovery.length > 20, `${cmd} ${args.join(' ')} has no recovery`);
+      if (i < tagAt) assert.doesNotMatch(recovery, /git tag -d/, `no tag exists yet at step ${i}`);
+    });
+    assert.match(all[0][2], /git checkout -- package\.json/);
+    assert.match(all[all.length - 1][2], /publish-scanned-release\.js v1\.2\.3.*Do NOT re-run this script/s);
+    // And main() prints it: the operator reads the terminal, not the source.
+    const src = fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'release.js'), 'utf8');
+    assert.match(src, /for \(const \[cmd, cmdArgs, recovery\] of steps\)/);
+    assert.match(src, /console\.error\(`release: recovery — \$\{recovery\}`\)/);
+  });
+
+  it('scans the dist directory and writes the receipt the upload step demands', () => {
+    const scan = steps().find(isScan);
+    assert.equal(scan[0], process.execPath);
+    assert.deepEqual(scan[1].slice(1).map((a, i) => (i % 2 === 0 ? a : path.basename(a))),
+      ['--dist', 'dist', '--receipt', 'package-scan.json']);
+  });
+
+  it('the upload is the LAST step and goes through the scanned-receipt publisher, never electron-builder', () => {
+    const all = steps();
+    const upload = all[all.length - 1];
+    assert.ok(isUpload(upload), 'the final step must be scripts/publish-scanned-release.js');
+    assert.deepEqual(upload[1].slice(1), ['v1.2.3']);
+    assert.equal(all.filter(isBuild).length, 1, 'exactly one build — the upload must not rebuild');
+  });
+
+  // electron-builder publishes on its own when --publish is absent and
+  // npm_lifecycle_event is "release" (which `npm run release` sets) or a CI tag
+  // is visible (app-builder-lib/out/publish/PublishManager.js, 26.15.3). So
+  // "never" must be explicit in EVERY mode — omitting the flag is not the same as
+  // not publishing.
+  for (const opts of [
+    { publishing: true, ci: false }, { publishing: true, ci: true },
+    { publishing: false, ci: false }, { publishing: false, ci: true },
+  ]) {
+    it(`every build passes --publish never (${JSON.stringify(opts)})`, () => {
+      const builds = release.releaseSteps('v1.2.3', opts).filter(isBuild);
+      assert.equal(builds.length, 1);
+      const args = builds[0][1];
+      const at = args.indexOf('--publish');
+      assert.ok(at > 0 && args[at + 1] === 'never', `build args were: ${args.slice(1).join(' ')}`);
+      assert.equal(args.includes('always'), false);
+    });
+  }
 
   it('does not invoke the build through npx, which cannot spawn on Windows', () => {
     // The defect that cost 0.1.10 AND 0.1.11, both of which stopped at this step
@@ -347,21 +487,23 @@ describe('releaseSteps — the ORDER, which is the part that was wrong', () => {
     assert.ok(commit >= 0 && commit < tag);
   });
 
-  it('omits --publish under --ci, where the workflow does the upload', () => {
+  it('does not upload under --ci, where the workflow does the upload', () => {
     const ciSteps = release.releaseSteps('v1.2.3', { publishing: true, ci: true });
     const build = ciSteps.find(isBuild);
     assert.ok(build, 'the build still runs as a smoke test');
-    assert.equal(build[1].includes('--publish'), false);
-    // The pushes must STILL come first here — under --ci the tag push is what
-    // triggers the release workflow, so a build placed before it would run
-    // against a tag that does not exist yet for a different reason.
+    assert.equal(ciSteps.some(isUpload), false, 'the workflow uploads; a local upload as well would race it');
+    // Under --ci the tag push is what STARTS the release workflow, so the local
+    // smoke build and its scan run first: a red scan must stop the push rather
+    // than follow it. (Until 2026-09-29 this asserted the reverse, when the
+    // local build was also the upload and needed the remote tag to exist.)
     const order = ciSteps.map(([cmd, args]) => cmd + ' ' + args.join(' '));
-    assert.ok(order.findIndex((s) => s.includes('push origin v1.2.3')) < order.findIndex((s) => s.includes('electron-builder')));
+    assert.ok(order.findIndex((s) => s.includes('verify-package-contents')) < order.findIndex((s) => s.includes('push origin v1.2.3')));
   });
 
-  it('omits --publish under --no-publish', () => {
-    const build = release.releaseSteps('v1.2.3', { publishing: false, ci: false }).find(isBuild);
-    assert.equal(build[1].includes('--publish'), false);
+  it('does not upload under --no-publish, but still builds and scans', () => {
+    const s = release.releaseSteps('v1.2.3', { publishing: false, ci: false });
+    assert.equal(s.some(isUpload), false);
+    assert.ok(s.some(isBuild) && s.some(isScan));
   });
 
   it('names the tag consistently in every step that mentions it', () => {
@@ -372,5 +514,92 @@ describe('releaseSteps — the ORDER, which is the part that was wrong', () => {
       const mentions = args.filter((a) => /^v\d+\.\d+\.\d+$/.test(a));
       for (const m of mentions) assert.equal(m, 'v1.2.3');
     }
+  });
+});
+
+// Every route that can run electron-builder, found by searching for it rather
+// than listed by hand: package.json scripts and every workflow. Each must say
+// `--publish never`, because a route that omits the flag lets electron-builder
+// decide — and it decides "publish" under `npm run release`, and on any CI run
+// that can see a tag. The upload belongs to publish-scanned-release.js alone.
+describe('no build route lets electron-builder upload by itself', () => {
+  const REPO = path.join(__dirname, '..', '..');
+
+  // Every non-comment line that runs electron-builder. There is deliberately no
+  // exemption: an earlier version skipped any line CONTAINING "install", so
+  // `electron-builder --publish always --config.nsis.installerIcon=x` — or one
+  // ending in "# build installer" — walked past this guard (independent review,
+  // 2026-09-29), and no workflow line needed the exemption in the first place.
+  function builderLines(text, file) {
+    const found = [];
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (/^\s*#/.test(line)) return;
+      if (/electron-builder(\s|$)/.test(line)) found.push({ where: `${file}:${i + 1}`, cmd: line.trim() });
+    });
+    return found;
+  }
+
+  function invocations() {
+    const found = [];
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+    for (const [name, cmd] of Object.entries(pkg.scripts || {})) {
+      if (/electron-builder/.test(cmd)) found.push({ where: `package.json scripts.${name}`, cmd });
+    }
+    const wfDir = path.join(REPO, '.github', 'workflows');
+    for (const file of fs.readdirSync(wfDir).filter((f) => /\.ya?ml$/.test(f))) {
+      found.push(...builderLines(fs.readFileSync(path.join(wfDir, file), 'utf8'), file));
+    }
+    return found;
+  }
+
+  it('finds the routes it polices (so an empty search cannot pass)', () => {
+    const where = invocations().map((i) => i.where);
+    assert.ok(where.includes('package.json scripts.dist'), `found: ${where.join(', ')}`);
+    assert.ok(where.some((w) => w.startsWith('release.yml:')), `found: ${where.join(', ')}`);
+  });
+
+  // Every publish flag on the line, in every spelling electron-builder's yargs
+  // accepts. Exactly one, and it must say "never": with "--publish never -p
+  // always" the LAST one wins, so the presence of "never" alone proves nothing.
+  function publishValues(cmd) {
+    const toks = cmd.split(/\s+/);
+    const values = [];
+    toks.forEach((tok, i) => {
+      if (tok === '--publish' || tok === '-p') values.push(toks[i + 1]);
+      else if (/^(--publish|-p)=/.test(tok)) values.push(tok.split('=')[1]);
+    });
+    return values;
+  }
+
+  // Independent review, 2026-09-29: `npm run dist` scanned without --receipt,
+  // so the documented upload after it (publish-scanned-release.js) always refused.
+  it('npm run dist writes the receipt the documented upload step demands', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'));
+    assert.match(pkg.scripts.dist,
+      /electron-builder --win --publish never && node mythos\/scripts\/verify-package-contents\.js --dist dist --receipt dist\/package-scan\.json$/);
+  });
+
+  it('every one of them passes exactly one publish flag, and it is --publish never', () => {
+    const bad = invocations().filter((i) => JSON.stringify(publishValues(i.cmd)) !== '["never"]');
+    assert.deepEqual(bad, [], 'these routes let electron-builder choose whether to upload');
+  });
+
+  it('the flag reader is not fooled by a second, later publish flag (attack on this guard)', () => {
+    assert.deepEqual(publishValues('electron-builder --win --publish never'), ['never']);
+    assert.deepEqual(publishValues('electron-builder --win --publish never -p always'), ['never', 'always']);
+    assert.deepEqual(publishValues('electron-builder --win --publish=always'), ['always']);
+    assert.deepEqual(publishValues('electron-builder --win'), []);
+  });
+
+  it('no line that runs electron-builder is exempt from the search (attack on this guard)', () => {
+    const wf = [
+      '# a comment naming electron-builder is prose, not a route',
+      '        run: npx electron-builder --win --publish always --config.nsis.installerIcon=x',
+      '        run: npx electron-builder --win # build installer',
+      '        run: npm ci && npx electron-builder --publish always',
+    ].join('\r\n');
+    const found = builderLines(wf, 'x.yml');
+    assert.deepEqual(found.map((f) => f.where), ['x.yml:2', 'x.yml:3', 'x.yml:4']);
+    assert.deepEqual(found.map((f) => JSON.stringify(publishValues(f.cmd))), ['["always"]', '[]', '["always"]']);
   });
 });
