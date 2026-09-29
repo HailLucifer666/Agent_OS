@@ -587,7 +587,7 @@ const SCHEMA = {
   // saying "yes" to something else a minute later must not fire it.
   VOICE_SPOKEN_CONFIRM_TTL_MS: { type: 'number', default: 60000, min: 1, max: 600000 },
   VOICE_EMAIL_MODE:            { type: 'string', default: 'gmail', enum: ['gmail', 'mailto'] },
-  VOICE_ALLOWED_DIRS:          { type: 'string', default: '%USERPROFILE%' },    // semicolon-separated list_folder whitelist
+  VOICE_ALLOWED_DIRS:          { type: 'string', default: '' },                 // extra file-tool roots; mythos/ is always one (B2d: no longer the whole profile)
 
   // Identity / reflection / immune speech
   BOOT_GREETING:               { type: 'string', default: '' },    // '' = on; 'false' = off

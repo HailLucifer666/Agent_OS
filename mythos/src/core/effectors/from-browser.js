@@ -9,6 +9,8 @@ const snapshotView = require('./snapshot-view');
 const effect = require('./browser-effect'); // BUG-462: did the action do what it was for
 const { remedy } = evidenceModule;
 const { vaultRelativePath, vaultUrl } = require('./vault-url');
+const { secretInOutbound, outboundRefusal } = require('./outbound-secret');
+const readAccess = require('./read-access-policy');
 const { spawn } = require('child_process');
 const { childRuntimeDir, childCommand, waitForSpawn } = require('../util/child-runtime');
 const fs = require('fs');
@@ -332,7 +334,17 @@ async function browser_navigate({ url, newTab, browser }) {
     }
     target = vaultUrl(relPath, config, { sign: true }); // BUG-317: a real browser sends no auth header
   }
-  try { new URL(target); } catch { return fail(`Invalid URL: "${target}"`); }
+  let parsedTarget;
+  try { parsedTarget = new URL(target); } catch { return fail(`Invalid URL: "${target}"`); }
+  // B2d: http(s) only. file:// would read any local file into a page the model
+  // then reads back (around the read-access policy), and javascript:/data: run
+  // code in whatever page is open. A vault path was already mapped to http above.
+  if (parsedTarget.protocol !== 'http:' && parsedTarget.protocol !== 'https:') {
+    return { ok: false, result: `browser_navigate opens http:// and https:// pages only (got "${parsedTarget.protocol}"). For a local file use read_file.`,
+      remedy: remedy('read_file', {}, 'read a local file through the read-access policy') };
+  }
+  const carried = secretInOutbound(url);
+  if (carried) return fail(outboundRefusal('that URL', carried));
   const guard = await requireOnline();
   if (guard) return guard;
 
@@ -1136,10 +1148,10 @@ function resolveUploadPath(rawPath) {
   // realpath both sides before comparing: it is the link-following check that
   // makes the containment test mean anything.
   let realFile;
-  try { realFile = fs.realpathSync(resolved); } catch (_) { realFile = resolved; }
+  try { realFile = fs.realpathSync.native(resolved); } catch (_) { realFile = resolved; }
   const contained = roots.some((root) => {
     let realRoot;
-    try { realRoot = fs.realpathSync(path.resolve(root)); } catch (_) { return false; }
+    try { realRoot = fs.realpathSync.native(path.resolve(root)); } catch (_) { return false; }
     const withSep = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
     return realFile === realRoot || realFile.startsWith(withSep);
   });
@@ -1148,6 +1160,12 @@ function resolveUploadPath(rawPath) {
       `"${rawPath}" is outside the folders I am allowed to upload from. I can only send files from: ` +
       roots.join('; ') + '.' };
   }
+  // B2d review (2026-09-29): an upload SENDS a local file to a web page, so the
+  // read-access policy applies, on the typed and the native spellings (.native
+  // expands an 8.3 short name; a stream suffix is refused outright).
+  const hit = readAccess.protectedReason(resolved) || readAccess.protectedReason(realFile)
+    || (/:/.test(realFile.replace(/^[A-Za-z]:/, '')) && { rule: 'stream', detail: 'an NTFS stream name' });
+  if (hit) return { ok: false, reason: readAccess.refusalFor(rawPath, hit) };
   return { ok: true, resolved: realFile };
 }
 

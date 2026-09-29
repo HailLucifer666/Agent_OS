@@ -26,6 +26,7 @@ const ytEpisode = require('../util/youtube-episode'); // BUG-438
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
 const { openUrlExternally } = require('./open-url');
+const { secretInOutbound, outboundRefusal } = require('./outbound-secret');
 const { vaultRelativePath, vaultUrl, vaultAgeHours } = require('./vault-url');
 const { visionThink } = require('./vision-call');
 const evidence = require('./evidence');
@@ -270,6 +271,11 @@ function buildTools(ctx) {
         return fail('open_web type must be one of ' + ALLOWED_TYPES.join('|') + ' (got "' + t + '"). To open or control the real browser, use browser_navigate or browser_tabs instead.', OPEN_WEB_CODES.BAD_REQUEST);
       }
       var q = String(query || '').trim();
+      // B2d: every type below puts url, query or location on the network (a
+      // search, an embed, a browser hand-off), so a credential in any of them
+      // is refused before a single branch runs.
+      var carried = secretInOutbound(url) || secretInOutbound(q) || secretInOutbound(location);
+      if (carried) return fail(outboundRefusal('that', carried), OPEN_WEB_CODES.BAD_REQUEST);
 
       // FIX-PLAN 3.3 (2026-08-17): the explicit in-tool route to the real
       // browser. Until now the only honest answer to "open this in my browser"
