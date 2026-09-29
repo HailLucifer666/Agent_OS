@@ -29,6 +29,7 @@ const ALLOWLIST = new Set([
   'pr3-wire-helpers.cjs', // Pure fake socket/dependency fixtures; import never starts a server.
   'helpers/mock-spawn-enoent.js',
   'helpers/leash-fixture.js',
+  'helpers/launch-resolve.js', // B2a: a pure resolve_app reply for pc-child stubs; starts nothing.
   'fixtures/stub-mcp-server.js',
   'fixtures/browser-native-protocol.js', // Pure framing oracle; importing never opens pipes or processes.
   'eval/routing.eval.js',

@@ -174,7 +174,9 @@ async function runTarget(adapter, target, opts) {
   let targetPid = null;
 
   // ---- launch -------------------------------------------------------------
-  const launched = await call(adapter, { cmd: 'launch_app', name: target.app });
+  // B2a: pc-child launches only a resolved record (resolve_app first).
+  const resolvedTarget = await call(adapter, { cmd: 'resolve_app', name: target.app });
+  const launched = await call(adapter, { cmd: 'launch_app', name: target.app, target: resolvedTarget.result });
   if (!launched.ok) {
     steps.push(step('launch', VERDICT.FAIL, launched.error, launched));
     return { target, steps, pid: null };

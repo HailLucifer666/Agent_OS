@@ -42,6 +42,7 @@ function humanizeArgs(args) {
 // the same fallback ad hoc.
 const { reasonText } = require('../util/reason-text');
 const executionGate = require('../goals/execution-gate');
+const { preparedOf } = require('../leash/prepared');
 
 // REVIEW-of-a0c82fe (2026-08-24): hub.invoke now ENFORCES the caller signal
 // (GAP-ANALYSIS-2026-08-24 H1), so this dispatcher's default ACTION_TIMEOUT_MS
@@ -110,7 +111,8 @@ async function dispatchAction(decision, ctx) {
   try {
     result = await effectors.invoke(decision.tool, decision.args,
       { signal: signal, bus: bus, goalId: goalId, channel: ctx.channel || null, connectionId: ctx.connectionId || null, requestId: ctx.requestId ?? undefined,
-        consent: ctx.consent || null }); // BUG-464: server-minted, never from the model's args (leash/consent.js)
+        consent: ctx.consent || null, // BUG-464: server-minted, never from the model's args (leash/consent.js)
+        prepared: (preparedOf(decision) || {}).target || null }); // B2a: the target leash.prepare() resolved and the operator approved
   } catch (err) {
     // Work that started is charged once, and its reservation is released, so a
     // throw can neither leak capacity nor run free.

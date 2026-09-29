@@ -20,6 +20,7 @@ const sttChain = require('../providers/stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
+const { approvalConsentFor } = require('../src/core/voice/authority-gate'); // B2a: the click-accept mints through the one minter
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
 const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause, startupInstructionsClause } = require('../src/core/conversation/briefing');
 const { isStartupOnlyFact, startupOnlyFacts } = require('../src/core/memory/startup-facts'); // BUG-463
@@ -3599,7 +3600,10 @@ function createServer(deps) {
         // on a T3+ popup), not the voice agent deciding on its own — label it
         // as such instead of the wrapper's default, and correlate it back to
         // the specific confirm popup that was approved.
-        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', origin: action.origin, traceId: confirmId, surface: surface, acceptedScope: acceptedScope });
+        // B2a: a call held for per-call approval runs only with a token bound to
+        // the resolved target the operator was shown; this click IS that approval.
+        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', origin: action.origin, traceId: confirmId, surface: surface, acceptedScope: acceptedScope,
+          consent: approvalConsentFor(decision) });
         // S2S (Phase 5): feed the real outcome back to the Live session as a
         // realtimeInput text turn, so the model reports what ACTUALLY
         // happened (AD-4) rather than whatever it assumed while waiting. A

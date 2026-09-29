@@ -12,6 +12,17 @@
 
 var TIER_TABLE = require('./tiers').TIER_TABLE;
 var createConfirmRegistry = require('./confirm').createConfirmRegistry;
+var prepared = require('./prepared');
+
+// The reason a prepared call is held for the operator's per-call approval
+// (B2a). The verdict also carries perCallApproval: true, which is what the
+// autonomous callers read: nothing but an operator's click can satisfy it, so
+// they deny instead of parking a confirm. authority-gate.js mints the consent
+// token from the prepared record (approval 'required'), and the effector refuses
+// without that token.
+var APPROVAL_REASON = 'execution-sensitive-requires-approval';
+// How long leash.prepare() waits for a tool's prepare() (see prepare() below).
+var PREPARE_TIMEOUT_MS = 3000;
 
 // BUG-142: sessionGrants (below) was only ever .set() and read — an expired entry
 // (or one left behind by a connection that never reconnects: voice
@@ -364,6 +375,35 @@ function createLeash(deps) {
       return failClosedIfUnwritable(tier, denyWrite, { allow: false, requireConfirm: false, tier: tier, reason: boundaryHit });
     }
 
+    // 1b. Prepared tools (2026-09-29 audit, B2a). A tool that declares prepare()
+    // is authorized on the RESOLVED target leash.prepare() recorded, never on
+    // the name the model typed. Placed after the credential scan, boundaries.md
+    // and DRY_RUN — all of which still win — and BEFORE the ceiling, goal
+    // grants, operator-present trust and session grants, because a per-call
+    // approval is exactly what none of those shortcuts may grant: with
+    // AUTONOMOUS_MAX_TIER at its schema maximum of 4 even "T4 always confirms"
+    // would auto-allow. A decision that was never prepared (a caller that skipped
+    // the step, or a copy of a prepared decision) is refused, so a forgotten call
+    // site fails loudly instead of launching unresolved.
+    if (effector && typeof effector.prepare === 'function') {
+      var prep = preparedEntry(action);
+      if (!prep) {
+        var unprepWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'deny', { reason: 'not-prepared' });
+        return failClosedIfUnwritable(tier, unprepWrite, { allow: false, requireConfirm: false, tier: tier, reason: 'not-prepared' });
+      }
+      if (prep.approval === 'refuse') {
+        var refuseReason = 'target-unresolved: ' + prep.detail;
+        var refuseWrite = writeAudit(action, goalCtx && goalCtx.goalId, tier, 'deny', { reason: refuseReason });
+        return failClosedIfUnwritable(tier, refuseWrite, { allow: false, requireConfirm: false, tier: tier, reason: refuseReason, detail: prep.detail, remedy: prep.remedy });
+      }
+      if (prep.approval === 'required') {
+        var approvalTier = Math.max(tier, 3);
+        var approvalWrite = writeAudit(action, goalCtx && goalCtx.goalId, approvalTier, 'confirm', { reason: APPROVAL_REASON + ': ' + prep.detail });
+        return failClosedIfUnwritable(approvalTier, approvalWrite,
+          { allow: false, requireConfirm: true, perCallApproval: true, tier: approvalTier, reason: APPROVAL_REASON, detail: prep.detail });
+      }
+    }
+
     // 2. Below maxTier -> auto-allow. Read config.AUTONOMOUS_MAX_TIER live, every
     // call — never cache at construction time (same bug class as D-46). No `|| 2`
     // fallback: the config schema already guarantees a validated 0-4 number.
@@ -502,10 +542,41 @@ function createLeash(deps) {
     }
   });
 
+  function preparedEntry(action) { return prepared.preparedOf(action); }
+
+  // Resolve before authorizing (B2a). Every call site that is about to
+  // check() a decision awaits this first; a tool without prepare() is left as
+  // it was. A prepare() that throws records an unresolved target rather than
+  // skipping the record, so the failure is refused, not waved through.
+  //
+  // Bounded by PREPARE_TIMEOUT_MS (B2a review, 2026-09-29): launch_app's prepare()
+  // asks pc-child, which runs one command at a time, so behind a slow tool it can
+  // wait up to pc-child's own 15 s — and Live awaits this OUTSIDE its per-turn
+  // deadline, stalling every other call in the batch. A late answer is dropped:
+  // the target stays unresolved and the call is refused, never launched late.
+  async function prepare(action) {
+    var effector = action && effectors.get(action.tool);
+    if (!effector || typeof effector.prepare !== 'function') return action;
+    var target;
+    var timer;
+    var timeout = new Promise(function (resolve) {
+      timer = setTimeout(function () { resolve({ resolved: false, reason: prepared.PREPARE_TIMEOUT }); }, PREPARE_TIMEOUT_MS);
+    });
+    try {
+      target = await Promise.race([Promise.resolve().then(function () { return effector.prepare(action.args || {}); }), timeout]);
+    } catch (err) {
+      target = { resolved: false, reason: 'prepare failed: ' + (err && err.message) };
+    } finally { clearTimeout(timer); }
+    var verdict = effector.approvalFor(target, action.args || {});
+    prepared.remember(action, { target: target, approval: verdict.approval, detail: verdict.detail, remedy: verdict.remedy });
+    return action;
+  }
+
   return {
     check: check,
+    prepare: prepare,
     confirm: confirmApi
   };
 }
 
-module.exports = { createLeash, sweepExpiredSessionGrants };
+module.exports = { createLeash, sweepExpiredSessionGrants, APPROVAL_REASON };

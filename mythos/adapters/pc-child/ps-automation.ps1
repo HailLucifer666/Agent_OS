@@ -629,7 +629,8 @@ function Resolve-AppPathFromRegistry($name) {
     )
     foreach ($root in $roots) {
         try {
-            $key = Get-Item -Path (Join-Path $root $exeName) -ErrorAction Stop
+            # -LiteralPath: with -Path, "p*" expanded and resolved PowerShell.exe (B2a review, 2026-09-29).
+            $key = Get-Item -LiteralPath (Join-Path $root $exeName) -ErrorAction Stop
             $resolved = $key.GetValue('')
             if ($resolved -and (Test-Path -LiteralPath $resolved)) { return $resolved }
         } catch { }
@@ -652,11 +653,11 @@ function Resolve-AppViaStartApps($name) {
     try {
         $apps = @(Get-StartApps -ErrorAction Stop)
         $exact = $apps | Where-Object { $_.Name -ieq $name } | Select-Object -First 1
-        if ($exact) { return $exact.AppID }
+        if ($exact) { return $exact }
         $prefix = $apps | Where-Object { $_.Name -like "$name*" } | Sort-Object { $_.Name.Length } | Select-Object -First 1
-        if ($prefix) { return $prefix.AppID }
+        if ($prefix) { return $prefix }
         $sub = $apps | Where-Object { $_.Name -like "*$name*" } | Sort-Object { $_.Name.Length } | Select-Object -First 1
-        if ($sub) { return $sub.AppID }
+        if ($sub) { return $sub }
     } catch { }
     return $null
 }
@@ -847,109 +848,149 @@ function New-LaunchResult($Name, $ResolvedPid, $Resolution, $Via) {
     return $r
 }
 
-function Handle-LaunchApp($name) {
-    if (-not $name) { return 'App name is required.' }
-    # A bare non-string JSON value (e.g. a number) reaches here as-is; coerce
-    # before .ToLowerInvariant() below, which only exists on [string] and would
-    # otherwise throw a MethodInvocationException that crashes this dispatch
-    # loop (transient DoS - pc-child auto-restarts, but every in-flight command
-    # is lost until it does).
+# B2a (2026-09-29 audit): RESOLUTION, separated from launching. The ladder is
+# the one Handle-LaunchApp always walked - Spotify, KnownApps (with their fixed
+# args), registry App Paths, Start Apps - and then it STOPS. The generic
+# `Start-Process -FilePath $name` that used to follow handed the raw,
+# model-chosen string to ShellExecute, which runs cmd, powershell, a full path,
+# a UNC path, ms-settings:, a .cpl - with no confirmation, because launch_app is
+# tier 2. Unresolved now means unresolved.
+# Read-only: registry reads and Get-StartApps. Nothing is started here. The Node
+# side (effectors/launch-app.js + launch-policy.js) decides whether the record
+# may run at all, and the operator approves anything that is not an ordinary app.
+function Resolve-LaunchTarget($name) {
+    if (-not $name) { return @{ resolved = $false; reason = 'App name is required.' } }
     $name = [string]$name
-
-    # Special handling for Spotify - use URI scheme (works for both desktop and Windows Store/UWP apps)
-    if ($name -eq 'spotify' -or $name -like 'spotify:*') {
-        # Use Spotify URI scheme - works for both desktop and Windows Store versions
-        # Supports spotify: (launch app), spotify:track:<id>, spotify:search:<query>
-        try {
-            Start-Process $name -ErrorAction Stop
-            Start-Sleep -Milliseconds 1500
-            # Try to get the PID after launch
-            $proc = Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($proc) {
-                return @{ pid = $proc.Id; name = $name; launched = $true }
-            }
-            return @{ name = $name; launched = $true; note = 'launched via URI scheme' }
-        } catch {
-            return ('Failed to launch Spotify via URI: ' + $_.Exception.Message)
-        }
-    }
-
-    # FIX 6: known installed desktop app - resolve before the generic
-    # Start-Process attempt below, which can't find apps with no PATH entry.
+    # A path, a URI or a command line is not an app name (effectors/launch-app.js
+    # refuses these first; this is the same rule where the lookup happens).
+    if ($name -match '[\\/:]') { return @{ resolved = $false; reason = 'not-an-app-name' } }
+    # Wildcards: -like below (Start Apps) would expand them, so "p*" meant "any app starting with p".
+    if ($name -match '[\*\?\[\]]') { return @{ resolved = $false; reason = 'wildcard-in-name' } }
+    if ($name -ieq 'spotify') { return @{ resolved = $true; kind = 'spotify'; identity = 'spotify'; fixedArgs = @() } }
     $attempted = @()
     $known = $script:KnownApps[$name.ToLowerInvariant()]
-    if ($known -and (Test-Path $known.path)) {
-        try {
-            $procArgs = @{ FilePath = $known.path; PassThru = $true; ErrorAction = 'Stop' }
-            if ($known.args) { $procArgs.ArgumentList = $known.args }
-            $proc = Start-Process @procArgs
-            Start-Sleep -Milliseconds 500
-            # AUDIT FIX: launcher-style entries (Discord's Squirrel Update.exe)
-            # spawn the real app and exit - $proc.Id would be the bootstrapper's
-            # transient PID, poisoning lastLaunchedPid upstream. Resolve the
-            # real process by name, same pattern as the Spotify branch above.
-            if ($known.procName) {
-                Start-Sleep -Milliseconds 1000
-                $real = Get-Process -Name $known.procName -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($real) { return @{ pid = $real.Id; name = $name; launched = $true } }
-                return @{ name = $name; launched = $true; note = 'launched via bootstrapper; app process not yet visible' }
-            }
-            return @{ pid = $proc.Id; name = $name; launched = $true }
-        } catch {
-            return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
+    if ($known) {
+        if (Test-Path -LiteralPath $known.path) {
+            $fixed = @()
+            if ($known.args) { $fixed = @($known.args) }
+            $rec = @{ resolved = $true; kind = 'known'; identity = $name.ToLowerInvariant(); executable = $known.path; fixedArgs = $fixed }
+            if ($known.procName) { $rec.procName = $known.procName }
+            return $rec
         }
-    } else {
-        # FIX 7: KnownApps only knows a literal per-user Win32 exe path. Apps
-        # reinstalled via a different channel - e.g. Slack as a Microsoft Store
-        # package - register under HKCU App Paths instead, or need the
-        # shell:AppsFolder\<AppID> launch form entirely. Both steps are
-        # best-effort and additive: any failure just falls through to the
-        # generic Start-Process attempt below, preserving the honest-failure
-        # contract.
-        if ($known) { $attempted += ('KnownApps path missing on disk: ' + $known.path) }
+        $attempted += ('KnownApps path missing on disk: ' + $known.path)
+    }
+    $regPath = Resolve-AppPathFromRegistry $name
+    if ($regPath) { return @{ resolved = $true; kind = 'app-paths'; identity = $name; executable = $regPath; fixedArgs = @() } }
+    $attempted += 'registry App Paths: no match'
+    $entry = Resolve-AppViaStartApps $name
+    if ($entry) { return @{ resolved = $true; kind = 'start-apps'; identity = $name; appId = [string]$entry.AppID; startName = [string]$entry.Name; fixedArgs = @() } }
+    $attempted += 'Get-StartApps: no match'
+    return @{ resolved = $false; reason = ('no application matches "' + $name + '". Tried: ' + ($attempted -join '; ')) }
+}
 
-        $regPath = Resolve-AppPathFromRegistry $name
-        if ($regPath) {
-            try {
-                $proc = Start-Process -FilePath $regPath -PassThru -ErrorAction Stop
+# B2a: launch EXACTLY a record resolve_app produced - never a name. The Node side
+# hands back the same record it resolved (and, for anything that is not an
+# ordinary app, only after the operator approved that record). Each kind is
+# re-validated here against this script's own tables before anything starts,
+# because the record arrives from outside this process and this is the last
+# place a path or an argument could be smuggled in.
+function Handle-LaunchApp($name, $target) {
+    if (-not $target) { return 'launch_app needs a resolved target: call resolve_app first (the by-name launch was removed on 2026-09-29).' }
+    $name = [string]$name
+    $kind = [string]$target.kind
+    try {
+        switch ($kind) {
+            'spotify' {
+                # The bare scheme only: tracks and searches go through open_uri.
+                Start-Process 'spotify:' -ErrorAction Stop
+                Start-Sleep -Milliseconds 1500
+                $proc = Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($proc) { return @{ pid = $proc.Id; name = $name; launched = $true } }
+                return @{ name = $name; launched = $true; note = 'launched via URI scheme' }
+            }
+            'known' {
+                $known = $script:KnownApps[[string]$target.identity]
+                if (-not $known -or $known.path -ne [string]$target.executable) { return 'launch_app refused: that record does not match this script''s own KnownApps table.' }
+                if (-not (Test-Path -LiteralPath $known.path)) { return ('launch_app: ' + $known.path + ' is no longer on disk.') }
+                # The TABLE's arguments, never the record's (Discord's
+                # --processStart Discord.exe is the only one today).
+                $procArgs = @{ FilePath = $known.path; PassThru = $true; ErrorAction = 'Stop' }
+                if ($known.args) { $procArgs.ArgumentList = $known.args }
+                $proc = Start-Process @procArgs
+                Start-Sleep -Milliseconds 500
+                # AUDIT FIX: launcher-style entries (Discord's Squirrel Update.exe)
+                # spawn the real app and exit - resolve the real process by name.
+                if ($known.procName) {
+                    Start-Sleep -Milliseconds 1000
+                    $real = Get-Process -Name $known.procName -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($real) { return @{ pid = $real.Id; name = $name; launched = $true } }
+                    return @{ name = $name; launched = $true; note = 'launched via bootstrapper; app process not yet visible' }
+                }
+                return @{ pid = $proc.Id; name = $name; launched = $true }
+            }
+            'app-paths' {
+                $exe = [string]$target.executable
+                if (-not [System.IO.Path]::IsPathRooted($exe) -or $exe -notmatch '\.exe$' -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+                    return 'launch_app refused: the resolved executable is not a rooted .exe on disk.'
+                }
+                # Re-resolve the name through the registry and require the SAME path:
+                # the checks above accept any rooted .exe, so without this a record
+                # naming an arbitrary executable would pass (B2a review, 2026-09-29).
+                if ((Resolve-AppPathFromRegistry ([string]$target.identity)) -ne $exe) {
+                    return 'launch_app refused: that record does not match what App Paths resolves for this name.'
+                }
+                # No ArgumentList: no arguments are ever passed on this path.
+                $proc = Start-Process -FilePath $exe -PassThru -ErrorAction Stop
                 Start-Sleep -Milliseconds 500
                 $realPid = Resolve-RealProcessAfterLaunch $proc $name
                 $resolution = $null
                 if (-not $realPid) { $resolution = Resolve-WindowedProcessByName $name 6000 }
                 return (New-LaunchResult $name $realPid $resolution 'registry-app-paths')
-            } catch { $attempted += ('registry path ' + $regPath + ': ' + $_.Exception.Message) }
-        } else { $attempted += 'registry App Paths: no match' }
-
-        $appId = Resolve-AppViaStartApps $name
-        if ($appId) {
-            try {
-                Start-Process "shell:AppsFolder\$appId" -ErrorAction Stop
+            }
+            'start-apps' {
+                $appId = [string]$target.appId
+                # Re-resolve the name and require the SAME entry, as for app-paths
+                # above: "any existing AppID" would accept a record naming another app.
+                $entry = Resolve-AppViaStartApps ([string]$target.identity)
+                if (-not $entry -or [string]$entry.AppID -ne $appId) { return 'launch_app refused: that record does not match what the Start menu resolves for this name.' }
+                Start-Process ('shell:AppsFolder\' + $appId) -ErrorAction Stop
                 Start-Sleep -Milliseconds 800
                 # A Store/UWP activation has no launcher process to follow, but the
-                # app it activates does own a real windowed process - find it by
-                # name. Returning no pid here is what left ui_type with nothing to
-                # foreground (see Resolve-WindowedProcessByName's comment).
+                # app it activates owns a real windowed process - find it by name.
                 $resolution = Resolve-WindowedProcessByName $name 8000
                 return (New-LaunchResult $name $null $resolution 'start-apps')
-            } catch { $attempted += ('shell:AppsFolder ' + $appId + ': ' + $_.Exception.Message) }
-        } else { $attempted += 'Get-StartApps: no match' }
-    }
-
-    # Try Start-Process with the name
-    try {
-        $proc = Start-Process -FilePath $name -PassThru -ErrorAction Stop
-        Start-Sleep -Milliseconds 500
-        $realPid = Resolve-RealProcessAfterLaunch $proc $name
-        $resolution = $null
-        if (-not $realPid) { $resolution = Resolve-WindowedProcessByName $name 6000 }
-        return (New-LaunchResult $name $realPid $resolution $null)
+            }
+            default { return ('launch_app refused: unknown target kind "' + $kind + '".') }
+        }
     } catch {
-        # FIX 4: an unresolvable name must report an honest failure, not
-        # silently fall back to opening File Explorer / triggering a browser
-        # web-search while still claiming success - a mistyped or unknown app
-        # name previously opened the wrong thing and reported launched:true.
-        $attempted += ('Start-Process "' + $name + '": ' + $_.Exception.Message)
-        return ('Failed to launch "' + $name + '". Tried: ' + ($attempted -join '; '))
+        return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
+    }
+}
+
+# B2a: the only URIs MYTHOS opens for itself - a Spotify track or search, and a
+# WhatsApp chat - as one narrow operation instead of launch_app's old
+# "Start-Process whatever-string". effectors/launch-app.js validates first; this
+# re-validates, because it is the last thing before ShellExecute.
+$script:AllowedUriPatterns = @(
+    '^spotify:track:[A-Za-z0-9]{22}$',
+    '^spotify:search:[A-Za-z0-9%._~!*''()\-]{1,2000}$',
+    '^whatsapp://send\?phone=[1-9][0-9]{7,14}$'
+)
+function Handle-OpenUri($uri) {
+    $uri = [string]$uri
+    $allowed = $false
+    foreach ($p in $script:AllowedUriPatterns) { if ($uri -cmatch $p) { $allowed = $true; break } }
+    if (-not $allowed) { return 'open_uri refused: only a Spotify track or search, or a WhatsApp chat link, may be opened this way.' }
+    try {
+        Start-Process $uri -ErrorAction Stop
+        if ($uri -clike 'spotify:*') {
+            Start-Sleep -Milliseconds 1500
+            $proc = Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($proc) { return @{ pid = $proc.Id; name = $uri; launched = $true } }
+        }
+        return @{ name = $uri; launched = $true }
+    } catch {
+        return ('Failed to open ' + $uri + ': ' + $_.Exception.Message)
     }
 }
 
@@ -5663,8 +5704,17 @@ while ($true) {
             # the payload - the exact shape this bug is about.
             if ($result -is [string]) { $err = $result; $result = $null }
         }
+        'resolve_app' {
+            # B2a: read-only. Answers what a name resolves to; never starts anything.
+            $result = Resolve-LaunchTarget $cmd.name
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'open_uri' {
+            $result = Handle-OpenUri $cmd.uri
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
         'launch_app' {
-            $result = Handle-LaunchApp $cmd.name
+            $result = Handle-LaunchApp $cmd.name $cmd.target
             # FIX 4: this case was missing the string-result-is-failure guard
             # every other handler below already has - a genuine "Failed to
             # launch..." string (including FIX 4's new honest failure) shipped
