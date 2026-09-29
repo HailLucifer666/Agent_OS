@@ -11,6 +11,7 @@
 // carries {provider, dim} and vector-index.js partitions by provider.
 
 const routePolicy = require('../src/core/brain/route-policy');
+const { redactText } = require('../src/core/effectors/credential-scanner');
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
@@ -120,7 +121,9 @@ function refusedByPolicy(entry) {
 
 // embed(text) -> { provider, dim, vec: Float32Array } | null. Never throws.
 async function embed(text) {
-  const t = String(text || '').trim();
+  // B2d: the last stop before text leaves the machine for an embedding provider —
+  // every caller (documents, code search, memory) passes through here.
+  const t = redactText(String(text || '')).trim();
   if (!t) return null;
   const now = Date.now();
   for (const entry of CHAIN) {

@@ -310,7 +310,7 @@ if (require.main === module) {
     // run, so no observed failure is explained by it.
     // Guarded by test/mcp-effector-ctx-parity.test.js, which also pins the
     // five OTHER effectors still drifting from main.js on this surface.
-    registerFromComputer(hub, { brain: brain, config: config, logger: logger });
+    registerFromComputer(hub, { brain: brain, config: config, logger: logger, identity: identity }); // B2d: boundaries.md allowed_dirs, same as src/main.js
     registerFromPc(hub, { brain: brain, fs: memory.fs });
     registerFromBrowser(hub, { config: config, getBridge: () => null, isDesktopTask: () => false });
     registerFromSkills(hub);
