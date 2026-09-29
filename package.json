@@ -5,7 +5,7 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron electron/main.js",
-    "dist": "electron-builder --win",
+    "dist": "electron-builder --win --publish never && node mythos/scripts/verify-package-contents.js --dist dist --receipt dist/package-scan.json",
     "parity-check": "node mythos/scripts/parity-check.js",
     "release": "node scripts/release.js"
   },
@@ -59,7 +59,18 @@
       "!**/onnxruntime-node/bin/napi-v*/darwin{,/**/*}",
       "!**/onnxruntime-node/bin/napi-v*/linux{,/**/*}",
       "!**/onnxruntime-web/lib{,/**/*}",
-      "!**/@huggingface/transformers/src{,/**/*}"
+      "!**/@huggingface/transformers/src{,/**/*}",
+      "!**/*.[eE][nN][vV]*{,/**/*}",
+      "!**/*.[pP][fF][xX]{,/**/*}",
+      "!**/*.[pP]12{,/**/*}",
+      "!mythos/[cC][oO][nN][fF][iI][gG]*.[jJ][sS][oO][nN]*{,/**/*}",
+      "!mythos/[kK][eE][yY][sS]*.[jJ][sS][oO][nN]*{,/**/*}",
+      "!mythos/[aA][uU][tT][hH]-[sS][eE][sS][sS][iI][oO][nN][sS]*.[jJ][sS][oO][nN]*{,/**/*}",
+      "!mythos/[mM][yY][tT][hH][oO][sS]-[sS][eE][tT][tT][iI][nN][gG][sS]*.[jJ][sS][oO][nN]*{,/**/*}",
+      "!mythos/.[bB][rR][oO][wW][sS][eE][rR]-[aA][gG][eE][nN][tT].[pP][iI][dD]{,/**/*}",
+      "!mythos/[vV][aA][uU][lL][tT]{,/**/*}",
+      "!mythos/[vV][aA][uU][lL][tT]_[tT][eE][sS][tT]_[aA][uU][dD][iI][tT]_*{,/**/*}",
+      "!mythos/.[tT][mM][pP]-*{,/**/*}"
     ],
     "win": {
       "extraResources": [
