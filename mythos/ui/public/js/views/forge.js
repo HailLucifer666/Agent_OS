@@ -4,7 +4,7 @@
 // instruction), and an <iframe> preview once a build is awaiting review or done.
 // WS-driven (subscribe ['forge','checkpoint']), no polling.
 import { subscribe, checkpointReply } from '/js/ws.js';
-import { safeSameOriginUrl, escapeAttr, escapeHtml } from '/js/url.js';
+import { safeSameOriginUrl, escapeAttr, escapeHtml, PREVIEW_SANDBOX } from '/js/url.js';
 
 const FILE_ICON = { done: '&#10003;', failed: '&#10007;', generating: '&#9881;', pending: '&#8230;' };
 
@@ -36,7 +36,8 @@ export async function render(mount) {
     // javascript:/data: exactly like a link does.
     const src = safeSameOriginUrl(p.previewUrl);
     if (!src) return '';
-    return `<iframe class="forge-preview" src="${escapeAttr(src)}" title="preview of ${escapeAttr(p.name)}"></iframe>`;
+    // B3c: a build is model-written HTML — sandboxed, never same-origin with the HUD.
+    return `<iframe class="forge-preview" sandbox="${PREVIEW_SANDBOX}" src="${escapeAttr(src)}" title="preview of ${escapeAttr(p.name)}"></iframe>`;
   }
 
   function approvalCard(p) {

@@ -114,7 +114,9 @@ function fieldStateInPage(el) {
 async function capture(page, spec) {
   const s = spec || {};
   const capsule = {};
-  try { capsule.url = page.url(); } catch (_) {}
+  // B3c: a build's preview address carries a capability; report the file's
+  // /vault/builds address instead (server/preview-isolation.js withoutCapability).
+  try { capsule.url = require('../server/preview-isolation').withoutCapability(page.url()); } catch (_) {}
   try { capsule.title = await page.title(); } catch (_) {}
   if (s.ref && s.locator) {
     // Did the target survive? Informative either way, proof neither way.
@@ -367,7 +369,7 @@ async function settle(page, beforeUrl) {
 async function actWithEvidence(page, spec) {
   const before = await capture(page, spec);
   const popups = [];
-  const onPopup = (p) => { let u = '(new tab)'; try { u = p.url() || u; } catch (_) {} popups.push(u); };
+  const onPopup = (p) => { let u = '(new tab)'; try { u = require('../server/preview-isolation').withoutCapability(p.url()) || u; } catch (_) {} popups.push(u); };
   const canListen = typeof page.on === 'function' && typeof page.off === 'function';
   if (canListen) page.on('popup', onPopup);
   try {
