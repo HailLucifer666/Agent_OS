@@ -894,6 +894,14 @@ function createServer(deps) {
   // BUG-317: a signed artifact link substitutes for the bearer token.
   app.use('/vault/builds', crossOriginGuard);
   app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken }));
+  // B3c (2026-09-29 audit): an allowed NAVIGATION to a build is redirected once
+  // into /vault/p/<capability>/, where the sandboxed page's own files load
+  // through the path (src/core/server/preview-isolation.js).
+  const previewIsolation = require('../src/core/server/preview-isolation');
+  const previewCaps = previewIsolation.createPreviewCapabilities({ ttlMs: AUTH_TOKEN ? previewIsolation.PREVIEW_TTL_TOKEN_MS : previewIsolation.PREVIEW_TTL_MS });
+  const previewRoutes = previewIsolation.createPreviewRoutes({ buildsDir: memory.fs.vaultPath('builds'), caps: previewCaps });
+  app.use('/vault/builds', previewRoutes.redirectNavigation);
+  app.use('/vault/p', previewRoutes.serve);
 
   // ---- static asset delivery: compression + caching -----------------------
   //
@@ -1063,9 +1071,12 @@ function createServer(deps) {
   // also holds Episodic/Semantic/Identity/Audit/Checkpoints that should never
   // be served as plain static files. Generated content the operator iterates on,
   // so it must never be cached beyond revalidation.
+  // B3c (2026-09-29 audit): and every response carries a CSP sandbox without
+  // allow-same-origin, so a build runs in an opaque origin of its own and cannot
+  // script the HUD or reach /api as it (src/core/server/preview-isolation.js).
   app.use('/vault/builds', express.static(memory.fs.vaultPath('builds'), {
     etag: true, lastModified: true, maxAge: 0,
-    setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+    setHeaders: require('../src/core/server/preview-isolation').setPreviewHeaders,
   }));
 
   // MediaPipe tasks-vision runtime assets (gesture recognition runs fully

@@ -15,7 +15,15 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-function ok(result) { return { ok: true, result }; }
+// B3c: a page reached through a build's preview redirect reports a /vault/p/
+// address carrying a capability; every result leaves through here, so its url
+// (and each tab's) is reported as the /vault/builds address of the same file.
+const { withoutCapability } = require('../server/preview-isolation');
+function ok(result) {
+  if (!result || typeof result !== 'object') return { ok: true, result };
+  const out = typeof result.url === 'string' ? { ...result, url: withoutCapability(result.url) } : result;
+  return { ok: true, result: Array.isArray(out.tabs) ? { ...out, tabs: out.tabs.map((t) => (t && typeof t.url === 'string' ? { ...t, url: withoutCapability(t.url) } : t)) } : out };
+}
 function fail(reason) { return { ok: false, result: reason }; }
 
 // Set by registerFromBrowser() from ctx.config — used by requireOnline()'s lazy
