@@ -186,7 +186,11 @@ function isInside(root, p) {
 // real one are judged, because a junction with an ordinary name can point at a
 // key folder. Answered as "Not found." so a refusal does not confirm the file.
 function isProtectedBuildFile(pairs) {
-  return pairs.some(([root, p]) => !!(p && isInside(root, p) && readAccess.protectedReason(path.join(path.sep, path.relative(root, p)), {})));
+  // Trailing dots and spaces are stripped per segment first: Windows opens "keys.json."
+  // as keys.json. (Node's long-path prefix happens to refuse that form today; the guard
+  // must not rely on it — review finding 4, 2026-10-05.)
+  const below = (root, p) => path.join(path.sep, path.relative(root, p).split(path.sep).map((s) => s.replace(/[. ]+$/, '')).join(path.sep));
+  return pairs.some(([root, p]) => !!(p && isInside(root, p) && readAccess.protectedReason(below(root, p), {})));
 }
 
 // deps: { buildsDir, caps } -> { redirectNavigation, serve }
@@ -249,8 +253,8 @@ function createPreviewRoutes(deps) {
     });
   }
 
-  // Mounted on /vault/builds before the gzip and static handlers (server/index.js),
-  // which serve build files without the capability.
+  // Mounted on /vault/builds BEFORE the capability redirect and the static mount
+  // (server/index.js): the static mount serves build files without a capability.
   function refuseProtected(req, res, next) {
     const segs = segmentsOf(req.path);
     // A path segmentsOf refuses (":", "..", NUL, a backslash, bad encoding) is never
@@ -261,6 +265,9 @@ function createPreviewRoutes(deps) {
     let buildsReal = null;
     let real = null;
     try { buildsReal = fs.realpathSync.native(buildsDir); real = fs.realpathSync.native(lexical); } catch (_) { real = null; }
+    // A real path outside the builds folder (a junction leading out) is never a build
+    // file: the same rule serve() applies (review finding 1, reproduced 2026-10-05).
+    if (real && buildsReal && !isInside(buildsReal, real)) return res.status(404).type('text/plain').send('Not found.');
     if (isProtectedBuildFile([[buildsDir, lexical], [buildsReal, real]])) return res.status(404).type('text/plain').send('Not found.');
     return next();
   }
@@ -269,6 +276,6 @@ function createPreviewRoutes(deps) {
 }
 
 module.exports = {
-  setPreviewHeaders, createPreviewCapabilities, createPreviewRoutes, segmentsOf, scopeOf, withoutCapability,
+  setPreviewHeaders, createPreviewCapabilities, createPreviewRoutes, segmentsOf, scopeOf, withoutCapability, isProtectedBuildFile,
   PREVIEW_CSP, PREVIEW_SANDBOX, PREVIEW_TTL_MS, PREVIEW_TTL_TOKEN_MS, NAVIGATION_DESTS,
 };

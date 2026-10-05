@@ -149,6 +149,7 @@ const SERVER = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'),
 
 describe('(2) a build never serves a credential file, on either route', () => {
   let dir;
+  let outside;
   let base;
   let server;
   const NAV = { 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate' };
@@ -163,16 +164,28 @@ describe('(2) a build never serves a credential file, on either route', () => {
     // A junction with an ordinary name onto the key folder: nothing on the path as
     // asked says ".ssh", only the real path does. Junctions need no privilege.
     fs.symlinkSync(path.join(dir, 'projects', 'proj', '.ssh'), path.join(dir, 'projects', 'proj', 'keysdir'), 'junction');
+    // Review finding 1 (Opus, 2026-10-05, reproduced): a junction that leads OUT of
+    // the builds folder. The real path is outside, so a judge that only looks
+    // inside its root never saw it, and express.static followed it. Ordinary names
+    // throughout: only "outside" is wrong here.
+    outside = dir + '-outside';
+    fs.mkdirSync(path.join(outside, 'elsewhere'), { recursive: true });
+    fs.writeFileSync(path.join(outside, 'elsewhere', 'tok.txt'), 'OUTSIDE-SECRET');
+    fs.symlinkSync(path.join(outside, 'elsewhere'), path.join(dir, 'projects', 'proj', 'notes'), 'junction');
+    // ADJACENT: a junction to a sibling INSIDE builds stays an ordinary build file.
+    fs.mkdirSync(path.join(dir, 'projects', 'other'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'projects', 'other', 'ok.txt'), 'fine');
+    fs.symlinkSync(path.join(dir, 'projects', 'other'), path.join(dir, 'projects', 'proj', 'sib'), 'junction');
     const routes = iso.createPreviewRoutes({ buildsDir: dir, caps: iso.createPreviewCapabilities({}) });
     const app = express();
-    app.use('/vault/builds', routes.redirectNavigation);
     app.use('/vault/builds', (req, res, next) => (routes.refuseProtected ? routes.refuseProtected(req, res, next) : next()));
+    app.use('/vault/builds', routes.redirectNavigation);
     app.use('/vault/p', routes.serve);
     app.use('/vault/builds', express.static(dir));
     await new Promise((r) => { server = app.listen(0, '127.0.0.1', r); });
     base = 'http://127.0.0.1:' + server.address().port;
   });
-  after(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+  after(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(outside, { recursive: true, force: true }); });
 
   // keysdir/notes.txt: an ordinary name on an ordinary path; ONLY the real path says
   // .ssh. (keysdir/id_rsa alone could not see the real-path check: id_rsa is
@@ -191,6 +204,15 @@ describe('(2) a build never serves a credential file, on either route', () => {
     for (const f of SECRETS) assert.equal((await get('/vault/builds/projects/proj/' + f)).status, 404, f);
     // Attacked 2026-10-05: other Windows names for the same file. The stream form
     // LEAKED through the first version (unparseable paths were passed on to static).
+    // Review finding 1: a junction OUT of builds, file and folder index, GET and HEAD.
+    for (const p of ['notes/tok.txt', 'notes/']) {
+      for (const method of ['GET', 'HEAD']) {
+        const r = await fetch(base + '/vault/builds/projects/proj/' + p, { method, redirect: 'manual' });
+        assert.equal(r.status, 404, method + ' ' + p);
+        if (method === 'GET') assert.ok(!(await r.text()).includes('OUTSIDE-SECRET'), p);
+      }
+    }
+    assert.equal((await get('/vault/builds/projects/proj/sib/ok.txt')).status, 200, 'ADJACENT: a junction to a sibling inside builds');
     for (const f of ['KEYS.JSON', 'keys.json.', 'keys.json%20', 'keys.json::$DATA', 'keys.json%3A%3A%24DATA']) {
       const r = await get('/vault/builds/projects/proj/' + f);
       assert.equal(r.status, 404, f);
@@ -198,10 +220,18 @@ describe('(2) a build never serves a credential file, on either route', () => {
     for (const f of ['app.js', 'config.json', 'data.json']) assert.equal((await get('/vault/builds/projects/proj/' + f)).status, 200, 'ADJACENT: ' + f);
   });
 
-  test('(2c) server/index.js mounts the refusal on /vault/builds before the gzip and static handlers', () => {
+  test('(2d) the guard ITSELF reads "keys.json." and "keys.json " as keys.json — not left to Node\'s \\\\?\\ prefix', () => {
+    const f = (name) => iso.isProtectedBuildFile([[dir, path.join(dir, 'projects', 'proj', name)]]);
+    for (const name of ['keys.json.', 'keys.json ', 'keys.json. .', '.env.', 'auth-sessions.json ']) assert.equal(f(name), true, JSON.stringify(name));
+    assert.equal(f('app.js.'), false, 'ADJACENT: an ordinary name with a trailing dot stays ordinary');
+  });
+
+  test('(2c) server/index.js mounts the refusal on /vault/builds before the capability redirect and the static mount', () => {
     const refuse = SERVER.indexOf("app.use('/vault/builds', previewRoutes.refuseProtected);");
     assert.ok(refuse > 0, 'mounted');
-    assert.ok(refuse < SERVER.indexOf('app.use(gzipTextAssets);'), 'before the gzip handler, which reads build files itself');
+    // Before the redirect, or a navigation to keys.json is answered 302 (a capability minted
+    // for it) and a missing one plain 404 — telling the caller which exists (review finding 3).
+    assert.ok(refuse < SERVER.indexOf("app.use('/vault/builds', previewRoutes.redirectNavigation);"), 'before the capability redirect');
     assert.ok(refuse < SERVER.indexOf("app.use('/vault/builds', express.static("), 'before the static mount');
   });
 });
@@ -215,3 +245,8 @@ describe('(2) a build never serves a credential file, on either route', () => {
 //   Pc the static mount judges the typed path only          -> (2b) red, once the
 //      fixture had keysdir/notes.txt (it SURVIVED keysdir/id_rsa, protected by name)
 //   Pd the capability route skips the check                 -> (2a) red
+
+// PROBE RECORD (2, review round), 2026-10-05, same method:
+//   Pe refuseProtected's outside-real-path rule off       -> (2b) red (junction OUT of builds served OUTSIDE-SECRET)
+//   Pf no trailing dot/space strip in the guard           -> (2d) red
+//   Pg refusal mounted after the capability redirect      -> (2c) red
