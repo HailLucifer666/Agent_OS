@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8509,
+      "value": 8511,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -6289,10 +6289,25 @@
           "evidence": "[CODED 2026-09-25, S2 of the Stage 1 repair campaign] The Lessons store named each file by goal title but keyed records by tool + args + goal title, so a second failure mode of one goal overwrote the first. A failed update came back as success (count +1, a ref) and the healer called it applied, and key order split one call into two. Now there is one file per whole key, checked before reuse; failed writes report degraded; args are keyed in canonical order. 349 real records were replayed read-only with identical results. Remaining evidence: a real vault holding two failure modes of one goal after merge.",
           "source": "mythos/test/bug-473-lesson-records-keep-their-identity.test.js; mythos/src/core/memory/lessons.js; mythos/src/core/immune/healer.js"
         }
+      },
+      {
+        "n": 474,
+        "shape": "entry",
+        "state": "verified",
+        "title": "the golden-path judge logged a run that FAILED as one that did not happen, so a broken product could keep its streak",
+        "detail": {
+          "cause": "`overallVerdict()` in `scripts/golden-path.js` ranked PREREQ-MISSING above FAIL (\"a missing prerequisite means the run did not happen\"). A run in which one step FAILED (say, \"tool ok but media oracle reports nothing playing\") and a later step was refused as a prerequisite was therefore logged `PREREQ-MISSING`, and `streakOf()` skips PREREQ lines without resetting. The failure was observed and then erased from the measure. `test/golden-path.test.js` had pinned it: `FAIL + PREREQ -> PREREQ`.",
+          "fix": "An observed failure outranks a missing prerequisite: FAIL, then UNVERIFIED, then PREREQ, then PASS. Only a run whose sole non-PASS outcome is PREREQ stays out of the streak. No change to `streakOf()`, the step verdicts or the log format."
+        },
+        "campaign": {
+          "disposition": "currently verified",
+          "evidence": "[FIXED 2026-10-05] overallVerdict() in scripts/golden-path.js ranked PREREQ-MISSING above FAIL, so a run that observed a failure beside a refused step was logged as not having happened and streakOf() skipped it. An observed FAIL or UNVERIFIED now outranks PREREQ; only a PREREQ-only run stays excluded. Consumers: the Stage 1 streak. Regression oracle: golden-path.test.js, red first, probes (e) and (f). Remaining evidence: none; the one historical log line was a genuine prerequisite.",
+          "source": "mythos/scripts/golden-path.js; tests: golden-path.test.js"
+        }
       }
     ],
     "counts": {
-      "verified": 92,
+      "verified": 93,
       "fixed": 182,
       "open": 36,
       "coded": 9,
@@ -6300,7 +6315,7 @@
       "duplicate": 2,
       "unrecorded": 0
     },
-    "total": 322,
+    "total": 323,
     "openDeclared": [
       274,
       275,

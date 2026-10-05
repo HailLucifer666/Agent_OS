@@ -111,12 +111,36 @@ test('timeout, missing done and turn error are FAIL', () => {
   assert.equal(gp.verdictForStep(step, turnWith([doneFrame({ error: 'boom' })], []), null).verdict, VERDICT.FAIL);
 });
 
-test('overall verdict: worst outcome wins, PREREQ above FAIL above UNVERIFIED', () => {
+// Until 2026-10-05 this test asserted FAIL + PREREQ -> PREREQ, pinning the defect:
+// a run that observed a failure was logged "did not happen" and streakOf skipped
+// it, so a broken product could keep a streak alive (reproduced by the Codex
+// review of the stage1 plan). An observed FAIL or UNVERIFIED now outranks a
+// missing prerequisite; only a run whose sole non-PASS outcome is PREREQ stays
+// excluded. Probes (e) and (f) below are recorded in the BUGS.md entry.
+test('overall verdict: an observed failure outranks a missing prerequisite', () => {
   const v = (list) => gp.overallVerdict(list.map((verdict, i) => ({ id: String(i), verdict, reason: '' })));
   assert.equal(v([VERDICT.PASS, VERDICT.PASS]), VERDICT.PASS);
   assert.equal(v([VERDICT.PASS, VERDICT.UNVERIFIED]), VERDICT.UNVERIFIED);
   assert.equal(v([VERDICT.UNVERIFIED, VERDICT.FAIL]), VERDICT.FAIL);
-  assert.equal(v([VERDICT.FAIL, VERDICT.PREREQ]), VERDICT.PREREQ);
+  assert.equal(v([VERDICT.FAIL, VERDICT.PREREQ]), VERDICT.FAIL, '(e) the reproduced case: a failure was observed');
+  assert.equal(v([VERDICT.PREREQ, VERDICT.FAIL]), VERDICT.FAIL, 'order of steps does not matter');
+  assert.equal(v([VERDICT.UNVERIFIED, VERDICT.PREREQ]), VERDICT.UNVERIFIED, '(f) unproven action was observed too');
+});
+
+test('a run whose only non-PASS outcome is PREREQ stays excluded (must keep passing)', () => {
+  const v = (list) => gp.overallVerdict(list.map((verdict, i) => ({ id: String(i), verdict, reason: '' })));
+  assert.equal(v([VERDICT.PREREQ]), VERDICT.PREREQ);
+  assert.equal(v([VERDICT.PASS, VERDICT.PREREQ, VERDICT.PASS]), VERDICT.PREREQ, 'an incomplete run is not a PASS');
+});
+
+test('a logged FAIL + PREREQ run resets the streak instead of being skipped', () => {
+  const results = [
+    { id: 'open', verdict: VERDICT.FAIL, reason: 'tool ok but media oracle reports nothing playing' },
+    { id: 'pause', verdict: VERDICT.PREREQ, reason: 'tool-refused: x' },
+  ];
+  const line = gp.formatLogLine('2026-10-05T00:00:00Z', gp.overallVerdict(results), results, null);
+  const pass = (d) => d + ' PASS steps=5/5 ackP95ms=900';
+  assert.equal(gp.streakOf([pass('2026-10-03T00:00:00Z'), pass('2026-10-04T00:00:00Z'), line]), 0);
 });
 
 test('zero steps is not a pass', () => {

@@ -117,15 +117,18 @@ function verdictForStep(step, turn, oracle) {
   return { id: step.id, verdict: VERDICT.PASS, reason: proof.payload.tool + (oracle && oracle.title ? ' / now playing: ' + oracle.title : '') };
 }
 
-// Worst-outcome-wins, in the order that keeps the streak honest: a missing
-// prerequisite means the run did not happen; a FAIL beats an UNVERIFIED; and a
-// run with zero steps is not a pass — it is a run that did not happen.
+// Worst-outcome-wins, in the order that keeps the streak honest: an OBSERVED
+// failure (FAIL, then UNVERIFIED) outranks a missing prerequisite, because the
+// run did happen far enough to fail; only a run whose sole non-PASS outcome is
+// PREREQ "did not happen". A run with zero steps is not a pass either. Until
+// 2026-10-05 PREREQ ranked first, so a FAIL beside a refused tool was logged
+// PREREQ-MISSING and streakOf skipped it: a broken product kept its streak.
 function overallVerdict(results) {
   const list = Array.isArray(results) ? results : [];
   if (list.length === 0) return VERDICT.PREREQ;
-  if (list.some((r) => r.verdict === VERDICT.PREREQ)) return VERDICT.PREREQ;
   if (list.some((r) => r.verdict === VERDICT.FAIL)) return VERDICT.FAIL;
   if (list.some((r) => r.verdict === VERDICT.UNVERIFIED)) return VERDICT.UNVERIFIED;
+  if (list.some((r) => r.verdict === VERDICT.PREREQ)) return VERDICT.PREREQ;
   return VERDICT.PASS;
 }
 
