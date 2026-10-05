@@ -364,10 +364,14 @@ describe('F04 — a question must name the click\'s target', () => {
   });
 
   it('(e3) a key is named by itself or by what it does: "Shall I refresh the page?" puts F5 to the operator', async () => {
+    // B2c (2026-09-26): the held words were "refresh the page" until the operator
+    // decided a short command naming its action runs (campaign C1 row 8); those
+    // words now press F5 at once (test/bug-461-a-short-command-that-names-its-action
+    // (c1)). The words below still ask, so the question is what is under test.
     for (const [question, runs] of [['Shall I refresh the page?', 1], ['Shall I press F5?', 1], ['Shall I press Enter?', 0]]) {
       const h = harness();
-      await h.call('browser_press_key', { key: 'F5' }, 'refresh the page');
-      await h.end('refresh the page', question);
+      await h.call('browser_press_key', { key: 'F5' }, 'Can you see the page?');
+      await h.end('Can you see the page?', question);
       await h.end('Yes.', 'Done.');
       assert.equal(h.dispatched.length, runs, question);
     }

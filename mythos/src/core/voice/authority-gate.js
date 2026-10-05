@@ -7,8 +7,9 @@
 //
 // Shape copied from voice-agent.js's WAVE 8 spoken send confirm, the one spoken
 // approval this repo already had: one armed proposal per connection, a second
-// supersedes the first, a whole-utterance yes approves, anything else cancels,
-// and the SERVER runs the stored call — the model's say-so never does.
+// supersedes the first, a whole-utterance yes approves (since B2c, 2026-09-26, so
+// does a yes whose rest names this call's key or words: approves()), anything else
+// cancels, and the SERVER runs the stored call — the model's say-so never does.
 //
 // What an approval binds, and where each is enforced:
 //   exact call    - the leash confirm entry stores the decision; a yes runs THAT,
@@ -27,7 +28,8 @@
 // spoken yes can never approve something that needs a click (NEVER_TRUSTABLE,
 // tier 4, trust disabled): those still take the leash's own confirm path.
 
-const { judgeTrustedAction, judgeMemoryWrite, isAffirmativeReply, readBackMatches, leadingWords, KEY_WORDS } = require('./operator-authority');
+const { judgeTrustedAction, judgeMemoryWrite, isAffirmativeReply, yesAndRest, restNamesCall, readBackMatches, leadingWords,
+  KEY_WORDS } = require('./operator-authority');
 const { mintConsent, signatureOf } = require('../leash/consent');
 
 // The leash reasons that exist only because a human connection is driving
@@ -196,6 +198,17 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
         tool: decision.tool, args: decision.args });
   }
 
+  // B2c: a whole yes, or a yes whose rest names THIS call and its argument ("Yes,
+  // refresh the web page" for a proposed F5; for a memory, the exact words to
+  // keep). The same answer on both routes: the reply turn and a re-issued call.
+  function approves(said, decision) {
+    if (isAffirmativeReply(said)) return true;
+    const rest = yesAndRest(said);
+    if (rest === null) return false;
+    return MEMORY_TOOLS.has(decision.tool) ? judge(decision, { said: rest, typed: false }).proceed
+      : restNamesCall(rest, decision.tool, decision.args);
+  }
+
   function propose(call, decision, verdict, reason) {
     discard('superseded');
     const tool = decision.tool;
@@ -226,7 +239,7 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
     const words = operatorWords(heard && heard.spoken, heard && heard.typed);
     const said = words.said;
     if (proposal && proposal.signature === signatureOf(decision.tool, decision.args)) {
-      if (proposal.presented && isAffirmativeReply(said)) {
+      if (proposal.presented && approves(said, decision)) {
         const p = proposal; proposal = null; pendingConfirms.delete(p.confirmId);
         const action = leash.confirm.acceptSpoken(p.confirmId, key);
         if (action) return memory ? { consent: mintConsent({ tool: decision.tool, args: decision.args, basis: 'approved-proposal' }) } : {};
@@ -285,7 +298,7 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
               interrupts: Number.isFinite(interrupts) ? interrupts : null, audioParts: Number.isFinite(audioParts) ? audioParts : null });
           }
         }
-      } else if (proposal.presented && isAffirmativeReply(said)) {
+      } else if (proposal.presented && approves(said, proposal.decision)) {
         const p = proposal; proposal = null;
         const action = leash.confirm.acceptSpoken(p.confirmId, key);
         if (action) approval = runApproved(p.confirmId, action);
