@@ -55,7 +55,7 @@ const {
 
 // BUG-357: cross-turn evidence window + actionStatus vocabulary, extracted for
 // the file-size ratchet; full rationale in that module.
-const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger');
+const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger'); const { describeAction } = require('./action-semantics'); // B2b-2: every row says what it did, to what
 const { isAssertionOnUnintelligibleInput } = require('./fragment-guard'); // BUG-299 / BUG-460
 const { createAuthorityGate } = require('./authority-gate'); // BUG-461 / BUG-464: ask before acting on words that did not ask
 const { createHeldReplies, TOOL_RESULT_HOLD_MAX_MS, cancelledNotice } = require('./held-reply'); // BUG-457: hold a slow reply instead of injecting it as user text
@@ -674,11 +674,11 @@ function createLiveToolAdapter(deps) {
         // connection confirm-hijack window.
         const confirmId = leash.confirm.create(
           summary, { decision, goalId: null, tier: verdict.tier }, connectionId || 'system');
-        livePendingConfirms.set(confirmId, { name: call.name, callId: call.id, createdAt: Date.now() });
+        livePendingConfirms.set(confirmId, { name: call.name, callId: call.id, args: call.args, createdAt: Date.now() });
         if (bus && typeof bus.emit === 'function') {
           bus.emit('confirm-request', { ...decision, confirmId, summary, tier: verdict.tier });
         }
-        commitAction({ tool: call.name, ok: false, confirmPending: true, summary, traceId: call.id });
+        commitAction({ tool: call.name, ok: false, confirmPending: true, summary, traceId: call.id, act: describeAction(call.name, call.args) });
         responses.push({ id: call.id, name: call.name, response: {
           status: 'awaiting_human_confirmation',
           message: `Tier ${verdict.tier} action. Tell the operator you need approval, then wait.`,
@@ -710,14 +710,14 @@ function createLiveToolAdapter(deps) {
       stampProvenanceIfUnbacked(decision); routeMemory.note(call.name, call.args || {}); const startedAt = (deps.now || Date.now)();
 
       if (SLOW_TOOLS[call.name]) {
-        commitAction(pendingAck(call.name, call.id));
+        commitAction(pendingAck(call.name, call.id, describeAction(call.name, call.args)));
         responses.push({ id: call.id, name: call.name, response: {
           status: 'started', message: STARTED_MESSAGE,
         }}); toolWait(call.id, true);
         // Deliberately not awaited: the whole point is that the turn does not wait.
         dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent })
-          .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
-          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
+          .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt, call.args))
+          .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt, call.args));
         continue;
       }
 
@@ -736,14 +736,14 @@ function createLiveToolAdapter(deps) {
           const started = { id: call.id, name: call.name, response: { status: 'started', message: STARTED_MESSAGE } };
           const kept = HOLD_BUDGET_MS > 0 ? await heldReplies.hold(call.id, pending, HOLD_BUDGET_MS, { onRelease: () => { responses.push(started); sendToolResponse(responses.splice(0)); } }) : { kind: 'hold-max', heldMs: 0 };
           if (HOLD_BUDGET_MS > 0) logger.info('live.tool-held', { tool: call.name, callId: call.id, heldMs: kept.heldMs, end: kept.kind }); // BUG-457
-          if (kept.kind === 'outcome' || kept.kind === 'error') { settled = kept; heldAnswered.push({ name: call.name, id: call.id, kept, startedAt }); toolWait(call.id, false); } // a real toolResponse follows below, not an injection
+          if (kept.kind === 'outcome' || kept.kind === 'error') { settled = kept; heldAnswered.push({ name: call.name, id: call.id, args: call.args, kept, startedAt }); toolWait(call.id, false); } // a real toolResponse follows below, not an injection
           else {
-            commitAction(pendingAck(call.name, call.id));
+            commitAction(pendingAck(call.name, call.id, describeAction(call.name, call.args)));
             if (kept.kind === 'hold-max') responses.push(started); // 'released' already sent it; a cancelled id needs no reply
             if (kept.kind === 'cancelled') sendSystemNotice(cancelledNotice(call.name), '', { site: 'held-call-cancelled', tool: call.name }); // the net: live, the model once invented a cancelled call's result
             pending
-              .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt))
-              .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt));
+              .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt, call.args))
+              .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt, call.args));
             continue;
           }
         }
@@ -808,7 +808,7 @@ function createLiveToolAdapter(deps) {
         // BUG-297: confirmedStep travels too, so the late-for-turn re-narration can
         // tell a partial hand-off from a wholly unproven outcome exactly as the other
         // three paths do.
-        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, verified: ev.verified,
+        commitAction({ tool: call.name, ok: ev.ok, unverified: ev.unverified, verified: ev.verified, act: describeAction(call.name, call.args, ev.result),
           abortedInFlight: ev.abortedInFlight, confirmedStep: ev.confirmedStep, summary,
           // BUG-398 row 2. `ok` here is EVIDENCE-level ("proven"), while the
           // Audit row's `outcome` is DISPATCH-level ("the effector returned
@@ -833,14 +833,14 @@ function createLiveToolAdapter(deps) {
       }
     }
     for (const row of responses) if (row.name === 'web_search' && recentActionLedger.searchStormDetected()) row.response.message = (row.response.message ? row.response.message + ' ' : '') + 'four searches in two minutes and nothing read — web_fetch one result or tell the operator you cannot find it';
-    if (responses.length && sendToolResponse(responses) === false) for (const a of heldAnswered) reportLateOutcome(a.name, a.kept.kind === 'error' ? { ok: false, result: sanitize(a.kept.error) } : a.kept.outcome, a.id, a.startedAt); // BUG-457: a rotation refused the held reply (pinned door); deliver it today's way, never lose it
+    if (responses.length && sendToolResponse(responses) === false) for (const a of heldAnswered) reportLateOutcome(a.name, a.kept.kind === 'error' ? { ok: false, result: sanitize(a.kept.error) } : a.kept.outcome, a.id, a.startedAt, a.args); // BUG-457: a rotation refused the held reply (pinned door); deliver it today's way, never lose it
   }
 
   // WAVE 3 — deliver a slow tool's real outcome after its turn has ended.
   // Pushes straight to liveTurnActions rather than through commitAction: this
   // arrival is EXPECTED, so it must not raise the late-for-turn anomaly that
   // exists to catch accidental misattribution.
-  function reportLateOutcome(toolName, outcome, traceId, startedAt) {
+  function reportLateOutcome(toolName, outcome, traceId, startedAt, args) {
     toolWait(traceId, false); // BUG-456: the wait is over whatever the outcome — the chime must not play after the result
     const ev = evaluateOutcome(outcome);
     let verdict;
@@ -895,7 +895,7 @@ function createLiveToolAdapter(deps) {
     // session — more breaches than calls. A digest on the awaited path only
     // would go quietly missing on exactly the slow lookups most likely to be
     // narrated from memory.
-    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified, verified: ev.verified,
+    const lateEntry = { tool: toolName, ok: ev.ok, unverified: ev.unverified, verified: ev.verified, act: describeAction(toolName, args, ev.result),
       abortedInFlight: ev.abortedInFlight, summary: verdict,
       dispatchOk: ev.dispatchOk, traceId: traceId || null,
       evidence: evidenceFor(toolName, ev.result) };
@@ -1043,7 +1043,7 @@ function createLiveToolAdapter(deps) {
     // the audit, not just the model, so a socket that closed while the human was
     // deciding must not erase what happened. reportLateOutcome already ordered
     // it this way.
-    const resolvedEntry = { tool: pending.name, ok: ok && !unverified, unverified, summary: verdict,
+    const resolvedEntry = { tool: pending.name, ok: ok && !unverified, unverified, summary: verdict, traceId: pending.callId || null, act: describeAction(pending.name, pending.args, outcome && outcome.result),
       verified: require('../effectors/evidence').isVerified(outcome) };
     liveTurnActions.push(resolvedEntry);
     recentActionLedger.record(resolvedEntry);
@@ -1253,7 +1253,7 @@ function createLiveToolAdapter(deps) {
       // BUG-357: the detector also sees the bounded recent-turn ledger; ledger
       // first so a CURRENT-turn row wins any Map collision below.
       const knownActions = [...recentActionLedger.forClaims(), ...actionsThisTurn];
-      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims(), { voiceHonesty: deps.config?.LIVE_VOICE_HONESTY_ENABLED !== false });
+      const unbackedClaims = detectUnbackedClaims(assistantText, actionsThisTurn, recentActionLedger.forClaims(), { voiceHonesty: deps.config?.LIVE_VOICE_HONESTY_ENABLED !== false, operatorText: userText }); // B2b-3: the operator's words can back "it's playing"
       const statusByTool = new Map(knownActions.map((a) => [a.tool, a.status || actionStatus(a)]));
       for (const claim of unbackedClaims) {
         // A3: name the actual tool and its real status. `tool`/`target` stay the
@@ -1305,9 +1305,9 @@ function createLiveToolAdapter(deps) {
           ? `${failedTool}: ${byTool.get(failedTool).summary || 'did not succeed'}`
           : 'no successful tool call backs this claim this turn';
         sendSystemNotice(
-          `CORRECTION of your own prior statement — you said "${claim.phrase}" but that action did NOT happen (${detail}).`,
-          'Retract this aloud now: tell the operator plainly that it did not happen. Do NOT repeat the claim again later in this conversation.',
-          { site: 'ad4-correction-retract', tool: failedTool || null, claim: 'retract' },
+          claim.notice ? claim.notice.message : `CORRECTION of your own prior statement — you said "${claim.phrase}" but that action did NOT happen (${detail}).`,
+          claim.notice ? claim.notice.instruction : 'Retract this aloud now: tell the operator plainly that it did not happen. Do NOT repeat the claim again later in this conversation.',
+          { site: 'ad4-correction-retract', tool: failedTool || null, claim: claim.notice ? 'unconfirmed' : 'retract' }, // B2b-3: a playback claim is corrected as unconfirmed
         );
       }
 
@@ -1425,7 +1425,7 @@ function createLiveToolAdapter(deps) {
           actions: actionsThisTurn.map((a) => ({
             tool: a.tool, ok: a.ok, summary: a.summary, status: actionStatus(a),
             // BUG-398 row 2: both scopes and the join key reach the vault.
-            dispatchOk: a.dispatchOk, traceId: a.traceId,
+            dispatchOk: a.dispatchOk, traceId: a.traceId, act: a.act, // B2b-2: what it did, to what (action-semantics.js)
           })),
         },
         salience: 0.6, channel: 'voice',

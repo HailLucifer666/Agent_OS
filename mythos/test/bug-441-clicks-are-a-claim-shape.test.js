@@ -100,8 +100,30 @@ function call(adapter, id, name, args) {
     .then(() => responses);
 }
 
-describe('BUG-441 — an unverified click cannot back "I clicked"', () => {
-  test('(a) the real 2026-09-11 outcome, through the real adapter, is flagged and retracted', async () => {
+// REVERSED 2026-09-26 (B2b-2, BUG-448; operator decision that day): a click that was DELIVERED
+// but whose effect could not be confirmed makes "I clicked" TRUE — the click happened. What it
+// does not back is "it's playing"; that needs the player's evidence (B2b-3). Measured before the
+// change: the 2026-09-24 20:47:41 sentence "I clicked on that spot based on the coordinates, but
+// I can't confirm it actually started playing." was retracted over a delivered click_at, and the
+// retraction was itself the false statement. So (a) and (a2) now pin the opposite of what they
+// pinned on 2026-09-16, and (a0) keeps the retraction path covered with a click that FAILED.
+describe('BUG-441 — "I clicked" is a claim; a delivered click backs it, a failed one does not', () => {
+  test('(a0) a FAILED click, through the real adapter, is flagged and retracted', async () => {
+    const { adapter, injected, anomalies } = harness({ ok: false, result: { error: 'no element matches button.play' } });
+    await call(adapter, 'c0', 'browser_click', { selector: 'button.play' });
+    adapter.onLiveTurnComplete({ userText: 'play it', assistantText: 'I clicked the play button for you.', turnId: 1 });
+    const flagged = anomalies.filter((a) => a.kind === 'claimed-action-not-taken');
+    assert.equal(flagged.length, 1, JSON.stringify(flagged));
+    assert.equal(flagged[0].target, 'clicking');
+    assert.equal(flagged[0].claimedTool, 'browser_click');
+    assert.equal(flagged[0].claimedToolStatus, 'failed');
+    const notice = injected.find((t) => /CORRECTION/.test(t));
+    assert.ok(notice, 'the retraction notice is the earliest correction Live allows — the audio is already heard');
+    assert.match(notice, /browser_click/, 'the correction must name the tool');
+    assert.match(notice, /did NOT happen/);
+  });
+
+  test('(a) the real 2026-09-11 outcome, through the real adapter: the delivered click backs "I clicked"', async () => {
     const { adapter, injected, anomalies } = harness({
       ok: true, unverified: true, reason: REAL_UNVERIFIED_REASON, result: {},
     });
@@ -120,21 +142,16 @@ describe('BUG-441 — an unverified click cannot back "I clicked"', () => {
     adapter.onLiveTurnComplete({ userText: 'play it', assistantText: 'I clicked the play button for you.', turnId: 1 });
 
     const flagged = anomalies.filter((a) => a.kind === 'claimed-action-not-taken');
-    assert.equal(flagged.length, 1, `expected 1 claim, got ${flagged.length}: ${JSON.stringify(flagged)}`);
-    assert.equal(flagged[0].target, 'clicking');
-    assert.equal(flagged[0].claimedTool, 'browser_click');
-    assert.equal(flagged[0].claimedToolStatus, 'unverified');
-
-    const notice = injected.find((t) => /CORRECTION/.test(t));
-    assert.ok(notice, 'the retraction notice is the earliest correction Live allows — the audio is already heard');
-    assert.match(notice, /browser_click/, 'the correction must name the tool');
-    assert.match(notice, /did NOT happen/);
+    assert.deepStrictEqual(flagged, [], 'the click was delivered: retracting "I clicked" would be the false statement');
+    assert.ok(!injected.some((t) => /CORRECTION/.test(t)), 'no retraction notice');
   });
 
-  test('(a2) "tapped" is the second owned verb', () => {
-    const claims = detectUnbackedClaims('I tapped the play button.', [UNVERIFIED_CLICK_ROW], []);
+  test('(a2) "tapped" is the second owned verb: a failed tap is flagged, a delivered one is not', () => {
+    const failedTap = { tool: 'browser_click', ok: false, unverified: false, dispatchOk: false, status: 'failed' };
+    const claims = detectUnbackedClaims('I tapped the play button.', [failedTap], []);
     assert.equal(claims.length, 1);
     assert.equal(claims[0].category, 'clicking');
+    assert.deepStrictEqual(detectUnbackedClaims('I tapped the play button.', [UNVERIFIED_CLICK_ROW], []), []);
   });
 
   test('(b) adjacent: a genuine ok:true browser_click backs the same sentence', () => {
@@ -172,6 +189,8 @@ describe('BUG-441 — an unverified click cannot back "I clicked"', () => {
     // even though THIS turn's browser_click was unverified. Detecting that
     // needs the target in the sentence matched to the action's args, which no
     // category does. Pinned so the residual is a decision; recorded in BUGS.md.
+    // Since B2b-2 (2026-09-26) the delivered row backs it on its own as well; the residual
+    // that stands is the TARGET: clicks are not matched to what was clicked (opening is).
     const claims = detectUnbackedClaims(
       'I clicked the pause button.',
       [UNVERIFIED_CLICK_ROW],
@@ -208,6 +227,8 @@ describe('BUG-441 — an unverified click cannot back "I clicked"', () => {
   });
 });
 
+// 2026-09-26: (a) and (a2) were reversed by B2b-2 (see the note above the describe); the run
+// below was against the 2026-09-16 disposition. B2b-2's probes are in its own test file.
 // MUTATION RUN 2026-09-16. Each probe applied by exact single-match replacement
 // (the driver refuses a probe that matches 0 or 2+ times), the file restored
 // from a snapshot and checked sha256-identical afterwards (claim-check.js

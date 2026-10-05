@@ -177,14 +177,16 @@ describe('BUG-460 — a one-word command the world confirms was obeyed is not "u
 // Two gaps the replay measured and this change deliberately does NOT close,
 // pinned so each is a decision rather than an oversight.
 describe('known gaps, pinned with the replay reason', () => {
-  it('KNOWN GAP: a playback claim has no category — "It should be starting up now" is not judged at all', () => {
-    // 15:11:33 said it after a click that navigated and nothing played. A playback
-    // category was NOT added: its only honest backing is a verified player, and
-    // the same session's TRUE "Glad we got the right one playing" (15:12:44) was
-    // backed by the operator's own confirmation, which no tool row records. The
-    // category would have retracted it. When playback evidence reaches the row,
-    // flip this.
-    assert.deepEqual(detectUnbackedClaims('It should be starting up now.', [row('browser_click')], []), []);
-    assert.deepEqual(detectUnbackedClaims('The video is playing now.', [], []), []);
+  // FLIPPED 2026-09-26 (B2b-3). This pinned that no category judged a playback claim, until player
+  // evidence reached the row. It does now (action-semantics.js `act.player`), and the operator's
+  // own words reach the checker too, so the 15:12:44 "Glad we got the right one playing" that
+  // made the category unsafe is backed by them. Full contract: bug-448-a-playback-claim-needs-the-player.test.js.
+  it('FLIPPED: a playback claim is judged; with no reading it is flagged as NOT CONFIRMED', () => {
+    const flagged = detectUnbackedClaims('It should be starting up now.', [row('browser_click')], []);
+    assert.deepEqual(flagged.map((c) => c.category), ['playback']);
+    assert.match(flagged[0].notice.instruction, /NOT confirmed/, 'the correction never says it did not play');
+    assert.deepEqual(detectUnbackedClaims('The video is playing now.', [], []).map((c) => c.category), ['playback']);
+    assert.deepEqual(detectUnbackedClaims('Excellent, Sir. Glad we got the right one playing.', [], [],
+      { operatorText: 'Yes, it just play. Just play. Classic.' }), [], '15:12:44, backed by the operator\'s own words');
   });
 });

@@ -87,6 +87,14 @@ function createRecentActionLedger() {
       // them. Checked before adding, not assumed — a 20k digest per action row
       // in the episodic log would be a real cost for no reader.
       evidence: entry.evidence || null,
+      // B2b-2 (2026-09-26): what the call did and to what (action-semantics.js), and the
+      // fields claim-check reads to tell a DELIVERED or still-WAITING call from a failed one.
+      // Dropped until now, so an unverified click or an awaited confirm one turn back read as a
+      // plain failure: claim-backing.js backs "I clicked" and "I'm opening it" by exactly these.
+      act: entry.act || null,
+      dispatchOk: entry.dispatchOk,
+      started: entry.started === true,
+      confirmPending: entry.confirmPending === true,
     });
     if (entries.length > RECENT_ACTION_LEDGER_MAX) {
       entries.splice(0, entries.length - RECENT_ACTION_LEDGER_MAX);
@@ -140,10 +148,10 @@ const STARTED_MESSAGE =
 // the ticket's own two examples — because their real outcome arrives after the
 // turn has closed. Without it the fix would have looked done while the measured
 // cases stayed unjoinable.
-function pendingAck(toolName, traceId) {
+function pendingAck(toolName, traceId, act) {
   return {
     tool: toolName, ok: null, started: true, status: 'pending',
-    traceId: traceId || null,
+    traceId: traceId || null, act: act || null, // B2b-2: a pending call backs "opening it now" only for its own target
     summary: `${toolName} started — outcome pending.`,
   };
 }
