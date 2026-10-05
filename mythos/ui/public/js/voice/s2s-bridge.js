@@ -47,6 +47,7 @@ import { createEchoVerdictTracker } from './echo-verdict.js';
 import { createGateRecorder, isGateRelease } from './gate-recorder.js'; // BUG-406: numbers-only mic-gate recorder, off unless configured
 import { arrayBufferToBase64 } from './pcm-base64.js';
 import { createUnheardMeter } from './unheard-meter.js'; // BUG-447: where a barge-in cut the answer, so "go ahead" can resume it
+import { createSpeechEndReason } from './speech-end-reason.js'; // B1 (BUG-469): why speech stopped, for the gate's release line
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -63,7 +64,7 @@ const PLAYBACK_RATE = 24000;
 // outside tests.
 export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOverride, gateRecorder: recordGate } = {}) {
   const send = sendMessageOverride || sendMessage; const gateRecorder = recordGate ? createGateRecorder({ rms: rmsFromPcm16 }) : null;
-  const unheard = createUnheardMeter();
+  const unheard = createUnheardMeter(); const speechEnd = createSpeechEndReason();
   let active = false;
   let stream = null;
   let audioCtx = null;
@@ -874,7 +875,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // So stopping the speech has to be local and has to outlast the flush: for the rest
   // of this model turn, arriving audio is DROPPED instead of played.
   function stopAssistantSpeech(reason) {
-    if (player) unheard.cut(player.flush());
+    if (player) unheard.cut(speechEnd.during(reason, () => player.flush()));
     armAudioOutSuppression();
     releaseOwnVoiceGate(reason);
   }
@@ -968,15 +969,14 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       refreshOwnVoiceCeiling();
     };
     // The server won this race: stop the audio and clear the local run, so a
-    // half-accumulated loud streak cannot tip over on the first frame of the
-    // NEXT reply. A local flush that already happened makes this a no-op —
-    // flush() on nothing scheduled stops nothing.
-    // BUG-274 step 5: the server winning the race means Gemini itself cut the turn, so
-    // no further chunks belong to it and the suppression must lift — leaving it armed
-    // would eat the start of the next reply.
+    // half-accumulated loud streak cannot tip over on the first frame of the NEXT
+    // reply. A local flush that already happened makes this a no-op. BUG-274 step 5:
+    // Gemini itself cut the turn, so no further chunks belong to it and the
+    // suppression must lift. B1: the release this flush fires is logged
+    // 'server-interrupted' (speech-end-reason.js); it used to read as a natural end.
     onInterruptedMsg = () => {
       bargeBackstop.reset();
-      if (player) unheard.cut(player.flush());
+      if (player) unheard.cut(speechEnd.during('server-interrupted', () => player.flush()));
       if (player) player.endTurn();
       endAudioOutSuppression('server-interrupted');
     };
@@ -1231,8 +1231,8 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // orb must still show speech in both of those cases. ownVoiceGate is its
       // own flag, distinct from captureSuspended (the media-playing mute
       // overlay), so this does not fight the overlay for the indicator.
-      onSpeakStart: () => { holdOwnVoiceGate(); setVoiceState('speaking'); },
-      onSpeakEnd: () => { releaseOwnVoiceGate('own-voice-ended'); setVoiceState('listening'); },
+      onSpeakStart: () => { holdOwnVoiceGate(); speechEnd.speechStarted(); setVoiceState('speaking'); },
+      onSpeakEnd: () => { releaseOwnVoiceGate(speechEnd.ended()); setVoiceState('listening'); },
     });
     active = true;
 
@@ -1293,7 +1293,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (captureNode) { try { captureNode.disconnect(); } catch { /* ok */ } captureNode = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (audioCtx) { try { await audioCtx.close(); } catch { /* ok */ } audioCtx = null; }
-    if (player) { player.close(); player = null; }
+    if (player) { speechEnd.during('session-stopped', () => player.close()); player = null; } // B1: a close mid-reply is not a natural end
     bargeBackstop.reset();
     // BUG-271: a stale hysteresis tail (or zeroed count) must not carry into
     // the next session — same once-per-session reasoning as the backstop reset.
