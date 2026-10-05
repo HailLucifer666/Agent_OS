@@ -5401,3 +5401,495 @@ and types into live windows.
 `node scripts/sync-test-count.js --check`, `node scripts/lint-bug-registry.js`
 and `node scripts/build-capability-map.js --check`. Trust their output over any
 sentence here, including this one.
+
+---
+
+# STAGE 1 REPAIR CAMPAIGN (opened 2026-09-25)
+
+> **This is the working plan for the 35 open tickets and the thirteen audit findings
+> (F01–F13).** It was written in two passes on 2026-09-25: an independent audit and plan
+> (Codex, "rev 8", against `main` at `f456217d`) and a second pass (Claude, "rev 10") that
+> adopted rev 8 whole, added seven items (A1–A7) and took eight review corrections. The
+> operator chose "rev 8 + the additions" as the working plan. Both drafts lived in the
+> gitignored `.cache/plan-review/`, which is how the V2 spine was nearly lost, so the binding
+> content is copied here in full.
+>
+> - **Evidence:** the audit report, verbatim, is `mythos/docs/PLAN-AUDIT-2026-09-25.md`.
+> - **Position and next action:** `RESUME.md`, rewritten in place.
+> - **Precedence:** the V2 spine (source level) > this section (contracts) > `RESUME.md`
+>   (position) > any plan-mode working copy under `~/.claude/plans/`. Within this section,
+>   the rev 10 parts (C1–C6) win over the verbatim rev 8 part (R) only where they say so;
+>   everything else follows rev 8. Rev 10 decision 6 replaces rev 8 §4's `codex/` branch
+>   prefix with `fix/`.
+> - **This section does not authorise merges, pushes, tags or vault edits.** Those stay the
+>   operator's, per the standing `main`-is-known-good rule.
+
+## Campaign progress log
+
+| Date | Batch | What happened | Evidence |
+|---|---|---|---|
+| 2026-09-25 | B0 | Base pinned at `main` `f456217d` (confirmed with `git ls-remote`; the existing `good-2026-09-25` tag is `ae88f424`, four merges older, and is not moved). Worktree `.claude/worktrees/stage1` created from it; `setup-worktree.js --path` linked 8 paths and copied 2 files, then `--check` found all 8 present. Baseline suite in the worktree: tests 8370, pass 8370, fail 0, cancelled 0, skipped 0, runner exit 0, zero `not ok` lines at any depth. All five docs gates exit 0; the register shows 35 open. **A6 recorded:** `.cache/windows-operator/golden-path.log`'s last line is `2026-09-16T10:31:48Z PREREQ-MISSING` (no debuggable browser on 9222) — the typed golden path has not run since. | `9ac86e2b` |
+| 2026-09-25 | S1 | F01–F05 built on `fix/s1-authority-consent` `f819adac`, from `f456217d`. Suite 8410/8410, 0 skipped; five docs gates exit 0. Not merged; awaiting Codex review. | BUG-461 / BUG-464 entries on that branch |
+| 2026-09-25 | S2 | F06–F08 built on `fix/s2-lesson-integrity` `eab6c27a` (BUG-473). Suite 8391/8391, 0 skipped; five docs gates exit 0. Not merged; awaiting review. | BUG-473 entry on that branch |
+| 2026-09-25 | B1 | A2 built on `fix/b1-interrupt-reason` `9f459d12`: an interruption is logged with its real reason. The 41 holds of 09-25 reclassify as 27 natural ends, 8 local barge-ins and 6 Gemini cuts; BUG-469's premise was disproved. Suite 8383/8383. Not merged; awaiting review. | BUG-469 / BUG-455 entries on that branch |
+| 2026-09-25 | B2a | A5 built on `fix/b2a-acknowledgement-is-not-a-fragment` `6311ebee` (BUG-460): a recognised acknowledgement is not a fragment. B2 was split into B2a–B2d (460, 448, 461, 457). Suite 8379/8379. Not merged; awaiting review. | BUG-460 entry on that branch |
+| 2026-09-25 | — | Operator decisions 9–15 recorded in C1, plus the presence window in row 4. | `521070f8` |
+| 2026-09-26 | — | The five campaign branches are open as PRs #123 (this docs branch), #124 (S1), #125 (S2), #126 (B1) and #127 (B2a). None merged. | GitHub |
+| 2026-09-26 | B1b | C1 row 13 built on `fix/b1b-voice-report-counts-what-was-left` `f8071071`, PR #128: the session report grades what a barge-in stop actually cut (discarded audio or dropped chunks), says "nothing left to cut" only when both are measured as zero, and "cannot be graded" when neither is valid. Suite 8378/8378, 0 skipped. Not merged. | BUG-469 entry on that branch |
+| 2026-09-26 | B2b-1 | BUG-448's grammar half on `fix/b2b1-a-sentence-that-claims-nothing-is-not-a-claim` `a99329cd`, PR #129: a question, a hedged subject or a quoted earlier claim is no longer judged as a claim, and "Opening YouTube now should not take long" still is. Suite 8378/8378. Not merged. | BUG-448 entry on that branch |
+| 2026-09-26 | B2b-2 | BUG-448's backing half on `fix/b2b2-a-claim-is-backed-by-what-the-tool-did` `c49c8ec9`, PR #130, stacked on #129: a claim is backed by what the call did and to what, not by the tool's name. Replay of the recorded turns: 53 flags became 28. 26 of the 29 wrong flags are gone, all 20 correct ones kept, and two hidden false claims are now caught ("Opening YouTube" when only Brave launched). Suite 8390/8390. Not merged. | BUG-448 entry on that branch |
+| 2026-09-26 | B2b-3 | BUG-448/460's playback predicate on `fix/b2b3-a-playback-claim-needs-the-player` `01cd1439`, PR #131, stacked on #130: "it's playing" is backed only by a player reading that says playing and names the same thing, or by the operator's own present-tense words that turn; an unbacked one is corrected as "not confirmed", never "it did not play". Replay: 28 flags became 43, all 15 added are playback: 6 real false claims, 6 true claims that had no reading, 3 unclear. The KNOWN GAP test is flipped. Suite 8398/8398. Not merged. | BUG-448 entry on that branch |
+| 2026-09-26 | — | Operator decisions 16–19 recorded in C1. | this commit |
+
+## C1. Operator decisions, with where each came from
+
+| # | Decision | Source |
+|---|---|---|
+| 1 | Rev 8 + these additions is the working plan. | Operator answer in the planning session, 2026-09-25 ("Rev 8 + my 7 additions"). |
+| 2 | 275 and 449 stay open as "known limit — detected, not prevented"; no text lane. | Operator answer in the planning session, 2026-09-25 ("Keep catch-after for now"). |
+| 3 | BUG-422 closes on a containment test, not on explaining the original crash. | Operator answer in the planning session, 2026-09-25. |
+| 4 | Background goal work runs only while the operator is present. **Present means an operator-origin request (spoken, typed or clicked) within the last 10 minutes.** MYTHOS's own activity never counts, and a restart starts absent (rev 8 B5's contract otherwise unchanged). | Operator answer in the planning session, 2026-09-25 ("Only while you're present"). The window was answered after B2a, 2026-09-25 ("10 minutes"). |
+| 5 | A capped trial of the three-language transcription hint is allowed; default unchanged. | Operator answer in the planning session, 2026-09-25 ("Allow a small hint trial"). |
+| 6 | Claude builds on `fix/` branches; Codex reviews each branch before merge. | Operator answer in the planning session, 2026-09-25 ("Claude builds, Codex reviews"). |
+| 7 | One primary guided sitting plus targeted retries. | **Derived**, not asked: the operator first chose "one dress rehearsal"; rev 8 §8.4–8.5 replaced it, and decision 1 adopted rev 8. |
+| 8 | Short commands whose own words name the action run without asking; the identity writer saves only on your cue words and says so; the auto note-taker is off. Facts answered at the same time: the 02:11:40 "Okay" was the operator's own, and no video click played. | Operator answers after the 09-25 sitting, recorded in the rev 4 plan file (`~/.claude/plans/d-agen-os-agent-os-main-agent-os-main-i-deep-cloud.md`, "Answers from the operator"). Subject to rev 8's S1 contract: a short command authorises only the matching operation and target. |
+| 9 | All five campaign branches (this docs branch, S1, S2, B1, B2a) go to GitHub, each as its own pull request, for Codex review. Merging stays the operator's click. | Operator answer after B2a, 2026-09-25 ("Upload all five"). |
+| 10 | Merge order, safety first: docs, S1, S2, B1, B2a. Before each merge, the branch is brought up to date with `main`, its generated docs are regenerated, and the full suite is re-run. | Operator answer after B2a, 2026-09-25 ("Safety first"). |
+| 11 | A5's "unsupported factual assertions stay covered" is met by the general claim checker, not by the fragment rule. After a recognised acknowledgement, the claim checker judges the reply as it would after any sentence; it covers action claims only. No stricter acknowledgement-only check is added. | Operator answer after B2a, 2026-09-25 ("General claim checker"). |
+| 12 | BUG-451's three vault records (the Lessons, Notes and Semantic files named in its entry) are removed by the operator; a session never edits the vault. Their wording is already quoted in BUGS.md. The session finds a removal route that works for each record and gives the operator exact steps. Measured read-only the same day: the Semantic record no longer exists, because a 09-24 consolidation replaced it with a file that does not contain the false cause. The Lessons and Notes records remain in the packaged app's vault. `forget_fact` searches Semantic topics only, so those two are deleted by hand. Byte copies are kept in gitignored `.cache/bug-451-records/`. | Operator answer after B2a, 2026-09-25 ("Remove all three"). |
+| 13 | B1's leftovers. `scripts/verify-voice-session.js`'s "nothing left to cut" verdict is fixed now, as its own small branch (B1b), so the sitting is graded correctly. Two questions are measured at the B7 sitting, not inferred from old logs: the six Gemini cuts about 3 s into replies, and the operator's voice reaching barge-in level late. | Operator answer after B2a, 2026-09-25 ("Fix report, measure live"). |
+| 14 | The typed/batch path (`voice-agent.js`, used when Live is off) gets the trusted-action word check in this campaign, as its own branch in B5, before the B7 sitting. | Operator answer after B2a, 2026-09-25 ("Add it to this repair"). |
+| 15 | Short commands in Bengali or Hindi keep asking first. Before any change, measure which Bengali and Hindi words the transcriber actually returns in the operator's sessions, then bring the operator a proposal (at B2c). | Operator answer after B2a, 2026-09-25 ("Keep asking for now"). |
+| 16 | A click that was delivered but whose effect was not confirmed backs "I clicked". It does not back "it's playing". | Operator answer after B2b-1, 2026-09-26 ("yes on the click"). Reverses BUG-441 (a)/(a2) in part; recorded on PR #130. |
+| 17 | "It's playing" needs the player's own evidence: a reading from the player, or the operator saying so. Without it, MYTHOS is corrected as "not confirmed", never as "it did not play". | Same answer as row 16, 2026-09-26. Built as B2b-3 (PR #131). The operator's own words count as evidence, bound to the same target and kept apart from a machine reading, as rev 8 B2 requires. |
+| 18 | A progressive "opening it now" is backed by a delivered open whose result is not yet confirmed, the same rule as row 16. | Operator answer after B2b-2, 2026-09-26 ("keep the opening rule"). Recorded on PR #130. |
+| 19 | B1b, B2b-1, B2b-2 and B2b-3 each go to GitHub as their own PR (#128–#131), one go-ahead per branch. The merge order extends row 10: after B2a come B1b, B2b-1, B2b-2, B2b-3. The last three are stacked because each changes the claim checker, so each merges after the one before. | Operator answers 2026-09-26 ("Upload it", once per branch). The extended order is **derived** from the stacking, not asked. |
+
+The two decisions owed at planning time are answered: the presence window (row 4) and BUG-451's records (row 12).
+
+**Operator actions, none blocking unrelated fixes:** say "forget the note about bugs 439"
+(stale fact 343); re-authorise Gmail if a sitting needs it; confirm the Mistral console is on the
+free tier; the wake-word licence (274) goes to a lawyer.
+
+## C2. The seven additions, each placed into a rev 8 batch
+
+### A1 — Your recorded language decision → amends rev 8 **B6**
+`mythos/.env.example`'s `GEMINI_LIVE_LANGUAGE` block (~lines 850–881) records the 2026-08-21
+decision: auto-detect is the accepted trade-off; do not pin a language or add a selector without
+asking again. Decision 5 allows a trial only:
+- test `AudioTranscriptionConfig.languageCodes[]` (listed at `ai.google.dev/api/live` as
+  "hints about the languages present") as English + Bengali + Hindi together, never one alone;
+- rev 8's budget (at most 48 phrase trials, at most 2 setup probes) and free-quota stop rule;
+- measure false "ask first" holds caused by mis-transcription separately — the cost that did not
+  exist in August;
+- change no default and no `.env.example` text; results return to you for a decision.
+
+### A2 — Interruptions are logged as "finished normally" → first step of rev 8 **B1**
+Confirmed in source: `stopAssistantSpeech(reason)` (`s2s-bridge.js:876`) flushes the player; the
+flush can fire `onSpeakEnd` (`:1235`), which calls `releaseOwnVoiceGate('own-voice-ended')`; the
+explicit interruption reason then reaches `releaseOwnVoiceGate` (`:714`) with the gate already
+open and is dropped. So the 41 "own-voice-ended" releases of 09-25 cannot be read as natural
+ends.
+
+For the 02:15 hold, the server log (`.cache/windows-operator/attended-2026-09-25/raw-S.log`,
+lines 298–300) shows the gate release at 20:45:22.955 UTC (`own-voice-ended`, held 8,154 ms) and
+the server interruption at 20:45:23.057 — **102 ms later**. The de-duplicated final loud run
+holds three samples. That supports re-investigation, not attribution.
+
+B1 therefore:
+1. Starts with a failing test: a release caused by an interruption is logged with its real
+   reason. Controls: a natural end; a server interruption; the player's tail guard; a duplicate
+   `onSpeakEnd`; a local-versus-server race.
+2. Reclassifies each of the 41 holds as **natural**, **local interruption**, **server
+   interruption** or **indeterminate**, from `raw-S.log` and the recorder. Holds that the old
+   telemetry cannot distinguish stay indeterminate.
+3. Re-grades BUG-455's "mic half held" and BUG-469's "never attempts" from that reclassification,
+   before any threshold is touched. Rev 8's latency point stands: 3 × 100 ms frames = 300 ms,
+   already over the 250 ms bar.
+
+Corrected statement of the capture path: **the backstop observes active, non-capture-suspended
+frames before own-voice holding suppresses transmission** (`s2s-bridge.js`: the
+`captureSuspended` return precedes `bargeBackstop.observe`; the own-voice return follows it).
+B1 keeps media/capture-suspension cases in its test matrix.
+
+### A3 — A browser refusal with no way forward → new ticket, rev 8 **B4**
+`src/core/effectors/browser-driver-tools.js:26–28`: when the model passes a `target` and no
+desktop task owns the goal, the call is refused ("A desktop-owned task is required…") and names
+no next step, which breaks refusal rules 1 and 3 in `mythos/src/core/CLAUDE.md`.
+
+**The refusal itself protects something real, so it stays.** The file header says desktop-owned
+calls "never fall through to another profile". The plain path ignores target capsules, and
+`withPage()` acts on the first tab (`from-browser.js:140`), so falling through could read a
+different browser, profile or tab.
+
+Contract: **preserve exact browser/profile/tab identity; if ownership cannot be established,
+refuse with an actionable remedy** that is reachable and not already satisfied. Tests cover two
+profiles, two tabs, a stale target and missing ownership; the success case must read the named
+tab. A test that only shows "a snapshot came back" is insufficient. The ticket number is taken
+from the real ledger at commit time.
+
+### A4 — Cancelling a proposal → rev 8 **B3** (resolves the conflict with rev 8)
+`src/core/voice/live-tool-adapter.js` `rejectPendingConfirmsOnNegative` (~1083–1114) injects a
+"tell the operator plainly what was cancelled" notice for every cancelled confirm, including ones
+never read back. Contract, in line with rev 8 B3:
+- a cancellation **always** revokes pending authority;
+- disposal is **silent by default**; no separate injected turn, ever;
+- any acknowledgement is part of MYTHOS's reply to the operator's current words, delivered once.
+
+Four cases are defined and tested separately:
+- **timeout** — silent revoke;
+- **explicit rejection** — revoke; the reply to the operator's "no" may say so once;
+- **supersession by a newer proposal** — silent revoke of the older one;
+- **already executed** — reported truthfully as done, never "cancelled".
+
+### A5 — The "Okay" fix is narrower than it looks → rev 8 **B2** (448/460)
+Confirmed by the reviewer's read-only probes and, independently, my explorer's source trace: a recognised "Okay" or "no"
+followed by a reply longer than the threshold draws the "I misheard you" correction
+(`src/core/voice/fragment-guard.js:54–64` has no notion of a recognised word).
+
+The fix is a small, separate **whole-utterance acknowledgement classifier**, distinct from
+consent and from action commands. It does **not** reuse `voice-agent.js`'s `NEGATIVE_RE` (broad
+and unanchored) or its `AFFIRMATIVE_RE` (includes action words such as "send"), and does not
+import that module. Unknown fragments and unsupported factual assertions stay covered; an
+acknowledgement is never consent.
+
+Also for 448: the `browser_tabs` false retraction comes from `window-control`'s
+`incidentProgressiveRe` (`claim-check.js:169`), which matches any sentence starting "Closing"
+with no object — not only from the missing list entry.
+
+### A6 — The video-playing check has been idle since 09-16 → rev 8 **B0 / B7**
+`.cache/windows-operator/golden-path.log` last shows 2026-09-16 `PREREQ-MISSING` (no debuggable
+browser on 9222). B0 records it; B7's checklist makes "start your signed-in browser with
+debugging on port 9222 before MYTHOS starts" step zero; every golden-path line is labelled
+"typed".
+
+### A7 — A plain-language layer for you
+Every sitting checklist is literal steps: what to click, what to say, what a good and a bad
+result look like. Each batch ends with a short plain summary: what changed, what was proven,
+what is still open. Decisions arrive as ⚠️ callouts with a recommendation.
+
+## C3. Execution sequence
+
+1. **B0, in this order:** inspect status and worktrees → fetch → pin the base SHA → create the
+   worktree from it → `setup-worktree.js --path <wt>` **then** `--check` (read the manifest; it
+   listed 8 links and 3 copies when checked) → reconcile instructions (root and scoped
+   CLAUDE.md, RESUME, spine) → record A6 → **only then**, inside the worktree, write the accepted
+   content into tracked documents (this section, the audit copy and RESUME).
+2. **S1** (F01–F05, authority and consent) → **S2** (F06–F08, lesson integrity). Nothing
+   attended runs before S1 passes.
+3. **B1** (A2) → **B2** (A5) → **B3** (A4) → **B4** (A3) → **B5** → **B6** (A1), with rev 8's
+   dependencies.
+4. **Per branch:** failing test first → fix → negative control and must-keep case → mutation
+   where it proves a guard (applied, diffed, restored by hash, dated in the verification record)
+   → full suite and five docs gates, exit codes read directly → app start and use where runtime
+   changes → review gate (C4) → operator merge per rev 8 G5.
+5. **B7** primary sitting and targeted retries, graded read-only (rev 8 §6); **B8** merges, a
+   new `good-YYYY-MM-DD` tag on your go-ahead (the existing one is never moved), then the Stage 1
+   week.
+
+Size ratchet: `live-tool-adapter.js` (1,449 lines), `s2s-bridge.js` (1,315) and `live-session.js`
+(1,204) are over 800, and `claim-check.js` is at 799. New logic goes into small new modules; the
+large files get call-site edits only.
+
+## C4. Review gate (between the builder's tests and the operator's merge)
+
+- **Packet for Codex:** base and head SHA, the full diff, dependencies on other branches, the
+  evidence (test names, counts, commands, mutation record, app-run notes), and any findings still
+  unresolved — not a selection of places to look.
+- **Corrections after review** re-run the affected tests **and** the candidate gates (full suite,
+  docs gates, app run where applicable) on the new head; the packet is re-issued for that SHA.
+- **No review, no pass:** if the reviewer is unavailable, the gate is pending. It is never
+  implicitly passed.
+
+## C5. Review corrections to rev 9 (so they are not repeated)
+
+| # | Rev 9 said | Corrected to |
+|---|---|---|
+| 1 | A3: fall through to the plain path | Preserve exact browser/profile/tab identity; refuse with a remedy when ownership is unknown. |
+| 2 | A2: the hold ended within 6 ms of the server interruption | 102 ms (server log); reclassify every hold, preserving "indeterminate". |
+| 3 | A4: a presented proposal + "no" → one spoken line | Silent revoke by default; any acknowledgement only inside the current reply, once. |
+| 4 | A5: reuse `voice-agent.js`'s vocabulary | A separate whole-utterance acknowledgement classifier. |
+| 5 | B0: write tracked documents, then create the worktree | Worktree first; write inside it. |
+| 6 | "The backstop is fed every frame" | Backstop observes active, non-capture-suspended frames before own-voice holding suppresses transmission. |
+| 7 | Review packet = "the two places worth attacking" | Full candidate identity, diff, dependencies, evidence, open findings; retest after corrections; pending if no reviewer. |
+| 8 | Copy position and progress only; "weeks of work"; decisions "taken" without sources | Complete contracts in tracked documents (this section); duration an estimate; every decision sourced (C1). |
+
+Rev 6's errors are recorded in the rev 9 history and in the audit; the main ones were the
+ask-first check approving prohibitions, the check-only setup command, the vault-writing grader,
+the wrong language-hint conclusion, and a 455 oracle that would fail a correct interruption.
+
+## C6. Not in scope
+
+Stages 2–7; a validated text lane; any model or provider change; explaining the original native
+crash; editing the vault; tuning echo for other rooms; legal conclusions; merging, pushing,
+tagging or deleting anything without the operator's go-ahead.
+
+## R. Rev 8 — the adopted contracts, verbatim
+
+Copied unchanged from rev 8 §3–§11 (headings demoted one level). Where it says "this review"
+it means the 2026-09-25 audit pass, not a later one.
+
+### 3. Scope and what already exists
+
+Keep Stage 1 active and Stages 2–7 paused. Preserve the supplied constraints: approved free-tier providers only; no additional inference stage, judge model, paid provider, or model migration; no direct edits of operator vault contents; no merger, push, tag, or release as part of this plan review.
+
+Reuse the existing shared dispatch and leash, confirmation registry, action receipts, held-reply module, gate recorder, own-voice playback clock, voice-session verifier, browser identity checks, and documentation generators. Extend these seams instead of adding a second policy engine, persistence system, or blanket tool registry rewrite. New metadata must survive hub/catalog projection and remain internal unless supported by the provider declaration schema.
+
+The smallest complete approach is to build a thin evidence layer early, repair the measured paths, and qualify each ticket's residuals. Do not require metadata on every tier-1 tool merely to repair three affected operations. Use focused completeness checks over the affected semantic categories, expanding only when an actual missing producer is found. Existing waivers require reasons; an empty waiver map is not a correctness guarantee.
+
+#### Complete inventory
+
+| Track | Tickets | Closure rule |
+|---|---|---|
+| Code or diagnosis | 406, 436, 446, 447, 448, 457, 460, 461, 463, 464, **466**, 468, 469, 470, 472, 471 | Reproduce residual, implement if warranted, and satisfy its full evidence checklist. There are 16 tickets, not a promised number of branches. |
+| Code reported complete; proof still required | 421, 422, 432, 437, 439, 444, 445, 450, 452, 455, 456, 458, 459, 462, 467 | Reconfirm code and all residuals; historical CODED status is not current proof. |
+| Accepted limits or disposition work | 274, 275, 449, 451 | Keep 274, 275, and 449 explicitly open under their current limits. BUG-451 needs both recurrence-prevention evidence and an operator decision about existing records. |
+
+This preserves all 35 tickets once each. Audit findings are a second, linked inventory, not thirteen additional ticket numbers. Before implementation, search the existing register for each finding, link an existing ticket where appropriate, and allocate a new ID only after checking concurrent changes. F06–F08 must not disappear merely because rev 6 did not list them. If new tickets are needed, report the revised denominator explicitly.
+
+### 4. Execution order and ownership
+
+All branches use `codex/` unless the operator requests another name. Create implementation worktrees under the project directory. Do not switch or clean the existing checkout; its untracked research draft can remain untouched. Deleting that draft is not a prerequisite for isolated work.
+
+| Batch | Work and ownership | Dependencies |
+|---|---|---|
+| B0 | Pin baseline, repair evidence contract, add read-only session grading skeleton and ticket matrix. Own scripts/runbook only. | None. |
+| S1 | Repair action intent, exact proposal presentation, and memory consent: F01–F05. Own authority/consent integration. | B0. This precedes discretionary live actions. |
+| S2 | Repair lesson storage identity, failed-write results, and deterministic deduplication: F06–F08. Own lesson store and disposable fixtures. | B0. This precedes lesson caching. |
+| B1 | Diagnose and repair 469/406; qualify 455 alongside it. Own capture/backstop/policy seams. | B0; S1 before attended action tests. |
+| B2 | Repair 448/460, complete 461 positive short-command behavior, then repair 457. Own claim semantics and Live adapter integration sequentially. | S1; integrate with B1 before acoustic/tool-overlap tests. |
+| B3 | Repair 464 and 463 together at consent/provenance boundaries, then 472 preference loading. | B2's authority and delivery contracts. |
+| B4 | Repair 468, then 471; qualify 421/445/459/462. Own browser/opening and target-verification paths. | B2 claims/authority contracts; final integration with B1. |
+| B5 | Diagnose 436; repair 470, 446, and 466 as separately reviewable changes. | S2 before caching; 446 uses S1/B2 input provenance. |
+| B6 | Investigate 447 using current documentation and controlled multilingual trials. | B0, B1, and B2 for meaningful end-to-end results. |
+| B7 | Complete all oracle fixtures, integration tests, primary sitting, targeted retries, and closure proposals. | All applicable batches. |
+| B8 | Operator merges verified candidates; qualify Stage 1 across the required week. | B7 and explicit operator merge/tag actions. |
+
+Potential independent lanes after B0 are S1 authority and S2 lesson integrity, followed by isolated acoustic/history/goal-count investigations. This is a dependency analysis, not an instruction to spawn agents. Sequential work is the default unless delegation is separately requested. The Live adapter, shared tool definitions, confirmation paths, generated docs, and BUGS.md are integration conflict points; assign one owner at a time. Do not create fourteen simultaneous worktrees. Branches can remain individually reviewable while dependent work waits for accepted prerequisites or uses an explicitly recorded temporary integration base.
+
+#### B0: establish a reproducible starting point
+
+1. Read current Git status, worktrees, remotes, scoped instructions, RESUME, and relevant spine invariants. Fetch before implementation, resolve the selected base SHA, and record it. Reconcile recently fixed-file claims before editing them.
+2. Create the worktree from that SHA, run `setup-worktree.js --path <worktree>`, then run `--check`. Inspect the actual manifest rather than hardcoding link counts. Resolve every junction target. Shared models and dependencies must not be mutated by tests; use disposable fixtures or a local copy where mutation is required.
+3. Put TEMP, TMP, caches, test vaults, captures, and build outputs in long-form paths under the project. Verify ports are free before assigning a run; 4999/5099 are examples, not globally reserved concurrent ports. Never kill the operator's app to free ports.
+4. Run recursive `node --test --test-reporter=tap` from the worktree's `mythos` directory. Save stdout/stderr and immediately record its process exit code. Check leaf failures, failed parent suites, cancellation, skips, and missing summaries using the current TAP-verdict code. Classify environmental failures without weakening assertions.
+5. Reuse that exact TAP output for count checks. A pipe is acceptable for supplying captured data only when the original runner exit and each later command exit are preserved independently. Do not accidentally run the 8,000-plus-test suite again through both count checking and docs checking. Update counts only from an inspected clean run, regenerate both generated pages through their scripts, then run all five docs checks. Baseline drift is a finding; do not silently rewrite it during measurement.
+6. Record runtime/build identity, fixture state, provider/model/API identifiers without secrets, and the input modality for every later proof. A source boot and installed build are different artifacts.
+
+### 5. Fix contracts and acceptance tests
+
+#### S1 — authority and consent blockers, F01–F05
+
+**Contract:** an action is authorized only by a trusted request for that operation and target, or a valid affirmative to an accurately presented, unchanged proposal. Model-provided intent labels never supply authority. Presence, grammatical request form, successful tool execution, and matching argument signatures are insufficient by themselves.
+
+Start with failing regressions for all reproduced cases. “Please do not click that button” must not dispatch. “Could you explain why this happens” must not authorize a click/type/key operation. “Refresh the page” may authorize the matching refresh on the bound current page but not a different operation or target. Denial wins over a nearby “please”; quoted/hypothetical requests are not executable instructions. If deterministic interpretation is ambiguous, use the existing confirmation flow rather than inventing an additional model judge.
+
+Pass the concrete operation and target evidence into the existing authority seam. Avoid an all-purpose natural-language parser. Support the measured action families with bounded, explicit matching; unsupported language/forms remain honestly unresolved and use explicit confirmation. The regression matrix includes denial, explanation, short command, restated affirmative, changed arguments, stale target, absent transcript, quoted text, hypothetical text, and EN/BN/HI examples with labeled expected dispositions. Supporting multilingual speech does not mean English regexes can authorize it.
+
+Bind presentation to a stable proposal ID, operation, exact payload, and an observable target description. Do not mark a proposal presented merely because some action question appeared. For voice, require evidence that the relevant read-back was played through, not just generated; interruption clears presentation. A visible HUD confirmation must display the actual action and target, and must use existing authenticated confirmation controls. Missing playback evidence prevents automatic spoken acceptance without blocking the explicit HUD route.
+
+For direct memory requests, preserve source content and polarity. Saving “green” when the operator said “blue” must require a fresh, exact confirmation or be rejected. Initially favor exact supported extraction from operator text; do not attempt unsupervised semantic paraphrase matching. Unsupported paraphrases, extra entities, changed numbers, negation, and model-added facts use read-back. A consent token is minted only after this content/presentation predicate succeeds. The existing argument signature then protects against changes after authorization.
+
+**Exit gate:** real session/adapter/registry/dispatcher integration shows zero dispatches for negative cases, exactly one for an authorized unchanged case, and zero durable writes for mismatched or interrupted proposals. Flip the existing wrong-target KNOWN GAP expectation to the required safe behavior; retain the original reproducing input as a regression. Do not simply delete the test.
+
+#### S2 — lesson data integrity before performance, F06–F08
+
+**Contract:** distinct triggers cannot overwrite each other; equivalent supported JSON arguments have the same deduplication identity; a failed durable write cannot return a successful update or update cached state.
+
+First preserve both records for different tools/arguments under the same goal. Separate display topic from storage identity. Use the complete normalized trigger as the logical key; use a collision-resistant storage identifier and verify the stored key before replacing a file. A shortened digest alone must not authorize overwrite. For supported JSON objects, normalize object-key order recursively while preserving array order and value types. Reject unsupported input explicitly instead of silently collapsing it to a generic string.
+
+Read existing lesson files without a bulk migration. Keep the legacy hash lookup for existing records where needed; a successful exact legacy match can retain its current path and identity. Old files contain only hashes for arguments, so their original argument order cannot always be recovered. Do not claim perfect historical deduplication or reinterpret an ambiguous legacy match. Write new distinct records without overwriting unmatched legacy files. Any later operator-vault migration is a separate explicit operation with backup and rollback, not a hidden boot action.
+
+Propagate the `write()` result through both `recordFailure()` branches. Simulated write failure must return degraded/failure and preserve persisted count, bullets, and cache. A later successful retry increments once. Check the concrete filesystem writer's replacement guarantees before claiming crash atomicity; if inadequate, include a narrowly scoped atomic replacement with failure-injection coverage. Do not build a new persistence framework.
+
+**Required regressions:** same goal/different args; same goal/different tool; slug/truncation collisions; reordered nested object keys; different array orders; existing-record write failure; new-record write failure; failed replacement preserving the previous readable file; restart/read/export preserving both records; successful retry without duplicate increments. Tests operate on project-local disposable fixtures.
+
+**Exit gate:** all identity and failure tests pass before B5 adds a cache. Historical overwritten content is not recoverable from the remaining file alone; identify available backups without modifying them and report unrecoverable loss honestly. Do not silently recreate lost lessons from model guesses.
+
+#### B1 — acoustic interruption: 469, 406; adjacent 455
+
+First reproduce the recorder's numbers from the original JSONL, deduplicating overlapping windows. Compare `captureSuspended`, `ownVoiceGate`, `speaking`, timestamps, and effective tuning. The recorder samples the same PCM via `rmsFromPcm16` before the early return, so prioritize gate and speaking-state differences over an unsupported theory that one recorded RMS is after the noise gate.
+
+Run scalar decision tests using the recorded levels and time intervals, labeled as decision replay. If a scalar-input seam is needed, factor the existing pure decision logic minimally; do not synthesize PCM and call it recorded-audio replay. Near thresholds, account for RMS rounding and missing samples. Without effective tuning and policy history, report an inconclusive reproduction rather than a certain root cause.
+
+Add bounded numeric instrumentation only for missing causal signals: capture-suspend reason, observation reached, actual thresholds, policy reason, release/flush disposition, and correlated playback clock. Collect quiet playback controls and operator-labeled interruptions. Raw audio is not required by default and must not be silently enabled. A playback-relative bleed algorithm is a separate measured design choice, not a consequence of the existing scalar corpus.
+
+Test the real capture callback with fake clocks/player: ordinary own-voice hold, media suspension, speaking false, protected window, accepted/vetoed attempt, release without flush, both tiers, near-end playback, server interruption, and next-turn reset. Keep own-echo controls, first-word preservation, and bounded preroll. A source-shape assertion supplements behavior tests; it does not replace them.
+
+Live proof must distinguish natural playback-end release from authorized interruption. For 455, accept either justified end or justified barge-in; reject unexplained ceiling release and self-triggered turns. Measure local-stop latency against the unchanged 250 ms Stage 1 bar. Three 100 ms frames already consume about 300 ms before other gating; expose this budget conflict. Fixing one missed interruption does not prove that latency target or close every 406 acoustic residual.
+
+#### B2 — truthful actions, authority, and result ownership
+
+**448/460:** Preserve claim categories but derive affected backing predicates from canonical tool semantics. A predicate receives the operation and arguments, target identity, outcome, receipt/evidence strength, and relevant turn. Listing tabs cannot back “closed a tab”; closing tab A cannot back closing tab B; delivering F5 can back “pressed refresh” without backing “page refreshed”; a click cannot back playback without player evidence. Do not widen action permission while repairing spoken claims. F10 also requires a playback-claim predicate for the measured unsupported sentences, not merely a backing-tool table change. Carry target-bound player evidence into the claim input before enabling that predicate. If using operator confirmation as evidence, bind it to the same target and distinguish it from a machine observation. Flip the existing playback KNOWN GAP test once that contract is implemented. Live correction remains after speech under the accepted native-audio architecture; no claim of preventing every false utterance is made.
+
+Replay complete turn/action histories, including empty assistant turns, chronological order, scoped prior receipts, and cancellations. Label ground truth independently of old checker output. Cover the known true retractions, hedged clicks, “I've also clicked,” wrong-target successes, failed/unverified outcomes, invented sends, and echo/no-transcript controls. Recognized “Okay” may be a valid conversational reply without becoming consent to any pending action.
+
+**461:** Match short commands to the specific proposed operation and arguments in the current trusted operator turn. Denial, quoted requests, hypotheticals, unclear targets, and background noise still cannot authorize actions. “Yes, refresh the web page” accepts only an unexpired, presented refresh proposal with the same argument fingerprint and target. Changed arguments, another session, consumed tokens, old proposals, and revocation must fail safely. Do not equate lexical overlap with semantic authority or assume English-only word counting works for Bengali/Hindi. Exercise the actual session-to-adapter-to-dispatch-to-confirm path.
+
+**457:** Use one result-delivery record shared by held, immediate, late, and retry paths, keyed by session generation plus call ID. Track protocol acknowledgement separately from final result delivery. State must distinguish waiting, released/acknowledged, cancelled, final result available, sending, locally accepted, rejected, and terminal cleanup. Claim ownership before the asynchronous send; on rejection retain the result and permit only the defined recovery path. Never resend a side-effecting tool merely because narration failed.
+
+Test completion before/at/after deadline; the 1.5 s initial wait plus additional hold duration; typed release; spoken cancellation; turn close; parallel calls; duplicate completions; socket rotation; reused IDs; shutdown; rejected sends; bounded retention. Promise local at-most-once routing with retained outcomes, not network-level exactly-once receipt. Move `screen_look` through the proven hold first. Generalize reply policy only where canonical semantics justify it; read-only status alone does not determine duration or narration needs. Preserve honest handling of calls beyond the hold, without treating forced user-role injection as proof of non-interruption.
+
+#### B3 — memory consent and stable preferences: 464, 463, 472
+
+Reuse the confirmation registry. Bind each proposal to its exact content, source turn, expiry, and receipt of presentation. A transcript showing generated read-back does not prove the operator heard it; interrupted or incomplete playback cannot count as presentation. Explicit saves use the existing consent rules. Silence/cancel must cancel a pending write without a new unsolicited spoken turn. If a completed save is later undone, report that truth separately from silent cancellation.
+
+For automatic preferences, use original operator-origin text, not a model summary containing cue words. “Never use think_deeply” is a valid negative preference; “don't remember this,” quotes, hypothetical statements, and descriptions of someone else's wishes are not save permission. Every saved item carries provenance, source turn, time, and revocation/update behavior. Remove speculative whole-profile rewrites only after tracing all profile/style consumers. Keep unrelated action-learning behavior unchanged.
+
+The supplied rev 6 says cue-based learning was approved. Preserve that intent, but do not silently broaden it. Acknowledgement belongs to the save's user turn through the existing speech delivery path. Reflection at shutdown or long after the turn must not inject an acknowledgement into another conversation. If exact source/presentation is unavailable, leave the proposal pending or skip it honestly.
+
+Only explicit, provenance-backed preferences enter the reserved prompt block. Existing unprovenanced identity text is not automatically promoted. Test correction, forget, contradictory preferences, duplicate facts, restart, and live-session setup/refresh. Bound the block, reserve space within the total frame, and expose omitted counts per spine AD-14. If explicit preferences exceed capacity, make the limitation visible; do not claim every preference is always present.
+
+Evaluate greetings, task requests, quoted commands, reasoning questions, and EN/BN/HI turns against labeled recorded cases. Compare inappropriate `use_skill`/`think_deeply` calls and missed legitimate calls with baseline. Descriptions influence model behavior but cannot guarantee “never.” A deterministic per-tool opt-out would require a clearly chosen policy change rather than being smuggled into a prompt fix. No new speech-filter inference lane is introduced.
+
+#### B4 — browser handoff and target verification: 468, 471
+
+Route explicit YouTube new-tab mode and no-embeddable fallback through the existing external opener. Distinguish requested handoff, opener acceptance, observed navigation, and advancing playback. An explicit `opened:false` is failure; accepted launch alone is not playback success. Test rejection, timeout, unsafe/invalid URL handling, browser selection, repeated results, and both fallback routes.
+
+For 471, prefer an observed actionable link/card tied to the requested video identity. A title link may be a valid target; “always thumbnail” is not a reliable rule. Preserve tab, task, and target ownership; refuse stale or ambiguous matches. Normalize punctuation/spacing symmetrically, retaining duplicate-result disambiguation. Unicode normalization must not collapse unrelated targets into one authorized click.
+
+Describe the existing `expect` field accurately as observable text. Do not reject ordinary strings by guessing whether they sound descriptive. If playback verification is required, use the existing playback oracle; only introduce a typed observation selector if a real boundary gap demands it, with compatibility tests. Success requires the intended video ID and advancing playback, excluding an advertisement. Test navigation without playback, paused previews, wrong videos, another tab playing, detached targets, DPI changes, and delayed after-state.
+
+External new-tab playback is not inherently uncontrollable: an attached, authorized browser may support it. Report the actual available control transport rather than asking the operator to choose a mode based on an unproven limitation.
+
+#### B5 — bounded maintenance: 436, 470, 446, 466
+
+**436:** Measure wall time, CPU, event-loop lag, read counts, and cold/warm boot/recall on a disposable local vault copy. Copying does not preserve OS cache or antivirus conditions, so do not identify antivirus as the cause from a low-CPU stall alone. If disk reads dominate, retain parsed lesson records in the existing store. Update only after successful writes; evict after successful prune; preserve ranking, provenance, deduplication, get/stats/export behavior, and restart reconstruction. Establish import/sync/manual-edit behavior before assuming one writer. Test failed writes and deletes without corrupting cached state. Measure warm recall with zero repeated file reads, plus startup cost and memory at the observed corpus and a larger synthetic corpus. Do not move a synchronous stall from recall into boot and call it solved.
+
+**470:** Trace both actual consumers to their data sources. Define active, paused, completed, and not-done explicitly. Derive active from canonical goal state and show unknown/degraded if unavailable rather than inventing zero. Test paused-only, mixed states, resumed goals, completed goals, empty stores, and stale Goals.md rows through the greeting and HUD API/render path.
+
+**446:** Add trusted presence at the shared autonomous-dispatch boundary, preserving goal status, budget, leash, and explicit operator authorization. Presence is not permission. Initialize absent on boot; update only from authenticated operator-origin actions, never reconnect, background traffic, model text, or app-generated clicks. Use monotonic elapsed time and reset across restart; test expiry boundary, sleep/resume, clock changes, queued work, and check-to-execution races. Recheck before each autonomous side effect. Already running work must stop at safe boundaries rather than be killed halfway through an irreversible action. The suggested ten-minute window is a proposal, not an established operator decision; use an existing policy value if available, otherwise keep that decision explicit before implementation.
+
+**466:** Preserve the transport's JSONL contract using the existing raw text reader, rather than joining parsed objects. Test real Episodic writer to HTTP history route to `buildTranscript`, with valid rows, Unicode, a torn final line, empty/missing file, local-day rollover, and overlap with session history. Confirm the real conversation panel shows the historical turn. Preserve the just-merged BUG-465 local-day behavior.
+
+#### B6 — transcription: 447
+
+Record the exact configured model, API version, raw setup shape, and current language-hint documentation. Try only documented configuration supported by that contract. A rejected field demonstrates rejection on that endpoint/model, not universal absence; an accepted field does not demonstrate efficacy.
+
+Use a preregistered set of twelve utterances: three English, three Bengali, three Hindi, and three code-switched examples, covering short commands, ordinary conversation, and negation. Compare baseline and documented treatment on the same utterances, twice each: at most 48 utterance trials, plus at most two setup-acceptance probes. This is a proposed bounded experiment, not a statistically comprehensive language benchmark. Verify a free-only configuration and current quota first; if quota does not support the experiment, stop and retain NOT-EXERCISED rather than use a paid fallback or expand the budget silently. Use operator-approved audio fixtures only if already available; otherwise collect attended utterances without silently retaining raw audio.
+
+Record operator ground truth before grading. Report setup acceptance, transcript accuracy, intended action recognition, false authority holds, and language regressions separately. A small positive trial supports further qualification, not a universal accuracy claim. A clear authority regression blocks enabling treatment; inconclusive quality results leave the default unchanged. If documentation/support is inconclusive, keep the residual open as unconfirmed. If unsupported on the configured model, label that precise bound. Add an optional unset-by-default configuration only after support and benefit are demonstrated. Do not assert that a system instruction can or cannot influence transcription without evidence.
+
+### 6. Evidence tooling comes before the final sitting
+
+Extend existing voice-session parsing where possible. The thin attended-session command consumes a run manifest and yields **per-ticket, per-residual** results, not a single aggregate verdict credited to every ticket.
+
+The manifest records run ID, runtime/build hash, configuration fingerprint with secrets removed, session/process IDs, input modality, operator-confirmed observations, and selected scenarios. Capture start and end bounds for each log. Handle file rotation, truncation, midnight changes, partial JSONL, timezone differences, duplicate rows, and delayed final writes. Do not merge concurrent processes by timestamps alone. Reading private logs is separate from storing sanitized fixtures; keep raw artifacts ignored and local.
+
+Use exit 0 for all required checks passing, 1 for observed failure, 2 for harness/parse errors, and 3 for missing prerequisites or unexercised checks. Preserve detailed statuses in JSON. A missing event on a known-executed path may itself be FAIL; no evidence window is NOT-EXERCISED; an unreadable capture is ERROR. Aggregate precedence is ERROR, FAIL, NOT-EXERCISED, PASS. Always show all per-ticket results.
+
+Fixture tests cover pass, wrong result, missing scenario, corrupt row, wrong process/build, duplicate events, overlapping windows, rotation, and absent operator confirmation. Explicit scenario-start/completion markers provide denominators. “No bad events” with zero relevant exercises cannot pass.
+
+Grading is read-only against vaults and BUGS.md. Emit reports and a proposed closure diff inside project `.cache`; review actual ticket headings and OPEN WORK semantics before updating tracked records. Do not wire the grader into the existing mutating `verify-live.js` unless its output directory, per-ticket mapping, argument passing, and promotion behavior have first been corrected and tested. A read-only standalone invocation is sufficient for this campaign.
+
+#### Proof-only scenario matrix
+
+| Tickets | Required observation, beyond unit tests |
+|---|---|
+| 421, 445 | Select observed ordinal results at the supported boundary and from content beyond the old snapshot cutoff; prove exact identity. |
+| 422 | Kill only the owned test backend that the shell supervises, identify the exact process, observe shell survival, bounded restart, healthy reconnect, and a successful next request without duplicate actions. This proves containment, not native-crash causation. |
+| 432 | Exercise documented flag variants with queued notices and operator speech; show serialization, cancellation, and absence of duplicate/overlapping delivery. |
+| 437 | Exercise each real quit route in a separate boot: shutdown ordering, deadline, exit, and no owned child survivors. A complete log line alone is insufficient. |
+| 439 | Use a disposable desktop target requiring the intended generic control path; observe target change and preserve unrelated windows. |
+| 444 | Test remote sign-in with prerequisites available, opaque session behavior, invalid/expired credentials, and absence of the raw server token in responses/cookies. Do not dump credentials into evidence. |
+| 450 | Exercise a dead engine, parking, subsequent utterances, usable fallback, and the documented recovery/reset boundary. |
+| 452 | Test a controlled foreign origin against PIN/token configuration variants; show refusal with no state change, while legitimate local requests still work. |
+| 455, 456 | Use the B1 release oracle plus audible chime and result timing; operator hearing confirmation is required. |
+| 458 | Exercise empty/cut provider replies and prove legitimate fallback output, with finish reason and no empty success. |
+| 459, 462 | Exercise spoken browser requests and distinct action/navigation/playback evidence; do not infer playback from a click. |
+| 467 | Boot under verified free-only configuration; inspect selected outbound model IDs and refusals with paid-only configuration fixtures. Do not intentionally make paid calls. Operator console verification remains external evidence. |
+| 451 | Reproduce symptom-only learning against disposable stores and prove no invented cause is persisted; track existing record disposition separately. |
+
+### 7. Test coverage and performance gates
+
+```text
+Operator speech / typed input / HUD action
+  +-- origin and echo acceptance                 [component + attended]
+  +-- own-voice/media gates and backstop         [callback replay + acoustic]
+  +-- transcript / current turn                 [multilingual trials]
+       +-- action intent / proposal / consent   [negative authority matrix]
+       +-- shared leash and dispatch            [real integration path]
+            +-- tool failure / partial success  [fault fixtures]
+            +-- target-specific evidence        [browser/desktop oracle]
+            +-- held / cancelled / late result  [clock and socket races]
+                 +-- spoken claim               [turn/receipt replay]
+                 +-- heard presentation         [playback + operator]
+                 +-- durable preference         [provenance/revoke tests]
+
+Every exercised path --> correlated run capture --> residual verdict
+                     --> reviewed ticket update --> generated register
+
+Shutdown / restart --> process ownership + recovery + no repeated side effect
+```
+
+Every fix starts with a failing behavioral regression for the stated defect, a negative control, and adjacent behavior that must stay working. Use targeted mutations only where they distinguish an actual guard; do them in disposable copies, verify the mutation applied, and verify restoration. Do not mutate live user data.
+
+Keep shared dispatch and audit ownership invariant. Run focused tests during iteration, the full suite on each final branch candidate as required, and again on changed integration candidates. Reuse captured TAP for documentation checks. A broad refactor, new dependency, or unrelated cleanup is not required by this plan. Preserve the file-size ratchet using small cohesive extractions only where new behavior requires them.
+
+Measure the unchanged Stage 1 p95 bars: acknowledgement 2 s, local stop 250 ms, spoken cancellation 1.5 s. Report sample counts and raw latency distributions; a handful of samples does not establish a robust p95. Include event-loop delay under lesson reads, prompt-block size, and bounded pending-delivery memory. Declare corpus, hardware/configuration, and cold/warm conditions before comparison. Avoid arbitrary new performance thresholds after observing results.
+
+### 8. Integration, attended proof, and merge gates
+
+1. Freeze an integration candidate and record its exact source tree, runtime hashes, and configuration. Build/run Electron from that candidate using project-local state. Exercise typed UI plumbing, quit routes, and controlled faults before the operator's sitting.
+2. Verify the existing signed-in browser transport, native helper/extension version, task ownership, and debugging attachment without replacing its profile or launching a new anonymous profile. Keep remote debugging loopback-only. The real browser version determines supported setup; no universal shortcut is promised.
+3. Run the typed golden-path instrument before/after relevant changes and label its modality. It changes the real browser, so it is not part of a read-only baseline. Separately record the attended spoken workflow using exact target identity and playback evidence.
+4. Schedule one primary guided sitting. Group quiet conversation, deliberate interruption, memory proposal/decline, short commands, browser workflow, goals/history, and multilingual trials. Put crash/quit tests last, with distinct session IDs and restarts. Remote-device security and free-only configuration can use separate targeted runs. Include explicit checks for 436, 463, 466, 470, 472, and 451; rev 6's checklist omitted several of these.
+5. Grade all selected residuals. FAIL returns to its owning batch. ERROR invalidates affected evidence. NOT-EXERCISED remains open. Partial PASS is retained as evidence but does not close a multi-residual ticket. Do not budget away necessary retests merely to preserve “one sitting.”
+6. Prepare closure changes only for complete proofs. Update the real ticket and OPEN WORK register together; regenerate indexes and validate parsing. Keep “CODED,” “live-verified,” and “accepted limitation” distinct. Record exact build and evidence paths. Do not promote based on a generic PASS exit for a different bug.
+7. Test each candidate that the operator will actually merge. A changed base, conflict resolution, or rebase requires fresh affected checks and a full suite; a material runtime change invalidates corresponding attended evidence. If intermediate merge prefixes must each be known good, qualify those prefixes or combine inseparable dependent changes into one coherent PR. Never rely solely on the final all-fixes build to bless untested intermediate main states.
+8. The operator performs merge commits. Verify final main identity and smoke behavior before proposing a unique good-build tag; an existing `good-2026-09-25` tag must not be moved. Public release remains outside scope and subject to licensing gates.
+9. Continue Stage 1 qualification until ten consecutive attended spoken successes across at least two cold boots over a week, with latency and safety bars met. Ticket closure, a primary sitting, typed golden-path PASS, and Stage 1 completion are separate facts.
+
+Rollback means returning the test runtime to the last verified artifact/configuration and retaining failed evidence. Do not reset shared checkout history, delete operator data, move tags, or undo other sessions' work. Reverting a runtime build must not silently roll back a user's saved memory.
+
+### 9. Decisions and honest endpoint
+
+Accepted in this review: full inventory, dependency-ordered batches. Carried from the supplied plan: no new inference lane or model migration; detected-only limits remain open; containment is BUG-422's target; operator performs merges and vault disposition.
+
+Planning defaults are explicit: delayed reflection does not inject speech into another turn; an over-budget preference block reports omissions and does not claim universal compliance; prompt guidance does not become a new deterministic tool ban. Preserve existing policy/configuration values where present. Ten minutes remains a proposed presence window, not a historical decision. Before enabling new autonomous behavior, resolve that one policy value with the operator; unrelated fixes can proceed after implementation is requested. If overflow could omit an explicit action restriction, do not grant permission on the assumption that the model saw it: the existing leash/consent boundary still governs every side effect. A general policy compiler is outside this repair.
+
+Operator prerequisites remain Gmail reauthorization if a selected scenario needs it, provider-console free-tier evidence, disposition of stale facts/BUG-451 records, and legal review of wake-word distribution. These do not block unrelated code fixes. No deletion of the research draft or checkout switch is required.
+
+`/kee` has no matching exposed skill in this session. Its meaning was requested and remains unresolved; no permission or additional workflow was inferred from it.
+
+Not in scope: Stages 2–7, a validated text-speech lane, new model/provider migrations, worldwide acoustic qualification, explanation of the original native crash, automatic vault cleanup, deployment, distribution, or legal conclusions.
+
+The endpoint is a reproducible verdict for every ticket and explicit remaining limits, not a promised reduction to three or four open tickets. No finite rehearsal can guarantee “fixed for good.”
+
+### 10. Audit-to-execution traceability
+
+| Audit finding | Accountable batch | Required proof before disposition |
+|---|---|---|
+| F01 — prohibition accepted | S1 | The exact negative sentence causes zero actions through real authority/dispatch integration. |
+| F02 — explanation authorizes action | S1 | Explanation-only input cannot authorize the proposed click/type/key operation. |
+| F03 — memory content changes | S1, B3 | Blue-to-green mismatch causes zero writes; exact authorized payload is saved once. |
+| F04 — wrong-target presentation | S1 | Wrong-target question leaves the original proposal unpresented; old KNOWN GAP test becomes a safety regression. |
+| F05 — weak/unheard read-back | S1, B3 | Changed details, negation, incomplete playback, and multilingual cases cannot confer false presentation. |
+| F06 — lesson overwrite | S2 | Both distinct trigger records remain readable after write, restart, and export. |
+| F07 — failed update looks successful | S2 | Simulated write failures return degraded/failure; persistent and cached data remain unchanged. |
+| F08 — hash depends on key order | S2 | Equivalent supported objects share identity; ordered arrays and distinct values stay distinct; legacy handling is explicit. |
+| F09 — competing delivery owners | B2 | Clock/socket race matrix produces one local final-result disposition, retained rejected results, and no repeated tool side effect. |
+| F10 — missing/wrong claim backing | B2, B4 | Measured playback sentences require relevant evidence; wrong-target/list-only actions do not excuse completion claims. |
+| F11 — history serialization | B5 | Real writer → HTTP → transcript → UI round-trip survives local-day rollover and a torn final line. |
+| F12 — incorrect active count | B5 | Greeting and HUD agree with canonical active/paused state; unavailable data remains unknown. |
+| F13 — inferred identity persistence | B3 | Only provenance-backed authorized content becomes a preference; revocation and delayed/shutdown paths preserve the contract. |
+
+Every row is mandatory to investigate. “Already fixed” requires equivalent current evidence; “accepted limitation” requires explicit disposition and stays distinct from PASS. Shared fixes may cover multiple rows, but no row disappears during regrouping.
+
+### 11. Go/no-go gates and evidence invalidation
+
+| Gate | Required evidence | Stop condition |
+|---|---|---|
+| G0 — trustworthy baseline | Pinned SHA, inspected instructions and fixtures, real test-run exit/summary, cleanly classified baseline, current ticket inventory. | Unknown base, silently missing fixtures, unexplained baseline failures, or shared writable user data in a test path. |
+| G1 — reproducible defect | Original failure on the selected base with a bounded input and independent expected result. | Test fails for setup reasons, or the claimed failure is not reproduced and source evidence does not settle it. Investigate; do not guess a fix. |
+| G2 — corrected behavior | Positive case, negative control, adjacent behavior, and complete runtime integration seam. | Only source-shape checks pass, a known-gap assertion still preserves the target defect, or the fix bypasses dispatch/consent. |
+| G3 — coherent candidate | Final full-suite pass, five docs checks, ratchet checks, applicable Electron boot/use, source/runtime identity. | Changed candidate after proof, unresolved conflicts, malformed TAP, failing parent suites, missing required oracle, or unjustified skips. |
+| G4 — ticket live proof | Every required residual exercised against the identified build; operator hearing/interaction confirmation where necessary. | Any FAIL, ERROR, NOT-EXERCISED, wrong target, unauthorized write, or unsupported completion claim in the applicable scenario. |
+| G5 — main merge readiness | Exact merge candidate and each required intermediate main state qualified; operator review/merge action. | Final all-fixes proof is being used to bless untested prefixes, or the merge changes unverified runtime bytes. |
+| G6 — Stage 1 qualification | Required attended spoken streak, two cold boots across a week, latency measurements, and no disqualifying safety failures. | Typed-only proof, missing samples, broken streak, weakened targets, or unexercised acoustic behavior. |
+
+A changed runtime file invalidates its affected integration/live proofs. Changed test or documentation-only files still require their relevant checks; they do not automatically invalidate unchanged acoustic recordings. A model/API/configuration, audio device, browser transport, or packaged-runtime change invalidates evidence dependent on that condition. Record the reason for retained evidence rather than simply copying PASS forward.
+
+Each finding/ticket record must include: ID; residual description; source/build identity; configuration fingerprint; reproduction input; expected/observed result; test and oracle references; runner exits; live run/session IDs; operator confirmation if needed; verdict; remaining bounds; and rollback artifact. No raw credentials enter records. Historical evidence is retained; fresh results do not overwrite the reason a previous run failed.
+
+If a fix introduces a new defect, stop that batch and link a new finding. If logs are corrupt, repair capture and rerun affected scenarios. If prerequisites are unavailable, complete independent work and leave that evidence open. Do not relabel missing evidence as success, lower thresholds after failure, or silently broaden the campaign.
