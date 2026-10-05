@@ -437,10 +437,9 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
     },
 
     // Learning loop: write a recurring-failure lesson so the planner can avoid
-    // it next time. The recurring-failure anomaly (reflection.js:215) carries a
-    // one-line `detail` describing the failure mode; recordFailure() dedups by
-    // trigger so repeated fires of the same mode increment count, not files.
-    // best-effort — never fails the heal if the store is unavailable.
+    // it next time. The anomaly carries a one-line `detail` describing the
+    // failure mode; recordFailure() dedups by trigger, so repeated fires count.
+    // A lesson the store could not write fails the heal (BUG-473, S2 2026-09-25).
     'record-lesson': async function(diagnosis, args) {
       if (!memory || !memory.lessons || typeof memory.lessons.recordFailure !== 'function') {
         return { ok: false, reason: 'missing-dependency:lessons' };
@@ -454,6 +453,7 @@ function buildActions({ getCortex, getGoals, memory, getScannerProxy }) {
       var trigger = { tool: (diagnosis && diagnosis.target) || '', argsHash: '0', goalTitle: String(lesson).slice(0, 60) };
       try {
         var res = memory.lessons.recordFailure(trigger, lesson, { source: args.source || 'reflection' });
+        if (!res || res.degraded) return { ok: false, reason: 'record-lesson-degraded', detail: (res && res.reason) || 'no result' };
         return { ok: true, result: { ref: res.ref, count: res.count, isNew: res.isNew } };
       } catch (err) {
         return { ok: false, reason: 'record-lesson-failed', detail: err.message };

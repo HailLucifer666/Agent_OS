@@ -5,12 +5,12 @@ const crypto = require('crypto');
 const { provenanceOf, OBSERVATION, HYPOTHESIS } = require('./provenance');
 
 // Lessons store — durable failure memory. The missing half of the learning loop.
-// vault/Lessons/<topic>.md
+// vault/Lessons/<topic-slug>--<key digest>.md (since S2; older files are <topic-slug>.md)
 //
 // Format (mirrors semantic.js's sidecar+markdown convention so the OKF exporter
 // and the vault browser treat it like any other store):
 //   ## <topic>
-//   <!-- {id: 'lsn-...', ts, count, lastSeen, trigger:{tool,argsHash,goalTitle}, sources:['ep-...']} -->
+//   <!-- {id: 'lsn-...', topic, ts, count, lastSeen, trigger:{tool,argsHash,argsKey,goalTitle}, sources:['ep-...']} -->
 //   - <the lesson — one line: what failed and what to do differently>
 //
 // WHY THIS EXISTS. MYTHOS already records failures (episodic kind:'action'
@@ -24,8 +24,9 @@ const { provenanceOf, OBSERVATION, HYPOTHESIS } = require('./provenance');
 // and that goal-failure distillation writes to (Layer 4).
 //
 // DESIGN NOTES.
-//  * One file per topic (goal title or failure-mode slug). recordFailure() finds
-//    an existing file by trigger match (tool + argsHash + goalTitle) and
+//  * One file per RECORD, i.e. per trigger (see IDENTITY below) — not per topic,
+//    which is what it was before S2. recordFailure() finds the existing record
+//    by trigger match (tool + args + goalTitle) and
 //    increments count/bumps lastSeen rather than appending a duplicate — so
 //    "shell_run with cmd:build timed out" surfaces as ONE lesson seen 7 times,
 //    not seven lessons. The count is what the planner uses to decide "pause
@@ -46,6 +47,64 @@ const { provenanceOf, OBSERVATION, HYPOTHESIS } = require('./provenance');
 //    only the observations (`plannerSnippet`): a guessed cause read back as an
 //    instruction is how the 2026-09-23 lesson would have steered later sessions
 //    away from the one click mechanism that works.
+//  * IDENTITY (S2 of the Stage 1 repair campaign, 2026-09-25, BUG-473, audit
+//    F06-F08). Three defects, each reproduced against main f456217d:
+//      F06 the FILE was named after the goal title (or tool) while a record was
+//          identified by tool + args + goal title — so two different failures of
+//          one goal ("Build application", avoid "npm" vs avoid "yarn") shared a
+//          file and the second write replaced the first. The real callers make
+//          this the common case: goals/index.js keys every distilled lesson by
+//          the goal's title and passes the model's free-text "avoid" as the tool.
+//      F07 recordFailure() ignored write()'s result: a failed update returned a
+//          count one higher than the file held, isNew:false and a ref.
+//      F08 hashArgs() hashed JSON.stringify(args), so {x:1,y:2} and {y:2,x:1}
+//          were two different failure modes.
+//    Now: storage identity is the WHOLE logical key (tool, a full sha256 of the
+//    canonical args, goal title) — digested into the file name, and verified
+//    against the stored key before any file is replaced, so a digest alone can
+//    never authorise an overwrite. Canonical args sort object keys at every
+//    depth and keep array order and value types; anything JSON cannot say
+//    exactly (a function, a Map, a cycle, NaN) is refused, never collapsed into
+//    "[object Object]". Files written before this keep their name and identity
+//    and are still found: nothing is migrated. One bound, the legacy data's own:
+//    an old args hash was taken in the order the caller happened to pass the
+//    keys, and a hash cannot be re-sorted, so an old record is found when args
+//    arrive in that order or in sorted order. In any other order a new record is
+//    written BESIDE it and the old one is left whole — a duplicate, never a loss.
+//    No production caller passes args today (goals, reflection, the healer and
+//    incident notes key by tool and goal title), so no such record is expected.
+
+// A value canonicalArgs() cannot represent exactly. Typed, so a caller can tell
+// "these args cannot be keyed" from every other failure.
+class UnsupportedArgsError extends Error {
+  constructor(what) { super('lesson trigger args cannot be keyed exactly: ' + what); this.code = 'ELESSONARGS'; }
+}
+
+// Object keys sorted at every depth; arrays keep their order; strings, finite
+// numbers, booleans and null keep their JSON type. Throws UnsupportedArgsError.
+function canonicalArgs(value, seen) {
+  seen = seen || new Set();
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new UnsupportedArgsError('a non-finite number');
+    return JSON.stringify(value);
+  }
+  if (typeof value !== 'object') throw new UnsupportedArgsError('a ' + typeof value);
+  if (seen.has(value)) throw new UnsupportedArgsError('a cycle');
+  seen.add(value);
+  var out;
+  if (Array.isArray(value)) {
+    // Array.from, not map: map skips the holes of a sparse array, and JSON reads a hole as null.
+    out = '[' + Array.from(value, function(v) { return v === undefined ? 'null' : canonicalArgs(v, seen); }).join(',') + ']';
+  } else {
+    var proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) throw new UnsupportedArgsError('a ' + ((value.constructor && value.constructor.name) || 'non-plain object'));
+    out = '{' + Object.keys(value).sort().filter(function(k) { return value[k] !== undefined; })
+      .map(function(k) { return JSON.stringify(k) + ':' + canonicalArgs(value[k], seen); }).join(',') + '}';
+  }
+  seen.delete(value);
+  return out;
+}
 
 function createLessonsStore({ fs, config, bus, logger }) {
   var log = logger || { info: function() {}, warn: function() {} };
@@ -65,19 +124,77 @@ function createLessonsStore({ fs, config, bus, logger }) {
     return String(name || 'untitled').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 80) || 'untitled';
   }
 
-  // Short stable hash of an args object → 8 hex chars. Used as a coarse
-  // "same shape of call" key. null/undefined args → '0' so absent-args calls
-  // still match each other rather than hashing differently each time.
+  // Short stable hash of an args object → 8 hex chars, kept in each record as
+  // its display-level "same shape of call" key. null/undefined args → '0' so
+  // absent-args calls still match each other. Canonical since S2: key order no
+  // longer matters. Throws UnsupportedArgsError for args it cannot key exactly.
   function hashArgs(args) {
+    if (args === null || args === undefined) return '0';
+    return crypto.createHash('sha1').update(canonicalArgs(args)).digest('hex').slice(0, 8);
+  }
+
+  // The pre-S2 hash, for finding records written before it: JSON.stringify in
+  // the caller's key order. Only ever compared against, never written.
+  function legacyHashArgs(args) {
     if (args === null || args === undefined) return '0';
     var text;
     try { text = JSON.stringify(args); } catch (_) { text = String(args); }
     return crypto.createHash('sha1').update(text).digest('hex').slice(0, 8);
   }
 
-  function triggerKey(trigger) {
+  // The full identity of a trigger. argsKey is a whole sha256 of the canonical
+  // args — never the 8-hex display hash — so two different calls cannot share
+  // it by truncation. A caller that passes only an argsHash (the healer passes
+  // '0') is keyed by that hash, which is all it said.
+  function identityOf(trigger) {
     trigger = trigger || {};
-    return (trigger.tool || '') + '|' + (trigger.argsHash || hashArgs(trigger.args)) + '|' + (trigger.goalTitle || '');
+    var argsKey = trigger.args !== undefined && trigger.args !== null
+      ? crypto.createHash('sha256').update(canonicalArgs(trigger.args)).digest('hex')
+      : 'h:' + (trigger.argsHash || '0');
+    return { tool: String(trigger.tool || ''), goalTitle: String(trigger.goalTitle || ''), argsKey: argsKey,
+      argsHash: trigger.argsHash || hashArgs(trigger.args) };
+  }
+
+  function logicalKey(id) {
+    return JSON.stringify([id.tool, id.argsKey, id.goalTitle]);
+  }
+
+  // Does a stored sidecar trigger belong to this identity? A record written
+  // since S2 carries argsKey and must match it exactly. An older record carries
+  // only the 8-hex argsHash: it matches on tool and goal title plus that hash
+  // taken canonically (sorted keys) or in the caller's key order, which is how
+  // it was taken before S2 — the one ambiguity left, and it is the legacy
+  // data's, not a new one.
+  // A lookup that knows only an argsHash (no args) is matched on that hash —
+  // it is all the caller said, and a lookup is not an overwrite.
+  function storedMatches(stored, id, trigger) {
+    if (!stored || String(stored.tool || '') !== id.tool || String(stored.goalTitle || '') !== id.goalTitle) return false;
+    var hasArgs = Boolean(trigger) && trigger.args !== undefined && trigger.args !== null;
+    if (!hasArgs) return stored.argsKey && /^h:/.test(stored.argsKey) ? stored.argsKey === id.argsKey : stored.argsHash === id.argsHash;
+    if (stored.argsKey) return stored.argsKey === id.argsKey;
+    return [id.argsHash, legacyHashArgs(trigger.args)].indexOf(stored.argsHash) !== -1;
+  }
+
+  // Where a NEW record with this identity lives: the display topic's slug plus a
+  // digest of the whole logical key. If that name is already taken by a record
+  // with a different key — a digest collision, or a hand-copied file — the next
+  // free suffix is used instead. The stored key is read and compared first.
+  // The read-and-compare is what keeps records apart; the digest is what keeps
+  // the suffix range from running out. On the slug alone every failure mode of
+  // one goal would share the range, and its 100th would have nowhere to go
+  // (test i5, mutation m6).
+  function pathForNew(topic, id) {
+    var base = 'Lessons/' + sanitizeFilename(topic) + '--' + crypto.createHash('sha256').update(logicalKey(id)).digest('hex').slice(0, 16);
+    for (var n = 1; n < 100; n++) {
+      var rel = base + (n === 1 ? '' : '-' + n) + '.md';
+      var content = fs.readText(rel, '');
+      if (!content) return rel;
+      var sc = parseSidecar(content);
+      var t = sc.trigger || {};
+      // This very record, written earlier: the same WHOLE key, not a digest of it.
+      if (t.argsKey === id.argsKey && String(t.tool || '') === id.tool && String(t.goalTitle || '') === id.goalTitle) return rel;
+    }
+    throw new Error('no free lesson file name for ' + base);
   }
 
   // A stable topic slug from a trigger. Falls back to the tool name then to
@@ -133,39 +250,74 @@ function createLessonsStore({ fs, config, bus, logger }) {
     return '## ' + topic + '\n\n<!-- ' + scJson + ' -->\n' + bullets + '\n';
   }
 
-  // write(): create or overwrite a lesson file for `topic`. `lessons` is an
-  // array of one or more bullet strings. `meta.trigger` keys the record for
-  // recall; `meta.count`/`meta.lastSeen`/`meta.sources` are optional.
+  function failed(reason, err) {
+    if (bus && typeof bus.emit === 'function') {
+      bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'lessons', reason: reason, error: err ? err.message : reason });
+    }
+    return { ref: null, degraded: true, reason: reason };
+  }
+
+  function sameStoredTrigger(a, b) {
+    a = a || {}; b = b || {};
+    return ['tool', 'argsHash', 'argsKey', 'goalTitle'].every(function(k) { return String(a[k] || '') === String(b[k] || ''); });
+  }
+
+  // write(): create a NEW lesson record. `lessons` is an array of one or more
+  // bullet strings; `meta.trigger` is the caller's {tool, args|argsHash,
+  // goalTitle}; `meta.count`/`meta.lastSeen`/`meta.sources` are optional. The
+  // record gets its own file (pathForNew) and its full key. There is no way to
+  // name a file here: replacing a record is recordFailure's alone (writeRecord
+  // with a path it just read), so no caller can aim a write at another record,
+  // or at any other file in the vault.
+  // Returns {ref, degraded:false, path}, or {ref:null, degraded:true, reason}.
   function write(topic, lessons, meta) {
+    return writeRecord(topic, lessons, meta, null);
+  }
+
+  // REPLACE (replacePath given): `meta.trigger` is the STORED trigger, written
+  // back unchanged, and only after the file at replacePath is read again and
+  // found to still hold that same trigger — nothing replaces a record it did not
+  // just read, and a record that vanished in between is not recreated. A legacy
+  // record keeps its file name, id and identity this way.
+  function writeRecord(topic, lessons, meta, replacePath) {
     meta = meta || {};
+    var arr = Array.isArray(lessons) ? lessons.filter(function(l) { return l && String(l).trim(); }) : [];
+    if (arr.length === 0) return { ref: null, degraded: true, reason: 'no-lesson-text' };
     var trigger = meta.trigger || {};
+    var relPath, storedTrigger;
+    try {
+      if (replacePath) {
+        var current = fs.readText(replacePath, '');
+        if (!current || !sameStoredTrigger(parseSidecar(current).trigger, trigger)) return failed('record-changed-underneath');
+        relPath = replacePath;
+        storedTrigger = { tool: trigger.tool || '', argsHash: trigger.argsHash || '0', goalTitle: trigger.goalTitle || '' };
+        if (trigger.argsKey) storedTrigger.argsKey = trigger.argsKey;
+      } else {
+        var ident = identityOf(trigger);
+        relPath = pathForNew(topic, ident);
+        storedTrigger = { tool: ident.tool, argsHash: ident.argsHash, argsKey: ident.argsKey, goalTitle: ident.goalTitle };
+      }
+    } catch (err) {
+      return failed(err && err.code === 'ELESSONARGS' ? 'unsupported-args' : 'identity-failed', err);
+    }
     var id = meta.id || generateId();
     var slug = sanitizeFilename(topic);
-    var relPath = 'Lessons/' + slug + '.md';
     var sidecar = {
       id: id,
+      topic: meta.displayTopic || String(topic || slug),
       ts: meta.ts || Date.now(),
       count: meta.count || 1,
       lastSeen: meta.lastSeen || (meta.ts || Date.now()),
-      trigger: {
-        tool: trigger.tool || '',
-        argsHash: trigger.argsHash || hashArgs(trigger.args),
-        goalTitle: trigger.goalTitle || ''
-      },
+      trigger: storedTrigger,
       sources: meta.sources || []
     };
-    var arr = Array.isArray(lessons) ? lessons.filter(function(l) { return l && String(l).trim(); }) : [];
-    if (arr.length === 0) return { ref: null, degraded: true };
     var given = Array.isArray(meta.provenance) ? meta.provenance : [];
     sidecar.provenance = arr.map(function(l, i) { return safeLabel(given[i], l); });
     try {
       fs.writeText(relPath, renderFile(slug, sidecar, arr.map(function(l){ return String(l); })));
       return { ref: id, degraded: false, path: relPath };
     } catch (err) {
-      if (bus && typeof bus.emit === 'function') {
-        bus.emit('health.anomaly', { kind: 'memory-write-failed', store: 'lessons', error: err.message });
-      }
-      return { ref: null, degraded: true };
+      return failed('write-failed', err);
     }
   }
 
@@ -173,15 +325,27 @@ function createLessonsStore({ fs, config, bus, logger }) {
   // (tool + argsHash + goalTitle) already exists, increment its count, bump
   // lastSeen, append the new lesson line if it isn't already present, and
   // re-write. Otherwise write a new file. Returns {ref, count, isNew}.
+  //
+  // S2 (F07): the write's result is the answer. A failed update returns
+  // degraded:true, ref:null (nothing was recorded this time), the id that WAS
+  // already there as existingRef, and the count the file still holds — never
+  // the count it would have held. Nothing here keeps state between calls, so a
+  // failure changes nothing a later call can see, and a retry counts once.
   function recordFailure(trigger, lessonText, opts) {
     opts = opts || {};
-    var existing = findByTrigger(trigger);
     var now = Date.now();
     var text = String(lessonText || '').trim();
-    if (!text) return { ref: null, degraded: true };
+    if (!text) return { ref: null, degraded: true, reason: 'no-lesson-text' };
+    var existing;
+    try { existing = findByTrigger(trigger); } catch (err) {
+      if (err && err.code === 'ELESSONARGS') return failed('unsupported-args', err);
+      throw err;
+    }
     if (existing) {
-      var sidecar = existing.sidecar;
-      var bullets = existing.bullets;
+      var sidecar = Object.assign({}, existing.sidecar);
+      sidecar.sources = Array.isArray(sidecar.sources) ? sidecar.sources.slice() : [];
+      var persistedCount = sidecar.count || 1;
+      var bullets = existing.bullets.slice();
       // Append only if this exact lesson line isn't already recorded.
       var normalized = text.toLowerCase().replace(/[.!?]+$/, '');
       var dup = bullets.some(function(b) {
@@ -191,21 +355,24 @@ function createLessonsStore({ fs, config, bus, logger }) {
       // labelled from its own text. Never relabel content that was already there.
       var labels = labelsFor(sidecar, bullets);
       if (!dup) { bullets.push(text); labels.push(provenanceOf(text)); }
-      sidecar.count = (sidecar.count || 1) + 1;
-      sidecar.lastSeen = now;
       if (opts.source && sidecar.sources.indexOf(opts.source) === -1) {
         sidecar.sources.push(opts.source);
       }
-      write(existing.topic, bullets, {
+      var updated = writeRecord(existing.topic, bullets, {
         id: sidecar.id,
+        displayTopic: sidecar.topic || existing.topic,
         ts: sidecar.ts,
-        count: sidecar.count,
-        lastSeen: sidecar.lastSeen,
+        count: persistedCount + 1,
+        lastSeen: now,
         trigger: sidecar.trigger,
         sources: sidecar.sources,
         provenance: labels
-      });
-      return { ref: sidecar.id, count: sidecar.count, isNew: false, path: existing.path };
+      }, existing.path);
+      if (updated.degraded) {
+        return { ref: null, existingRef: sidecar.id, count: persistedCount, isNew: false, degraded: true, reason: updated.reason,
+          path: existing.path };
+      }
+      return { ref: sidecar.id, count: persistedCount + 1, isNew: false, path: existing.path };
     }
     var topic = topicFor(trigger, text);
     var res = write(topic, [text], {
@@ -214,26 +381,34 @@ function createLessonsStore({ fs, config, bus, logger }) {
       lastSeen: now,
       sources: opts.source ? [opts.source] : []
     });
+    if (res.degraded) return { ref: null, count: 0, isNew: false, degraded: true, reason: res.reason };
     return { ref: res.ref, count: 1, isNew: true, path: res.path };
   }
 
+  // The record for this trigger, or null. A record keyed by the whole key
+  // (written since S2) wins over a legacy one matched by its 8-hex hash.
+  // Throws UnsupportedArgsError when the trigger's args cannot be keyed.
   function findByTrigger(trigger) {
-    var key = triggerKey(trigger);
+    var id = identityOf(trigger);
     var files = fs.listFiles('Lessons', '.md');
+    var legacy = null;
     for (var i = 0; i < files.length; i++) {
       var content = fs.readText(files[i].path, '');
       if (!content) continue;
       var sc = parseSidecar(content);
-      if (sc.trigger && triggerKey(sc.trigger) === key) {
-        return {
-          topic: files[i].name.replace(/\.md$/, ''),
-          path: files[i].path,
-          sidecar: sc,
-          bullets: parseBullets(content)
-        };
-      }
+      if (!storedMatches(sc.trigger, id, trigger)) continue;
+      var rec = { topic: displayTopic(sc, files[i]), path: files[i].path, sidecar: sc, bullets: parseBullets(content),
+        legacy: !sc.trigger.argsKey };
+      if (!rec.legacy) return rec;
+      if (!legacy) legacy = rec;
     }
-    return null;
+    return legacy;
+  }
+
+  // What a person sees as the record's name: the topic it was written under.
+  // Files since S2 carry a digest in their name; files before carry only the slug.
+  function displayTopic(sc, file) {
+    return (sc && sc.topic) || file.name.replace(/\.md$/, '');
   }
 
   // recall(): match by trigger (exact tool/argsHash/goalTitle) and/or by keyword
@@ -259,7 +434,7 @@ function createLessonsStore({ fs, config, bus, logger }) {
       var triggerScore = 0;
       if (trig.tool && sc.trigger && sc.trigger.tool === trig.tool) {
         triggerScore += 0.5;
-        var argHash = trig.argsHash || hashArgs(trig.args);
+        var argHash = trig.argsHash || (function() { try { return hashArgs(trig.args); } catch (_) { return null; } })();
         if (argHash && sc.trigger.argsHash === argHash) triggerScore += 0.5;
         if (trig.goalTitle && sc.trigger.goalTitle === trig.goalTitle) triggerScore += 0.2;
       }
@@ -282,7 +457,7 @@ function createLessonsStore({ fs, config, bus, logger }) {
           lastSeen: sc.lastSeen,
           trigger: sc.trigger || {},
           record: {
-            topic: files[i].name.replace(/\.md$/, ''),
+            topic: displayTopic(sc, files[i]),
             sidecar: sc,
             lessons: bullets
           },
@@ -308,10 +483,10 @@ function createLessonsStore({ fs, config, bus, logger }) {
       var content = fs.readText(files[i].path, '');
       if (!content) continue;
       var sc = parseSidecar(content);
-      if (sc.id === ref || files[i].name.replace(/\.md$/, '') === ref) {
+      if (sc.id === ref || files[i].name.replace(/\.md$/, '') === ref || (sc.topic && sc.topic === ref)) {
         return {
           ref: sc.id,
-          topic: files[i].name.replace(/\.md$/, ''),
+          topic: displayTopic(sc, files[i]),
           content: content,
           sidecar: sc,
           lessons: parseBullets(content),
@@ -375,7 +550,10 @@ function createLessonsStore({ fs, config, bus, logger }) {
       var bullets = parseBullets(content);
       concepts.push({
         type: 'lesson',
-        title: files[i].name.replace(/\.md$/, ''),
+        title: displayTopic(sc, files[i]),
+        // Two records can share a title (one goal, two failure modes); their
+        // storage names cannot, so an export writes both, not one over the other.
+        filename: files[i].name,
         count: sc.count || 1,
         lastSeen: sc.lastSeen,
         trigger: sc.trigger || {},
@@ -407,4 +585,4 @@ function createLessonsStore({ fs, config, bus, logger }) {
   };
 }
 
-module.exports = { createLessonsStore: createLessonsStore };
+module.exports = { createLessonsStore: createLessonsStore, canonicalArgs: canonicalArgs, UnsupportedArgsError: UnsupportedArgsError };
