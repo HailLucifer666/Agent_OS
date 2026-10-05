@@ -3,7 +3,7 @@
 *Under 100 lines, by rule. The roadmap is the archive; this file is the position.
 Rewrite in place, never append.*
 
-## Position (2026-09-26)
+## Position (2026-10-05)
 
 **One workflow, until it is boring.** Stage 1 only. Stages 2 to 7 stay paused until the
 golden path holds 10 consecutive PASS lines across two cold boots for a week.
@@ -15,13 +15,18 @@ means the full suite green AND the app run and used. Only then is it merged, and
 good `main` is tagged `good-YYYY-MM-DD`. Merges are the operator's click; the
 session's permission check refuses `gh pr merge`.
 
-**Nine campaign PRs wait for Codex review, then the operator's merge**, in this order
-(C1 rows 10 and 19): #123 this docs branch, #124 S1 `f819adac`, #125 S2 `eab6c27a`,
-#126 B1 `9f459d12`, #127 B2a `6311ebee`, #128 B1b `f8071071`, #129 B2b-1 `a99329cd`,
-#130 B2b-2 `c49c8ec9`, #131 B2b-3 `01cd1439`. #129–#131 are stacked, so each merges after
-the one before; the rest sit on `main` `f456217d`. All rewrite the generated docs, so before its merge each later one is
-updated from `main`, regenerated and re-run. The `good-2026-09-25` tag is `ae88f424`
-and is never moved; `f456217d` is not tagged yet (operator's go-ahead after a smoke run).
+**Bundle A (operator, 2026-10-05: "one tested bundle"; repairs land before the security
+bundle #143; Codex reviews).** Branch `fix/stage1-bundle-2026-10`, worktree
+`.claude/worktrees/stage1-bundle`, from `main` `f456217d`. It merges, with merge commits
+in C1 row 10/19 order, #124 S1, #125 S2, #126 B1, #127 B2a, #128 B1b, #131 (with #129,
+#130) and B2c `36b0a32e` (no PR of its own), then #123's documents; every head verified an
+ancestor. Two hand resolutions: `s2s-bridge.js` (#126 × #128, both kept on the stop door)
+and BUGS.md's 460/461 table rows. Baseline `f456217d` 8370/8370/0/0 on a quiet host (two
+earlier runs under host load failed one timing test each: BUG-379's netstat lookup and
+BUG-354's 30 ms fake handshake, each now its own task); bundle 8509/8509/0/0, five docs
+gates exit 0. The working plan for finishing is plan-mode file
+`~/.claude/plans/i-have-20-or-elegant-lagoon.md` (rev 3, Codex-reviewed twice). The
+`good-2026-09-25` tag is `ae88f424` and is never moved.
 
 **Attended 2026-09-25 (build fee97e18, 37 turns): the build works, and the week's fixes held live.** The mic reopened early in 0 of 41 holds (20 of 50 on 09-24); 11 chimes at 0.6 s; 7 held replies clean; the memory lock and "ask first" held, and a spoken "no" was honoured; the Gmail line was one plain sentence; resume returned the right answer; the goAway rotation and the quit were clean. **Found**, each in BUGS.md with times: talking over MYTHOS does not stop it (BUG-469); two retractions of true actions (448); "yes, refresh the page" not taken as a yes (461); the read-back skipped (464); a double delivery and six screen_look cut-ins (457); English transcribed as Spanish twice (447); a 2.7 s low-CPU stall on a Lessons read (436); paused goals counted active (BUG-470); video clicks miss (BUG-471); unrelated skills and think_deeply overuse (BUG-472).
 
@@ -40,11 +45,6 @@ B1 (469/406/455) → B2 (448/460/461/457) → B3 (464/463/472) → B4 (468/471) 
 (436/470/446/466) → B6 (447, a capped language-hint trial) → B7 (one guided sitting and
 targeted retries) → B8 (the operator's merges, then the Stage 1 week). One `fix/`
 branch per change; Claude builds, Codex reviews each branch before the operator merges.
-
-B0 done 2026-09-25: base `f456217d`, worktree `.claude/worktrees/stage1`, baseline
-8370/8370, 0 fail, 0 skipped, runner exit 0, five docs gates exit 0, 35 open. S1, S2, B1,
-B2a, B1b and B2b (in three parts) are built on their branches (campaign progress log).
-B2 is split into B2a–B2d.
 
 ## The golden path
 
@@ -83,12 +83,12 @@ needs it; confirm the Mistral console is on the free tier; the wake-word licence
 
 ## NEXT ACTION
 
-**B2c** (BUG-461, C1 rows 8 and 15): short commands whose own words name the action.
-First measure, read-only, which Bengali and Hindi words the transcriber actually returned
-in the operator's sessions, and bring the operator a proposal before changing how they are
-treated; until then they keep asking first. Then B2d (457: one delivery record per result),
-then B3. Owed at B5: the typed path still treats a delivered click as unbacked. Not yet
-exercised live: web_search, recall_memory, crash containment, and every B1b/B2b change.
+Bundle A: desktop app started from the candidate (typed turn, clean quit), then its
+Codex packet, push and PR on the operator's go-ahead. Then Bundle B on A's tip, one
+branch each: golden-path verdict (an observed FAIL must outrank PREREQ-MISSING;
+`golden-path.js:126` ranks it below), spoken-run evidence capture, 466, 470, B4
+(468/471/A3), B2d (457), B3, B5, B6 prep. Sitting 1 targeted for 2026-10-08. Not yet
+exercised live: web_search, recall_memory, crash containment, and every bundle-A change.
 
 ## Where the detail lives
 
