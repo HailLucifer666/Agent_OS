@@ -135,3 +135,83 @@ describe('(1) open_file x read access, each guard alone', () => {
 //      file and binding refused it; rewritten to ask for the protected file itself.
 //   B. open-file-policy.js: EXECUTE_EXT returns kind 'display' instead of 'refuse'
 //      -> (1c) red; (1a), (1b) and ADJACENT green.
+
+// (2) preview (#142, B3c) x read access (#137, B2d). A build folder is written by
+//     the build engine and can hold what a cloned repo or a careless build put
+//     there. B3c served it under a capability with dotfiles denied, so `.env` was
+//     refused but `keys.json`, `Nvidia NIM.env`, `auth-sessions.json` were served,
+//     and the legacy /vault/builds static mount served them too. B2d's protected
+//     names are now refused on both routes, judged below the builds folder only,
+//     on the path as asked AND on the real path (a junction can rename a key folder).
+const express = require('express');
+const iso = require('../src/core/server/preview-isolation');
+const SERVER = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8').replace(/\r\n/g, '\n');
+
+describe('(2) a build never serves a credential file, on either route', () => {
+  let dir;
+  let base;
+  let server;
+  const NAV = { 'sec-fetch-dest': 'iframe', 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'navigate' };
+  const get = (p, headers) => fetch(base + p, { headers: headers || {}, redirect: 'manual' });
+  before(async () => {
+    dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'mythos-bundle-b3c-')));
+    for (const rel of ['projects/proj/index.html', 'projects/proj/app.js', 'projects/proj/config.json', 'projects/proj/data.json',
+      'projects/proj/keys.json', 'projects/proj/Nvidia NIM.env', 'projects/proj/auth-sessions.json', 'projects/proj/.ssh/id_rsa', 'projects/proj/.ssh/notes.txt']) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+      fs.writeFileSync(path.join(dir, rel), 'x');
+    }
+    // A junction with an ordinary name onto the key folder: nothing on the path as
+    // asked says ".ssh", only the real path does. Junctions need no privilege.
+    fs.symlinkSync(path.join(dir, 'projects', 'proj', '.ssh'), path.join(dir, 'projects', 'proj', 'keysdir'), 'junction');
+    const routes = iso.createPreviewRoutes({ buildsDir: dir, caps: iso.createPreviewCapabilities({}) });
+    const app = express();
+    app.use('/vault/builds', routes.redirectNavigation);
+    app.use('/vault/builds', (req, res, next) => (routes.refuseProtected ? routes.refuseProtected(req, res, next) : next()));
+    app.use('/vault/p', routes.serve);
+    app.use('/vault/builds', express.static(dir));
+    await new Promise((r) => { server = app.listen(0, '127.0.0.1', r); });
+    base = 'http://127.0.0.1:' + server.address().port;
+  });
+  after(() => { server.close(); fs.rmSync(dir, { recursive: true, force: true }); });
+
+  // keysdir/notes.txt: an ordinary name on an ordinary path; ONLY the real path says
+  // .ssh. (keysdir/id_rsa alone could not see the real-path check: id_rsa is
+  // protected by its name, so probe Pc survived it, 2026-10-05.)
+  const SECRETS = ['keys.json', 'Nvidia%20NIM.env', 'auth-sessions.json', 'keysdir/id_rsa', 'keysdir/notes.txt'];
+
+  test('(2a) under a capability (/vault/p), every protected name is refused', async () => {
+    const loc = (await get('/vault/builds/projects/proj/index.html', NAV)).headers.get('location');
+    assert.ok(loc, 'the page gets a capability');
+    const capBase = loc.slice(0, loc.lastIndexOf('/') + 1);
+    for (const f of SECRETS) assert.equal((await get(capBase + f)).status, 404, f);
+    for (const f of ['app.js', 'config.json', 'data.json']) assert.equal((await get(capBase + f)).status, 200, 'ADJACENT: ' + f + ' is an ordinary build file');
+  });
+
+  test('(2b) on the legacy /vault/builds mount, every protected name is refused', async () => {
+    for (const f of SECRETS) assert.equal((await get('/vault/builds/projects/proj/' + f)).status, 404, f);
+    // Attacked 2026-10-05: other Windows names for the same file. The stream form
+    // LEAKED through the first version (unparseable paths were passed on to static).
+    for (const f of ['KEYS.JSON', 'keys.json.', 'keys.json%20', 'keys.json::$DATA', 'keys.json%3A%3A%24DATA']) {
+      const r = await get('/vault/builds/projects/proj/' + f);
+      assert.equal(r.status, 404, f);
+    }
+    for (const f of ['app.js', 'config.json', 'data.json']) assert.equal((await get('/vault/builds/projects/proj/' + f)).status, 200, 'ADJACENT: ' + f);
+  });
+
+  test('(2c) server/index.js mounts the refusal on /vault/builds before the gzip and static handlers', () => {
+    const refuse = SERVER.indexOf("app.use('/vault/builds', previewRoutes.refuseProtected);");
+    assert.ok(refuse > 0, 'mounted');
+    assert.ok(refuse < SERVER.indexOf('app.use(gzipTextAssets);'), 'before the gzip handler, which reads build files itself');
+    assert.ok(refuse < SERVER.indexOf("app.use('/vault/builds', express.static("), 'before the static mount');
+  });
+});
+
+// PROBE RECORD (2), 2026-10-05, same method as (1):
+//   Pa isProtectedBuildFile() always false                 -> (2a) and (2b) red
+//   Pb refuseProtected passes unparseable paths on (the first version) -> (2b) red:
+//      that version LEAKED keys.json::$DATA through express.static, found by attacking
+//      it with Windows' other names for one file (case, trailing dot/space, 8.3 short
+//      name, the stream suffix); only the stream form got through
+//   Pc the static mount judges the typed path only          -> (2b) red, once the
+//      fixture had keysdir/notes.txt (it SURVIVED keysdir/id_rsa, protected by name)
+//   Pd the capability route skips the check                 -> (2a) red

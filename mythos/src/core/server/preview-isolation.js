@@ -59,6 +59,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const readAccess = require('../effectors/read-access-policy');
 
 const PREVIEW_SANDBOX = 'allow-scripts allow-forms allow-modals allow-popups allow-downloads';
 const PREVIEW_CSP = 'sandbox ' + PREVIEW_SANDBOX;
@@ -177,6 +178,17 @@ function isInside(root, p) {
   return !!r && !path.isAbsolute(r) && r.split(path.sep)[0] !== '..';
 }
 
+// 2026-10-05 security bundle: a build folder holds whatever the build engine, a
+// cloned repo or a careless build put there. B2d's protected names (a .env in any
+// spelling, keys.json, auth-sessions.json, key folders, browser profiles) are never
+// served from it. Each [root, path] pair is judged only BELOW its root, so the
+// vault's own location cannot trip a rule, and both the path as asked and the
+// real one are judged, because a junction with an ordinary name can point at a
+// key folder. Answered as "Not found." so a refusal does not confirm the file.
+function isProtectedBuildFile(pairs) {
+  return pairs.some(([root, p]) => !!(p && isInside(root, p) && readAccess.protectedReason(path.join(path.sep, path.relative(root, p)), {})));
+}
+
 // deps: { buildsDir, caps } -> { redirectNavigation, serve }
 function createPreviewRoutes(deps) {
   const { buildsDir, caps } = deps;
@@ -228,6 +240,7 @@ function createPreviewRoutes(deps) {
       return res.status(404).type('text/plain').send('Not found.');
     }
     if (!isInside(rootReal, real) || !isInside(buildsReal, real)) return res.status(403).type('text/plain').send(REFUSALS.outside);
+    if (isProtectedBuildFile([[buildsDir, path.join(buildsDir, ...fileSegs)], [buildsReal, real]])) return res.status(404).type('text/plain').send('Not found.');
     setPreviewHeaders(res);
     // Sent by its REAL path, relative to the real builds root, so the dotfile rule
     // judges only the part inside the vault (never a dot folder above it).
@@ -236,7 +249,23 @@ function createPreviewRoutes(deps) {
     });
   }
 
-  return { redirectNavigation, serve };
+  // Mounted on /vault/builds before the gzip and static handlers (server/index.js),
+  // which serve build files without the capability.
+  function refuseProtected(req, res, next) {
+    const segs = segmentsOf(req.path);
+    // A path segmentsOf refuses (":", "..", NUL, a backslash, bad encoding) is never
+    // a build file, and passing it on let express.static open "keys.json::$DATA",
+    // NTFS's other name for keys.json (attacked 2026-10-05). Only the bare root goes on.
+    if (!segs) return String(req.path || '').replace(/^\/+/, '') ? res.status(404).type('text/plain').send('Not found.') : next();
+    const lexical = path.join(buildsDir, ...asFile(segs));
+    let buildsReal = null;
+    let real = null;
+    try { buildsReal = fs.realpathSync.native(buildsDir); real = fs.realpathSync.native(lexical); } catch (_) { real = null; }
+    if (isProtectedBuildFile([[buildsDir, lexical], [buildsReal, real]])) return res.status(404).type('text/plain').send('Not found.');
+    return next();
+  }
+
+  return { redirectNavigation, serve, refuseProtected };
 }
 
 module.exports = {

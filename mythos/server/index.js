@@ -902,6 +902,7 @@ function createServer(deps) {
   const previewCaps = previewIsolation.createPreviewCapabilities({ ttlMs: AUTH_TOKEN ? previewIsolation.PREVIEW_TTL_TOKEN_MS : previewIsolation.PREVIEW_TTL_MS });
   const previewRoutes = previewIsolation.createPreviewRoutes({ buildsDir: memory.fs.vaultPath('builds'), caps: previewCaps });
   app.use('/vault/builds', previewRoutes.redirectNavigation);
+  app.use('/vault/builds', previewRoutes.refuseProtected); // a build's credential-named files are never served (2026-10-05)
   app.use('/vault/p', previewRoutes.serve);
 
   // ---- static asset delivery: compression + caching -----------------------
