@@ -8,8 +8,8 @@
 // still checks hudTrust.ipc(event) first (test/electron-hud-trust.test.js sweeps
 // every electron/*.js file for that, not only main.js).
 
-function registerSettingsIpc({ ipcMain, hudTrust, settingsStore, settingsPath, settingsConfirm, ENV_INJECTION_DENYLIST, CANCELLED }) {
-  const { ANSWER, MAX_SHOWN, BUSY } = require('./settings-confirm');
+function registerSettingsIpc({ ipcMain, hudTrust, settingsStore, settingsPath, settingsConfirm, ENV_INJECTION_DENYLIST }) {
+  const { ANSWER, MAX_SHOWN, refusalFor } = require('./settings-confirm');
   // Reading is a value-returning channel, which the key store deliberately does
   // NOT have (AD-8). That is not a contradiction: these keys are non-secret by
   // construction, and settings-store.js's own secret filter is applied again here
@@ -50,7 +50,7 @@ function registerSettingsIpc({ ipcMain, hudTrust, settingsStore, settingsPath, s
     if (!valid.ok) return valid;
     // B3b: the operator confirms, in a native dialog naming the setting and its value.
     const answer = await settingsConfirm.confirmSettings([{ name, value }]);
-    if (answer !== ANSWER.YES) return { ok: false, error: answer === ANSWER.BUSY ? BUSY : CANCELLED };
+    if (answer !== ANSWER.YES) return { ok: false, error: refusalFor(answer) };
     const res = settingsStore.writeSetting({ name, value, settingsPath: settingsPath() });
     if (!res.ok) return res;
     // Deliberately does NOT restart the server. The wizard/panel calls
@@ -82,7 +82,7 @@ function registerSettingsIpc({ ipcMain, hudTrust, settingsStore, settingsPath, s
     }
     if (new Set(list.map((c) => c.name)).size !== list.length) return { ok: false, error: 'the same setting appears twice' };
     const answer = await settingsConfirm.confirmSettings(list);
-    if (answer !== ANSWER.YES) return { ok: false, error: answer === ANSWER.BUSY ? BUSY : CANCELLED };
+    if (answer !== ANSWER.YES) return { ok: false, error: refusalFor(answer) };
     const res = settingsStore.writeSettings({ changes: list, settingsPath: settingsPath() });
     if (!res.ok) return res;
     return { ok: true, needsRestart: true, results: list.map((c) => ({ name: c.name, ok: true, cleared: c.value === '' })) };

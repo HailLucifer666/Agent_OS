@@ -220,7 +220,14 @@ function processQueue() {
   // call is method 'tools/call'. Reading `method` here would classify a click as
   // read-only and defeat the whole split.
   const toolName = (request.method === 'tools/call' && request.params && request.params.name) || null;
-  commandInFlight = { id: id, resolve: resolve, reject: reject, timer: null };
+  // B3b, at the moment of sending: a click queued before a confirmation dialog
+  // opened is refused here, not written to the driver after it (2026-10-05).
+  if (toolName !== null && inputInhibit.isInputInhibited() && !READ_ONLY_TOOLS.has(toolName)) {
+    resolve({ error: { message: inputInhibit.REFUSAL } });
+    processQueue();
+    return;
+  }
+  commandInFlight = { id: id, resolve: resolve, reject: reject, timer: null, toolName: toolName };
 
   const timer = setTimeout(() => {
     if (commandInFlight === null || commandInFlight.id !== id) return;
@@ -315,6 +322,20 @@ async function inputGate(toolName, args) {
     if (!same) return 'Refused: pid ' + pid + ' is ' + (w.process || 'a program') + ' - ' + w.why + '. Input there can run commands, so it needs the operator\'s approval for this one call.';
   }
   return null;
+}
+
+// The server acks a confirmation's inhibit only once no input call is still
+// running here, as it does for pc-child (whenInputIdle there). true = idle.
+function whenInputIdle(maxMs) {
+  const until = Date.now() + (Number(maxMs) || 2000);
+  return new Promise((resolve) => {
+    (function poll() {
+      const busy = commandInFlight && commandInFlight.toolName && !READ_ONLY_TOOLS.has(commandInFlight.toolName);
+      if (!busy) return resolve(true);
+      if (Date.now() > until) return resolve(false);
+      setTimeout(poll, 20);
+    })();
+  });
 }
 
 // Call a cua-driver MCP tool (names confirmed against 0.8.3 — see header).
@@ -537,5 +558,6 @@ module.exports = {
   startCuaDriver: startCuaDriver,
   shutdownCuaDriver: shutdownCuaDriver,
   invoke: invoke,
+  whenInputIdle: whenInputIdle,
   getStatus: getStatus
 };

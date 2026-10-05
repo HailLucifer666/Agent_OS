@@ -42,9 +42,16 @@
 const MAX_SHOWN = 40;
 const MAX_VALUE = 120;
 const BS = String.fromCharCode(92); // a backslash
-const ANSWER = Object.freeze({ YES: 'yes', NO: 'no', BUSY: 'busy' });
+const ANSWER = Object.freeze({ YES: 'yes', NO: 'no', BUSY: 'busy', UNPROTECTED: 'unprotected' });
 const CANCELLED = "not changed: the operator chose Cancel in MYTHOS's confirmation dialog";
 const BUSY = 'not changed: another MYTHOS confirmation is already open — answer that one first';
+const UNPROTECTED = "not changed: MYTHOS could not pause its own keyboard and mouse automation, so it did not show the confirmation — try again in a moment";
+// The one refusal text per answer, for every caller (key store, settings, import).
+function refusalFor(answer) {
+  if (answer === ANSWER.BUSY) return BUSY;
+  if (answer === ANSWER.UNPROTECTED) return UNPROTECTED;
+  return CANCELLED;
+}
 
 // The key store holds provider credentials, and every name in it becomes an
 // environment variable in the server child, where it OUTRANKS config.json and
@@ -95,8 +102,13 @@ function createSettingsConfirm(deps) {
     if (open) return ANSWER.BUSY;
     open = true;
     try {
-      try { await inhibitInput(true); } catch (_) { /* the dialog is the gate; the inhibit is the second line */ }
+      // Fail closed (2026-10-05 security bundle): a dialog drawn while automation
+      // can still type or click could be answered by MYTHOS itself, so with no
+      // held inhibit it is not drawn at all. The finally below still releases.
+      let held = false;
+      try { held = (await inhibitInput(true)) === true; } catch (_) { held = false; }
       try {
+        if (!held) return ANSWER.UNPROTECTED;
         const opts = { type: 'warning', buttons: ['Cancel', okLabel], defaultId: 0, cancelId: 0, noLink: true, title, message, detail };
         const win = getWindow();
         if (win) {
@@ -160,27 +172,49 @@ function createSettingsConfirm(deps) {
 
 // The inhibit's transport to the server child (server/index.js sets
 // adapters/input-inhibit.js and acks once no input command is still running).
-// Waits briefly for the ack so the inhibit is in force before the dialog is
-// drawn; with no child, or no ack in time, the dialog is shown anyway — it is the
-// gate, the inhibit is the second line. Each message carries a sequence number
-// and only its own ack settles it, so a late ack for an earlier message cannot
-// stand in for a later one (B3b review).
+// It resolves true only when the inhibit is HELD, and the dialog is drawn only
+// then (createSettingsConfirm). Each message carries a sequence number and only
+// its own ack settles it, so a late ack for an earlier message cannot stand in
+// for a later one (B3b review).
+// 2026-10-05 security bundle: an "on" ack counts only with idle:true (the server
+// measured pc-child AND cua-driver idle); with no server child nothing can type,
+// so the inhibit holds. Electron owns the wanted state: envFor() puts it in the
+// next child's fork env, and resync() answers a child that asks for it.
 function createChildInputInhibit({ getChild, log, timeoutMs = 2500 }) {
   let pending = null;
   let seq = 0;
+  let wanted = false;
   function inhibit(on) {
+    wanted = !!on;
     return new Promise((resolve) => {
       const child = getChild();
-      if (!child || !child.connected) { resolve(false); return; }
+      if (!child || !child.connected) { resolve(true); return; }
       const mine = ++seq;
       const timer = setTimeout(() => { if (pending && pending.seq === mine) pending = null; log('input-inhibit: no ack from the server child (on=' + on + ')'); resolve(false); }, timeoutMs);
-      pending = { seq: mine, settle: () => { clearTimeout(timer); pending = null; resolve(true); } };
+      pending = { seq: mine, on: !!on, settle: (held) => { clearTimeout(timer); pending = null; resolve(held); } };
       try { child.send({ channel: 'mythos:input-inhibit', on: !!on, seq: mine }); }
       catch (err) { clearTimeout(timer); pending = null; log('input-inhibit: send failed:', err.message); resolve(false); }
     });
   }
-  function heardAck(msg) { if (pending && msg && msg.seq === pending.seq) pending.settle(); }
-  return { inhibit, heardAck };
+  function heardAck(msg) {
+    if (!pending || !msg || msg.seq !== pending.seq) return;
+    const held = !pending.on || msg.idle === true;
+    if (!held) log('input-inhibit: the server child is still sending input; the confirmation is not shown');
+    pending.settle(held);
+  }
+  function envFor() { return { MYTHOS_INPUT_INHIBITED: wanted ? '1' : '' }; }
+  function resync() {
+    const child = getChild();
+    if (!child || !child.connected) return;
+    try { child.send({ channel: 'mythos:input-inhibit', on: wanted, seq: 0 }); } catch (err) { log('input-inhibit: resync failed:', err.message); }
+  }
+  // The two channels the server child sends about the inhibit; true = consumed.
+  function handles(msg) {
+    if (msg.channel === 'mythos:input-inhibit-ack') { heardAck(msg); return true; }
+    if (msg.channel === 'mythos:input-inhibit-sync') { resync(); return true; }
+    return false;
+  }
+  return { inhibit, heardAck, envFor, resync, handles };
 }
 
-module.exports = { createSettingsConfirm, createChildInputInhibit, describeSettings, visible, isProviderKeyName, MAX_SHOWN, ANSWER, CANCELLED, BUSY, NOT_A_KEY };
+module.exports = { createSettingsConfirm, createChildInputInhibit, describeSettings, visible, isProviderKeyName, refusalFor, MAX_SHOWN, ANSWER, CANCELLED, BUSY, UNPROTECTED, NOT_A_KEY };

@@ -15,11 +15,13 @@
 // to the media session). One flag in one module, so
 // the two drivers cannot disagree about whether a dialog is open.
 //
-// It is process state, not persisted: a server child that restarts while a
-// dialog is open starts clear and is NOT told again. The dialog is still the
-// gate (drawn by Windows, Cancel by default); this flag is the second line.
+// It is process state, not persisted. A server child that starts while a dialog
+// is open reads MYTHOS_INPUT_INHIBITED, which Electron puts in its fork env, and
+// asks for the current state once its IPC handler is live (server/index.js,
+// 'mythos:input-inhibit-sync'), so a restart cannot come up uninhibited
+// (2026-10-05 security bundle; until then it started clear and was never told).
 
-let inhibited = false;
+let inhibited = process.env.MYTHOS_INPUT_INHIBITED === '1';
 
 function setInputInhibited(on) { inhibited = on === true; }
 function isInputInhibited() { return inhibited; }

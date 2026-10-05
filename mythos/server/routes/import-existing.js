@@ -119,7 +119,9 @@ function mountImportRoutes(app, deps) {
       if (answer !== 'yes' && answer !== 'no-shell') {
         return res.status(409).json({ error: answer === 'busy'
           ? 'not imported: another MYTHOS confirmation is already open — answer that one first'
-          : 'not imported: the operator chose Cancel in MYTHOS\'s confirmation dialog' });
+          : answer === 'unprotected'
+            ? 'not imported: MYTHOS could not pause its own keyboard and mouse automation, so it did not show the confirmation — try again in a moment'
+            : 'not imported: the operator chose Cancel in MYTHOS\'s confirmation dialog' });
       }
     }
 

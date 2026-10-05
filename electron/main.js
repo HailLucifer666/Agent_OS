@@ -61,7 +61,7 @@ const { createNoWindowRelaunchPrompt } = require('./relaunch-no-window');
 const { rotateLogIfOver } = require('./log-rotate');
 const { createHudTrust, hudOriginFor } = require('./hud-trust');
 // B3b: a native confirmation before any key or setting changes (see the file).
-const { createSettingsConfirm, createChildInputInhibit, isProviderKeyName, CANCELLED, BUSY, NOT_A_KEY } = require('./settings-confirm');
+const { createSettingsConfirm, createChildInputInhibit, isProviderKeyName, refusalFor, NOT_A_KEY } = require('./settings-confirm');
 const { registerSettingsIpc } = require('./settings-ipc');
 const settingsStore = require('../mythos/src/core/config/settings-store');
 
@@ -605,7 +605,7 @@ ipcMain.handle('mythos:set-key', async (event, name, value) => {
   }
   // B3b: a native dialog naming the key (never its value) answers 'yes', 'no' or 'busy'.
   const keyAnswer = await settingsConfirm.confirmKey(name);
-  if (keyAnswer !== 'yes') return { ok: false, error: keyAnswer === 'busy' ? BUSY : CANCELLED };
+  if (keyAnswer !== 'yes') return { ok: false, error: refusalFor(keyAnswer) };
   const store = loadStore();
   if (safeStorage.isEncryptionAvailable()) {
     // security-reviewer HIGH: serialize the Buffer as base64, not as JSON's
@@ -682,7 +682,7 @@ function settingsPath() {
 
 // The settings channels (get-settings, set-setting, set-settings) live in
 // ./settings-ipc.js since B3b gave every write a native confirmation.
-registerSettingsIpc({ ipcMain, hudTrust, settingsStore, settingsPath, settingsConfirm, ENV_INJECTION_DENYLIST, CANCELLED });
+registerSettingsIpc({ ipcMain, hudTrust, settingsStore, settingsPath, settingsConfirm, ENV_INJECTION_DENYLIST });
 
 // Stage 5 (BUG-075) — routes 'ui.open-web' (relayed from the server child over
 // the fork() IPC channel below — see server/index.js's process.send() call in
@@ -849,7 +849,7 @@ function startChild() {
     cwd: MYTHOS_DIR,
     env: {
       ...process.env,
-      ...decryptedKeysForChild(),
+      ...decryptedKeysForChild(), ...childInputInhibit.envFor(),
       MYTHOS_VAULT_ROOT: vaultRoot,
       // Installer parity — where the child reads its non-secret settings.
       // Injected rather than derived server-side because only the main process
@@ -961,7 +961,7 @@ function startChild() {
   // closes it and acks back so close_panel can report what really happened.
   child.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return;
-    if (msg.channel === 'mythos:input-inhibit-ack') { childInputInhibit.heardAck(msg); return; }
+    if (childInputInhibit.handles(msg)) return; // mythos:input-inhibit-ack / -sync (settings-confirm.js)
     if (msg.channel === 'mythos:confirm-import') { settingsConfirm.confirmImport(msg.summary).then((answer) => { try { child.send({ channel: 'mythos:confirm-import-answer', answer }); } catch (_) { /* the server times out as Cancel */ } }); return; }
     if (msg.channel === 'mythos:ocr-result') {
       // BUG-268 D4 (2026-09-16): the OCR hotkey's result, toasted and copied

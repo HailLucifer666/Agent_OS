@@ -4248,10 +4248,14 @@ function createServer(deps) {
       // commands, so MYTHOS's own input tools cannot answer the operator's dialog.
       if (msg && msg.channel === 'mythos:input-inhibit') {
         require('../adapters/input-inhibit').setInputInhibited(msg.on === true);
-        // Acked only once no input command is still inside pc-child (at most 2 s),
-        // and with the request's own sequence number (B3b review).
-        const ack = () => { try { process.send({ channel: 'mythos:input-inhibit-ack', on: msg.on === true, seq: msg.seq }); } catch (_) { /* Electron shows the dialog without the ack */ } };
-        if (msg.on === true) pcChild.whenInputIdle(2000).then(ack, ack); else ack();
+        // Acked with the request's own sequence number (B3b review) and, for "on",
+        // whether BOTH input backends went idle within 2 s: Electron draws the
+        // dialog only on idle:true (2026-10-05 security bundle).
+        const ack = (idle) => { try { process.send({ channel: 'mythos:input-inhibit-ack', on: msg.on === true, seq: msg.seq, idle: idle === true }); } catch (_) { /* no ack: Electron does not draw the dialog */ } };
+        if (msg.on === true) {
+          Promise.all([pcChild.whenInputIdle(2000), require('../adapters/cua-driver').whenInputIdle(2000)])
+            .then((r) => ack(r.every((x) => x === true)), () => ack(false));
+        } else ack(true);
         return;
       }
       // BUG-272 T2 — the ack for mythos:open-external. Same single-pending-slot
@@ -4318,6 +4322,12 @@ function createServer(deps) {
         })();
       }
     });
+    // A child started while a confirmation dialog was open began inhibited from
+    // MYTHOS_INPUT_INHIBITED; ask for the current state now that the handler above
+    // can hear the answer (2026-10-05 security bundle).
+    if (typeof process.send === 'function') {
+      try { process.send({ channel: 'mythos:input-inhibit-sync' }); } catch (_) { /* no Electron parent: nothing to sync */ }
+    }
   }
   function requestCloseMediaWindow() {
     return new Promise((resolve) => {

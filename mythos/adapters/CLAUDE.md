@@ -26,9 +26,16 @@ pointer) — this file adds what's specific to this directory.
   set, checked when the command is SENT (processQueue) so one queued before the
   dialog opened is refused too, and the server acks only once none is in flight; and cua-driver's `invoke()` refuses every tool but
   its reads. A new input command must join pc-child's `INHIBITED_WHILE_CONFIRMING`
-  (`test/electron-settings-confirm.test.js` lists them). **The two gates are
-  independent and both run**: cua-driver checks the inhibit flag first (no pid,
-  no round-trip) and then the window-identity gate.
+  (`test/electron-settings-confirm.test.js` lists them).
+  **Since the 2026-10-05 security bundle the dialog is drawn only on a HELD
+  inhibit:** cua-driver also refuses at dequeue (`processQueue`), the server's ack
+  carries `idle` measured on pc-child AND cua-driver, and Electron draws nothing
+  (answer `unprotected`) without `idle: true`. A server child forked while a dialog
+  is open starts inhibited from `MYTHOS_INPUT_INHIBITED` and asks for the current
+  state (`mythos:input-inhibit-sync`) once its IPC handler is live
+  (`test/input-inhibit-integrity.test.js`). **The two gates are independent and
+  both run**: cua-driver checks the inhibit flag first (no pid, no round-trip) and
+  then the window-identity gate.
 
 - **PowerShell 5.1 + pipes**: stdout defaults to the OEM codepage, which
   best-fits curly quotes (U+201C/D) into ASCII `"`, corrupting JSON in

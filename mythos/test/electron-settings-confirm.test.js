@@ -50,7 +50,7 @@ function recorder(answer) {
       return typeof answer === 'function' ? answer(opts) : { response: answer };
     },
     getWindow: () => ({ id: 'hud' }),
-    inhibitInput: async (on) => { events.push('inhibit:' + on); },
+    inhibitInput: async (on) => { events.push('inhibit:' + on); return true; }, // held: a dialog is drawn only on a held inhibit (2026-10-05)
   });
   return { confirm, events, dialogs };
 }
@@ -106,7 +106,7 @@ describe('the native confirmation', () => {
     const failing = createSettingsConfirm({
       showMessageBox: async () => { events.push('dialog'); throw new Error('no display'); },
       getWindow: () => null,
-      inhibitInput: async (on) => { events.push('inhibit:' + on); },
+      inhibitInput: async (on) => { events.push('inhibit:' + on); return true; },
     });
     await assert.rejects(failing.confirmKey('K'), /no display/, 'a dialog that cannot be shown is not a yes');
     assert.deepEqual(events, ['inhibit:true', 'dialog', 'inhibit:false']);
@@ -121,7 +121,7 @@ describe('the native confirmation', () => {
       // confirmer that queued or stacked would show it and answer "no", not hang.
       showMessageBox: (opts) => { shown.push(opts.message); return shown.length === 1 ? new Promise((r) => { release = () => r({ response: 1 }); }) : Promise.resolve({ response: 0 }); },
       getWindow: () => null,
-      inhibitInput: async () => {},
+      inhibitInput: async () => true,
     });
     const first = c.confirmKey('ONE');
     await new Promise((r) => setTimeout(r, 10));
@@ -135,7 +135,7 @@ describe('the native confirmation', () => {
   test('a minimised HUD is brought back before its dialog is shown', async () => {
     const calls = [];
     const win = { isMinimized: () => true, restore: () => calls.push('restore'), show: () => calls.push('show'), focus: () => calls.push('focus') };
-    const c = createSettingsConfirm({ showMessageBox: async () => { calls.push('dialog'); return { response: 0 }; }, getWindow: () => win, inhibitInput: async () => {} });
+    const c = createSettingsConfirm({ showMessageBox: async () => { calls.push('dialog'); return { response: 0 }; }, getWindow: () => win, inhibitInput: async () => true });
     await c.confirmKey('K');
     assert.deepEqual(calls, ['restore', 'show', 'focus', 'dialog']);
   });
@@ -165,7 +165,7 @@ describe('(3) the key store takes provider keys only', () => {
     const refuse = h.indexOf('if (!isProviderKeyName(name)) return { ok: false, error: NOT_A_KEY };');
     const ask = h.indexOf('await settingsConfirm.confirmKey(name)');
     assert.ok(refuse > 0 && refuse < ask, 'the name is refused before any dialog');
-    assert.match(h, /if \(keyAnswer !== 'yes'\) return \{ ok: false, error: keyAnswer === 'busy' \? BUSY : CANCELLED \};/,
+    assert.match(h, /if \(keyAnswer !== 'yes'\) return \{ ok: false, error: refusalFor\(keyAnswer\) \};/,
       'only the exact answer yes stores — the answers are strings, so a truthiness test would store on "no"');
     assert.ok(ask < h.indexOf('saveStore(store)'));
   });
@@ -188,7 +188,6 @@ function drive(answer) {
       confirmKey: async () => answer,
     },
     ENV_INJECTION_DENYLIST: new Set(['NODE_OPTIONS']),
-    CANCELLED: 'cancelled',
   });
   const onDisk = () => (fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {});
   return { handlers, asked, file, onDisk, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
@@ -272,7 +271,7 @@ describe('the settings channels, driven through a fake ipcMain and the real sett
 
 describe('wiring that only exists in main.js and server/index.js', () => {
   test('main.js registers the settings channels and keeps no second copy', () => {
-    assert.match(MAIN, /registerSettingsIpc\(\{ ipcMain, hudTrust, settingsStore, settingsPath, settingsConfirm, ENV_INJECTION_DENYLIST, CANCELLED \}\);/);
+    assert.match(MAIN, /registerSettingsIpc\(\{ ipcMain, hudTrust, settingsStore, settingsPath, settingsConfirm, ENV_INJECTION_DENYLIST \}\);/);
     assert.equal((MAIN.match(/ipcMain\.handle\('mythos:set-setting/g) || []).length, 0);
   });
 
@@ -292,8 +291,11 @@ describe('wiring that only exists in main.js and server/index.js', () => {
     t.heardAck({ seq: sent[1].seq });
     assert.equal(await second, true);
     assert.notEqual(sent[0].seq, sent[1].seq);
-    assert.equal(await createChildInputInhibit({ getChild: () => null, log() {} }).inhibit(true), false, 'no child: nothing to tell');
-    assert.match(MAIN, /msg\.channel === 'mythos:input-inhibit-ack'\) \{ childInputInhibit\.heardAck\(msg\); return; \}/);
+    // 2026-10-05 security bundle: with no server child nothing can send input (pc-child
+    // and cua-driver live in it), so the inhibit HOLDS; the state reaches the next child
+    // through envFor() (test/input-inhibit-integrity.test.js (d2)).
+    assert.equal(await createChildInputInhibit({ getChild: () => null, log() {} }).inhibit(true), true, 'no child: nothing can type');
+    assert.match(MAIN, /if \(childInputInhibit\.handles\(msg\)\) return;/);
     assert.match(MAIN, /inhibitInput: childInputInhibit\.inhibit,/);
   });
 
@@ -304,10 +306,13 @@ describe('wiring that only exists in main.js and server/index.js', () => {
 
   test('(5) server/index.js acks the inhibit only once no input is in flight, with its sequence number', () => {
     const at = SERVER.indexOf("msg.channel === 'mythos:input-inhibit'");
-    const block = SERVER.slice(at, at + 900);
+    const block = SERVER.slice(at, at + 1400);
     assert.match(block, /require\('\.\.\/adapters\/input-inhibit'\)\.setInputInhibited\(msg\.on === true\)/);
     assert.match(block, /seq: msg\.seq/);
-    assert.match(block, /pcChild\.whenInputIdle\(2000\)\.then\(ack, ack\)/);
+    // 2026-10-05: the ack says whether BOTH backends went idle; Electron draws the
+    // dialog only on idle:true (test/input-inhibit-integrity.test.js (b)).
+    assert.match(block, /Promise\.all\(\[pcChild\.whenInputIdle\(2000\), require\('\.\.\/adapters\/cua-driver'\)\.whenInputIdle\(2000\)\]\)/);
+    assert.match(block, /idle: idle === true/);
     const save = PANEL.slice(PANEL.indexOf("saveBtn.addEventListener('click'"));
     assert.match(save.slice(0, 1500), /await bridge\.setSettings\(/);
     assert.doesNotMatch(save.slice(0, 1500), /bridge\.setSetting\(/, 'no per-field loop: that would be one dialog per field');
