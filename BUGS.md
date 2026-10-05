@@ -656,7 +656,7 @@ Each blocked row requires its named remaining evidence before promotion; complet
 | BUG-430 | coded | blocked | The healer now shares the search ladder first cooldown of 60s. Live function responses caution after four searches within 120s without a successful fetch; pending and late rows share one trace. Jina keyless remains deliberate. These changes reduce churn; they do not make blocked scrapers answer. Search procurement D4 remains the operator decision. Diagnoses: Sept 9 filing and Sept 10 replay. | mythos/src/core/immune/healer.js; mythos/src/core/voice/action-evidence-ledger.js; mythos/src/core/voice/live-tool-adapter.js |
 | BUG-431 | fixed | blocked | The measured CDP drops followed close_window calls. Attached-browser closure is refused; offline transitions use the existing announcement ladder. Slow outcomes survive closed/rejected Live delivery, and final artifact fallback-model evidence reaches jobs/cards/speech. Local wire/mutation tests pass; attended behavior remains untested. | mythos/test/bug-431b-finished-work-reaches-the-operator.test.js |
 | BUG-465 | verified | currently verified | [FIXED 2026-09-24] GET /api/conversation/history named today's Episodic file with toISOString().slice(0, 10), the UTC date, while Episodic is written under the local day, so on a UTC+5:30 machine the panel read the previous day's file from 00:00 to 05:30 local and, west of UTC, a not-yet-existing file every evening. The name now comes from util/day-key.js dayKey(), per request. Consumers: HUD conversation panel. Regression oracle: bug-465-history-reads-local-day.test.js pins the path read in three zone/instant cases and that the real Episodic writer and the route agree; mutation probes recorded there. Remaining evidence: none for the mechanism; a real boot with TZ=Pacific/Kiritimati (local date one day ahead of UTC at the time) served the local day's file. Rows cannot render until BUG-466 is fixed. | mythos/server/index.js (/api/conversation/history); mythos/src/core/util/day-key.js; tests: bug-465-history-reads-local-day.test.js |
-| BUG-466 | open | currently reproduced | [FILED 2026-09-24] The same route joins readLines()'s parsed objects into one string with Array.join, so every Episodic row reaches the panel as the text "[object Object]" and the client's parser, built to skip torn lines, skips all of them. The Episodic half of the panel has never shown a row since the route was added (1908d50d, 2026-08-12). Measured in isolation and on a real boot (8 of 8 lines "[object Object]"). Consumers: HUD conversation panel (conversation.js, transcript-model.js buildTranscript). Remaining evidence: none; a fix is proven by a written turn coming back out of buildTranscript through the real route. | mythos/server/index.js (/api/conversation/history); mythos/ui/public/js/views/transcript-model.js (parseEpisodicJsonl) |
+| BUG-466 | coded | blocked | [CODED 2026-10-05: the route sends raw JSONL; writer -> route -> transcript-model proven headlessly, probe (g); the real panel is not yet seen] [FILED 2026-09-24] The same route joins readLines()'s parsed objects into one string with Array.join, so every Episodic row reaches the panel as the text "[object Object]" and the client's parser, built to skip torn lines, skips all of them. The Episodic half of the panel has never shown a row since the route was added (1908d50d, 2026-08-12). Measured in isolation and on a real boot (8 of 8 lines "[object Object]"). Consumers: HUD conversation panel (conversation.js, transcript-model.js buildTranscript). Remaining evidence: none; a fix is proven by a written turn coming back out of buildTranscript through the real route. | mythos/server/index.js (/api/conversation/history); mythos/ui/public/js/views/transcript-model.js (parseEpisodicJsonl) |
 
 Twelve security/data/boot rows were subsequently read claim-by-claim against current implementation and candidate consumers (032, 033, 047, 048, 167, 168, 238, 247, 249, 254, 303, 307). Their generic gaps above are replaced with concrete proof limits. The associated 11-file historical regression set passed **90/90** (`.cache/campaign/historical-security-memory-tests.log`); this source audit found the additional 247 and 249 defects described in their full entries. That checkpoint covered only this subset; the complete 261-row assessment above supersedes its coverage limit.
 
@@ -3730,9 +3730,9 @@ choice is the operator's, and it is not made yet.
 
 **Attribution:** named as not-covered in BUG-454's commit `006e5e4e`; fixed 2026-09-24.
 
-## BUG-466 — the conversation panel's Episodic half has never shown a row: the history route sends every row as the text "[object Object]" (filed 2026-09-24, OPEN)
+## BUG-466 — the conversation panel's Episodic half has never shown a row: the history route sends every row as the text "[object Object]" (filed 2026-09-24; CODED 2026-10-05)
 
-**Status:** OPEN, filed 2026-09-24. Measured live and in isolation; not fixed.
+**Status:** 🔧 CODED 2026-10-05 (branch fix/bug-466-history-sends-raw-jsonl, Bundle B of the stage1 plan). The route sends the Episodic file as raw JSONL text. Proven end to end headlessly (real Episodic writer -> real route over HTTP -> the HUD's own transcript-model.js); not yet seen in the real conversation panel, which is what closes it.
 
 **What the operator would see.** The conversation panel shows only what `Conversation/session.json` holds — a rolling window of the last few turns, dropped entirely after an idle period. The day's Episodic log, which the panel was built to merge in so that a long session stays visible (F7), contributes nothing. That is the complaint F7 existed to fix, still present.
 
@@ -3747,6 +3747,13 @@ choice is the operator's, and it is not made yet.
 **Consumers:** the HUD conversation panel (`ui/public/js/views/conversation.js`, which passes `payload.episodic` to `buildTranscript`).
 
 **Attribution:** found 2026-09-24 while fixing BUG-465.
+
+**Fix (2026-10-05).** `GET /api/conversation/history` now reads `memory.fs.readText('Episodic/<day>.jsonl', '')` instead of `readLines(...).filter(Boolean).join('
+')`. That is the contract the route's own comment already stated: send the raw file and let the client's parser skip torn lines. One behaviour difference, deliberate: `readLines` raised a `corrupt-line` health anomaly per torn line, which this route never used; the HUD parser still skips them silently, as before. A missing file is still an empty string.
+
+**Proof.** `test/bug-466-history-sends-raw-jsonl.test.js` 3/3, written red first: (a) a turn written by the real Episodic writer reaches `buildTranscript` as user + assistant messages; (b) Bengali/Hindi text and a torn final line, where the good rows survive; (c) no file today gives `""` (must keep working; green before and after). `bug-465-history-reads-local-day.test.js` 4/4 still passes. Mutation probe (g), 2026-10-05: restoring the old `readLines(...).join` expression (syntax-checked, diffed, restored by hash) reddens (a) and (b) and leaves (c) green. A first probe attempt was discarded: shell escaping put a real line break into the string, so its red came from a syntax error, not the assertion.
+
+**Remaining evidence:** the real conversation panel showing a historical turn after a restart (sitting scenario "goals and history").
 
 ## BUG-438 — open_web opened a DIFFERENT YouTube video from the one asked for, and reported it as opened (CODED 2026-09-11; filed 2026-09-11)
 
@@ -23979,6 +23986,6 @@ those records remain owed (this section is the index until then).
   **T3 options note written 2026-09-23** (keep user-fetched weights / train our own / license / paid tier
   without a wake word), with the question each needs a lawyer to answer. No choice made; operator decision.
 
-- BUG-466 - the conversation panel's Episodic half has never shown a row: the history
+- BUG-466 - CODED 2026-10-05 (raw JSONL; real panel not yet seen). The conversation panel's Episodic half has never shown a row: the history
   route joins parsed objects into text, so every row arrives as "[object Object]" and the
   panel's parser skips it. Measured live 2026-09-24. Filed 2026-09-24. Full entry above.

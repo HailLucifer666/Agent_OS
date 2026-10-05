@@ -347,7 +347,7 @@
   "generatedBy": "mythos/scripts/build-capability-map.js",
   "vitals": {
     "tests": {
-      "value": 8509,
+      "value": 8512,
       "label": "tests",
       "tone": "ok",
       "source": "ROADMAP.md SYNC:TEST-COUNT",
@@ -626,7 +626,7 @@
       ],
       "note": "LIVE 2026-09-25: log_incident recorded the operator's report of the false tab-close retraction on the first call. Logging is perfect. The backlog it produces is not being drained.",
       "ev": "log_incident 155 ok / 0 fail  --  but 72 incidents are OPEN",
-      "ok": 226,
+      "ok": 227,
       "f": 0
     },
     {
@@ -776,7 +776,7 @@
       ],
       "note": "LIVE 2026-09-25: the 09-24 misfire is fixed (f7620761). One live call at 02:15:32 returned the unheard tail of the answer the room heard last, not an older one. Whether the model reaches for it on \"go on\" is still thin evidence. After a barge-in and \"go ahead\", returns the part of the answer the room did not hear, once. Read-only.",
       "ev": "LIVE 2026-09-24: it misfired. Called on \"hold on\" (transcribed as French), it returned the unheard end of an OLDER answer, because the interrupted answer produced no report and nothing discarded the older one; MYTHOS then said \"Notepad should still be open\". When Gemini itself cuts a turn, the model resumed correctly without the tool. Repair direction: a remainder belongs to the latest answer or is discarded, and the tool serves only HUD-side cuts (BUG-447).",
-      "ok": 2,
+      "ok": 3,
       "f": 0
     },
     {
@@ -1048,7 +1048,7 @@
         "gmail_read"
       ],
       "ok": 101,
-      "f": 137,
+      "f": 139,
       "note": "LIVE 2026-09-25: still red: the refresh token is expired. The spoken explanation is now one plain sentence, and the steps show in the HUD Anomalies list. gmail_unread, gmail_read. STILL RED, and now provably so: the Google grant is dead. One operator command fixes it — `node mythos/scripts/google-auth.js`.",
       "ev": "LIVE-VERIFIED 2026-08-28 (Track A, BUG-387) — the first time this node has been checked against the provider rather than against its own history. `node mythos/scripts/verify-google-grant.js` reports INVALID: the refresh token minted no access token and Gmail refused. The real effector agrees, which is the two-routes-one-answer cross-check: calling gmail_unread through the registered tool returns \"invalid_grant: Token has been expired or revoked.\" So this row is correct and stays red. THE CODE AROUND IT IS NOT AT FAULT, measured rather than assumed: from-gmail classifies invalid_grant as TERMINAL and its remedy text names the literal command plus the 7-day Testing-publishing-status trap; hub.js latches the terminal result per tool so the provider is not hammered — the 88 recorded failures fall into 60 bursts, nearly all of size ONE, i.e. one attempt per process rather than a retry storm; gmail-sensor raises health.anomaly with needsOperator:true; and explainer.js speaks the whole remedy aloud, verbatim, including `node scripts/google-auth.js`. Nine test files already cover that chain, two of them asserting the SPOKEN text contains the command. WHAT WAS ACTUALLY BROKEN was the one thing an operator would check: `doctor` reported \"OK Gmail / Calendar sensors — configured\" for three weeks while all of the above was failing, because it tests that three strings are PRESENT in .env and presence is not validity. Fixed under BUG-387: doctor now says validity is unchecked and names the verifier. A CORRECTION worth recording: from the episodic `summary` field it looked as though MYTHOS had announced this nine times over eight days and never said what to do — that was WRONG, `summary` truncates at ~100 characters and `detail.text` carries the full remedy. Only the 2026-08-18 utterance is genuinely deficient and it predates the BUG-273 C2 / BUG-278 fixes that repaired exactly it. NEEDS THE OPERATOR: run `node mythos/scripts/google-auth.js`, put the new GOOGLE_REFRESH_TOKEN in mythos/.env, then confirm with `node mythos/scripts/verify-google-grant.js` — which is the point of the new script, since before it there was no way to tell whether the three minutes had worked."
     },
@@ -1312,7 +1312,7 @@
         "reminder_approve_action",
         "calendar_upcoming"
       ],
-      "ok": 99,
+      "ok": 101,
       "f": 4,
       "note": "reminder_add, timer_add. CLOSED 2026-08-27: BUG-289 added sub-minute phrasing on 2026-08-21 and the newest failure is 2026-08-20.",
       "ev": "DISPOSITION 2026-08-27 (Track D-6), measured against the live vault. D-6 asked for \"sub-minute phrasing; same parser family as timer_add, likely closes with it\" — and it did close with it. BUG-289 (2026-08-21) fixed both halves of that parser: a seconds unit was added (none existed), and the count became \\d+(?:\\.\\d+)? so timer_add{minutes:0.5} building \"in 0.5 minutes\" could be read back. Vault evidence: reminder_add 4 ok / 2 fail and timer_add 2 ok / 2 fail, and the NEWEST failure for either is 2026-08-20 — the day before the fix. Three of the four failures carry the pre-fix message \"Could not parse that time. Try ISO date, in 20 minutes, tomorrow 9am, or HH:MM\", which does not mention seconds; the current message names seconds first, deliberately, because that was the case that used to be impossible. Zero failures since."
@@ -1613,7 +1613,7 @@
       ],
       "note": "LIVE 2026-09-25: get_time answered \"2:12 AM\" correctly, and get_weather fed the greeting. The same session still said \"this evening\" at 2 AM once, from the model, not the tool. Historical get_time/get_weather/get_directions checks passed. Latest weather failure was a timeout; location ambiguity remains a separate content gate.",
       "ev": "Exercised 2026-08-28 by scripts/verify-unknown-nodes.js (BUG-386, Track F) — 21 pass / 7 n/a / 11 disp / 0 FAIL. This node reached the acceptance contract, so it is the strongest of the four promotions. get_time is not merely \"ok:true\": the answer must carry THIS process's current year, and passing timezone:\"Asia/Tokyo\" must actually change it — a tool returning a plausible date is precisely what a self-report cannot rule out, and the mutation that returned a fixed 1999 date was caught. get_weather and get_directions answered over their free lanes (346 and 143 bytes); their CONTENT is not verified against a second source and the harness says so rather than implying it did. The run is worth something only because the harness is PROVEN able to fail: eight mutations were made to real product code, each making a tool return ok while doing nothing, and all eight were caught. Two survived a first pass and were real holes in the oracles — set_persona_level asked only whether the levels blob contained the number it had set (a default already held it), and okf_export counted files rather than reading the concept back. Campaign 2026-09-07: latest recorded weather failure was an upstream timeout, preceded by successful calls. A fresh Bangalore query returned Bangalore Town, Sindh, Pakistan; this is not proof of the intended city. No capability downgrade was inferred from a single failure, and content accuracy remains unverified.",
-      "ok": 192,
+      "ok": 195,
       "f": 10
     },
     {
@@ -6184,13 +6184,13 @@
         "n": 466,
         "shape": "entry",
         "state": "open",
-        "title": "the conversation panel's Episodic half has never shown a row: the history route sends every row as the text \"[object Object]\" (filed 2026-09-24, OPEN)",
+        "title": "the conversation panel's Episodic half has never shown a row: the history route sends every row as the text \"[object Object]\" (filed 2026-09-24; CODED 2026-10-05)",
         "detail": {
           "cause": "`GET /api/conversation/history` in `server/index.js` builds its `episodic` field as `(memory.fs.readLines('Episodic/' + today + '.jsonl') || []).filter(Boolean).join('\\n')`. `readLines()` returns PARSED objects, one per line, and `Array.prototype.join` turns each object into the string `[object Object]`. The client's `parseEpisodicJsonl()` (`ui/public/js/views/transcript-model.js`) calls `JSON.parse` on each line, fails, and skips the line without a word — by design, because the same tolerance is what survives a torn final line. So the transport turns every row into a line the reader is built to discard. The route's own comment above it says \"Raw text, not parsed\"; the code does the opposite. It has read this way since the route was added in `1908d50d` (2026-08-12)."
         },
         "campaign": {
-          "disposition": "currently reproduced",
-          "evidence": "[FILED 2026-09-24] The same route joins readLines()'s parsed objects into one string with Array.join, so every Episodic row reaches the panel as the text \"[object Object]\" and the client's parser, built to skip torn lines, skips all of them. The Episodic half of the panel has never shown a row since the route was added (1908d50d, 2026-08-12). Measured in isolation and on a real boot (8 of 8 lines \"[object Object]\"). Consumers: HUD conversation panel (conversation.js, transcript-model.js buildTranscript). Remaining evidence: none; a fix is proven by a written turn coming back out of buildTranscript through the real route.",
+          "disposition": "blocked",
+          "evidence": "[CODED 2026-10-05: the route sends raw JSONL; writer -> route -> transcript-model proven headlessly, probe (g); the real panel is not yet seen] [FILED 2026-09-24] The same route joins readLines()'s parsed objects into one string with Array.join, so every Episodic row reaches the panel as the text \"[object Object]\" and the client's parser, built to skip torn lines, skips all of them. The Episodic half of the panel has never shown a row since the route was added (1908d50d, 2026-08-12). Measured in isolation and on a real boot (8 of 8 lines \"[object Object]\"). Consumers: HUD conversation panel (conversation.js, transcript-model.js buildTranscript). Remaining evidence: none; a fix is proven by a written turn coming back out of buildTranscript through the real route.",
           "source": "mythos/server/index.js (/api/conversation/history); mythos/ui/public/js/views/transcript-model.js (parseEpisodicJsonl)"
         }
       },
