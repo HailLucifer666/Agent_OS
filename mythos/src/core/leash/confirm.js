@@ -114,6 +114,15 @@ function createConfirmRegistry({ config, onExpire }) {
     return true;
   }
 
+  // S1 (2026-09-25): the proposal's read-back turned out not to be heard in
+  // full (the HUD reported a cut). Its own connection only, like markPresented.
+  function unmarkPresented(confirmId, connectionId) {
+    const entry = pending.get(confirmId);
+    if (!entry || !entry.spoken || connectionId == null || entry.connectionId !== connectionId) return false;
+    entry.presented = false;
+    return true;
+  }
+
   // The spoken twin of accept(): the stored action, consumed, or null. Stricter
   // than accept() on scope — an unscoped (null) entry is never voice-approvable,
   // because "any connection may answer" is not a person answering.
@@ -145,7 +154,7 @@ function createConfirmRegistry({ config, onExpire }) {
   }
 
   return { create: create, accept: accept, reject: reject, peek: peek, peekTier: peekTier, stats: stats,
-    markPresented: markPresented, acceptSpoken: acceptSpoken };
+    markPresented: markPresented, unmarkPresented: unmarkPresented, acceptSpoken: acceptSpoken };
 }
 
 module.exports = { createConfirmRegistry };

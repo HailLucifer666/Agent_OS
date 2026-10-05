@@ -146,9 +146,12 @@ describe('BUG-124 — every Live turn is identifiable', () => {
     sockets[0].serverFrame({ serverContent: { outputTranscription: { text: 'It is noon.' }, turnComplete: true } });
 
     // BUG-461 (2026-09-24) added `typedText` — the operator's HUD-typed words,
-    // kept apart from the transcript — so the record grew by one key. Pairing is
-    // untouched: the spoken fragments still join exactly as before.
-    assert.deepEqual(turns[0], { userText: 'what is the time', assistantText: 'It is noon.', turnId: 1, typedText: '' });
+    // kept apart from the transcript — so the record grew by one key. S1
+    // (2026-09-25) added `interrupts` and `audioParts`, so "ask first" can tell a
+    // read-back the room heard from one it did not. Pairing is untouched: the
+    // spoken fragments still join exactly as before.
+    assert.deepEqual(turns[0], { userText: 'what is the time', assistantText: 'It is noon.', turnId: 1, typedText: '',
+      interrupts: 0, audioParts: 0 });
     session.close();
   });
 });

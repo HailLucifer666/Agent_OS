@@ -803,7 +803,7 @@ function createLiveSession(deps) {
         // with the same turnId and the question stops being a guess.
         turnCounter += 1;
         const turn = {
-          userText: userText.trim(), assistantText: assistantText.trim(), turnId: turnCounter, typedText: typedText.trim(),
+          userText: userText.trim(), assistantText: assistantText.trim(), turnId: turnCounter, typedText: typedText.trim(), interrupts: turnInterrupts, audioParts: turnAudioParts, // S1: was the reply heard in full
         };
         userText = ''; assistantText = ''; typedText = '';
         // Snapshot before the reset below — Wave 0 (2026-08-13) needs these on
