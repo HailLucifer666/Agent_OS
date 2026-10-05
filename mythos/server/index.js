@@ -3811,6 +3811,10 @@ function createServer(deps) {
           // this time by bug-273-suspend-fields-reach-the-log.test.js, which now scans
           // every logSuspendTransition() call site instead of two named ones.
           'suppressedChunks', 'suppressedMs',
+          // B1b (2026-09-26): what the stop's flush threw out of the queue. suppressedChunks
+          // counts only audio arriving AFTER the stop, and read alone it called 7 of 8
+          // stops "nothing left to cut" on 2026-09-25 while 0.4-5.1 s was still queued.
+          'discardedMs',
           // BUG-274 step 5: pcm-player.js's jitter cushion, as it stood when the
           // suppression lifted. cushionMs is how far ahead of the clock the player
           // is scheduling audio, underruns is how many times the timeline ran dry

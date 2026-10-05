@@ -524,7 +524,7 @@ describe('BUG-274 — a barge-in the policy authorises must actually be delivera
   //
   // THE SESSION: 2026-08-20, 55 turns. Eleven 'pending-sustaining' vetoes at levels up
   // to 0.2144, five of them above the room's measured bleed peak of 0.1193. Ten
-  // barge-ins reached the stop door, ONE cut audio. The operator scored it 7-8/10 and
+  // barge-ins reached the stop door, ONE seen to cut audio (a floor: B1b, 2026-09-26). The operator scored it 7-8/10 and
   // described exactly this: "sometimes it still is talking and it's not stopping."
   // Stage 3 lowered the sustain to 200ms, and at 200ms three loud frames clear the bar
   // before the dip arrives. Speech that dips like human speech is now believed, which

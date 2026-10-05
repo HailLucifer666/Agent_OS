@@ -149,7 +149,7 @@ describe('BUG-274 — the barge-in floor must separate measured bleed from measu
     // own bleed peak (0.1193), so they are unambiguously the operator, refused for not
     // LASTING rather than for being too quiet. A one- or two-word interruption is
     // 200-400ms of speech and could not clear a 350ms bar plus the backstop's 3-frame
-    // cadence. Ten barge-ins reached the stop door and exactly ONE cut real audio.
+    // cadence. Ten barge-ins reached the stop door; ONE was seen to cut audio, a floor (B1b, 2026-09-26).
     //
     // The counter-failure to watch is self-interruption, which ran at 26/89 turns
     // before this change. If it rises, raise INITIAL_BLEED_FLOOR back toward 0.04 —
