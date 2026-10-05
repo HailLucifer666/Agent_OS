@@ -177,18 +177,24 @@ function createSettingsConfirm(deps) {
 // its own ack settles it, so a late ack for an earlier message cannot stand in
 // for a later one (B3b review).
 // 2026-10-05 security bundle: an "on" ack counts only with idle:true (the server
-// measured pc-child AND cua-driver idle); with no server child nothing can type,
-// so the inhibit holds. Electron owns the wanted state: envFor() puts it in the
+// measured pc-child AND cua-driver idle); with no server child — and none still
+// shutting down (track) — nothing can type, so the inhibit holds. Electron owns the wanted state: envFor() puts it in the
 // next child's fork env, and resync() answers a child that asks for it.
 function createChildInputInhibit({ getChild, log, timeoutMs = 2500 }) {
   let pending = null;
   let seq = 0;
   let wanted = false;
+  // Servers that main.js is still shutting down (stopChild clears its own reference
+  // at once and then waits up to 7 s): one of them may still be sending input, so
+  // "no child" holds only once every tracked one has exited (review finding 2).
+  let stopping = [];
+  const alive = (c) => c && c.exitCode === null && c.signalCode === null;
+  function track(dying) { stopping = stopping.filter(alive).concat(dying ? [dying] : []); }
   function inhibit(on) {
     wanted = !!on;
     return new Promise((resolve) => {
       const child = getChild();
-      if (!child || !child.connected) { resolve(true); return; }
+      if (!child || !child.connected) { resolve(!stopping.some(alive)); return; }
       const mine = ++seq;
       const timer = setTimeout(() => { if (pending && pending.seq === mine) pending = null; log('input-inhibit: no ack from the server child (on=' + on + ')'); resolve(false); }, timeoutMs);
       pending = { seq: mine, on: !!on, settle: (held) => { clearTimeout(timer); pending = null; resolve(held); } };
@@ -214,7 +220,7 @@ function createChildInputInhibit({ getChild, log, timeoutMs = 2500 }) {
     if (msg.channel === 'mythos:input-inhibit-sync') { resync(); return true; }
     return false;
   }
-  return { inhibit, heardAck, envFor, resync, handles };
+  return { inhibit, heardAck, envFor, resync, handles, track };
 }
 
 module.exports = { createSettingsConfirm, createChildInputInhibit, describeSettings, visible, isProviderKeyName, refusalFor, MAX_SHOWN, ANSWER, CANCELLED, BUSY, UNPROTECTED, NOT_A_KEY };

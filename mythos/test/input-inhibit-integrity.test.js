@@ -210,6 +210,21 @@ describe('(d) a server child started while a dialog is open starts inhibited, an
     assert.deepEqual(t.envFor(), { MYTHOS_INPUT_INHIBITED: '' });
   });
 
+  // Review finding 2 (Opus, 2026-10-05, traced in code): stopChild() sets child = null
+  // at once and then gives the old server up to 7 s to exit, so "no child" was not
+  // "nothing can type" while a stopping server could still be finishing input.
+  test('(d4) a server that is still shutting down is not "no child": the inhibit is not held until it has exited', async () => {
+    const t = sc.createChildInputInhibit({ getChild: () => null, log() {}, timeoutMs: 50 });
+    const dying = { exitCode: null, signalCode: null };
+    t.track(dying);
+    assert.equal(await t.inhibit(true), false, 'the stopping server may still be sending input');
+    dying.exitCode = 0;
+    assert.equal(await t.inhibit(true), true, 'ADJACENT: once it has exited, nothing can type');
+    t.track({ exitCode: null, signalCode: 'SIGTERM' });
+    assert.equal(await t.inhibit(true), true, 'ADJACENT: killed by a signal counts as exited');
+    assert.match(MAIN, /const dying = child; childInputInhibit\.track\(dying\);/);
+  });
+
   test('(d3) main.js forks the server with the state and answers its request; the server asks once its handler is live', () => {
     assert.match(MAIN, /\.\.\.childInputInhibit\.envFor\(\)/);
     assert.match(MAIN, /if \(childInputInhibit\.handles\(msg\)\) return;/);
@@ -234,3 +249,7 @@ describe('(d) a server child started while a dialog is open starts inhibited, an
 //   P4 input-inhibit.js: starts `false` whatever the env says          -> (d1) red
 //   P5 transport: no child resolves false (the old behaviour)          -> (d2) red
 //   P6 server ack: Promise.all over pc-child only                      -> (b3) red
+
+// PROBE RECORD (review round), 2026-10-05:
+//   Ph a stopping server ignored (no child resolves true)  -> (d4) red
+//   Pi main.js stopChild() does not track the dying server -> (d4) red

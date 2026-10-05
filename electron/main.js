@@ -1079,7 +1079,7 @@ function startChild() {
 
 function stopChild() {
   if (!child) return;
-  const dying = child;
+  const dying = child; childInputInhibit.track(dying);
   child = null;
   // BUG-437 (2026-09-16): this used to be `dying.kill()` and then the
   // awaitChildExit ladder (BUG-225). On Windows kill() is TerminateProcess — no
