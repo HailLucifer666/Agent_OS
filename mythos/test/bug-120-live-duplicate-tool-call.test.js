@@ -58,7 +58,7 @@ function harness(overrides) {
     },
     bus: { emit() {} },
     logger: { warn() {}, info() {} },
-    connectionId: 'conn-120',
+    connectionId: 'conn-120', toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path this test pins
     memory: { working: { tick: 1 }, episodic: { write: async () => {} } },
     historyAppend: () => {},
     reflection: null,

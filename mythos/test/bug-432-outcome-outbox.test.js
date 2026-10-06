@@ -364,7 +364,7 @@ describe('BUG-436 — the adapter hands a rotating session the answer instead of
         confirm: { create: () => 'confirm-436', reject: () => {} } },
       dispatchAction: () => done.then(() => ({ ok: true, result: { launched: true } })),
       now: () => clock,
-      bus: { emit() {} }, logger: { info() {}, warn() {} }, connectionId: 'conn-436',
+      bus: { emit() {} }, logger: { info() {}, warn() {} }, connectionId: 'conn-436', toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path this test pins
       memory: { working: { tick: 1 }, episodic: { write: async () => {} } }, historyAppend: () => {},
       reflection: null, summarizeActionsForResult, getLiveSession: () => session,
       speakWhenClosed: async (t) => { spokenByTts.push(t); }, config: {},

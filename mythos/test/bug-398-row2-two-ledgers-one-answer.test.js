@@ -88,6 +88,7 @@ function harness(outcome) {
       check: () => ({ allow: true, requireConfirm: false, tier: 2, reason: 'within-autonomous-max' }),
       confirm: { create: () => 'c', reject: () => {} },
     },
+    toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path this test pins
     // Stands in for dispatch-action, and records what the AUDIT writer would
     // have been given for this call: `outcome` is dispatch-level, exactly as
     // dispatch-action.js computes it (`actionOk ? 'ok' : 'fail'`).
