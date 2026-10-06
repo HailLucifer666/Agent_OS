@@ -469,7 +469,43 @@ function judgeMemoryWrite({ text, current, previous, previousAgeMs, today } = {}
   return { proceed: true, reason: 'operator-request' };
 }
 
+// BUG-464 widened, operator decision 2026-10-06: a NOTE (note_take, write_note)
+// is permanent memory too, and is written only when the operator asked for one.
+// Unlike a remembered fact, a note is a document the operator asks MYTHOS to
+// compose ("write that down" after a recipe was read out), so there is no
+// content check and no bare-referent rule: the ask is for a note, and what goes
+// in it is the model's to draft. Anything else is read back first.
+// ATTACKED 2026-10-06 before shipping (test (j1)/(j2) pin each):
+//   - a READ request names a note too: "what's in my shopping note" must not
+//     count. So every form here carries a write verb, and "in my X note" alone
+//     never does.
+//   - "Did you take a note of that?" asks about the past: excluded.
+//   - negation ("you don't have to write that down"), the operator's objection,
+//     quotation and "if I say take a note" do not ask.
+// Bound: English lexical forms, like every rule here. A long note cannot be read
+// back in full, so it is written only when the operator's own words asked.
+const NOTE_REQUEST_RES = [
+  /(?<!\b(?:did|have|has|had) you\s)\b(?:make|take|write|save|start|create|jot|keep)\s+(?:a|an|another|one)\s+(?:quick\s+|short\s+|new\s+)?note\b/i,
+  /\b(?:write|jot|note|put|get|take)\s+(?:it|this|that|these|those|them|everything|all of (?:it|this|that))\s+down\b/i,
+  /\b(?:write|jot|note) down\b/i,
+  /\b(?:save|put|add|write|append|store|keep|log)\s+(?:it\s+|this\s+|that\s+|these\s+|those\s+)?(?:to|in|into|under)\s+(?:a|my|the|that|this)\s+(?:[\w'-]+\s+){0,3}?note\b/i,
+  /(?:^|[.?!,;]\s*|\b(?:please|also|and|so|just)\s+)note (?:that|this|it)\b/i,
+];
+const NOTE_NEGATION_RE = /\b(?:don'?t|do not|no need to|needn'?t|never|not|shouldn'?t|should not)\s+(?:have to\s+|need to\s+|bother(?:\s+to)?\s+)?(?:make|take|write|save|jot|note|add|keep|put)\b/i;
+const NOTE_HYPOTHETICAL_RE = /\b(?:if|what if|suppose|supposing|when|whenever)\b[^.?!]{0,40}\b(?:I|you)\s+(?:say|said|tell|told|ask|asked)\b/i;
+
+function judgeNoteWrite({ current, previous, previousAgeMs } = {}) {
+  const words = wordsFor({ current, previous, previousAgeMs });
+  if (!words) return { proceed: false, reason: 'note-not-requested' };
+  const s = plain(words.said);
+  if (NOTE_NEGATION_RE.test(s) || DENIAL_RE.test(s)) return { proceed: false, reason: 'note-declined' };
+  const asked = unquoted(words.said);
+  if (NOTE_HYPOTHETICAL_RE.test(asked) || !NOTE_REQUEST_RES.some((re) => re.test(asked))) return { proceed: false, reason: 'note-not-requested' };
+  return { proceed: true, reason: 'operator-request' };
+}
+
 module.exports = {
+  judgeNoteWrite,
   SHORT_INPUT_MAX_WORDS, CONTINUATION_WINDOW_MS, TOOL_OPERATION, KEY_WORDS,
   DENIAL_RE, AFFIRMATIVE_REPLY_RE,
   countWords, hasRequestForm, isAffirmativeReply, yesAndRest, restNamesCall, prohibits,

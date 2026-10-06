@@ -212,7 +212,12 @@ describe('fix-plan 3.1 — every consolidation skip says why', () => {
   });
 
   it('the happy path writes the distilled topic and emits NO skip', async () => {
-    const brain = { think: async () => ({ content: 'the user prefers concise answers', offline: false }) };
+    // CHANGED 2026-10-06 (operator decision): step 3 now drops every line about the
+    // operator, so the old fixture "the user prefers concise answers" is no longer a
+    // happy path — it is the dropped case, pinned in
+    // test/bug-464-background-writers-need-the-operator.test.js (x1)-(x3). This one
+    // distils MYTHOS's own status, which is what step 3 still keeps.
+    const brain = { think: async () => ({ content: '4 active goals and 160 incidents logged', offline: false }) };
     const { memory, skips } = await memoryWithSkips(brain, [
       { kind: 'conversation', summary: 'important thing', salience: 0.8 },
     ]);

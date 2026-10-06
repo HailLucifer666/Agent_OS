@@ -146,6 +146,20 @@ file adds the invariants specific to this layer.
   background summariser in `memory/index.js` (step 3b) writes `user-facts`
   only when `MEMORY_AUTO_USER_FACTS=true`: off by default since 2026-09-25,
   on the operator's decision (BUG-463). Do not turn it back on by default.
+- **Every durable record about the operator follows that rule (operator
+  decision, 2026-10-06).** Nothing goes into permanent memory unless the
+  operator asked for it or approved the exact text read back. `note_take` and
+  `write_note` take `remember`'s lock (a consent token, minted only by the
+  authority gate; the rule for a note is `judgeNoteWrite`). Identity
+  reflection's profile, style and preferences join step 3b behind the same
+  switch, `memory/auto-operator-facts.js`. The habit promoter stays on, but
+  promotes only 3+ plays on 2+ local days, read from Episodic. Step 3's
+  `consolidated-*` stays on and drops every line describing the operator
+  (`memory/operator-lines.js`). A new writer into Semantic memory,
+  the operator files or notes fails
+  `test/bug-464-background-writers-need-the-operator.test.js` (d1) until it is
+  classified. A spoken proposal cancelled by "no" gets no `[SYSTEM]` notice:
+  every injection is a new Live turn, and that one made MYTHOS speak unasked.
 
 ## Dispatch (`effectors/dispatch-action.js`)
 

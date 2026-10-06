@@ -5,6 +5,7 @@
 
 const pcChild = require('../../../adapters/pc-child');
 const { effectorFromTool } = require('./adapter');
+const { verifyConsent } = require('../leash/consent'); // BUG-464: write_note
 // §7.7 (step 5) — set_wallpaper's path argument is sandboxed via
 // from-computer.js's existing resolveSandboxed (reused, not reimplemented).
 // open_folder (BUG-058) is reused the same way by launch_app below, for the
@@ -1435,8 +1436,11 @@ async function drag({ x1, y1, x2, y2 }) {
   return delegate({ cmd: 'drag', x1, y1, x2, y2 });
 }
 
-async function write_note({ text, title }) {
+async function write_note(args, callCtx) { // BUG-464 widened (2026-10-06): a note is permanent memory; remember's lock, see from-memory.js note_take
+  const { text, title } = args || {};
   if (!text) return fail('Note text is required.');
+  const consent = verifyConsent(callCtx && callCtx.consent, 'write_note', args);
+  if (!consent.ok) return fail(`Not saved (${consent.reason}): a note is written only when the operator asks for one in their own words, or says yes after the exact text is read back to them.`);
   return delegate({ cmd: 'write_note', text, title: title || null });
 }
 

@@ -28,7 +28,7 @@
 // spoken yes can never approve something that needs a click (NEVER_TRUSTABLE,
 // tier 4, trust disabled): those still take the leash's own confirm path.
 
-const { judgeTrustedAction, judgeMemoryWrite, isAffirmativeReply, yesAndRest, restNamesCall, readBackMatches, leadingWords,
+const { judgeTrustedAction, judgeMemoryWrite, judgeNoteWrite, isAffirmativeReply, yesAndRest, restNamesCall, readBackMatches, leadingWords,
   KEY_WORDS } = require('./operator-authority');
 const { mintConsent, signatureOf } = require('../leash/consent');
 
@@ -38,6 +38,15 @@ const HUMAN_PREMISE_REASONS = new Set(['operator-present-trusted', 'session-gran
 // Tools whose effector writes the permanent `user-facts` memory. Derived in
 // the test from the effector source, not trusted from this line.
 const MEMORY_TOOLS = new Set(['remember']);
+// BUG-464 widened, operator decision 2026-10-06: a note is permanent memory too,
+// written only when the operator asked for one or approved the exact text read
+// back. Same lock (the effectors verify a consent), same gate; only the rule for
+// what counts as asking differs (operator-authority.js judgeNoteWrite).
+const NOTE_TOOLS = new Set(['note_take', 'write_note']);
+// Every tool whose effector verifies a consent token. Derived in
+// test/bug-464-background-writers-need-the-operator.test.js (d2) from the
+// effector source: a tool that verifies one but is missing here could never get one.
+const CONSENT_TOOLS = new Set([...MEMORY_TOOLS, ...NOTE_TOOLS]);
 // voice-agent.js's VOICE_SPOKEN_CONFIRM_TTL_MS default, for the same reason.
 const SPOKEN_APPROVAL_TTL_MS = 60000;
 
@@ -54,14 +63,23 @@ const WHY = {
   'not-this-action': 'the operator\'s words do not ask for this action',
   'unsupported-operation': 'this action cannot be matched to anything the operator said',
   'content-mismatch': 'the text to save is not what the operator said',
+  'note-not-requested': 'the operator did not ask you to write a note',
+  'note-declined': 'the operator said not to write it down',
 };
 function why(reason) {
   return WHY[reason] || WHY[String(reason).replace(/-before$/, '')] || 'the operator has not clearly asked for this';
 }
 
+// One rule per kind of save, shared by the Live gate and the typed gate, so the
+// two channels cannot drift: a fact must be the operator's own words (F03); a
+// note needs only the operator's ask for a note (BUG-464 widened, 2026-10-06).
+function judgeSave(decision, input) {
+  return NOTE_TOOLS.has(decision.tool) ? judgeNoteWrite(input) : judgeMemoryWrite({ ...input, text: savedText(decision.args) });
+}
+
 function savedText(args) {
   const a = args || {};
-  return String(a.text || a.fact || a.note || '').trim();
+  return String(a.text || a.fact || a.note || a.body || a.content || '').trim(); // body/content: note_take reads them too
 }
 
 // F04 (S1, 2026-09-25): the name of what a call acts on, in words a person can
@@ -87,7 +105,7 @@ function targetLabel(decision, describeRef) {
 // yes can never approve it (the operator's own words, restated, still can).
 function readBackFor(decision, describeRef) {
   const a = decision.args || {};
-  if (MEMORY_TOOLS.has(decision.tool)) return { text: savedText(a), numbers: 'exact' };
+  if (CONSENT_TOOLS.has(decision.tool)) return { text: savedText(a), numbers: 'exact' };
   if (typeof a.text === 'string' && a.text && decision.tool !== 'see_and_click') return { text: a.text, numbers: 'exact' };
   if (typeof a.key === 'string' && a.key) return { text: a.key.replace(/([a-z])([A-Z])/g, '$1 $2'), numbers: 'subset', ordered: false };
   const label = targetLabel(decision, describeRef);
@@ -99,6 +117,7 @@ function questionFor(decision, describeRef) {
   if (MEMORY_TOOLS.has(decision.tool)) {
     return `that reads the exact words back: "Shall I remember this: '${savedText(a).slice(0, 300)}'?"`;
   }
+  if (NOTE_TOOLS.has(decision.tool)) return `that reads the exact words back: "Shall I save this note: '${savedText(a).slice(0, 300)}'?"`;
   if (typeof a.text === 'string' && a.text && decision.tool !== 'see_and_click') return `: "Shall I type '${a.text.slice(0, 200)}'?"`;
   if (typeof a.key === 'string' && a.key) return `: "Shall I press ${a.key}?"`;
   const need = readBackFor(decision, describeRef);
@@ -115,6 +134,22 @@ function askResponse(decision, reason, describeRef) {
       message: `${decision.tool} has NOT run: ${why(reason)}, and a yes cannot approve it because nothing here names what `
         + 'it would act on. Tell the operator in one short sentence what you were about to do, and ask them to say in '
         + `their own words what they want. When their own words ask for it, call ${decision.tool} again and it runs.`,
+    };
+  }
+  // BUG-464 residual (i), attended 2026-09-25 02:14: the hold was right, but the
+  // model said "I'll keep that in mind for next time" and never read the text
+  // back, so nothing could be approved and the operator was told something false.
+  // For a save, the message now says first that nothing is kept, forbids that
+  // claim (and says how to take it back if already spoken), and makes the
+  // read-back the very next thing said. Whether a model obeys cannot be tested
+  // here; that is the attended check.
+  if (CONSENT_TOOLS.has(decision.tool)) {
+    return {
+      status: 'needs_operator_yes',
+      message: `${decision.tool} has NOT run, and nothing is saved: ${why(reason)}. Do not say you will keep it, note it `
+        + 'or bear it in mind; nothing is kept unless they say yes. If you already said so, say it is not saved yet. '
+        + `Your next words must be one short question ${question}, then stop and wait. Do not issue the same call again — `
+        + 'if they answer yes, it is saved by itself and you will be told; if they say anything else, nothing is saved.',
     };
   }
   return {
@@ -148,7 +183,7 @@ function presentedBy(spoken, decision, describeRef) {
   const need = readBackFor(decision, describeRef);
   if (!need || !need.text.trim()) return false;
   const typing = typeof (decision.args || {}).text === 'string' && decision.tool !== 'see_and_click';
-  const asks = MEMORY_TOOLS.has(decision.tool) ? ASKS_TO_SAVE_RE : (typing ? ASKS_TO_TYPE_RE : ASKS_TO_ACT_RE);
+  const asks = CONSENT_TOOLS.has(decision.tool) ? ASKS_TO_SAVE_RE : (typing ? ASKS_TO_TYPE_RE : ASKS_TO_ACT_RE);
   if (!asks.test(s)) return false;
   const key = (decision.args || {}).key;
   // A key is named by itself ("PageDown", "page down") or by what it does ("scroll down").
@@ -192,8 +227,8 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
     const previous = lastOperator ? lastOperator.text : '';
     const previousAgeMs = lastOperator ? now() - lastOperator.at : NaN;
     const previousTyped = Boolean(lastOperator && lastOperator.typed);
-    return MEMORY_TOOLS.has(decision.tool)
-      ? judgeMemoryWrite({ text: savedText(decision.args), current: words.said, previous, previousAgeMs, today: new Date(now()) })
+    return CONSENT_TOOLS.has(decision.tool)
+      ? judgeSave(decision, { current: words.said, previous, previousAgeMs, today: new Date(now()) })
       : judgeTrustedAction({ current: words.said, typed: words.typed, previous, previousAgeMs, previousTyped,
         tool: decision.tool, args: decision.args });
   }
@@ -205,7 +240,7 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
     if (isAffirmativeReply(said)) return true;
     const rest = yesAndRest(said);
     if (rest === null) return false;
-    return MEMORY_TOOLS.has(decision.tool) ? judge(decision, { said: rest, typed: false }).proceed
+    return CONSENT_TOOLS.has(decision.tool) ? judge(decision, { said: rest, typed: false }).proceed
       : restNamesCall(rest, decision.tool, decision.args);
   }
 
@@ -234,7 +269,7 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
   // `heard`: { spoken, typed } — this turn's operator words so far, from
   // live-session.js (the echo-accepted transcript, and HUD-typed text).
   function hold(call, decision, verdict, heard) {
-    const memory = MEMORY_TOOLS.has(decision.tool);
+    const memory = CONSENT_TOOLS.has(decision.tool); // a save of any kind: remember, or a note (2026-10-06)
     if (!memory && !(verdict && verdict.allow && HUMAN_PREMISE_REASONS.has(verdict.reason))) return {};
     const words = operatorWords(heard && heard.spoken, heard && heard.typed);
     const said = words.said;
@@ -261,7 +296,7 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
     if (!verdict || !verdict.allow) {
       return Promise.resolve(resolveConfirm(confirmId, { ok: false, result: 'no longer permitted: ' + ((verdict && verdict.reason) || 'unknown') }, true));
     }
-    const consent = MEMORY_TOOLS.has(decision.tool) ? mintConsent({ tool: decision.tool, args: decision.args, basis: 'approved-proposal' }) : null;
+    const consent = CONSENT_TOOLS.has(decision.tool) ? mintConsent({ tool: decision.tool, args: decision.args, basis: 'approved-proposal' }) : null;
     return Promise.resolve()
       .then(() => dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: confirmId, consent }))
       .then((outcome) => resolveConfirm(confirmId, outcome, true))
@@ -336,7 +371,7 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
 function createTypedMemoryGate({ now = Date.now } = {}) {
   const pending = new Map(); // connectionId -> { signature, at }
   function hold(decision, said, connectionId) {
-    if (!MEMORY_TOOLS.has(decision.tool)) return {};
+    if (!CONSENT_TOOLS.has(decision.tool)) return {};
     const k = connectionId || 'system';
     const signature = signatureOf(decision.tool, decision.args);
     const armed = pending.get(k);
@@ -344,13 +379,16 @@ function createTypedMemoryGate({ now = Date.now } = {}) {
     if (armed && armed.signature === signature && now() - armed.at <= SPOKEN_APPROVAL_TTL_MS && isAffirmativeReply(said)) {
       return { consent: mintConsent({ tool: decision.tool, args: decision.args, basis: 'approved-proposal' }) };
     }
-    const judged = judgeMemoryWrite({ text: savedText(decision.args), current: said, today: new Date(now()) });
+    const judged = judgeSave(decision, { current: said, today: new Date(now()) });
     if (judged.proceed) return { consent: mintConsent({ tool: decision.tool, args: decision.args, basis: 'operator-request' }) };
     pending.set(k, { signature, at: now() });
-    return { refuse: `Not saved: ${why(judged.reason)}. Read this exact text back and ask whether to save it: `
+    // BUG-464 residual (i): say nothing is kept, and forbid the unbacked claim.
+    return { refuse: `Not saved: ${why(judged.reason)}, so nothing is saved. Do not say you will keep it or bear it in mind. `
+      + `Read this exact text back and ask whether to save it${NOTE_TOOLS.has(decision.tool) ? ' as a note' : ''}: `
       + `"${savedText(decision.args).slice(0, 300)}". It is saved only if their next message is a plain yes.` };
   }
   return { hold };
 }
 
-module.exports = { createAuthorityGate, createTypedMemoryGate, HUMAN_PREMISE_REASONS, MEMORY_TOOLS, SPOKEN_APPROVAL_TTL_MS };
+module.exports = { createAuthorityGate, createTypedMemoryGate, HUMAN_PREMISE_REASONS, MEMORY_TOOLS, NOTE_TOOLS, CONSENT_TOOLS,
+  SPOKEN_APPROVAL_TTL_MS };

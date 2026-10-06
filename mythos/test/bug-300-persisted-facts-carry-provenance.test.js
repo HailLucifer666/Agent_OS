@@ -34,6 +34,15 @@ const { createLiveToolAdapter } = require('../src/core/voice/live-tool-adapter')
 // Verbatim from the log: what MYTHOS persisted, and the tool it used.
 const FABRICATED_NOTE = 'Mohun Bagan won the Durand Cup match against East Bengal today.';
 
+// CHANGED 2026-10-06 (BUG-464 widened, operator decision): write_note is now
+// written only when the operator asked for a note, so each call here carries the
+// operator's words, as the real Live session passes them. Without them the note
+// is held for a read-back and never dispatched, and every test below would fail
+// on that rather than on the stamp it is about.
+// test/bug-464-background-writers-need-the-operator.test.js (a5) pins that the
+// stamp lands BEFORE the consent is minted.
+const ASKED_CTX = { sendToolResponse: () => {}, userTextSoFar: 'Please write that down as a note.' };
+
 function makeAdapter(dispatchImpl) {
   const dispatched = [];
   const adapter = createLiveToolAdapter({
@@ -69,7 +78,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     const { adapter, dispatched } = makeAdapter();
     await adapter.handleLiveToolCalls(
       [{ id: 'c1', name: 'write_note', args: { text: FABRICATED_NOTE, title: 'Durand Cup' } }],
-      { sendToolResponse: () => {} },
+      ASKED_CTX,
     );
     const args = noteArgs(dispatched);
     assert.equal(args.length, 1, 'the note must still be written — this never refuses');
@@ -83,7 +92,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     const { adapter, dispatched } = makeAdapter();
     await adapter.handleLiveToolCalls(
       [{ id: 'c2', name: 'write_note', args: { text: FABRICATED_NOTE } }],
-      { sendToolResponse: () => {} },
+      ASKED_CTX,
     );
     const { text } = noteArgs(dispatched)[0];
     assert.ok(text.startsWith(FABRICATED_NOTE),
@@ -95,7 +104,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     const { adapter, dispatched } = makeAdapter();
     await adapter.handleLiveToolCalls(
       [{ id: 'c3', name: 'write_note', args: { text: FABRICATED_NOTE, title: 'Durand Cup' } }],
-      { sendToolResponse: () => {} },
+      ASKED_CTX,
     );
     assert.equal(noteArgs(dispatched)[0].title, 'Durand Cup');
   });
@@ -109,7 +118,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     await adapter.handleLiveToolCalls([
       { id: 'c4', name: 'web_search', args: { query: 'Durand Cup result' } },
       { id: 'c5', name: 'write_note', args: { text: FABRICATED_NOTE } },
-    ], { sendToolResponse: () => {} });
+    ], ASKED_CTX);
     assert.doesNotMatch(noteArgs(dispatched)[0].text, STAMP,
       'something did establish something this turn — do not invent doubt about it');
   });
@@ -123,7 +132,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     await adapter.handleLiveToolCalls([
       { id: 'c6', name: 'web_search', args: { query: 'Durand Cup result' } },
       { id: 'c7', name: 'write_note', args: { text: FABRICATED_NOTE } },
-    ], { sendToolResponse: () => {} });
+    ], ASKED_CTX);
     assert.match(noteArgs(dispatched)[0].text, STAMP,
       'a tool that failed is not evidence, and the 2026-08-20 session had 8 web_search failures');
   });
@@ -140,7 +149,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     await adapter.handleLiveToolCalls([
       { id: 'c8', name: 'ui_type', args: { text: 'x' } },
       { id: 'c9', name: 'write_note', args: { text: FABRICATED_NOTE } },
-    ], { sendToolResponse: () => {} });
+    ], ASKED_CTX);
     assert.match(noteArgs(dispatched)[0].text, STAMP);
   });
 
@@ -152,7 +161,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     await adapter.handleLiveToolCalls([
       { id: 'c10', name: 'write_note', args: { text: 'first' } },
       { id: 'c11', name: 'write_note', args: { text: FABRICATED_NOTE } },
-    ], { sendToolResponse: () => {} });
+    ], ASKED_CTX);
     const args = noteArgs(dispatched);
     assert.equal(args.length, 2);
     assert.match(args[0].text, STAMP);
@@ -165,7 +174,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     const { adapter, dispatched } = makeAdapter();
     await adapter.handleLiveToolCalls(
       [{ id: 'c12', name: 'write_note', args: { title: 'empty' } }],
-      { sendToolResponse: () => {} },
+      ASKED_CTX,
     );
     const args = noteArgs(dispatched);
     assert.equal(args.length, 1);
@@ -182,7 +191,7 @@ describe('BUG-300 — a note written with nothing behind it says so', () => {
     await adapter.handleLiveToolCalls([
       { id: 'c13', name: 'capture_idea', args: { text: FABRICATED_NOTE } },
       { id: 'c14', name: 'create_goal', args: { title: FABRICATED_NOTE } },
-    ], { sendToolResponse: () => {} });
+    ], ASKED_CTX);
     assert.equal(dispatched[0].args.text, FABRICATED_NOTE);
     assert.equal(dispatched[1].args.title, FABRICATED_NOTE);
   });

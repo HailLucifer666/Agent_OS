@@ -43,6 +43,21 @@ const WATCHED = {
 // Three is the number the incident itself supplies: the operator expected MYTHOS
 // to have noticed after the third play. Two is coincidence; three is a habit.
 const PROMOTE_AFTER = 3;
+// OPERATOR DECISION 2026-10-06: habits stay ON ("this will be your PA": learn
+// likes, dislikes, taste and repetitive work), but only behaviour that is really
+// repeated. THE RULE: at least PROMOTE_AFTER (3) successful actions on the same
+// subject, falling on at least MIN_HABIT_DAYS (2) different LOCAL days
+// (util/day-key.js, the vault's one date basis), all within HABIT_WINDOW_DAYS.
+// WHY a second day: three plays in one sitting are a session, not a taste. The
+// "listens to lofi" fact came from lofi played while TESTING "play the second /
+// third video" — three plays, one sitting. Raised from the existing threshold,
+// not beside it: the count still applies (two plays on two days stay coincidence).
+// WHY 7 days: Episodic recall's own default window, which is where the days are
+// read from (below) — so a habit is "repeated this week", and the old comment's
+// worry (two plays weeks apart are not a habit) still holds.
+const MIN_HABIT_DAYS = 2;
+const HABIT_WINDOW_DAYS = 7;
+const { dayKey } = require('../util/day-key');
 
 // Counting normalized text, not raw args: "radiohead", "Radiohead" and
 // "  Radiohead " are one preference, and treating them as three is how a
@@ -74,21 +89,56 @@ function subjectOf(tool, params) {
 // be code-reviewed in a PR, and every line-based tool over it -- grep included --
 // goes silently blind. Pinned from both sides: source-has-no-nul-byte.test.js fails
 // on the raw byte, habit-promotion.test.js fails if this stops being a NUL.
+// The subject of a past play, read back from its Episodic summary, which
+// dispatch-action.js writes as `tool(<args JSON cut at 80 chars>)`. A value cut
+// mid-string does not match and is not counted: it can only undercount a habit,
+// never invent one. Attacked 2026-10-06: another tool whose name ends the same
+// ("xspotify_play(") does not start with `tool + '('`; an arg named like ours
+// inside another value ("{\"q\":\"\\\"query\\\":...") needs a raw `"query":"`,
+// which JSON escaping inside a string value never produces.
+function subjectFromSummary(tool, summary) {
+  const s = String(summary || '');
+  if (!WATCHED[tool] || s.indexOf(tool + '(') !== 0) return null;
+  const arg = WATCHED[tool].arg;
+  const m = new RegExp('[{,]"' + arg + '":("(?:[^"\\\\]|\\\\.)*")').exec(s);
+  if (!m) return null;
+  try { return subjectOf(tool, { [arg]: JSON.parse(m[1]) }); } catch (_) { return null; }
+}
+
 function keyFor(tool, subject) {
   return tool + '\u0000' + subject;
 }
 
 function createHabitPromoter(deps) {
   const semantic = deps && deps.semantic;
+  // Not behind MEMORY_AUTO_USER_FACTS (operator decision 2026-10-06): see the
+  // rule above PROMOTE_AFTER. `now`, `minDays` and `promoteAfter` are for tests.
   const logger = (deps && deps.logger) || { info: function() {} };
   const promoteAfter = (deps && deps.promoteAfter) || PROMOTE_AFTER;
-
-  // In-process only, and deliberately so. Persisting the counter would make a
-  // fact promotable across a restart weeks apart, which is not a habit; and the
-  // already-promoted set below is what stops a long session re-writing the same
-  // fact every time the count ticks up.
-  const counts = new Map();
+  const minDays = (deps && deps.minDays) || MIN_HABIT_DAYS;
+  const now = (deps && deps.now) || Date.now;
+  // The days must survive a restart, or "two different days" needs a process
+  // that stays up past midnight and the rule would never fire. Episodic already
+  // records every dispatched action (dispatch-action.js step 3, BEFORE it calls
+  // observe in 4.5), so the plays are read from there: no new store, no second
+  // copy of the operator's behaviour. Without an Episodic store (unit tests,
+  // hub-less callers) the same rule runs on an in-process record of days.
+  const episodic = deps && deps.episodic;
+  const daysSeen = new Map(); // key -> [dayKey, ...] one entry per play (in-process fallback only)
   const promoted = new Set();
+
+  function playDays(tool, subject, key) {
+    if (episodic && typeof episodic.recall === 'function') {
+      const since = now() - HABIT_WINDOW_DAYS * 24 * 3600 * 1000;
+      const hits = episodic.recall('', { kind: 'action', limit: 1000, windowDays: HABIT_WINDOW_DAYS }) || [];
+      return hits.map(function(h) { return (h && h.record) || h; })
+        .filter(function(r) { return r && r.outcome === 'ok' && (r.ts || 0) >= since && subjectFromSummary(tool, r.summary) === subject; })
+        .map(function(r) { return dayKey(r.ts); });
+    }
+    const days = (daysSeen.get(key) || []).concat(dayKey(now()));
+    daysSeen.set(key, days);
+    return days;
+  }
 
   // Called after a dispatch that actually succeeded. Never throws — this is
   // best-effort bookkeeping sitting on the action path, exactly like
@@ -102,9 +152,9 @@ function createHabitPromoter(deps) {
       const key = keyFor(tool, subject);
       if (promoted.has(key)) return null;
 
-      const next = (counts.get(key) || 0) + 1;
-      counts.set(key, next);
-      if (next < promoteAfter) return null;
+      const days = playDays(tool, subject, key);
+      const next = days.length;
+      if (next < promoteAfter || new Set(days).size < minDays) return null;
 
       const fact = WATCHED[tool].fact(subject);
       // One topic per (tool, subject), NOT an append to a shared topic. The
@@ -139,6 +189,9 @@ module.exports = {
   createHabitPromoter: createHabitPromoter,
   WATCHED: WATCHED,
   PROMOTE_AFTER: PROMOTE_AFTER,
+  MIN_HABIT_DAYS: MIN_HABIT_DAYS,
+  HABIT_WINDOW_DAYS: HABIT_WINDOW_DAYS,
+  subjectFromSummary: subjectFromSummary,
   subjectOf: subjectOf,
   keyFor: keyFor,
 };

@@ -153,6 +153,9 @@ describe('BUG-437 — the saving steps run first and cannot be held hostage', ()
           getOperatorProfile: () => '',
         },
         logger: { info() {}, warn() {} },
+        // CHANGED 2026-10-06 (BUG-464 widened): the pass now runs only with the
+        // switch on; this test is about the deadline, so it turns it on.
+        env: { MEMORY_AUTO_USER_FACTS: 'true' },
       });
       return { reflection, writes };
     }

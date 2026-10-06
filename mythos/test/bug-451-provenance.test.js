@@ -140,6 +140,11 @@ describe('BUG-451 — the goal planner is not instructed by a guess', () => {
 describe('BUG-451 — a note MYTHOS writes carries its provenance on the entry', () => {
   let dir; let notes; let tools;
   const tool = (name) => tools.find((t) => t.name === name);
+  // CHANGED 2026-10-06 (BUG-464 widened): note_take writes only with a consent
+  // minted for exactly its arguments. These tests are about what the tool does
+  // with a save, so each passes one, as from-memory.test.js does for remember.
+  const { mintConsent } = require('../src/core/leash/consent');
+  const take = (args) => tool('note_take').fn(args, { consent: mintConsent({ tool: 'note_take', args, basis: 'operator-request' }) });
   function setup() {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bug451-notes-'));
     notes = require('../src/core/memory/notes').createNotesStore({ dir });
@@ -150,7 +155,7 @@ describe('BUG-451 — a note MYTHOS writes carries its provenance on the entry',
   test('(g) the 09-23 note is stored marked as a hypothesis, and the model is told so in the result', async () => {
     setup();
     try {
-      const out = await tool('note_take').fn({ title: 'Lesson Learned: Rapid Ref Staleness on YouTube', text: MODEL_NOTE });
+      const out = await take({ title: 'Lesson Learned: Rapid Ref Staleness on YouTube', text: MODEL_NOTE });
       assert.equal(out.ok, true);
       assert.equal(out.result.provenance, 'hypothesis');
       assert.match(out.result.evidence, /unverified hypothesis/);
@@ -164,7 +169,7 @@ describe('BUG-451 — a note MYTHOS writes carries its provenance on the entry',
     try {
       notes.write({ title: 'Shopping', text: 'milk, eggs — written by the operator' });
       const before = notes.read('Shopping').content;
-      const out = await tool('note_take').fn({ title: 'Shopping', text: 'bread was added at 5 pm' });
+      const out = await take({ title: 'Shopping', text: 'bread was added at 5 pm' });
       assert.equal(out.result.provenance, 'observation');
       const after = notes.read('Shopping').content;
       assert.ok(after.startsWith(before.replace(/\s*$/, '')), 'the operator\'s text is kept byte for byte');
@@ -176,7 +181,7 @@ describe('BUG-451 — a note MYTHOS writes carries its provenance on the entry',
   test('(i) the model cannot choose the label: an args.provenance of "verified" is ignored', async () => {
     setup();
     try {
-      const out = await tool('note_take').fn({ title: 'Forced', text: MODEL_NOTE, provenance: 'verified' });
+      const out = await take({ title: 'Forced', text: MODEL_NOTE, provenance: 'verified' });
       assert.equal(out.result.provenance, 'hypothesis');
       assert.doesNotMatch(notes.read('Forced').content, /verified -->/);
     } finally { done(); }

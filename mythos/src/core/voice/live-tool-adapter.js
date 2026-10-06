@@ -691,7 +691,7 @@ function createLiveToolAdapter(deps) {
         responses.push({ id: call.id, name: call.name, response: { status: 'denied', reason: verdict.reason } });
         continue;
       }
-      const held = authorityGate.hold(call, decision, verdict, { spoken: userTextSoFar, typed: typedTextSoFar }); // BUG-461/464
+      stampProvenanceIfUnbacked(decision); const held = authorityGate.hold(call, decision, verdict, { spoken: userTextSoFar, typed: typedTextSoFar }); // BUG-461/464. Stamp FIRST (2026-10-06): write_note's consent binds its exact args
       if (held.response) { commitAction(held.row); responses.push({ id: call.id, name: call.name, response: held.response }); continue; }
 
       // WAVE 3 — tools that take longer than a Live turn get an explicit
@@ -705,9 +705,9 @@ function createLiveToolAdapter(deps) {
       // existed. Awaiting harder cannot fix it — the turn boundary is the model's,
       // not ours. So say "started", and deliver the real outcome afterwards through
       // the same [SYSTEM] sendText channel resolveLiveConfirm already uses.
-      // BUG-300: one call site, ahead of both dispatch paths below, so a note can
-      // never reach the effector unstamped by going down the slow branch.
-      stampProvenanceIfUnbacked(decision); routeMemory.note(call.name, call.args || {}); const startedAt = (deps.now || Date.now)();
+      // BUG-300: stamped once, above the authority gate and so ahead of both dispatch
+      // paths below: a note can never reach the effector unstamped via the slow branch.
+      routeMemory.note(call.name, call.args || {}); const startedAt = (deps.now || Date.now)();
 
       if (SLOW_TOOLS[call.name]) {
         commitAction(pendingAck(call.name, call.id, describeAction(call.name, call.args)));
@@ -1084,7 +1084,7 @@ function createLiveToolAdapter(deps) {
     if (livePendingConfirms.size === 0) return;
     if (!NEGATIVE_RE.test(String(text || ''))) return;
 
-    const cancelledNames = [];
+    const cancelledNames = [], clickNames = [];
     for (const [id, entry] of livePendingConfirms) {
       // Security-review fix parity (line ~429): mirror the connectionId
       // fallback used at confirm.create() time, or a reject issued with an
@@ -1097,17 +1097,17 @@ function createLiveToolAdapter(deps) {
       };
       liveTurnActions.push(cancelledEntry);
       recentActionLedger.record(cancelledEntry);
-      cancelledNames.push(entry.name);
+      cancelledNames.push(entry.name); if (!entry.spoken) clickNames.push(entry.name);
     }
     livePendingConfirms.clear();
 
-    const names = cancelledNames.join(', ');
-    // BUG-273 D3: third door, closed. One notice for the whole batch of cancels,
-    // as before — this path already coalesced, which is precisely the shape the
-    // late-outcome path lacks.
+    // BUG-464 (ii), 2026-10-06: a SPOKEN proposal (authority-gate.js) gets no notice. Every injection is a new Live turn, so on 09-25 02:14:29 the cancel
+    // became an unprompted "I've cancelled adding that preference to memory"; the model was already told it runs on nothing but a yes. Ledger rows above stay.
+    if (!clickNames.length) return; const names = clickNames.join(', ');
+    // BUG-273 D3: one notice for the whole batch of cancels — the coalescing the late-outcome path lacks.
     sendSystemNotice(
       `The operator said no. Cancelled: ${names}.`,
-      `Do NOT run ${cancelledNames.length === 1 ? 'that action' : 'those actions'} — `
+      `Do NOT run ${clickNames.length === 1 ? 'that action' : 'those actions'} — `
       + 'tell the operator plainly what was cancelled.',
       { site: 'confirm-rejected-by-voice', tool: names, claim: 'cancelled' },
     );
