@@ -182,6 +182,22 @@ function mountConfigRoutes(app, deps) {
     });
   });
 
+  // ---- /api/config/model-choice — BUG-467 closure (2026-10-06). Per job: the
+  // model the operator chose (or "free-only (no choice)"), the routes it may use
+  // and the routes refused, with reasons. The data source for the future
+  // Settings screen. READ-ONLY ON PURPOSE: there is no POST/PUT here, and there
+  // must not be one until it goes through the native "no key, setting or import
+  // change without a confirmation" path (PR #141, unmerged when this was
+  // written). A write route that skipped it would let any page that can reach
+  // this server authorise a bill. ----
+  app.get('/api/config/model-choice', (req, res) => {
+    try {
+      res.json(require('../../src/core/brain/model-choice').statusReport({ config }));
+    } catch (err) {
+      res.status(500).json({ error: sanitizeRestError(err) });
+    }
+  });
+
   // ---- /api/stats — NEW (P9 HUD density source): one snapshot of how much the
   // entity has lived. Drives the neural map's data-grown node weights. ----
   app.get('/api/stats', (req, res) => {

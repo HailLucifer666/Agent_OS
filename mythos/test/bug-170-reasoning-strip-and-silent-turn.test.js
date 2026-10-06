@@ -84,7 +84,10 @@ function makeHarness(overrides) {
   socket.close = () => { socket.readyState = socket.CLOSED; socket.emit('close', 1000, 'client-close'); };
 
   const session = createLiveSession(Object.assign({
-    config: { GEMINI_LIVE_MODEL: 'models/test', LIVE_IDLE_TIMEOUT_MS: 600000 },
+    // The real default model since 2026-10-06 (was 'models/test'): an unclassified
+    // model id is refused for the 'live' job unless chosen (BUG-467 closure), and
+    // the session would never open. These tests are about transcripts, not models.
+    config: { GEMINI_LIVE_MODEL: 'models/gemini-3.1-flash-live-preview', LIVE_IDLE_TIMEOUT_MS: 600000 },
     // B3 (2026-08-14): busEvents captures EVERY emit, not just health.anomaly, so
     // the reasoning strip can be asserted on its own channel after it was moved
     // off the fault channel. `anomalies` still holds only health.anomaly, which is

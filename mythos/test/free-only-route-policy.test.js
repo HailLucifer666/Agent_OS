@@ -19,6 +19,17 @@
 // build engine's catalog is a temp directory. Mutation probes and dates live in
 // the BUGS.md entry's Proof paragraph and the commit body; the tests they turn red
 // are marked (a)…(e).
+//
+// UPDATED 2026-10-06 (BUG-467 closure, operator decision). MODEL_BILLING_POLICY is
+// retired: free-only is no longer opt-in, it is what every JOB does until the
+// operator chooses a model for it (src/core/brain/model-choice.js). So every test
+// here that set MODEL_BILLING_POLICY=free-only now runs with nothing set, the two
+// tests that pinned "unset = premium allowed" are inverted (that was the defect),
+// the "unknown policy value fails closed" test now pins that the env value opens
+// nothing at all, each "control: with the policy off" now turns the route on with
+// a CHOICE instead, and route modes name a job ('voice', not 'chat'). The
+// classification rules themselves are unchanged. Per-job choices are tested in
+// bug-467-per-job-model-choice.test.js.
 
 const { describe, it, before, after, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -29,29 +40,38 @@ const path = require('node:path');
 const policy = require('../src/core/brain/route-policy');
 const registry = require('../src/core/brain/registry');
 const chain = require('../src/core/brain/chain');
+const modelChoice = require('../src/core/brain/model-choice');
 const { BRAIN_TABLES } = require('../src/core/brain/lanes.default');
 
 const ENV_KEYS = ['MODEL_BILLING_POLICY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CHAIN_VOICE',
   'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'MYTHOS_DSH_INSTALL_DIR'];
 let savedEnv;
-beforeEach(() => { savedEnv = {}; for (const k of ENV_KEYS) savedEnv[k] = process.env[k]; });
+beforeEach(() => { savedEnv = {}; for (const k of ENV_KEYS) savedEnv[k] = process.env[k]; delete process.env.MODEL_BILLING_POLICY; });
 afterEach(() => {
   for (const k of ENV_KEYS) { if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k]; }
+  modelChoice.install(null);
 });
 
-const FREE = { MODEL_BILLING_POLICY: 'free-only' };
+// The default since 2026-10-06: no choice for any job. Passed explicitly so a
+// test cannot pass because some other file left a choice installed.
+const FREE = Object.freeze({});
+const choose = (job, provider, model) => modelChoice.install({ file: null, choices: Object.freeze({ [job]: Object.freeze({ provider, model }) }) });
 
 describe('route-policy: classification of one route', () => {
-  it('policy unset → every route is allowed, premium included (BYO unchanged)', () => {
-    for (const env of [{}, { MODEL_BILLING_POLICY: '' }, { MODEL_BILLING_POLICY: 'any' }]) {
-      assert.equal(policy.decide({ provider: 'anthropic', model: 'claude-sonnet-4-5', mode: 'chat' }, env).allowed, true);
-      assert.equal(policy.decide({ provider: 'google', model: 'gemini-3.1-flash-image', endpoint: 'https://generativelanguage.googleapis.com/v1beta/models', mode: 'image' }, env).allowed, true);
+  it('INVERTED 2026-10-06: no choice → a premium route is refused, whatever MODEL_BILLING_POLICY says', () => {
+    // This test used to pin "unset = every route allowed, premium included". That
+    // was BUG-467 itself: a key's presence decided the bill. The env value is now
+    // read by nothing that routes, so 'any' opens nothing.
+    for (const value of [undefined, '', 'any', 'free-only']) {
+      if (value === undefined) delete process.env.MODEL_BILLING_POLICY; else process.env.MODEL_BILLING_POLICY = value;
+      assert.equal(policy.decide({ provider: 'anthropic', model: 'claude-sonnet-4-5', mode: 'voice' }).allowed, false, 'MODEL_BILLING_POLICY=' + value);
+      assert.equal(policy.decide({ provider: 'google', model: 'gemini-3.1-flash-image', endpoint: 'https://generativelanguage.googleapis.com/v1beta/models', mode: 'image' }).allowed, false);
     }
   });
 
   it('(a) free-only refuses the paid-only providers, by name', () => {
     for (const provider of ['anthropic', 'openai', 'deepseek']) {
-      const d = policy.decide({ provider, model: 'm', mode: 'chat' }, FREE);
+      const d = policy.decide({ provider, model: 'm', mode: 'voice' }, FREE);
       assert.equal(d.allowed, false, provider + ' must be refused');
       assert.equal(d.classification, 'paid');
       assert.match(d.reason, new RegExp('^' + provider + ':m '), 'the reason names the route');
@@ -59,7 +79,7 @@ describe('route-policy: classification of one route', () => {
   });
 
   it('free-only allows a free-plan provider on its OFFICIAL host, and refuses the same name elsewhere', () => {
-    assert.equal(policy.decide({ provider: 'groq', model: 'openai/gpt-oss-20b', endpoint: 'https://api.groq.com/openai/v1', mode: 'chat' }, FREE).allowed, true);
+    assert.equal(policy.decide({ provider: 'groq', model: 'openai/gpt-oss-20b', endpoint: 'https://api.groq.com/openai/v1', mode: 'voice' }, FREE).allowed, true);
     const proxied = policy.decide({ provider: 'mistral', model: 'codestral-latest', endpoint: 'https://my-gateway.example.com/v1', mode: 'build' }, FREE);
     assert.equal(proxied.allowed, false, 'a base-URL override can point a free provider name at a paid proxy');
     assert.equal(proxied.classification, 'unknown');
@@ -68,51 +88,56 @@ describe('route-policy: classification of one route', () => {
 
   it('Google is judged per model: an exact free-tier id passes, the image model and an alias do not', () => {
     const host = 'https://generativelanguage.googleapis.com/v1beta/openai';
-    assert.equal(policy.decide({ provider: 'google', model: 'gemini-3.6-flash', endpoint: host, mode: 'chat' }, FREE).allowed, true);
+    assert.equal(policy.decide({ provider: 'google', model: 'gemini-3.6-flash', endpoint: host, mode: 'voice' }, FREE).allowed, true);
     assert.equal(policy.decide({ provider: 'google', model: 'models/gemini-3.1-flash-live-preview', endpoint: 'wss://generativelanguage.googleapis.com/ws/x', mode: 'live' }, FREE).allowed, true,
       'the Live model id carries a models/ prefix; it is the same model');
     const image = policy.decide({ provider: 'google', model: 'gemini-3.1-flash-image', endpoint: host, mode: 'image' }, FREE);
     assert.equal(image.allowed, false);
     assert.equal(image.classification, 'paid', 'Google lists this model "Not available" on the free tier');
-    const alias = policy.decide({ provider: 'google', model: 'gemini-flash-lite-latest', endpoint: host, mode: 'chat' }, FREE);
+    const alias = policy.decide({ provider: 'google', model: 'gemini-flash-lite-latest', endpoint: host, mode: 'voice' }, FREE);
     assert.equal(alias.allowed, false, 'an alias can move to a model with no free tier without any change here');
     assert.equal(alias.classification, 'unknown');
   });
 
   it('OpenRouter: only an explicit :free variant', () => {
     const host = 'https://openrouter.ai/api/v1';
-    assert.equal(policy.decide({ provider: 'openrouter', model: 'meta/llama:free', endpoint: host, mode: 'chat' }, FREE).allowed, true);
-    assert.equal(policy.decide({ provider: 'openrouter', model: 'meta/llama', endpoint: host, mode: 'chat' }, FREE).allowed, false);
+    assert.equal(policy.decide({ provider: 'openrouter', model: 'meta/llama:free', endpoint: host, mode: 'voice' }, FREE).allowed, true);
+    assert.equal(policy.decide({ provider: 'openrouter', model: 'meta/llama', endpoint: host, mode: 'voice' }, FREE).allowed, false);
   });
 
   it('Ollama: local means THIS machine and a local model — not a :cloud model through localhost', () => {
-    assert.equal(policy.decide({ provider: 'ollama', model: 'qwen3:8b', endpoint: 'http://localhost:11434', mode: 'chat' }, FREE).allowed, true);
-    assert.equal(policy.decide({ provider: 'ollama', model: 'qwen3:8b', endpoint: 'http://127.0.0.1:11434', mode: 'chat' }, FREE).allowed, true);
-    const cloud = policy.decide({ provider: 'ollama', model: 'kimi-k2.5:cloud', endpoint: 'http://localhost:11434', mode: 'chat' }, FREE);
+    assert.equal(policy.decide({ provider: 'ollama', model: 'qwen3:8b', endpoint: 'http://localhost:11434', mode: 'voice' }, FREE).allowed, true);
+    assert.equal(policy.decide({ provider: 'ollama', model: 'qwen3:8b', endpoint: 'http://127.0.0.1:11434', mode: 'voice' }, FREE).allowed, true);
+    const cloud = policy.decide({ provider: 'ollama', model: 'kimi-k2.5:cloud', endpoint: 'http://localhost:11434', mode: 'voice' }, FREE);
     assert.equal(cloud.allowed, false, 'the request goes to localhost and the inference happens on Ollama\'s servers');
-    assert.equal(policy.decide({ provider: 'ollama', model: 'qwen3:8b', endpoint: 'http://gpu-box.lan:11434', mode: 'chat' }, FREE).allowed, false,
+    assert.equal(policy.decide({ provider: 'ollama', model: 'qwen3:8b', endpoint: 'http://gpu-box.lan:11434', mode: 'voice' }, FREE).allowed, false,
       'a remote Ollama is somebody\'s machine, not this one');
   });
 
-  it('(b) an unrecognised policy value fails CLOSED, and says which value', () => {
-    const d = policy.decide({ provider: 'anthropic', model: 'm', mode: 'chat' }, { MODEL_BILLING_POLICY: 'freeonly' });
-    assert.equal(d.allowed, false, 'a typo in a spending guard must not re-enable paid routes');
-    assert.match(d.reason, /MODEL_BILLING_POLICY="freeonly" is not a recognised value/);
-    assert.equal(policy.decide({ provider: 'groq', model: 'm', endpoint: 'https://api.groq.com/openai/v1', mode: 'chat' }, { MODEL_BILLING_POLICY: 'freeonly' }).allowed, true,
-      'failing closed still leaves the free routes working');
+  it('(b) REPLACED 2026-10-06: a typo\'d policy value opens nothing — the route policy no longer reads it at all', () => {
+    // It used to "fail closed and name the value". The value is now rejected at
+    // BOOT (model-choice.js retiredPolicyError, tested in bug-467-per-job-model-
+    // choice.test.js); here the guard is that no value can reach the decision.
+    process.env.MODEL_BILLING_POLICY = 'freeonly';
+    assert.equal(policy.decide({ provider: 'anthropic', model: 'm', mode: 'voice' }).allowed, false, 'a typo in a spending guard must not re-enable paid routes');
+    assert.equal(policy.decide({ provider: 'groq', model: 'm', endpoint: 'https://api.groq.com/openai/v1', mode: 'voice' }).allowed, true,
+      'the free routes keep working');
+    assert.equal(modelChoice.retiredPolicyError('freeonly') !== null, true, 'and boot refuses the value by name');
   });
 
   it('an unknown provider is refused, not guessed at', () => {
-    const d = policy.decide({ provider: 'somecloud', model: 'm', endpoint: 'https://api.somecloud.ai', mode: 'chat' }, FREE);
+    const d = policy.decide({ provider: 'somecloud', model: 'm', endpoint: 'https://api.somecloud.ai', mode: 'voice' }, FREE);
     assert.equal(d.allowed, false);
     assert.equal(d.classification, 'unknown');
   });
 
-  it('the config schema accepts exactly the values the policy understands', () => {
+  it('UPDATED 2026-10-06: the retired key stays in the schema (so it is checked, not dropped) with ONE authority for its values', () => {
     const { SCHEMA } = require('../src/core/config/schema');
     const def = SCHEMA.MODEL_BILLING_POLICY;
-    assert.ok(def, 'MODEL_BILLING_POLICY must be in the config schema, or boot never validates it');
-    assert.deepEqual(def.enum.slice().sort(), ['', policy.POLICY_ANY, policy.POLICY_FREE_ONLY].sort());
+    assert.ok(def, 'MODEL_BILLING_POLICY must stay in the schema, or a config.json carrying it is dropped as unknown instead of checked');
+    assert.equal(def.enum, undefined, 'no enum: model-choice.js retiredPolicyError is the single authority, so the two cannot disagree');
+    for (const ok of ['', 'free-only', ' FREE-ONLY ']) assert.equal(modelChoice.retiredPolicyError(ok), null, JSON.stringify(ok));
+    for (const bad of ['any', 'freeonly']) assert.match(modelChoice.retiredPolicyError(bad), /is retired/);
   });
 });
 
@@ -204,7 +229,7 @@ describe('GUARD: every runtime file that can reach a model provider consults the
       offenders.push(r);
     }
     assert.ok(matched >= 10, 'precondition: the scan must actually match the provider files (' + matched + ')');
-    assert.deepEqual(offenders, [], 'these files can reach a model provider without asking MODEL_BILLING_POLICY');
+    assert.deepEqual(offenders, [], 'these files can reach a model provider without asking route-policy');
   });
 
   it('a chat lane module is required only by chain.js and registry.js — the claim above is checked, not trusted', () => {
@@ -242,18 +267,19 @@ describe('registry.chainFor applies the policy AFTER overrides, with premium key
   after(() => { global.fetch = savedFetch; });
   beforeEach(() => registry._internal._resetBlockedRouteReports());
 
-  it('(c) premium keys present + policy unset → the premium routes head the voice lane (today, unchanged)', async () => {
+  it('(c) INVERTED 2026-10-06: premium keys present + a choice → only the CHOSEN premium route heads the lane', async () => {
+    // Used to pin "policy unset → both premium routes head the voice lane". A key
+    // alone no longer does that; a choice does, and only for the chosen route.
     process.env.ANTHROPIC_API_KEY = 'sk-test-not-real';
     process.env.OPENAI_API_KEY = 'sk-test-not-real';
-    delete process.env.MODEL_BILLING_POLICY;
+    choose('voice', 'anthropic', 'claude-sonnet-4-5');
     const voice = await registry.chainFor('voice');
-    assert.deepEqual(voice.map((p) => p.provider).slice(0, 2), ['anthropic', 'openai']);
+    assert.deepEqual(voice.map((p) => p.provider), ['anthropic']);
   });
 
-  it('(c) premium keys present + free-only → the premium routes are gone, and a report says why', async () => {
+  it('(c) premium keys present + no choice → the premium routes are gone, and a report says why', async () => {
     process.env.ANTHROPIC_API_KEY = 'sk-test-not-real';
     process.env.OPENAI_API_KEY = 'sk-test-not-real';
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     const events = [];
     const voice = await registry.chainFor('voice', { bus: { emit: (type, e) => events.push({ type, e }) } });
     assert.equal(voice.some((p) => p.provider === 'anthropic' || p.provider === 'openai'), false);
@@ -265,10 +291,9 @@ describe('registry.chainFor applies the policy AFTER overrides, with premium key
   it('(c) a CHAIN_VOICE override naming a paid model is not a way around the policy', async () => {
     process.env.OPENAI_API_KEY = 'sk-test-not-real';
     process.env.CHAIN_VOICE = 'openai:gpt-4.1';
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     assert.deepEqual(await registry.chainFor('voice'), []);
-    delete process.env.MODEL_BILLING_POLICY;
-    assert.deepEqual((await registry.chainFor('voice')).map((p) => p.model), ['gpt-4.1'], 'control: the override works when the policy is off');
+    choose('voice', 'openai', 'gpt-4.1');
+    assert.deepEqual((await registry.chainFor('voice')).map((p) => p.model), ['gpt-4.1'], 'control: the override route works once it is the chosen one');
   });
 });
 
@@ -296,7 +321,6 @@ describe('chain.complete asks again at invocation, on every fallback hop', () =>
     stubLane('mistral', async () => { throw new Error('mistral chat failed: 503 overloaded'); });
     stubLane('openai', async () => { paidCalls.push(1); return 'paid answer'; });
     registry.chainFor = async () => [{ provider: 'mistral', model: 'mistral-medium-latest' }, { provider: 'openai', model: 'gpt-4.1' }];
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     const attempts = [];
     await assert.rejects(() => chain.complete({ messages: [{ role: 'user', content: 'hi' }], brain: 'voice', attemptTimeoutMs: 200, onAttemptEnd: (a) => attempts.push(a) }),
       (err) => err.chainExhausted === true);
@@ -309,7 +333,6 @@ describe('chain.complete asks again at invocation, on every fallback hop', () =>
     stubLane('mistral', async () => { throw new Error('mistral chat failed: 503 overloaded'); });
     stubLane('groq', async () => 'free answer');
     registry.chainFor = async () => [{ provider: 'mistral', model: 'mistral-medium-latest' }, { provider: 'groq', model: 'openai/gpt-oss-20b' }];
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     const r = await chain.complete({ messages: [{ role: 'user', content: 'hi' }], brain: 'voice', attemptTimeoutMs: 200 });
     assert.equal(r.provider, 'groq');
     assert.equal(r.content, 'free answer');
@@ -323,7 +346,6 @@ describe('the direct request paths refuse before any request is sent', () => {
   beforeEach(() => { fetches = []; });
 
   it('(e) image generation says why and sends nothing — its model has no free tier', async () => {
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     const saved = process.env.GOOGLE_API_KEY; process.env.GOOGLE_API_KEY = 'test-key-not-real';
     try {
       const { buildTools } = require('../src/core/effectors/from-image-gen');
@@ -332,13 +354,12 @@ describe('the direct request paths refuse before any request is sent', () => {
       const tool = buildTools({ vault }).find((t) => t.name === 'generate_image');
       const r = await tool.fn({ prompt: 'a cat' }, {});
       assert.equal(r.ok, false);
-      assert.match(String(r.result), /gemini-3\.1-flash-image .*refused by MODEL_BILLING_POLICY=free-only: .*no free tier/);
+      assert.match(String(r.result), /gemini-3\.1-flash-image \(image\) is refused: .*no free tier/);
       assert.deepEqual(fetches, [], 'no request may leave the machine');
     } finally { if (saved === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = saved; }
   });
 
   it('text-to-speech and speech-to-text refuse with a typed code, so a chain above can move on', async () => {
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     const savedKey = process.env.GOOGLE_API_KEY; process.env.GOOGLE_API_KEY = 'test-key-not-real';
     try {
       const tts = require('../providers/gemini-tts');
@@ -353,7 +374,6 @@ describe('the direct request paths refuse before any request is sent', () => {
   });
 
   it('embeddings skip a refused rung and still try the free ones', async () => {
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     const emb = require('../providers/embeddings');
     const google = emb._internal.CHAIN.find((e) => e.name === 'google');
     assert.equal(policy.decide(google.route).allowed, false, 'gemini-embedding-001 is not on the free-tier list');
@@ -370,16 +390,15 @@ describe('the direct request paths refuse before any request is sent', () => {
       assert.equal(await emb.embed('hello'), null, 'every rung fails in this test');
       assert.equal(fetches.some((u) => /googleapis/.test(u)), false, 'the refused rung sent nothing');
       assert.equal(fetches.some((u) => /api\.mistral\.ai/.test(u)), true, 'the free rung was still tried');
-      delete process.env.MODEL_BILLING_POLICY;
+      choose('embed', 'google', google.route.model);
       fetches.length = 0;
       for (const k of Object.keys(emb._internal.cooldownUntil)) emb._internal.cooldownUntil[k] = 0;
       await emb.embed('hello');
-      assert.equal(fetches.some((u) => /googleapis/.test(u)), true, 'control: with the policy off the Google rung IS tried');
+      assert.equal(fetches.some((u) => /googleapis/.test(u)), true, 'control: once chosen for the embed job, the Google rung IS tried');
     } finally { if (savedGoogle === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = savedGoogle; }
   });
 
   it('the Live session stays closed on a refused model, with the reason, and opens no socket', async () => {
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     const savedKey = process.env.GOOGLE_API_KEY; process.env.GOOGLE_API_KEY = 'test-key-not-real';
     try {
       const { createLiveSession } = require('../src/core/voice/live-session');
@@ -396,7 +415,7 @@ describe('the direct request paths refuse before any request is sent', () => {
       assert.equal(s.getState(), 'closed');
       const refusal = events.find((x) => x.type === 'health.anomaly' && x.e.kind === 'route-refused-by-billing-policy');
       assert.ok(refusal, 'the reason must be audible: setState drops a closed→closed transition in silence');
-      assert.match(refusal.e.reason, /gemini-3\.1-pro-preview \(live\) is refused by MODEL_BILLING_POLICY=free-only/);
+      assert.match(refusal.e.reason, /gemini-3\.1-pro-preview \(live\) is refused: .*no model has been chosen for the live job/);
     } finally { if (savedKey === undefined) delete process.env.GOOGLE_API_KEY; else process.env.GOOGLE_API_KEY = savedKey; }
   });
 });
@@ -420,25 +439,21 @@ describe('the build engine and MCP servers', () => {
     });
     process.env.DEEPSEEK_API_KEY = 'test-key-not-real';
     process.env.MISTRAL_API_KEY = 'test-key-not-real';
-    process.env.MODEL_BILLING_POLICY = 'free-only';
     const dsh = require('../adapters/dsh-agent');
-    assert.throws(() => dsh.selectModel({ provider: 'deepseek', model: 'deepseek-chat' }), /deepseek:deepseek-chat \(build\) is refused by MODEL_BILLING_POLICY=free-only/);
+    assert.throws(() => dsh.selectModel({ provider: 'deepseek', model: 'deepseek-chat' }), /deepseek:deepseek-chat \(build\) is refused: deepseek has no free plan; no model has been chosen for the build job/);
     const picked = dsh.selectModel(null);
     assert.equal(picked.laneProvider, 'mistral', 'the lane still has a free build model');
-    delete process.env.MODEL_BILLING_POLICY;
-    assert.equal(dsh.selectModel({ provider: 'deepseek', model: 'deepseek-chat' }).laneProvider, 'deepseek', 'control: allowed with the policy off');
+    // Control, rewritten 2026-10-06: the old one switched the policy off. deepseek
+    // cannot be CHOSEN through model-choice.json (it is not a brain-lane provider),
+    // so the decision is driven with an installed choice directly — this pins the
+    // dsh call site honouring a choice, not the validator.
+    choose('build', 'deepseek', 'deepseek-chat');
+    assert.equal(dsh.selectModel({ provider: 'deepseek', model: 'deepseek-chat' }).laneProvider, 'deepseek', 'control: allowed once chosen for build');
   });
 
-  it('an MCP server configured to receive a paid-only key is refused by name, and no process starts', async () => {
-    process.env.MODEL_BILLING_POLICY = 'free-only';
-    const { createClient } = require('../adapters/mcp-client');
-    const c = createClient({ name: 'browser_use', command: 'definitely-not-a-real-binary-' + process.pid, serverEnv: { OPENAI_API_KEY: '${OPENAI_API_KEY}' } });
-    const r = await c.connect();
-    assert.equal(r.ok, false);
-    assert.match(r.error, /browser_use is configured to receive OPENAI_API_KEY, a key for a paid-only provider/);
-  });
-
-  it('paid-only key names are derived from the paid-only provider list, not typed twice', () => {
-    assert.deepEqual(policy.paidOnlyKeyEnvs(), ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY']);
-  });
+  // REMOVED 2026-10-06, operator decision: "an MCP server configured to receive a
+  // paid-only key is refused" and the paidOnlyKeyEnvs() derivation test. MCP
+  // add-ons keep today's behaviour (they get the keys their config names) until a
+  // per-add-on permission exists; the pin is (h) in
+  // bug-467-per-job-model-choice.test.js, and paidOnlyKeyEnvs had no other reader.
 });

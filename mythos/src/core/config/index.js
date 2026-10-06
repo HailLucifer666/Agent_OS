@@ -7,6 +7,7 @@ const { deriveVoiceDefaults, deriveLiveVoiceDefaults, deriveWakewordDefaults, OV
 const { applyVoiceChoice } = require('./voice-choice');
 const { readVoiceChoice } = require('./voice-choice-store');
 const { readSettings } = require('./settings-store');
+const { loadModelChoices, choiceFilePath, retiredPolicyError } = require('../brain/model-choice');
 const { findModelFile } = require('../setup/model-paths');
 
 function validate(rawEnv, schema) {
@@ -186,8 +187,27 @@ function loadConfig({ envOverrides, wakewordModelsDir, settings, envFileKeys, se
     });
   }
 
+  // BUG-467 closure (2026-10-06): which model each job may bill. Loaded here so
+  // an invalid <vault>/Config/model-choice.json, or the retired
+  // MODEL_BILLING_POLICY=any, stops boot through the same "Config errors:" path
+  // as an invalid .env value — never a silent "no choice". Returned for main.js
+  // to install; loadConfig itself stays free of global state.
+  const choiceErrors = [];
+  const retired = retiredPolicyError(raw.MODEL_BILLING_POLICY);
+  if (retired) choiceErrors.push(retired);
+  let modelChoices = { file: choiceFilePath(vaultRoot), choices: Object.freeze({}) };
+  try {
+    modelChoices = loadModelChoices({ vaultRoot, config: result.config });
+  } catch (err) {
+    if (!err || err.code !== 'model-choice-invalid') throw err;
+    choiceErrors.push(err.message);
+  }
+
   return {
     ...result,
+    ok: result.ok && choiceErrors.length === 0,
+    errors: [...result.errors, ...choiceErrors],
+    modelChoices,
     origins: Object.freeze(origins),
     // Read by main.js, which warns once at boot when it is non-empty. Frozen for
     // the same reason origins is: a consumer must not be able to edit the record

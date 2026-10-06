@@ -560,7 +560,7 @@ function createLiveSession(deps) {
       return false;
     }
     const key = process.env.GOOGLE_API_KEY;
-    const refused = !key ? 'no-key' : require('../brain/route-policy').refusalFor({ provider: 'google', model: MODEL, endpoint: WS_URL, mode: 'live' }, bus); // Wave 0c: GEMINI_LIVE_MODEL judged by MODEL_BILLING_POLICY; why the reason also goes to the bus is in refusalFor
+    const refused = !key ? 'no-key' : require('../brain/route-policy').refusalFor({ provider: 'google', model: MODEL, endpoint: WS_URL, mode: 'live' }, bus); // Wave 0c: GEMINI_LIVE_MODEL judged for the 'live' job (route-policy.js; model-choice.js liveRoute mirrors this route); why the reason also goes to the bus is in refusalFor
     if (refused) { setState('closed', refused); return false; }
 
     setState('opening');

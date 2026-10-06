@@ -34,8 +34,18 @@ describe('from-image-gen — generate_image', () => {
   const realFetch = global.fetch;
   const realKey = process.env.GOOGLE_API_KEY;
 
-  before(() => { dir = tempVault(); vault = createFsStore(() => dir, null); });
-  after(() => { cleanup(dir); });
+  // 2026-10-06 (BUG-467 closure): the image model has no free tier, so the tool
+  // now refuses until the operator CHOOSES it for the 'image' job. These tests are
+  // about what happens once a request is sent, so the fixture makes that choice
+  // (from the tool's own billingRoute); the refusal itself is pinned in
+  // bug-467-per-job-model-choice.test.js and free-only-route-policy.test.js.
+  const modelChoice = require('../src/core/brain/model-choice');
+  before(() => {
+    dir = tempVault(); vault = createFsStore(() => dir, null);
+    const r = require('../src/core/effectors/from-image-gen').billingRoute();
+    modelChoice.install({ file: null, choices: { image: { provider: r.provider, model: r.model } } });
+  });
+  after(() => { cleanup(dir); modelChoice.install(null); });
   beforeEach(() => { process.env.GOOGLE_API_KEY = 'test-key-123'; tools = buildTools({ vault }); });
   afterEach(() => {
     global.fetch = realFetch;

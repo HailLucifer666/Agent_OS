@@ -14,15 +14,23 @@
 // would say so. A key's presence silently deciding what gets billed is the
 // defect class (13: two sources of one answer, and the implicit one wins).
 //
-// WHAT IT DOES. MODEL_BILLING_POLICY selects a mode:
-//   unset / 'any'   today's behaviour, unchanged. BYO buyers keep their premium
-//                   routes; this module allows everything and costs one call.
-//   'free-only'     only routes classified below as free are allowed. Anything
-//                   paid, or anything this file cannot classify, is REFUSED with
-//                   a reason that names the route. Unknown is refused, not
-//                   guessed: a route nobody has checked is not free by default.
-//   anything else   refused as if free-only, and the reason names the bad value.
-//                   A typo in a spending guard must fail closed, not open.
+// WHAT IT DOES (since 2026-10-06, operator decision closing BUG-467). Every
+// route belongs to a JOB (route.mode: a brain lane such as 'voice' or 'build',
+// or a call-site job such as 'image', 'stt', 'tts', 'live', 'embed' — the list
+// is derived in model-choice.js). A route is allowed when:
+//   - it is the model the operator CHOSE for that job (model-choice.js), paid or
+//     not — a choice is the only thing that can authorise a bill; or
+//   - this file classifies it as free or local (below).
+// Everything else — paid, or anything this file cannot classify — is REFUSED
+// with a reason naming the route and the job. Unknown is refused, not guessed:
+// a route nobody has checked is not free by default. A job name nobody
+// registered is refused too: nothing could have chosen it.
+//
+// MODEL_BILLING_POLICY IS RETIRED and read by nothing here. Its 'any' (the old
+// default) let a key's presence bill — the exact defect — and kept a second
+// source of the same answer beside the per-job choice. Free-only is now the
+// default for every job with no choice. See model-choice.js retiredPolicyError
+// for the boot-time migration message.
 //
 // A ROUTE IS provider + model + endpoint + mode. The provider name alone cannot
 // tell free from paid: Google serves free and paid-only models on one key and
@@ -51,9 +59,7 @@
 // Re-read the pricing page before adding a Google model here — a model missing
 // from this table is refused in free-only mode, which is the safe direction.
 
-const POLICY_ENV = 'MODEL_BILLING_POLICY';
-const POLICY_ANY = 'any';
-const POLICY_FREE_ONLY = 'free-only';
+const modelChoice = require('./model-choice');
 
 // The official host for each provider that offers a free plan. A request whose
 // effective endpoint is anywhere else is not the route this file classified.
@@ -92,21 +98,12 @@ const GOOGLE_PAID_ONLY = Object.freeze(['gemini-3.1-flash-image']);
 
 const LOOPBACK_HOSTS = Object.freeze(['localhost', '127.0.0.1', '[::1]', '::1']);
 
-function currentPolicy(env) {
-  const raw = String(((env || process.env)[POLICY_ENV]) || '').trim().toLowerCase();
-  if (!raw || raw === POLICY_ANY) return { mode: POLICY_ANY, raw };
-  if (raw === POLICY_FREE_ONLY) return { mode: POLICY_FREE_ONLY, raw };
-  return { mode: POLICY_FREE_ONLY, raw, invalid: true };
-}
-
 function hostOf(endpoint) {
   if (!endpoint) return null;
   try { return new URL(String(endpoint)).hostname.toLowerCase(); } catch (_) { return null; }
 }
 
-function stripModelsPrefix(model) {
-  return String(model || '').replace(/^models\//, '');
-}
+const stripModelsPrefix = modelChoice.stripModelsPrefix;
 
 function label(route) {
   return route.provider + ':' + route.model + (route.mode ? ' (' + route.mode + ')' : '');
@@ -156,30 +153,48 @@ function classifyRoute(route) {
 
 // The decision every caller asks for, immediately before it sends a request.
 // route: { provider, model, endpoint, mode } — endpoint is the EFFECTIVE base
-// URL the request will go to, after every env override.
-function decide(route, env) {
-  const policy = currentPolicy(env);
-  if (policy.mode === POLICY_ANY) return { allowed: true, policy: POLICY_ANY };
-  const { classification, why } = classifyRoute(route);
-  if (classification === 'free' || classification === 'local') {
-    return { allowed: true, policy: policy.mode, classification };
+// URL the request will go to, after every env override; mode is the JOB.
+// `choices` is a test seam; production reads what boot installed.
+//
+// basis: 'chosen' (the operator's choice for this job) | 'free' (free or local,
+// allowed for every job) | 'refused'.
+//
+// A CHOICE IS MATCHED ON provider + model, NOT ENDPOINT, deliberately: choosing a
+// provider is choosing its key and its configured host together, and both are
+// the operator's settings. A base-URL override on an UNCHOSEN free provider is
+// still judged by host below, because nobody chose that proxy.
+function decide(route, choices) {
+  const job = String(route.mode || '');
+  if (!modelChoice.isJob(job)) {
+    return {
+      allowed: false,
+      basis: 'refused',
+      classification: 'unknown-job',
+      reason: label(route) + ' is refused: "' + job + '" is not a job MYTHOS knows (' + modelChoice.jobNames().join(', ') + '), so nothing could have chosen it',
+    };
   }
-  const badValue = policy.invalid
-    ? ' (' + POLICY_ENV + '="' + policy.raw + '" is not a recognised value, so it is treated as free-only)'
-    : '';
+  const choice = (choices || modelChoice.current())[job] || null;
+  const { classification, why } = classifyRoute(route);
+  if (choice && modelChoice.sameRoute(choice, route)) return { allowed: true, basis: 'chosen', job, classification };
+  if (classification === 'free' || classification === 'local') return { allowed: true, basis: 'free', job, classification };
+  const rule = choice
+    ? 'the ' + job + ' job may bill only its chosen model, ' + choice.provider + ':' + choice.model
+    : 'no model has been chosen for the ' + job + ' job, so it uses free models only';
   return {
     allowed: false,
-    policy: policy.mode,
+    basis: 'refused',
+    job,
     classification,
-    reason: label(route) + ' is refused by ' + POLICY_ENV + '=free-only: ' + why + badValue,
+    reason: label(route) + ' is refused: ' + why + '; ' + rule
+      + ' (choices are made per job in <vault>/' + modelChoice.REL_DIR + '/' + modelChoice.REL_FILE + ')',
   };
 }
 
 // For the direct request paths (speech, embeddings, image) whose failure shape is
 // already "throw an Error": refuse the same way, with a typed code so a chain
 // above can tell a policy refusal from a provider fault without reading prose.
-function assertAllowed(route, env) {
-  const d = decide(route, env);
+function assertAllowed(route, choices) {
+  const d = decide(route, choices);
   if (d.allowed) return d;
   const err = new Error(d.reason);
   err.code = 'billing-policy';
@@ -194,8 +209,8 @@ function assertAllowed(route, env) {
 // refusal has that same silent drop; it predates Wave 0c and is left alone.)
 // Returns null when allowed, otherwise the reason — already announced on the
 // bus's health channel, which is storm-exempt.
-function refusalFor(route, bus, env) {
-  const d = decide(route, env);
+function refusalFor(route, bus, choices) {
+  const d = decide(route, choices);
   if (d.allowed) return null;
   if (bus && typeof bus.emit === 'function') {
     try { bus.emit('health.anomaly', { kind: 'route-refused-by-billing-policy', reason: d.reason, classification: d.classification }); } catch (_) { /* reporting must never break the caller */ }
@@ -203,24 +218,12 @@ function refusalFor(route, bus, env) {
   return d.reason;
 }
 
-// Env vars that exist only to reach a paid-only provider. The MCP client must not
-// hand these to a server in free-only mode, because nothing here can see what the
-// server does with them. Derived from PAID_ONLY, not typed twice.
-function paidOnlyKeyEnvs() {
-  return PAID_ONLY.map(function (p) { return p.toUpperCase() + '_API_KEY'; });
-}
-
 module.exports = {
-  POLICY_ENV,
-  POLICY_ANY,
-  POLICY_FREE_ONLY,
   OFFICIAL_HOSTS,
   GOOGLE_FREE_TIER,
   GOOGLE_PAID_ONLY,
-  currentPolicy,
   classifyRoute,
   decide,
   assertAllowed,
   refusalFor,
-  paidOnlyKeyEnvs,
 };
