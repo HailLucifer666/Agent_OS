@@ -232,6 +232,15 @@ function buildTools(ctx) {
       return evidence.unverified(ok(result, uiActions),
         'the dashboard did not answer, so I cannot confirm it rendered');
     }
+    // BUG-468 (2026-10-06). An explicit opened:false is the surface saying "I did NOT
+    // open this" (the media window's own verdict, e.g. 'not a media widgetType').
+    // It must beat the unverified branch below, which exists for a surface that
+    // could not tell. Attack: a surface that omits `opened` is untouched (only the
+    // literal false counts), so noopener's absent handle stays unverified.
+    if (ack.opened === false) {
+      return fail('the dashboard did not open this: ' + String(ack.reason || 'no reason given')
+        + '. Nothing is on screen, so do not tell the operator to look at it.');
+    }
     if (ack.mounted === false && ack.unverified === true && typeof ack.reason === 'string' && ack.reason.trim()) {
       return evidence.unverified(ok(result, uiActions), ack.reason);
     }
@@ -244,6 +253,32 @@ function buildTools(ctx) {
       expected: String((result && result.widgetType) || 'widget'),
       observed: String(ack.surface || 'mounted') + ' — ' + String((result && result.widgetType) || 'widget'),
     });
+  }
+
+  // BUG-468 (2026-10-06). The hand-off half of open_web(browser:true), shared with the
+  // youtube newtab result (YOUTUBE_MODE=newtab, and the no-embeddable fallback). That
+  // result used to go to the renderer, which has no newtab surface under Electron
+  // (media window takes only youtube/web; HUD window.open is denied), so nothing could
+  // ever play. With no opener (plain browser HUD) the HUD's own newtab branch can still
+  // window.open, so that path keeps the renderer; "unset" never fabricates a yes.
+  async function handToBrowser(target, title) {
+    var handoff = await externalRoute.performExternalOpen(target, { externalOpener: externalOpener });
+    if (!handoff.opened) {
+      return fail('could not open ' + target.href + ' in your browser: ' + (handoff.reason || 'no reason given')
+        + '. Use browser_navigate to drive a browser directly, or open it yourself.', OPEN_WEB_CODES.PROVIDER_ERROR);
+    }
+    return externalRoute.settleExternalOpen({
+      href: target.href, handoff: handoff,
+      payload: ok({ widgetType: 'newtab', url: target.href, title: title || target.href,
+        handedToBrowser: true, browser: handoff.browser || 'os-default', via: handoff.via, windowPidsMayBeStale: true }),
+    });
+  }
+  // DECISION 2026-10-06 (operator): with NO external opener installed (plain browser HUD) the
+  // renderer path is kept on purpose - pinned by the 'NO opener' tests in test/bug-468-*.
+  async function openNewtab(href, title) {
+    if (typeof externalOpener !== 'function') return openWebResult({ widgetType: 'newtab', url: href, title: title });
+    var target = externalRoute.resolveExternalTarget({ url: href });
+    return target.ok ? handToBrowser(target, title) : fail(target.reason, OPEN_WEB_CODES.BAD_REQUEST);
   }
 
   // ---- open_web ----
@@ -295,11 +330,6 @@ function buildTools(ctx) {
       if (browser) {
         var target = externalRoute.resolveExternalTarget({ url: url, query: q, browserName: browserName });
         if (!target.ok) return fail(target.reason, OPEN_WEB_CODES.BAD_REQUEST);
-        var handoff = await externalRoute.performExternalOpen(target, { externalOpener: externalOpener });
-        if (!handoff.opened) {
-          return fail('could not open ' + target.href + ' in your browser: ' + (handoff.reason || 'no reason given')
-            + '. Use browser_navigate to drive a browser directly, or open it yourself.', OPEN_WEB_CODES.PROVIDER_ERROR);
-        }
         // Handed to a browser process, which is not the same as "the operator
         // saw the page" — both routes resolve on ACCEPTANCE, not on render.
         // BUG-273 B2 separated the two halves: the hand-off IS confirmed and
@@ -310,14 +340,7 @@ function buildTools(ctx) {
         // settleExternalOpen reads the browser's own window title back and
         // returns verifiedOk when it can; every other path is the old verdict
         // with a sharper reason. See open-external-route.js for the numbers.
-        return externalRoute.settleExternalOpen({
-          href: target.href, handoff: handoff,
-          payload: ok({
-            widgetType: 'newtab', url: target.href, title: title || target.href,
-            handedToBrowser: true, browser: handoff.browser || 'os-default',
-            via: handoff.via, windowPidsMayBeStale: true,
-          }),
-        });
+        return await handToBrowser(target, title); // BUG-468: shared with the youtube newtab result; `await` keeps a thrown opener inside this try
       }
 
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
@@ -381,7 +404,7 @@ function buildTools(ctx) {
         // schema default in mythos/src/core/config/schema.js.
         var youtubeMode = (config && config.YOUTUBE_MODE) || 'electron';
         if (youtubeMode === 'newtab') {
-          return openWebResult({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
+          return await openNewtab('https://www.youtube.com/watch?v=' + candidates[0].id, candidates[0].title);
         }
 
         // Embeddability pre-check via YouTube's public oEmbed endpoint (no API
@@ -439,7 +462,7 @@ function buildTools(ctx) {
             // this path too.
             return fail(ytEpisode.episodeRefusal(q, { missing: { phrase: ytEpisode.describeMarkers(requestedEp) }, closest: null }), OPEN_WEB_CODES.NO_MATCH);
           }
-          return openWebResult({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + fallback[0].id, title: fallback[0].title });
+          return await openNewtab('https://www.youtube.com/watch?v=' + fallback[0].id, fallback[0].title);
         }
         // enablejsapi=1 is required for the player to postMessage onReady/
         // infoDelivery — without it, web-panel.js's success detection never
@@ -543,7 +566,7 @@ function buildTools(ctx) {
           'instagram.com','github.com','linkedin.com','reddit.com','youtube.com','youtu.be','openai.com']; // its own entry — see BUGS.md
         for (var d = 0; d < NO_EMBED_DOMAINS.length; d++) {
           if (host === NO_EMBED_DOMAINS[d] || host.endsWith('.' + NO_EMBED_DOMAINS[d])) {
-            return openWebResult({ widgetType: 'newtab', url: url, title: title || parsed.hostname });
+            return await openNewtab(url, title || parsed.hostname); // BUG-468 gate B: same dead end as the youtube newtab
           }
         }
         return openWebResult({ widgetType: 'web', embedUrl: url, title: title || parsed.hostname });
