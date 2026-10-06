@@ -33,11 +33,14 @@ function createDesktopConnection({ runtime, connectionId, leash, dispatch, reply
   }
   runtime.bind(connectionId);
   const unwatch = runtime.watch?.(connectionId, result => send({ type: 'desktop-task', ...result }));
-  async function call(tool, args, requestId) {
+  // BUG-446 (2026-10-06): this route's words ARE the operator's (msg.text), so a
+  // start is consented here, by the same judge as the voice routes.
+  async function call(tool, args, requestId, said) {
     const decision = { tool, args };
     const verdict = leash.check(decision, ctx);
     if (!verdict.allow) return { ok: false, result: verdict.reason || 'Desktop request requires confirmation' };
-    return dispatch(decision, { ...ctx, requestId, traceId: requestId, tier: verdict.tier, channel: 'desktop-request' });
+    const held = said === undefined ? {} : require('../src/core/voice/authority-gate').goalConsent(decision, said);
+    return dispatch(decision, { ...ctx, requestId, traceId: requestId, tier: verdict.tier, channel: 'desktop-request', consent: held.consent });
   }
   async function execute(msg, intent, token) {
     const current = () => !closed && token === generation;
@@ -48,7 +51,7 @@ function createDesktopConnection({ runtime, connectionId, leash, dispatch, reply
       cancelSpeech();
       accepted = prior.ok ? await call('desktop_task_control', { taskId: prior.result.taskId, action: intent.control }) : { ok: false, result: 'There is no active desktop task.' };
     } else if (intent.unsupported) accepted = { ok: false, result: 'This desktop workflow is not supported by the current YouTube qualification stage.' };
-    else accepted = await call('desktop_task_start', { request: intent.request }, msg.reqId);
+    else accepted = await call('desktop_task_start', { request: intent.request }, msg.reqId, String(msg.text || ''));
     if (!current()) return;
     send({ type: 'desktop-task', ...accepted });
     const started = accepted?.started === true;

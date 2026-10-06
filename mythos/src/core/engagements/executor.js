@@ -24,6 +24,7 @@
 //  - All emits use the events.js builders (this file makes events.js live).
 
 const events = require('./events');
+const { parseVerifyCmd } = require('./verify-cmd');
 
 function createEngagementExecutor(deps) {
   if (!deps) throw new Error('createEngagementExecutor requires deps');
@@ -39,6 +40,7 @@ function createEngagementExecutor(deps) {
   const engagementStore = deps.engagementStore;   // persistence: sync read/write/list
   const vault = deps.vault;                       // optional fs-store for build artifacts
   const logger = deps.logger;                     // optional
+  const haltFor = require('./goal-halt').createGoalHalt(deps.goals, (kind, detail) => anomaly(kind, detail)); // BUG-446, 2026-10-06
 
   if (!bus) throw new Error('createEngagementExecutor requires bus');
   if (!config) throw new Error('createEngagementExecutor requires config');
@@ -114,8 +116,10 @@ function createEngagementExecutor(deps) {
     var stages = (record.plan && record.plan.stages) || [];
     var idx = record.plan.currentStageIndex || 0;
 
+    var ranOneStage = false; // BUG-446: the approve covers the first stage of a run; see goal-halt.js
     for (; idx < stages.length; idx++) {
       var stage = stages[idx];
+      if (ranOneStage && haltFor(engagementStore.read(engagementId), stage.id)) return; ranOneStage = true;
       // Respect prior progress: a stage already marked success/verified is skipped.
       var prior = findStageResult(record, stage.id);
       if (prior && (prior.status === 'success' || prior.status === 'verified')) continue;
@@ -472,35 +476,6 @@ function createEngagementExecutor(deps) {
     return { ok: false, skipped: false };
   }
 
-  // Minimal shell-like split for v.cmd: respects single + double quotes,
-  // backslash escapes. Returns null if the command parses to nothing.
-  // (The run_command effector re-checks each arg for shell metachars and
-  // allowlist compliance — this parser is just for splitting.)
-  function parseVerifyCmd(cmd) {
-    if (!cmd || typeof cmd !== 'string') return null;
-    var tokens = [];
-    var cur = '';
-    var quote = null;
-    for (var i = 0; i < cmd.length; i++) {
-      var c = cmd[i];
-      if (quote) {
-        if (c === '\\' && i + 1 < cmd.length) { cur += cmd[++i]; continue; }
-        if (c === quote) { quote = null; continue; }
-        cur += c;
-      } else if (c === '"' || c === "'") {
-        quote = c;
-      } else if (/\s/.test(c)) {
-        if (cur) { tokens.push(cur); cur = ''; }
-      } else {
-        cur += c;
-      }
-    }
-    if (cur) tokens.push(cur);
-    if (quote) return null;          // unterminated quote → unparseable
-    if (!tokens.length) return null;
-    return { command: tokens[0], args: tokens.slice(1) };
-  }
-
   // ---- repair ----
   // Budget-bounded. Emits engagement.repairing. On success transitions
   // retryReady→EXECUTING and returns true (caller re-runs the stage). On
@@ -833,6 +808,7 @@ function createEngagementExecutor(deps) {
           rearmed += 1;
         }
       } else if (rec.status === 'EXECUTING') {
+        if (haltFor(rec, null)) continue; // BUG-446: re-arm only while the goal is active
         // Honest retry: reset the in-flight stage's result so it re-runs cleanly.
         // currentStageIndex is preserved — completed stages are NOT re-run.
         retried += 1;

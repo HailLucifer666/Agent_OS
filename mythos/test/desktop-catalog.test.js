@@ -19,7 +19,8 @@ test('desktop declarations can be inspected without runtime and refuse execution
 test('desktop invocation takes connection ownership only from trusted dispatch context', async () => {
   let received;
   const tool = buildTools({ controller: { start: (args, ctx) => { received = { args, ctx }; return { ok: true }; } } })[0];
-  await tool.fn({ request: 'open YouTube', connectionId: 'spoofed' }, { connectionId: 'trusted' });
+  const args = { request: 'open YouTube', connectionId: 'spoofed' }; // BUG-446: a start needs the operator's consent token
+  await tool.fn(args, { connectionId: 'trusted', consent: require('../src/core/leash/consent').mintConsent({ tool: 'desktop_task_start', args, basis: 'operator-request' }) });
   assert.equal(received.ctx.connectionId, 'trusted');
   assert.equal(received.args.request, 'open YouTube');
 });

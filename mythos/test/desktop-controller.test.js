@@ -296,7 +296,8 @@ test('request keys are bounded trusted context only; model arguments cannot forg
   for (const requestId of ['', ' ', 'x'.repeat(161), 7]) assert.equal(r.controller.start({ request: 'Open YouTube' }, { ...r.ctx, requestId }).ok, false);
   assert.equal(r.calls.length, 0);
   const tool = buildTools({ controller: r.controller }).find(t => t.name === 'desktop_task_start');
-  const ack = await tool.fn({ request: 'Open YouTube', requestId: 'forged' }, { ...r.ctx, requestId: 'trusted' });
+  const args = { request: 'Open YouTube', requestId: 'forged' }; // BUG-446: a start needs the operator's consent token
+  const ack = await tool.fn(args, { ...r.ctx, requestId: 'trusted', consent: require('../src/core/leash/consent').mintConsent({ tool: 'desktop_task_start', args, basis: 'operator-request' }) });
   await r.controller.settled(ack.result.taskId);
   assert.equal(r.goals.get(ack.result.taskId).execution.requestId, 'trusted');
 });

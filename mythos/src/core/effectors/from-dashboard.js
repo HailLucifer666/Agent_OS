@@ -34,6 +34,7 @@ const externalRoute = require('./open-external-route');
 // fix — same defect (a review-failed or fallback-engine build reading as
 // "done"), arriving by voice query instead of by proactive speech.
 const { completionForJob } = require('./completion-status');
+const { verifyConsent } = require('../leash/consent'); // BUG-446: reopening/creating a goal needs the operator's words
 
 // The ONE fetcher. See web_fetch below for why this file no longer has its own.
 const { web_fetch: sharedWebFetch } = require('./web-fetch');
@@ -801,9 +802,20 @@ function buildTools(ctx) {
 
   // ---- goals ----
 
-  function create_goal({ text, category }) {
+  // BUG-446 (2026-10-06): an ACTIVE goal is one the cortex runs on its own tick, and
+  // the operator's decision is that goal work runs only when they ask. So a goal
+  // is born active only with a consent token for exactly this call (minted from the
+  // operator's own words, voice/authority-gate.js, never from model arguments);
+  // without one it is saved as an inert proposal, said plainly.
+  function create_goal(args, callCtx) {
+    const { text, category } = args || {};
     try {
       if (!text || !text.trim()) return fail('Goal text is required.');
+      if (!verifyConsent(callCtx && callCtx.consent, 'create_goal', args).ok) {
+        const proposals = goalsEffector.proposeGoal(text, category, { reason: 'create_goal without the operator asking for a goal' });
+        return ok({ proposed: true, proposals, message: 'Saved as a PROPOSAL only, not running: the operator has not asked for a goal in their own words. '
+          + 'It starts when they say "create a goal to ..." or accept it on the dashboard.' });
+      }
       const list = goalsEffector.addGoal(text, category);
       return ok({ goals: list, stats: goalsEffector.stats() });
     } catch (err) {
@@ -836,11 +848,18 @@ function buildTools(ctx) {
   // toggle_goal / delete_goal: re-fetch listGoals() fresh, right here, right before
   // acting — goal ids surfaced to the human (Goals.md rows) are matched by text, never
   // trusted from an earlier turn's context.
-  function toggle_goal({ query }) {
+  // BUG-446 (2026-10-06): closing a goal is always allowed; REOPENING one makes it
+  // active, so it needs the operator's words (see create_goal).
+  function toggle_goal(args, callCtx) {
+    const { query } = args || {};
     try {
       const current = goalsEffector.listGoals();
       const match = findByQuery(current, query, (g) => g.text);
       if (!match) return fail(`No goal matching "${query}" found.`);
+      if (match.item.done && !verifyConsent(callCtx && callCtx.consent, 'toggle_goal', args).ok) {
+        return fail(`Not reopened: "${match.item.text}" is done, and reopening starts work, which happens only when the operator asks for it in their own words. `
+          + 'Ask them to say "reopen" that goal.');
+      }
       const list = goalsEffector.toggleGoal(match.item.id);
       return ok({ goals: list, toggled: match.item.text });
     } catch (err) {

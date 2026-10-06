@@ -31,6 +31,7 @@
 const { judgeTrustedAction, judgeMemoryWrite, isAffirmativeReply, yesAndRest, restNamesCall, readBackMatches, leadingWords,
   KEY_WORDS } = require('./operator-authority');
 const { mintConsent, signatureOf } = require('../leash/consent');
+const { judgeGoalRequest } = require('./goal-authority');
 
 // The leash reasons that exist only because a human connection is driving
 // (leash/index.js: isOperatorPresent). That premise is what BUG-461 broke.
@@ -38,6 +39,15 @@ const HUMAN_PREMISE_REASONS = new Set(['operator-present-trusted', 'session-gran
 // Tools whose effector writes the permanent `user-facts` memory. Derived in
 // the test from the effector source, not trusted from this line.
 const MEMORY_TOOLS = new Set(['remember']);
+// BUG-446 (2026-10-06): the tools that can make a goal ACTIVE — the cortex runs
+// any active goal on its own tick, and the operator's decision is that goal work
+// runs only when they ask. The effector needs a token from a yes here; without
+// one it saves a proposal instead. Derived in the test from from-dashboard.js.
+const GOAL_TOOLS = new Set(['create_goal', 'toggle_goal', 'desktop_task_start']);
+function goalConsent(decision, said) {
+  return judgeGoalRequest({ tool: decision.tool, current: said }).proceed
+    ? { consent: mintConsent({ tool: decision.tool, args: decision.args, basis: 'operator-request' }) } : {};
+}
 // voice-agent.js's VOICE_SPOKEN_CONFIRM_TTL_MS default, for the same reason.
 const SPOKEN_APPROVAL_TTL_MS = 60000;
 
@@ -235,6 +245,7 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
   // live-session.js (the echo-accepted transcript, and HUD-typed text).
   function hold(call, decision, verdict, heard) {
     const memory = MEMORY_TOOLS.has(decision.tool);
+    if (GOAL_TOOLS.has(decision.tool)) return goalConsent(decision, operatorWords(heard && heard.spoken, heard && heard.typed).said);
     if (!memory && !(verdict && verdict.allow && HUMAN_PREMISE_REASONS.has(verdict.reason))) return {};
     const words = operatorWords(heard && heard.spoken, heard && heard.typed);
     const said = words.said;
@@ -336,6 +347,7 @@ function createAuthorityGate({ leash, connectionId, pendingConfirms, dispatchAct
 function createTypedMemoryGate({ now = Date.now } = {}) {
   const pending = new Map(); // connectionId -> { signature, at }
   function hold(decision, said, connectionId) {
+    if (GOAL_TOOLS.has(decision.tool)) return goalConsent(decision, said);
     if (!MEMORY_TOOLS.has(decision.tool)) return {};
     const k = connectionId || 'system';
     const signature = signatureOf(decision.tool, decision.args);
@@ -353,4 +365,4 @@ function createTypedMemoryGate({ now = Date.now } = {}) {
   return { hold };
 }
 
-module.exports = { createAuthorityGate, createTypedMemoryGate, HUMAN_PREMISE_REASONS, MEMORY_TOOLS, SPOKEN_APPROVAL_TTL_MS };
+module.exports = { createAuthorityGate, createTypedMemoryGate, HUMAN_PREMISE_REASONS, MEMORY_TOOLS, GOAL_TOOLS, goalConsent, SPOKEN_APPROVAL_TTL_MS };
