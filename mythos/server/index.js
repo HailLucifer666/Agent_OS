@@ -2890,7 +2890,7 @@ function createServer(deps) {
           // the picker would look broken precisely for the operator who is
           // using Live, which is now the default whenever a Google key exists.
           config: liveConfigNow(), bus, logger, spend, breakers: geminiLiveBreakers,
-          createSocket: createLiveSocket, // test-only seam; undefined in production
+          createSocket: require('../src/core/voice/live-frame-trace').wrapLiveSocket(createLiveSocket, { config, logger }), // test-only seam, undefined in production; LIVE_FRAME_TRACE=true taps it for the live.frame measurement (off: returned untouched)
           // BUG-436: an answer still held when the session FINALLY closes goes into the history and, if it has a spoken form, out over TTS — see createUndeliveredHandler.
           onNoticeUndelivered: require('../src/core/voice/notice-queue').createUndeliveredHandler({ historyAppend, speak: (text) => proactiveSpeak(text, ws, { skipLive: true }).catch((err) => logger.warn('proactive.speak-failed', { error: err.message })), logger }),
           // BUG-079: pass the FUNCTION, not its one-time result — live-session.js's
@@ -3156,6 +3156,7 @@ function createServer(deps) {
             if (ctrl.signal.aborted) break;
             if (audioB64 && typeof micStoppedAt === 'number' && !latencyRecorded) {
               voiceLatencyTracker.record(Date.now() - micStoppedAt);
+              if (config.LIVE_FRAME_TRACE === true) logger.info('voice.text-lane-latency', require('../src/core/voice/live-frame-trace').textLaneLatency(micStoppedAt, Date.now()));
               latencyRecorded = true;
             }
             sendSpeechChunk(send, speechTarget, { type: 'speech-chunk', reqId, index: i, total: chunks.length, audioB64, mime: chunkMime, text: chunks[i] }, ws);
