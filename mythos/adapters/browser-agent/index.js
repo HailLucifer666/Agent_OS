@@ -22,7 +22,7 @@ const browserProcess = require('./browser-process');
 // BUG-415: "which browser" is answered once, in browser-target.js. This adapter
 // was the third site deriving it independently, and the only one still hardcoding
 // a two-entry ladder that could not name the operator's default.
-const browserTarget = require('../../src/core/effectors/browser-target');
+const browserTarget = require('../../src/core/effectors/browser-target'); const disconnectEvidence = require('./disconnect-evidence'); // BUG-477: what a disconnect / a quiet probe leaves in the log
 const log = createLogger(process.env.LOG_LEVEL || 'info');
 
 const CONNECT_TIMEOUT_MS = 10000;
@@ -146,7 +146,7 @@ let cdpUrl = null;
 // OFFLINE. connect() now returns this promise instead of dialing again
 // whenever one is already in flight, so the poller, ensureOnline(), and
 // browser_launch_debug() can never open two sessions.
-let connectingPromise = null;
+let connectingPromise = null; let evidenceTracker = null; const suppressed = disconnectEvidence.createSuppressedCounter(); // BUG-477
 
 function getStatus() {
   let pageCount = 0;
@@ -204,14 +204,15 @@ async function connect(url, opts) {
       launchedChannel = null;
       mode = 'cdp';
       state = 'ONLINE';
-      log.info('browser-agent connected via CDP', { url, contexts: browser.contexts().length });
-
+      log.info('browser-agent connected via CDP', { url, contexts: browser.contexts().length, ...suppressed.take() });
+      const tracker = evidenceTracker = disconnectEvidence.track(newBrowser); // BUG-477: per-connection evidence
       // Handle disconnection events
       browser.on('disconnected', function() {
+        if (browser !== newBrowser) return; // BUG-477: a replaced/dropped handle closing late is not the current connection
         if (!intentionalDisconnect) {
           state = 'OFFLINE';
           hint = 'Chrome disconnected unexpectedly.';
-          log.warn('browser-agent disconnected unexpectedly'); require('./offline-notice').notifyOffline(hint, log);
+          disconnectEvidence.reportUnexpectedDisconnect(tracker, { cdpUrl: url, log }); require('./offline-notice').notifyOffline(hint, log);
         }
         browser = null;
       });
@@ -223,7 +224,7 @@ async function connect(url, opts) {
       browser = null;
       // The hint above is always set, so a quiet failure is still fully
       // reportable through getStatus() — only the log line is withheld.
-      if (!quiet) log.warn('browser-agent connect failed', { error: err.message });
+      if (!quiet) log.warn('browser-agent connect failed', { error: err.message, ...suppressed.take() }); else suppressed.add(err.message); // BUG-477
       return false;
     } finally {
       connectingPromise = null;
@@ -408,7 +409,7 @@ async function ensureOnline(opts) {
 
   // Try CDP connection first
   if (opts.cdpUrl) {
-    var ok = await connect(opts.cdpUrl);
+    var ok = await connect(opts.cdpUrl, { quiet: opts.quiet }); // BUG-477: cold-start probes pass quiet
     if (ok) return true;
   }
 
@@ -766,7 +767,7 @@ module.exports = {
   isMythosDebugProfile: browserProcess.isMythosDebugProfile,
   getStatus, onOffline: require('./offline-notice').onOffline,
   withPage,
-  withNewPage,
+  withNewPage, noteTool: (name) => { if (evidenceTracker) evidenceTracker.noteTool(name); }, // BUG-477: last tool, for the disconnect line
   launchLocal,
   // BUG-415 seam: the CHOICE of browser and profile, separated from the launch
   // so it can be tested with no Playwright, no registry and no browser
