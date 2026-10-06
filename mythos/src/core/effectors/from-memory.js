@@ -4,6 +4,7 @@ var { reasonText } = require('../util/reason-text');
 var { dayKey } = require('../util/day-key');
 var { resumeInterruptedAnswer } = require('../voice/unheard-answer'); // BUG-447
 var { verifyConsent } = require('../leash/consent'); // BUG-464
+var { provenanceOf, labelText, OBSERVATION, HYPOTHESIS } = require('../memory/provenance'); // BUG-451
 function ok(r){return{ok:true,result:r};}
 function fail(m){return{ok:false,result:{error:m}};}
 
@@ -173,7 +174,12 @@ function buildTools(ctx){
       var d=dayKey(now);   // F11: one date basis for every dated vault file
       var id=nextIncidentId(now);
       fs.ensureDir('Incidents');
-      fs.appendLine('Incidents/'+d+'.jsonl',{id:id,ts:now,text:text,severity:severity,source:'voice',status:'open'});
+      // BUG-451 closure (2026-10-06): the 09-24 incident ("...MYTHOS only offers dashboard
+      // rendering or app launch") was written here as fact, and was false. The label is set
+      // by the server from the text; the model cannot supply one. It rides with the record,
+      // and the Lessons and semantic copies below label themselves from the same text.
+      var provenance=provenanceOf(text);
+      fs.appendLine('Incidents/'+d+'.jsonl',{id:id,ts:now,text:text,severity:severity,source:'voice',status:'open',provenance:provenance});
       recentIncidents.set(norm,{id:id,ts:now,date:d});
 
       // Learning loop (Layer 3): incidents were write-only — nothing ever read
@@ -192,8 +198,8 @@ function buildTools(ctx){
         try { semantic.write('incidents',['Incident '+id+' ('+severity+', '+d+'): '+text],
           {confidence:0.9,append:true,sources:['incident']}); } catch (_) {}
       }
-      return ok({logged:text.slice(0,200),date:d,id:id,
-        evidence:'wrote '+id+' to Incidents/'+d+'.jsonl'});
+      return ok({logged:text.slice(0,200),date:d,id:id,provenance:provenance,
+        evidence:'wrote '+id+' to Incidents/'+d+'.jsonl'+(provenance===HYPOTHESIS?'; stored as an unverified claim, because it states a cause or a limitation nobody measured':'')});
     }catch(err){return fail('log_incident failed: '+reasonText(err));}
   }
 
@@ -224,7 +230,10 @@ function buildTools(ctx){
     var out=[];
     for (var rec of byId.values()){
       var st=statusById.get(rec.id);
-      out.push({id:rec.id,ts:rec.ts,text:rec.text,severity:rec.severity||'warn',
+      // Read-time label: stored hypothesis OR a hypothesis by today's rule, so a record written
+      // before labels existed (the real 09-24 one) is covered without editing the file.
+      var label=(rec.provenance===HYPOTHESIS||provenanceOf(rec.text)===HYPOTHESIS)?HYPOTHESIS:OBSERVATION;
+      out.push({id:rec.id,ts:rec.ts,text:rec.text,provenance:label,severity:rec.severity||'warn',
         status:(st&&st.status)||rec.status||'open',
         statusNote:(st&&st.note)||'',
         statusTs:(st&&st.ts)||null});
@@ -248,7 +257,7 @@ function buildTools(ctx){
     }
     return ok({status:status,count:filtered.length,total:incidents.length,
       incidents:filtered.slice(0,limit).map(function(i){
-        return {id:i.id,text:i.text.slice(0,200),severity:i.severity,status:i.status,
+        return {id:i.id,text:labelText(i.text.slice(0,200),i.provenance),provenance:i.provenance,severity:i.severity,status:i.status,
           when:new Date(i.ts).toISOString().slice(0,16).replace('T',' ')};
       })});
   }
@@ -288,7 +297,8 @@ function buildTools(ctx){
       var d=dayKey();      // F11: one date basis for every dated vault file
       fs.ensureDir('Incidents');
       fs.appendLine('Incidents/'+d+'.jsonl',
-        {kind:'status',id:target.id,status:status,ts:Date.now(),note:(args&&args.note)||'',source:'voice'});
+        {kind:'status',id:target.id,status:status,ts:Date.now(),note:(args&&args.note)||'',source:'voice',
+          noteProvenance:(args&&args.note)?provenanceOf(args.note):undefined});
       return ok({id:target.id,text:target.text.slice(0,120),from:target.status,status:status,
         evidence:'appended status '+status+' for '+target.id+' to Incidents/'+d+'.jsonl'});
     }catch(err){return fail('incident_status failed: '+reasonText(err));}
@@ -370,7 +380,6 @@ function buildTools(ctx){
   // it labels only the entry being written — earlier content, and anything the
   // operator wrote, is left exactly as it is. The result says the label too, so
   // the model is told at once that its diagnosis was stored as a guess.
-  var provenanceOf=require('../memory/provenance').provenanceOf;
   function markEntry(text,label){
     return '<!-- mythos-provenance: '+label+(label==='hypothesis'?' (states a cause MYTHOS has not verified)':'')+' -->\n'+text;
   }

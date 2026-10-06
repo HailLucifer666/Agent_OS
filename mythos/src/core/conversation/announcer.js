@@ -13,6 +13,7 @@
 // deduplication prevents announcing the same event twice.
 
 var completionStatusLib = require('../effectors/completion-status');
+var provenanceLib = require('../memory/provenance');
 
 // BUG-123 (AD-5) helpers, at module scope since 2026-08-10 so immune/explainer.js
 // can share them. They were factory-local when only onHealthAnomaly/
@@ -27,6 +28,14 @@ function describeCondition(p) {
 
 function honestCauseClause(p) {
   if (!p.reason) return ' I do not yet know the cause.';
+  // BUG-451 closure (2026-10-06): this sentence is spoken, so it is where an inferred cause
+  // reaches the operator's ear as fact. A reason that itself states a cause or a limitation
+  // is said to be suspected, in the words a listener cannot take for a measurement. The
+  // sentence is still BUILT, never generated (AD-5); only its framing changes, and a reason
+  // that reports what was measured is spoken exactly as before.
+  if (provenanceLib.provenanceOf(p.reason) === provenanceLib.HYPOTHESIS) {
+    return ' Suspected cause (not verified): ' + String(p.reason) + '.';
+  }
   return ' Reported reason: ' + String(p.reason) + '.';
 }
 

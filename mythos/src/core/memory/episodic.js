@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { provenanceOf, labelText, HYPOTHESIS } = require('./provenance');
 
 // ---------------------------------------------------------------------------
 // Default lexical scorer — term overlap + recency decay
@@ -72,6 +73,15 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
    * @returns {{ ref: string|null, degraded: boolean }}
    */
   function write(record) {
+    // BUG-451 closure (2026-10-06): a 'thought' is the cortex mull - a model's inference about
+    // the operator's situation, recalled later as "YOU NOTED EARLIER". It is the one episodic
+    // kind that is MYTHOS reasoning rather than a record of what happened or what was said, so
+    // it is the one that gets a label, assigned here from the text and overwriting anything a
+    // caller passed. A conversation turn is the operator's own words ("I left because it
+    // rained") and is deliberately left alone - labelling it would call the operator a guess.
+    if (record.kind === 'thought') {
+      record.provenance = provenanceOf((record.detail && record.detail.text) || record.summary);
+    }
     if (!record.id) record.id = generateId();
     if (!record.ts) record.ts = Date.now();
 
@@ -90,6 +100,14 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
       }
       return { ref: null, degraded: true };
     }
+  }
+
+  // A thought written before labels existed is classified at read, like Lessons; any other kind
+  // has no label to show.
+  function thoughtLabel(entry) {
+    if (entry.kind !== 'thought') return null;
+    return entry.provenance === HYPOTHESIS ? HYPOTHESIS
+      : provenanceOf((entry.detail && entry.detail.text) || entry.summary);
   }
 
   /**
@@ -138,7 +156,7 @@ function createEpisodicStore({ fs, config, bus, logger, scorer }) {
           ref: entry.id,
           score: score,
           record: entry,
-          snippet: (entry.summary || '').slice(0, 200),
+          snippet: labelText(entry.summary || '', thoughtLabel(entry)).slice(0, 200),
           store: 'episodic'
         });
       }
