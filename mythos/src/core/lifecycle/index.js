@@ -138,7 +138,7 @@ function createLifecycle({ bus, logger, config, proc: injectedProc, shutdownRese
     // Graceful sequence. Step 0 (Phase 9): stop the HTTP/WS server first, bounded
     // by drainCapMs — a socket that will not close must not spend the budget the
     // saving steps need. Then the registered steps, in registration order
-    // (shutdown-steps.js owns that order: saving first, reflection last).
+    // (shutdown-steps.js owns that order: saving steps only).
     shutdownPromise = (async function() {
       const outcomes = [];
       if (stopServerFn) outcomes.push(await runBounded('server-close', stopServerFn, Math.min(drainCapMs, deadline - Date.now())));

@@ -1326,13 +1326,13 @@ async function main() {
 
   // D-07: full graceful shutdown sequence — server-close (step 0, registered
   // separately via registerStopServer above) -> stop-loops -> episodic-flush
-  // -> checkpoint-write -> audit-flush -> reflection-final-pass LAST, all
-  // under one deadline with SHUTDOWN_MS as the hard-exit(1) backstop. BUG-437
-  // (2026-09-23): the order, and why reflection moved from second to last, is in
-  // src/core/lifecycle/shutdown-steps.js. `memory` and `reflection` are read
-  // late through getters: both are populated by boot steps that run after this.
+  // -> checkpoint-write -> audit-flush, all under one deadline with
+  // SHUTDOWN_MS as the hard-exit(1) backstop. BUG-437: the order, and why there
+  // is no reflection pass at quit (2026-10-06), is in
+  // src/core/lifecycle/shutdown-steps.js. `memory` is read late through a
+  // getter: it is populated by a boot step that runs after this.
   require('./core/lifecycle/shutdown-steps').registerCoreShutdownSteps(lifecycle, {
-    stopRunningLoops, getMemory: () => memory, getReflection: () => reflection,
+    stopRunningLoops, getMemory: () => memory,
   });
 
   // Register signal handlers — the ONE path that drives shutdown on SIGINT/SIGTERM

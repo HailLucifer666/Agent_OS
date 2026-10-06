@@ -9,6 +9,14 @@
 // (episodic-flush, checkpoint-write, audit-flush) never ran:
 // Checkpoints/latest.json was 47 s older than the quit.
 //
+// 2026-10-06 UPDATE (operator decision, BUG-437 closure): reflection is no
+// longer a quit step at all — see bug-437-no-reflection-at-quit.test.js. Test
+// (a) below used to assert "saving steps first, reflection last, a hung
+// reflection times out"; it now asserts the saving order alone, and that a
+// reflection handed in is never started. (d) is kept on purpose: it tests
+// reflection.runNow's own signal fence directly, which no production caller
+// reaches any more — a backstop for a future caller that passes a signal.
+//
 // What this file pins (the mechanism is in src/core/lifecycle/index.js and
 // src/core/lifecycle/shutdown-steps.js):
 //   (a) the production order: the saving steps run BEFORE reflection, and a
@@ -75,7 +83,7 @@ const stepLines = (r) => r.lines.filter((l) => l.msg === 'lifecycle.shutdown.ste
 const completeLine = (r) => r.lines.find((l) => l.msg === 'lifecycle.shutdown.complete');
 
 describe('BUG-437 — the saving steps run first and cannot be held hostage', () => {
-  test('(a) production order: saving steps before reflection; a reflection that never returns cannot stop them', async () => {
+  test('(a) production order: the saving steps run in order; a reflection handed in is never started (2026-10-06)', async () => {
     assert.ok(fsNode.existsSync(shutdownStepsPath), 'the production shutdown order is not a module a test can read');
     const { registerCoreShutdownSteps } = require(shutdownStepsPath);
     const { lc, r } = lifecycle();
@@ -85,20 +93,17 @@ describe('BUG-437 — the saving steps run first and cannot be held hostage', ()
       checkpoints: { save: () => { done.push('checkpoint-write'); return { ok: true }; } },
       audit: { write: () => { done.push('audit-flush'); return { ok: true }; } },
     };
-    let seen = null;
+    let started = false;
     registerCoreShutdownSteps(lc, {
       stopRunningLoops: () => done.push('stop-loops'),
       getMemory: () => memory,
-      getReflection: () => ({ runNow: (reason, opts) => { seen = opts; return never(); } }),
+      getReflection: () => ({ runNow: () => { started = true; return never(); } }),
     });
     await within(lc.shutdown(600), 2000, HELD);
-    assert.ok(seen && seen.signal, 'reflection must be handed the step deadline as an AbortSignal');
-    assert.equal(seen.signal.aborted, true, 'and it must be aborted once the deadline passes');
+    assert.equal(started, false, 'reflection must not run at quit');
     assert.deepEqual(done, ['stop-loops', 'episodic-flush', 'checkpoint-write', 'audit-flush'],
-      'every saving step must run, in this order, before reflection is even started');
-    const names = stepLines(r).map((l) => l.step);
-    assert.equal(names[names.length - 1], 'reflection-final-pass', 'reflection runs LAST');
-    assert.equal(stepLines(r).find((l) => l.step === 'reflection-final-pass').status, 'timeout');
+      'every saving step must run, in this order');
+    assert.deepEqual(stepLines(r).map((l) => l.step), ['stop-loops', 'episodic-flush', 'checkpoint-write', 'audit-flush']);
   });
 
   test('(b) a server drain that never finishes is bounded, and the steps still run', async () => {
