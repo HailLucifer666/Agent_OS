@@ -45,6 +45,7 @@ const fromPc = require('./from-pc');
 // operator's implicit ui_type/ui_click target (BUG-353).
 const implicitTarget = require('./implicit-target');
 const { formatOutgoingMessage } = require('./message-format');
+const sendFence = require('./send-fence');
 
 function ok(result) {
   return { ok: true, result };
@@ -277,7 +278,9 @@ function resolveRecipient(to) {
   let windowSettleMs = WINDOW_SETTLE_MS;
   let windowPollMs = WINDOW_POLL_MS;
 
-async function whatsapp_send({ to, text, send }) {
+// BUG-476: ctx carries the caller's signal (hub -> adapter -> here); send-fence.js
+// holds the why, the fence and the attack notes.
+async function whatsapp_send({ to, text, send }, ctx) {
   const recipient = resolveRecipient(to);
   if (recipient.error) return fail(recipient.error);
 
@@ -293,7 +296,11 @@ async function whatsapp_send({ to, text, send }) {
   // dash-soup that collapse alone leaves behind.
   const message = sanitizeMessage(formatOutgoingMessage(text, { itemJoiner: ', ' }));
   if (!message) return fail('What should the message say?');
+  return sendFence.run({ number: recipient.number, message, label: recipient.name || recipient.number, ctx, logger },
+    (fence) => sendResolved(recipient, message, send, fence));
+}
 
+async function sendResolved(recipient, message, send, fence) {
   // A fuzzy recipient resolution is never silent: the note rides on the label,
   // which every success AND failure message below interpolates, so the operator
   // always hears which saved contact was actually chosen — including when the
@@ -548,6 +555,8 @@ async function whatsapp_send({ to, text, send }) {
   const existingDraft = String(cbox.currentText || '').trim();
 
   // 4. Type the message, verified against the target window.
+  const stopBeforeType = fence.checkpoint('type');
+  if (stopBeforeType) return stopBeforeType;
   const typed = await fromPc.ui_type({ text: message, pid });
   if (!typed.ok) {
     return fail('The chat with ' + label + ' is open but I could not type the message: ' +
@@ -573,6 +582,9 @@ async function whatsapp_send({ to, text, send }) {
   // SendInput (BUG-061), so Enter was accepted and did nothing, and this function
   // reported sent:true. submitMessage invokes WhatsApp's own Send button through UIA
   // and only succeeds when the composer has actually emptied.
+  const stopBeforeSubmit = fence.checkpoint('submit');
+  if (stopBeforeSubmit) return stopBeforeSubmit;
+  fence.submitting(); // no await between the check and the submit: nothing can abort in between
   const submitted = await fromPc.submitMessage(pid);
   if (!submitted.ok) {
     return fail('The message to ' + label + ' is typed into the chat but I could not submit it (' +

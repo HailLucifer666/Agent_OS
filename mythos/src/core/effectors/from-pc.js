@@ -20,6 +20,7 @@ const { visionThink } = require('./vision-call');
 // The window a pid-omitted ui_type/ui_click aims at. Was a bare module-scope
 // `lastLaunchedPid` here that any launch overwrote and nothing expired (BUG-353).
 const implicitTarget = require('./implicit-target');
+const sendFence = require('./send-fence'); // BUG-476: the raw Enter below is fenced while a WhatsApp send is unresolved
 const uiTarget = require('./ui-target');
 const { clickVerdict, scopedMissRemedy } = uiTarget;
 const { makeClickAt } = require('./click-at-evidence');
@@ -1164,6 +1165,7 @@ async function send_key({ key, pid }) {
     // every route it tried is already a superset of what send_key could do, and one of
     // them may have half-landed, so retrying risks sending twice.
     if (guard.messaging) {
+      const fenced = sendFence.refuseRawSubmit(guard.app); if (fenced) return fail(fenced);
       return submitMessage(guard.pid);
     }
   }

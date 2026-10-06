@@ -110,7 +110,10 @@ async function dispatchAction(decision, ctx) {
   try {
     result = await effectors.invoke(decision.tool, decision.args,
       { signal: signal, bus: bus, goalId: goalId, channel: ctx.channel || null, connectionId: ctx.connectionId || null, requestId: ctx.requestId ?? undefined,
-        consent: ctx.consent || null }); // BUG-464: server-minted, never from the model's args (leash/consent.js)
+        consent: ctx.consent || null, // BUG-464: server-minted, never from the model's args (leash/consent.js)
+        // BUG-476: lets an effector that outlives a timed-out call log its late
+        // outcome under the same id as this call's Audit row (send-fence.js).
+        traceId: ctx.traceId || null });
   } catch (err) {
     // Work that started is charged once, and its reservation is released, so a
     // throw can neither leak capacity nor run free.
