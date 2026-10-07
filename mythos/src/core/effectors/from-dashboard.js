@@ -34,6 +34,7 @@ const externalRoute = require('./open-external-route');
 // fix — same defect (a review-failed or fallback-engine build reading as
 // "done"), arriving by voice query instead of by proactive speech.
 const { completionForJob } = require('./completion-status');
+const goalConsent = require('./goal-consent'); // BUG-446: creating or reopening a goal needs the operator's words
 
 // The ONE fetcher. See web_fetch below for why this file no longer has its own.
 const { web_fetch: sharedWebFetch } = require('./web-fetch');
@@ -801,9 +802,11 @@ function buildTools(ctx) {
 
   // ---- goals ----
 
-  function create_goal({ text, category }) {
+  function create_goal(args, callCtx) {
+    const { text, category } = args || {};
     try {
       if (!text || !text.trim()) return fail('Goal text is required.');
+      if (!goalConsent.createGoalAsked(args, callCtx)) return ok(goalConsent.proposalOnly(goalsEffector, text, category));
       const list = goalsEffector.addGoal(text, category);
       return ok({ goals: list, stats: goalsEffector.stats() });
     } catch (err) {
@@ -836,11 +839,13 @@ function buildTools(ctx) {
   // toggle_goal / delete_goal: re-fetch listGoals() fresh, right here, right before
   // acting — goal ids surfaced to the human (Goals.md rows) are matched by text, never
   // trusted from an earlier turn's context.
-  function toggle_goal({ query }) {
+  function toggle_goal(args, callCtx) {
+    const { query } = args || {};
     try {
       const current = goalsEffector.listGoals();
       const match = findByQuery(current, query, (g) => g.text);
       if (!match) return fail(`No goal matching "${query}" found.`);
+      if (match.item.done && !goalConsent.reopenGoalAsked(args, callCtx)) return fail(goalConsent.reopenRefusal(match.item.text));
       const list = goalsEffector.toggleGoal(match.item.id);
       return ok({ goals: list, toggled: match.item.text });
     } catch (err) {

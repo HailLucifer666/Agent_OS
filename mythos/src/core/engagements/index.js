@@ -384,6 +384,7 @@ function createEngagementManager({ bus, config, memory, goals, leash, effectors,
     checkpoints: checkpoints,
     store: engagement,
     engagementStore: engagementStore,
+    goals: goals,                 // BUG-446: an engagement stops when its goal is no longer active
     vault: memory && memory.fs,
     logger: null
   });
