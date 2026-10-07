@@ -66,9 +66,9 @@ export const PROTECTED_MS = 500;
 // 3-frame cadence it was over before it could be believed. The operator scored the
 // result 7-8/10: "sometimes it still is talking and it's not stopping immediately."
 //
-// The counting bears that out: 11 barge-ins reached the stop door and only ONE cut real
-// audio; the other ten fired with nothing left to cut, i.e. the authorisation arrived
-// after the reply had already finished.
+// The counting was read as bearing that out (11 stops, ONE cut audio). CORRECTED 2026-09-26
+// (B1b): it counted only audio arriving AFTER each stop, not the queued speech the stop
+// discarded, so the other ten were unmeasured, not "after the reply had already finished".
 //
 // THE RISK, STATED, because this weakens the thing that was doing the discriminating.
 // The comment below still holds: this sustain is the PRIMARY bleed discriminator, and

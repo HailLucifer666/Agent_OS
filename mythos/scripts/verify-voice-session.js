@@ -41,6 +41,7 @@
  */
 
 const fs = require('node:fs');
+const { gradeStopDoor, describeStopDoor } = require('./stop-door-verdict.js'); // B1b: did each stop cut speech
 
 // 100ms per frame, from s2s-bridge.js FRAME_MS. Stated as a constant because
 // assuming it is what produced the 10x error in the original plan.
@@ -611,15 +612,7 @@ function main() {
   // of whether the gate-release line was written. See the criterion below.
   const suppressionEpisodes = suspendLines
     .filter((e) => String(e.reason || '').indexOf(SUPPRESSION_PREFIX) === 0);
-  let suppressedChunks = 0;
-  let suppressedMs = 0;
-  for (const e of suspendLines) {
-    if (String(e.reason || '').indexOf(SUPPRESSION_PREFIX) !== 0) continue;
-    const c = num(e.suppressedChunks);
-    if (c !== null) suppressedChunks += c;
-    const ms = num(e.suppressedMs);
-    if (ms !== null && ms > suppressedMs) suppressedMs = ms;
-  }
+  const stopDoor = gradeStopDoor(suppressionEpisodes);
   // BUG-273 A4: a caller-chosen hold that simply elapsed is routine and is counted
   // separately. The 8 counted on 2026-08-18 were ALL of this kind — 8 media-start
   // arms, 8 expiries, 0 clears — and reading them as 8 fail-opens is what filed A4
@@ -707,18 +700,22 @@ function main() {
   // stopAssistantSpeech() — so an episode IS an authorised stop, and it is the honest
   // count. Same defect class as the criterion this line replaced: counting a proxy that
   // can be absent while the thing it stands for happened.
-  const authorisedStops = suppressionEpisodes.length;
-  const stopsThatCutAudio = suppressionEpisodes
-    .filter((e) => (num(e.suppressedChunks) || 0) > 0).length;
-  const stopDoorDetail = `${authorisedStops} barge-in(s) reached the stop door, of which `
-    + `${stopsThatCutAudio} actually cut audio (${suppressedChunks} chunk(s) total, longest `
-    + `suppression ${suppressedMs}ms). ${authorisedStops - stopsThatCutAudio} fired with nothing `
-    + 'left to cut — the reply had already finished, so interrupting changed nothing audible'
+  // CORRECTED 2026-09-26 (B1b): whether a stop cut audio was graded on suppressedChunks
+  // alone, which counts only audio arriving AFTER the stop, and a 0 was printed as "fired
+  // with nothing left to cut — the reply had already finished": 7 of 8 stops on 2026-09-25,
+  // while the recorder showed 0.4-5.1 s queued at all 8. stop-door-verdict.js has the rule.
+  // The release-count note named one cause; that log shows the other (own-voice-ended).
+  const authorisedStops = stopDoor.reached;
+  const stopDoorDetail = describeStopDoor(stopDoor)
     + (bargeLanded < authorisedStops
-      ? `. Only ${bargeLanded} logged a gate-release reason: releaseOwnVoiceGate() returns `
-        + 'early without logging when the gate is not held, so the release count UNDER-reports'
+      ? `. Only ${bargeLanded} logged a barge-in release reason, so the release count UNDER-reports: `
+        + 'releaseOwnVoiceGate() writes nothing when the gate is not held, and builds before B1 '
+        + 'logged a stop\'s release as own-voice-ended'
       : '');
 
+  // "stopped playback" below is left as it was on purpose (B1b): it counts releases that went
+  // through the flushing stop door, and the stop-door grade after it says whether each one
+  // actually cut speech. Pinned by bug-274-local-flush-does-not-stop-the-turn.test.js.
   check('operator interruptions that STOPPED THE SPEECH', true,
     (bargeLanded === 0 && authorisedStops === 0)
       ? 'NONE landed — every hold ended by MYTHOS finishing or by a ceiling'
@@ -728,7 +725,7 @@ function main() {
         + (micOnlyLanded ? `, ${micOnlyLanded} reopened the mic ONLY (MYTHOS kept talking)` : '')
         + ` of ${bargeLanded} released (${bargeLandedBreakdown})`
         + (stopsTheSpeech
-          ? `; suppression dropped ${suppressedChunks} audio chunk(s), longest ${suppressedMs}ms`
+          ? `; ${describeStopDoor(stopDoor)}`
           : ' — this log predates BUG-274 step 5, so no landing here silenced the rest of the turn')),
     'a landed barge-in that only reopened the mic is the operator\'s complaint, not '
     + 'evidence against it — and even a stopped one is not proof: THE OPERATOR\'S EAR '

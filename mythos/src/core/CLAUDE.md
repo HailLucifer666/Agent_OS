@@ -130,6 +130,12 @@ file adds the invariants specific to this layer.
   never approves a click-only confirm. Measured cause: at 09-24 15:11:24 a
   click ran in a turn that said "I didn't say anything… it's the background
   noise". Do not dispatch a trusted call around `authorityGate.hold()`.
+  Since B2c (2026-09-26, operator decision): a spoken command of four words or
+  fewer runs only when it starts with its verb and names THIS call's key or
+  typed words ("refresh the page" for F5); a click or a window close still
+  asks. A yes may go on ("Yes, refresh the web page") only when the rest names
+  the same key or words; a contrast, a later, another target or a question
+  makes it no yes.
 - **`remember` needs a consent token (BUG-464, 2026-09-24).** It writes
   `user-facts` only with a token from `leash/consent.js` for exactly its
   arguments. The token is minted by the authority gate and carried in the

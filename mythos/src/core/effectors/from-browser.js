@@ -146,6 +146,11 @@ let snapshotPage = null;
 // of the SAME tree. Re-capturing for page 2 could renumber the refs page 1 issued.
 let snapshotYaml = null;
 let snapshotViewChars = null;
+// S1/F04 (2026-09-25): the name the model was shown beside each ref, so "ask
+// first" can require a question to name the element a click would hit. Read only
+// through labelForRef(), which checks snapshotRefs — so a label from an
+// invalidated generation is never returned.
+let snapshotLabels = new Map();
 
 // Size discipline, BUG-445 (2026-09-23). This used to cap the YAML at 8,000
 // characters header-first and register every ref in it, while the voice adapter
@@ -183,6 +188,7 @@ async function browser_snapshot({ screenshot, page: viewPage, generation } = {})
       snapshotYaml = String((await page.ariaSnapshot({ mode: 'ai' })) || '');
       snapshotGeneration += 1;
       snapshotRefs = new Set();
+      snapshotLabels = new Map();
       snapshotPageUrl = page.url();
       snapshotPage = page;
     }
@@ -196,6 +202,7 @@ async function browser_snapshot({ screenshot, page: viewPage, generation } = {})
     if (!continuing) snapshotViewChars = snapshotView.viewCharsFor(header);
     const v = snapshotView.buildSnapshotView(snapshotYaml, { page: continuing ? viewPage : 1, maxChars: snapshotViewChars });
     for (const r of v.refs) snapshotRefs.add(r);
+    for (const row of v.rows) if (row && row.ref && row.name) snapshotLabels.set(row.ref, String(row.name));
     const result = Object.assign(header, { page: v.page, pages: v.pages, itemCount: v.totalRows, items: v.rows },
       snapshotView.pagingFields(v, snapshotGeneration));
     // ego-lite's combined capture: the picture and the semantic tree in one
@@ -285,11 +292,16 @@ function refFailure(ref, verb, err) {
   return `Could not ${verb} ref "${ref}": ${detail}`;
 }
 
+function labelForRef(ref) {
+  return snapshotRefs.has(ref) ? snapshotLabels.get(ref) || null : null;
+}
+
 // Test-only seam: the ref state is module-level (one browser, one operator), and
 // tests need a known starting point without driving a real page.
 function __resetSnapshotStateForTest() {
   snapshotGeneration = 0;
   snapshotRefs = new Set();
+  snapshotLabels = new Map();
   snapshotPageUrl = null;
   snapshotPage = null;
   snapshotYaml = null;
@@ -1504,7 +1516,7 @@ module.exports = {
   browser_launch_debug, browser_switch,
   browser_wait_for, browser_fill_form,
   // Snapshot-and-refs. The view itself is pure and lives in snapshot-view.js.
-  browser_snapshot,
+  browser_snapshot, labelForRef,
   __resetSnapshotStateForTest, __setSnapshotStateForTest,
   // Phase 5 toolkit. resolveUploadPath is exported as its own seam: the upload
   // allowlist is the one security boundary in this file, and it must be

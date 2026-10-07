@@ -78,31 +78,48 @@ describe('BUG-461 — the operator\'s words decide whether a trusted click, type
   it('(t4) missing and stale words: nothing heard, or last heard too long ago, is held; a recent request carries on', () => {
     assert.deepEqual(trusted({ current: '' }), { proceed: false, reason: 'no-operator-words' });
     const w = authority.CONTINUATION_WINDOW_MS;
-    assert.equal(trusted({ current: '', previous: 'Can you play the third video?', previousAgeMs: 20000 }).proceed, true);
-    assert.deepEqual(trusted({ current: '', previous: 'Can you play the third video?', previousAgeMs: w + 1 }), { proceed: false, reason: 'no-operator-words' });
+    assert.equal(trusted({ current: '', previous: 'Can you play the third video?', previousAgeMs: 20000, tool: 'browser_click' }).proceed, true);
+    assert.deepEqual(trusted({ current: '', previous: 'Can you play the third video?', previousAgeMs: w + 1, tool: 'browser_click' }), { proceed: false, reason: 'no-operator-words' });
     // A turn MYTHOS started itself inherits the last words' JUDGEMENT, never a pass.
     assert.deepEqual(trusted({ current: '', previous: NOISE_0924, previousAgeMs: 5000 }), { proceed: false, reason: 'short-input-before' });
   });
 
-  it('(t5) BOUND, pinned: real short commands are asked about too — the operator chose "ask first"', () => {
+  it('(t5) REVERSED IN PART 2026-09-26 (B2c): a real short command runs when its words name the call and its argument', () => {
+    // Until B2c this test pinned that every one of these asks: the operator chose
+    // "ask first" on 2026-09-24. After the 09-25 sitting the operator decided that
+    // short commands whose own words name the action run without asking (campaign
+    // C1 row 8). With no call to match, each still asks, as before.
     for (const s of ['further', 'Mute the volume.', 'Close brief', 'pause', 'Scroll down a bit.']) {
       assert.equal(trusted({ current: s }).proceed, false, s);
     }
-    // "pause" gets no exemption: nothing on this path can see the player, and a
-    // toggle key on a misheard word is how noise toggled the video on 09-11.
+    // With the call each one drove, three run; "Close brief" (a window by pid) still
+    // asks, and "further" runs only after a recent command for the same key
+    // (test/bug-461-a-short-command-that-names-its-action.test.js (c2), (c5), (c7)).
+    assert.equal(trusted({ current: 'Mute the volume.', tool: 'browser_press_key', args: { key: 'm' } }).proceed, true);
+    assert.equal(trusted({ current: 'pause', tool: 'browser_press_key', args: { key: 'k' } }).proceed, true);
+    assert.equal(trusted({ current: 'Scroll down a bit.', tool: 'browser_press_key', args: { key: 'PageDown' } }).proceed, true);
+    assert.equal(trusted({ current: 'Close brief', tool: 'close_window', args: { pid: 4120 } }).proceed, false);
+    assert.equal(trusted({ current: 'further', tool: 'browser_press_key', args: { key: 'PageDown' } }).proceed, false);
   });
 
-  it('(t6) ADJACENT, must proceed: the operator\'s real requests from the replay', () => {
-    for (const s of ['Can you play the third video?', 'Yeah, okay. Can you just play the the first trailer?',
-      'Why dashboard? I asked you to play it on YouTube. On the Brave browser, you have it open.',
-      'Can you try to scroll down on that thread?', 'I mean close video player.', 'Yeah, yeah, go ahead. Don\'t ask me.']) {
-      assert.deepEqual(trusted({ current: s }), { proceed: true, reason: 'operator-request' }, s);
+  it('(t6) ADJACENT, must proceed: the operator\'s real requests from the replay, each with the tool it drove', () => {
+    // S1 (2026-09-25): the check now needs the call's tool, because a request
+    // must name what THAT call does (F02). The tools are the vault's own: the
+    // replay in the S1 commit paired each line with the call it drove. The sixth
+    // line used to be "Yeah, yeah, go ahead. Don't ask me." — an approval with no
+    // operation of its own; it is judged by the words before it now, pinned in
+    // test/bug-461-464-authority-binds-operation-and-content.test.js (b6).
+    for (const [s, tool] of [['Can you play the third video?', 'browser_click'],
+      ['Yeah, okay. Can you just play the the first trailer?', 'browser_click'],
+      ['Why dashboard? I asked you to play it on YouTube. On the Brave browser, you have it open.', 'browser_click'],
+      ['Can you try to scroll down on that thread?', 'ui_click'], ['I mean close video player.', 'close_window']]) {
+      assert.deepEqual(trusted({ current: s, tool }), { proceed: true, reason: 'operator-request' }, s);
     }
   });
 
   it('(t7) typed words cannot be noise: a typed short command runs, a typed objection still holds', () => {
-    assert.equal(trusted({ current: 'pause', typed: true }).proceed, true);
-    assert.equal(trusted({ current: 'I did not ask you to open that.', typed: true }).proceed, false);
+    assert.equal(trusted({ current: 'pause', typed: true, tool: 'browser_click' }).proceed, true);
+    assert.equal(trusted({ current: 'I did not ask you to open that.', typed: true, tool: 'browser_click' }).proceed, false);
   });
 
   it('(t8) a yes is a whole-utterance yes — "Yep, can you play" is not one', () => {
@@ -116,8 +133,12 @@ describe('BUG-461 — the operator\'s words decide whether a trusted click, type
   });
 
   it('(t9) BOUND, pinned: the rules are English lexical proxies — a clear command in another language asks', () => {
-    assert.equal(trusted({ current: 'teesra video chalao abhi turant please mere liye' }).proceed, true, '"please" is the only English word that let this through');
-    assert.equal(trusted({ current: 'teesra video chalao abhi turant mere liye' }).proceed, false);
+    // Until S1 (2026-09-25) the first line PROCEEDED: "please" was the only English
+    // word in it, and a request form was all the check looked for. It now asks,
+    // because nothing in it names a click. Both still ask; neither is understood.
+    assert.deepEqual(trusted({ current: 'teesra video chalao abhi turant please mere liye', tool: 'browser_click' }),
+      { proceed: false, reason: 'not-this-action' });
+    assert.equal(trusted({ current: 'teesra video chalao abhi turant mere liye', tool: 'browser_click' }).proceed, false);
   });
 });
 
@@ -145,14 +166,25 @@ describe('BUG-464 — a permanent memory is written only when the operator asks'
   });
 
   it('(m4) ADJACENT, must proceed: the requested 14:55:56 save, and the explicit forms', () => {
-    assert.deepEqual(memory({ current: REQUESTED_1455 }), { proceed: true, reason: 'operator-request' });
-    for (const s of ['Keep it in memory. Remember this, do not remind me of Gmail until the token is refreshed.',
-      'Please remember that my sister\'s name is Priya', 'So, next time don\'t say closing it, just close it.',
-      'Don\'t forget that my meeting is on Friday morning', 'From now on, always open links in the debug browser.']) {
-      assert.equal(memory({ current: s }).proceed, true, s);
+    // S1 (2026-09-25, F03): the text saved must now say only what the operator
+    // said, so each ask carries the text a model would save from it. Until then
+    // every one of these proceeded with the placeholder 'something to keep' — any
+    // text at all. A paraphrase of the same asks is a read-back now (the new file).
+    assert.deepEqual(memory({ current: REQUESTED_1455,
+      text: 'If I tell you I\'m not keeping well, next time you should ask me if I\'m feeling better.' }),
+    { proceed: true, reason: 'operator-request' });
+    for (const [s, text] of [
+      ['Keep it in memory. Remember this, do not remind me of Gmail until the token is refreshed.',
+        'Do not remind the operator of Gmail until the token is refreshed.'],
+      ['Please remember that my sister\'s name is Priya', 'The operator\'s sister\'s name is Priya.'],
+      ['So, next time don\'t say closing it, just close it.', 'Next time, don\'t say closing it, just close it.'],
+      ['Don\'t forget that my meeting is on Friday morning', 'The operator\'s meeting is on Friday morning.'],
+      ['From now on, always open links in the debug browser.', 'Always open links in the debug browser.']]) {
+      assert.equal(memory({ current: s, text }).proceed, true, s);
     }
     // 09-10 turn 42: the ask was the previous turn; the call landed in an empty one.
-    assert.equal(memory({ current: '', previous: 'Always remember when I ask you to open browser you open the debug browser', previousAgeMs: 3000 }).proceed, true);
+    assert.equal(memory({ current: '', previous: 'Always remember when I ask you to open browser you open the debug browser', previousAgeMs: 3000,
+      text: 'When the operator asks to open a browser, open the debug browser.' }).proceed, true);
   });
 
   it('(m5) an explicit ask with no content ("remember that") is a read-back, not a write', () => {
@@ -298,7 +330,12 @@ const verdictFor = (d) => (TIER_TABLE[d.tool] === 3
   ? { allow: true, requireConfirm: false, tier: 3, reason: 'operator-present-trusted' }
   : { allow: true, requireConfirm: false, tier: TIER_TABLE[d.tool] || 0, reason: 'within-autonomous-max' });
 
-function live({ outcome, check, ttlMs = 120000, dispatch } = {}) {
+// S1 (2026-09-25): the wire now says whether a reply was heard in full (live-
+// session.js puts interrupts and audioParts on every turn) and the browser
+// effector names the element behind a ref. `heard` and `labels` model both; a
+// test that needs a cut or a nameless ref passes its own.
+const HEARD = { interrupts: 0, audioParts: 3 };
+function live({ outcome, check, ttlMs = 120000, dispatch, heard = HEARD, labels = { f2e308: 'Café Ambience' } } = {}) {
   const confirm = createConfirmRegistry({ config: { LEASH_CONFIRM_TTL_MS: ttlMs } });
   const dispatched = []; const notices = []; const anomalies = []; const audits = [];
   const leash = { check: check || verdictFor, confirm };
@@ -315,6 +352,7 @@ function live({ outcome, check, ttlMs = 120000, dispatch } = {}) {
     historyAppend: () => {}, reflection: null, summarizeActionsForResult,
     getLiveSession: () => ({ isOpen: () => true, sendText: (t) => notices.push(t) }),
     toolAckDeadlineMs: 500,
+    describeBrowserRef: (ref) => labels[ref] || null,
   });
   let n = 0; let turnNo = 0;
   return {
@@ -325,8 +363,9 @@ function live({ outcome, check, ttlMs = 120000, dispatch } = {}) {
         { sendToolResponse: (r) => { sent = r; }, userTextSoFar: spoken || '', typedTextSoFar: typed || '' });
       return sent && sent[0] ? sent[0].response : null;
     },
-    async end(userText, assistantText, typedText) {
-      adapter.onLiveTurnComplete({ userText: userText || '', assistantText: assistantText || '', turnId: ++turnNo, typedText: typedText || '' });
+    async end(userText, assistantText, typedText, evidence) {
+      adapter.onLiveTurnComplete({ userText: userText || '', assistantText: assistantText || '', turnId: ++turnNo, typedText: typedText || '',
+        ...(evidence || heard) });
       for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
     },
   };
@@ -396,7 +435,9 @@ describe('through the real adapter — hold, ask, and run exactly the proposal o
     await h.call('browser_click', CLICK, NOISE_0924);
     await h.end(NOISE_0924, ASKED_CLICK);
     const res = await h.call('browser_click', { ref: 'f2e999' }, 'Yes.');
-    assert.equal(res.status, 'needs_operator_yes');
+    // f2e999 has no name in the snapshot, so since S1 it cannot be asked about by
+    // name: the model is told to get the operator's own words instead. Held either way.
+    assert.equal(res.status, 'needs_operator_words');
     assert.equal(h.dispatched.length, 0);
   });
 
@@ -522,16 +563,40 @@ describe('BUG-464 through the real adapter — to the real store', () => {
 
   it('(s5) an explicit ask writes at once, through the real dispatcher, labelled voice-explicit', async () => {
     const { h, writes } = withStore();
-    const res = await h.call('remember', { text: 'The operator\'s sister is called Priya.' }, 'Please remember that my sister\'s name is Priya.');
+    const res = await h.call('remember', { text: 'The operator\'s sister\'s name is Priya.' }, 'Please remember that my sister\'s name is Priya.');
     assert.notEqual(res.status, 'needs_operator_yes');
     assert.equal(writes.length, 1);
     assert.deepEqual(writes[0].opts.sources, ['voice-explicit']);
   });
 
-  it('(s6) the requested 14:55:56 save still succeeds, straight away', async () => {
+  it('(s5b) S1: the same ask saved in the model\'s own words ("is called") is read back first, then saved on a yes', async () => {
+    // Until 2026-09-25 this was (s5) itself and wrote at once. "Called" is not a
+    // word the operator said — harmless here, but the same rule is what stops
+    // "blue" being saved as "green" (F03), so a paraphrase is confirmed, not trusted.
     const { h, writes } = withStore();
-    await h.call('remember', { text: 'If the operator mentions they are unwell, ask if they are feeling better next time.' }, REQUESTED_1455);
+    const text = 'The operator\'s sister is called Priya.';
+    const res = await h.call('remember', { text }, 'Please remember that my sister\'s name is Priya.');
+    assert.equal(res.status, 'needs_operator_yes');
+    assert.match(res.message, /the text to save is not what the operator said/);
+    await h.end('Please remember that my sister\'s name is Priya.', `Shall I remember this: "${text}"?`);
+    assert.equal(writes.length, 0);
+    await h.end('Yes.', 'Saved.');
     assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].opts.sources, ['operator-approved']);
+  });
+
+  it('(s6) the requested 14:55:56 save still lands: read back in the model\'s words, then saved on the yes', async () => {
+    // Until S1 this wrote at once. The saved text is the model's paraphrase
+    // ("mentions they are unwell" — words the operator never used), so it is now
+    // read back first; the GOAL, the operator's request saved, is unchanged.
+    const { h, writes } = withStore();
+    const text = 'If the operator mentions they are unwell, ask if they are feeling better next time.';
+    const res = await h.call('remember', { text }, REQUESTED_1455);
+    assert.equal(res.status, 'needs_operator_yes');
+    await h.end(REQUESTED_1455, `Shall I remember this: "${text}"?`);
+    await h.end('Yes, please.', 'Done.');
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].lines, [text]);
   });
 });
 
@@ -676,11 +741,20 @@ describe('known gaps, pinned with the reason', () => {
     assert.match(src, /if \(process\.env\.MEMORY_AUTO_USER_FACTS !== 'true'\) \{[\s\S]{0,400}\} else try \{/);
   });
 
-  it('KNOWN GAP: a click proposal has no words to check, so "presented" means MYTHOS asked an action question', () => {
-    const gate = createAuthorityGate({ leash: { confirm: createConfirmRegistry({ config: { LEASH_CONFIRM_TTL_MS: 60000 } }) },
-      connectionId: 'c', pendingConfirms: new Map(), dispatchAction: async () => ({ ok: true }), resolveConfirm: () => {} });
-    gate.hold({ id: 'x' }, { tool: 'browser_click', args: { ref: 'e9' } }, { allow: true, reason: 'operator-present-trusted', tier: 3 }, { spoken: 'yes' });
-    gate.onTurnComplete({ userText: 'yes', assistantText: 'Shall I play the other video instead?' });
-    assert.equal(gate._internal.proposal.presented, true, 'a question naming the WRONG video still counts — the ref has no name here');
+  it('CLOSED 2026-09-25 (was a known gap, audit F04): a question that does not name the click\'s target presents nothing', () => {
+    // The original reproduction, kept verbatim as the regression: before S1 the
+    // last assertion was presented === true — "Shall I play the other video
+    // instead?" presented a click on ref e9 it never named, and a yes would have run it.
+    const make = (describeRef) => createAuthorityGate({ leash: { confirm: createConfirmRegistry({ config: { LEASH_CONFIRM_TTL_MS: 60000 } }) },
+      connectionId: 'c', pendingConfirms: new Map(), dispatchAction: async () => ({ ok: true }), resolveConfirm: () => {}, describeRef });
+    const heard = { interrupts: 0, audioParts: 4 };
+    const nameless = make(null);
+    nameless.hold({ id: 'x' }, { tool: 'browser_click', args: { ref: 'e9' } }, { allow: true, reason: 'operator-present-trusted', tier: 3 }, { spoken: 'yes' });
+    nameless.onTurnComplete({ userText: 'yes', assistantText: 'Shall I play the other video instead?', turnId: 1, ...heard });
+    assert.equal(nameless._internal.proposal.presented, false, 'the ref has no name here, so no question can have named it');
+    const named = make((ref) => (ref === 'e9' ? 'Xiaomi 15 Ultra long-term review' : null));
+    named.hold({ id: 'y' }, { tool: 'browser_click', args: { ref: 'e9' } }, { allow: true, reason: 'operator-present-trusted', tier: 3 }, { spoken: 'yes' });
+    named.onTurnComplete({ userText: 'yes', assistantText: 'Shall I play the other video instead?', turnId: 1, ...heard });
+    assert.equal(named._internal.proposal.presented, false, 'the WRONG video, even with a name to check against');
   });
 });

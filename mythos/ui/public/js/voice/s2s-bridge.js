@@ -47,6 +47,8 @@ import { createEchoVerdictTracker } from './echo-verdict.js';
 import { createGateRecorder, isGateRelease } from './gate-recorder.js'; // BUG-406: numbers-only mic-gate recorder, off unless configured
 import { arrayBufferToBase64 } from './pcm-base64.js';
 import { createUnheardMeter } from './unheard-meter.js'; // BUG-447: where a barge-in cut the answer, so "go ahead" can resume it
+import { createSpeechEndReason } from './speech-end-reason.js'; // B1 (BUG-469): why speech stopped, for the gate's release line
+import { createStopTally } from './stop-tally.js'; // B1b: how much queued speech a stop threw away, for the log
 
 const FRAME_MS = 100;
 const TARGET_RATE = 16000;
@@ -63,7 +65,7 @@ const PLAYBACK_RATE = 24000;
 // outside tests.
 export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOverride, gateRecorder: recordGate } = {}) {
   const send = sendMessageOverride || sendMessage; const gateRecorder = recordGate ? createGateRecorder({ rms: rmsFromPcm16 }) : null;
-  const unheard = createUnheardMeter();
+  const unheard = createUnheardMeter(); const speechEnd = createSpeechEndReason();
   let active = false;
   let stream = null;
   let audioCtx = null;
@@ -874,7 +876,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   // So stopping the speech has to be local and has to outlast the flush: for the rest
   // of this model turn, arriving audio is DROPPED instead of played.
   function stopAssistantSpeech(reason) {
-    if (player) unheard.cut(player.flush());
+    if (player) stopTally.stopped(unheard.cut(speechEnd.during(reason, () => player.flush())));
     armAudioOutSuppression();
     releaseOwnVoiceGate(reason);
   }
@@ -891,6 +893,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
   const SUPPRESS_IDLE_MS = 2000;
   let suppressAudioOut = false;
   let suppressedChunks = 0;
+  const stopTally = createStopTally(); // what the stops' flushes discarded; reset when the episode's line is written
   let suppressStartedAt = 0;
   let suppressIdleTimer = null;
 
@@ -920,14 +923,12 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (!suppressAudioOut) return;
     suppressAudioOut = false;
     if (how === 'idle') unheard.resumed(); // the turn carries on, and from here the room hears it
-    // The cushion diagnostics used to be added here and were moved to
-    // logSuspendTransition() itself on 2026-08-20: on this line they only ever
-    // reached the log for turns the operator interrupted, which is the least likely
-    // shape of session for the transport to be the fault. They now ride every
-    // transition. Nothing is lost from this line — it still carries them.
+    // The cushion diagnostics ride every transition from logSuspendTransition() itself
+    // (moved there 2026-08-20; on this line they reached the log only for interrupted turns).
     logSuspendTransition({
       reason: 'barge-in-suppression-' + how,
-      suppressedChunks: suppressedChunks,
+      suppressedChunks: suppressedChunks, // audio that ARRIVED after the stop; not what the stop cut
+      discardedMs: stopTally.ended(), // B1b: what the stop cut from the queue. Chunks alone read "nothing left to cut" at 7 stops with 0.4-5.1 s queued (2026-09-25)
       suppressedMs: suppressStartedAt ? Date.now() - suppressStartedAt : 0,
     });
     suppressedChunks = 0;
@@ -968,15 +969,14 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       refreshOwnVoiceCeiling();
     };
     // The server won this race: stop the audio and clear the local run, so a
-    // half-accumulated loud streak cannot tip over on the first frame of the
-    // NEXT reply. A local flush that already happened makes this a no-op —
-    // flush() on nothing scheduled stops nothing.
-    // BUG-274 step 5: the server winning the race means Gemini itself cut the turn, so
-    // no further chunks belong to it and the suppression must lift — leaving it armed
-    // would eat the start of the next reply.
+    // half-accumulated loud streak cannot tip over on the first frame of the NEXT
+    // reply. A local flush that already happened makes this a no-op. BUG-274 step 5:
+    // Gemini itself cut the turn, so no further chunks belong to it and the
+    // suppression must lift. B1: the release this flush fires is logged
+    // 'server-interrupted' (speech-end-reason.js); it used to read as a natural end.
     onInterruptedMsg = () => {
       bargeBackstop.reset();
-      if (player) unheard.cut(player.flush());
+      if (player) unheard.cut(speechEnd.during('server-interrupted', () => player.flush()));
       if (player) player.endTurn();
       endAudioOutSuppression('server-interrupted');
     };
@@ -1231,8 +1231,8 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
       // orb must still show speech in both of those cases. ownVoiceGate is its
       // own flag, distinct from captureSuspended (the media-playing mute
       // overlay), so this does not fight the overlay for the indicator.
-      onSpeakStart: () => { holdOwnVoiceGate(); setVoiceState('speaking'); },
-      onSpeakEnd: () => { releaseOwnVoiceGate('own-voice-ended'); setVoiceState('listening'); },
+      onSpeakStart: () => { holdOwnVoiceGate(); speechEnd.speechStarted(); setVoiceState('speaking'); },
+      onSpeakEnd: () => { releaseOwnVoiceGate(speechEnd.ended()); setVoiceState('listening'); },
     });
     active = true;
 
@@ -1293,7 +1293,7 @@ export function createS2SBridge({ onState, onCaption, screenShare, sendMessageOv
     if (captureNode) { try { captureNode.disconnect(); } catch { /* ok */ } captureNode = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     if (audioCtx) { try { await audioCtx.close(); } catch { /* ok */ } audioCtx = null; }
-    if (player) { player.close(); player = null; }
+    if (player) { speechEnd.during('session-stopped', () => player.close()); player = null; } // B1: a close mid-reply is not a natural end
     bargeBackstop.reset();
     // BUG-271: a stale hysteresis tail (or zeroed count) must not carry into
     // the next session — same once-per-session reasoning as the backstop reset.
