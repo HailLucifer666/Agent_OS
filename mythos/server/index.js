@@ -3600,7 +3600,8 @@ function createServer(deps) {
         // on a T3+ popup), not the voice agent deciding on its own — label it
         // as such instead of the wrapper's default, and correlate it back to
         // the specific confirm popup that was approved.
-        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', origin: action.origin, traceId: confirmId, surface: surface, acceptedScope: acceptedScope });
+        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', origin: action.origin, traceId: confirmId, surface: surface, acceptedScope: acceptedScope,
+          consent: require('../src/core/voice/authority-gate').consentForClickedConfirm(decision, surface) }); // a click IS the operator's approval (2026-10-07)
         // S2S (Phase 5): feed the real outcome back to the Live session as a
         // realtimeInput text turn, so the model reports what ACTUALLY
         // happened (AD-4) rather than whatever it assumed while waiting. A

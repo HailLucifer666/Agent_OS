@@ -7,6 +7,7 @@ const { createFsStore } = require('./fs-store');
 const { createEpisodicStore } = require('./episodic');
 const { createSemanticStore } = require('./semantic');
 const { createHabitPromoter } = require('./habit-promoter');
+const { withoutOperatorLines } = require('./operator-lines');
 const { createSkillsStore } = require('./skills');
 const { createIdentityStore } = require('./identity');
 const { createWorkingMemory } = require('./working');
@@ -46,7 +47,7 @@ function createMemory({ config, bus, logger, brain }) {
   // F9: writes through the semantic store, so it is constructed after it and
   // holds no store of its own — a promoted habit IS a semantic fact, not a
   // fourth place facts can live.
-  const habits = createHabitPromoter({ semantic, logger });
+  const habits = createHabitPromoter({ semantic, logger, episodic }); // 2026-10-06: plays on 2+ days, read from Episodic
 
   // ---- semantic recall layer (vector indexes over episodic + semantic + documents) ----
   // Existing sync recall() on each store is untouched (tests + callers keep
@@ -356,7 +357,13 @@ function createMemory({ config, bus, logger, brain }) {
                 });
               } else {
                 try {
-                  semantic.write('consolidated-' + Date.now(), [result.content], {
+                  // Operator decision 2026-10-06: kept on for MYTHOS's own status,
+                  // but a line describing the operator is dropped — nobody asked
+                  // for it (memory/operator-lines.js). Only the count is reported.
+                  const screened = withoutOperatorLines(result.content);
+                  if (screened.dropped) bus.emit('memory.consolidate-skip', { reason: 'operator-lines-dropped', count: screened.dropped, detail: screened.dropped + ' line(s) described the operator' });
+                  if (!screened.kept) bus.emit('memory.consolidate-skip', { reason: 'only-operator-lines', detail: 'every distilled line described the operator' });
+                  else semantic.write('consolidated-' + Date.now(), [screened.kept], {
                     confidence: 0.6,
                     sources: highSalience.map(function(e) { return e.id; })
                   });

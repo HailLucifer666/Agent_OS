@@ -11,6 +11,13 @@ const { createIdentityStore } = require('../src/core/memory/identity');
 const { createIdentity } = require('../src/core/identity');
 const { createReflection } = require('../src/core/identity/reflection');
 
+// CHANGED 2026-10-06 (BUG-464 widened, operator decision): this pass writes about
+// the operator without being asked, so it runs only when MEMORY_AUTO_USER_FACTS is
+// exactly "true". These tests are about what it does when it runs, so each turns it
+// on through the injected env. Off by default is pinned in
+// test/bug-464-background-writers-need-the-operator.test.js (r1).
+const AUTO_ON = { MEMORY_AUTO_USER_FACTS: 'true' };
+
 function fakeConfig() { return { MYTHOS_NAME: 'MYTHOS', AUTONOMOUS_MAX_TIER: 2, REFLECTION_EVERY_TURNS: 3 }; }
 
 function fakeConvos(n) {
@@ -58,7 +65,7 @@ describe('reflection learning loop', () => {
 
   it('writes up to 3 preferences + the style line', async () => {
     brainReplies.push({ preferences: ['Prefers short spoken answers', 'Calls builds "light speed" runs', 'Works late at night'], style: 'Terse, voice-transcribed, uses slang.' });
-    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig(), env: AUTO_ON });
     const res = await reflection.runNow('test');
     assert.equal(res.written, 3);
     assert.equal(res.styleUpdated, true);
@@ -76,7 +83,7 @@ describe('reflection learning loop', () => {
       style: '',
       profile: 'Address them as sir.\nDaughter: Mira.\nBuilding MYTHOS on two machines.',
     });
-    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig(), env: AUTO_ON });
     const res = await reflection.runNow('test');
     assert.equal(res.profileUpdated, true);
     assert.match(identity.getOperatorProfile(), /Daughter: Mira/);
@@ -86,7 +93,7 @@ describe('reflection learning loop', () => {
   it('a missing or too-short profile field leaves an existing profile intact', async () => {
     identity.setOperatorProfile('Address them as sir.\nDaughter: Mira.');
     brainReplies.push({ preferences: [], style: '', profile: '' });
-    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig(), env: AUTO_ON });
     const res = await reflection.runNow('test');
     assert.equal(res.profileUpdated, false);
     assert.match(identity.getOperatorProfile(), /Daughter: Mira/);
@@ -95,7 +102,7 @@ describe('reflection learning loop', () => {
   it('second pass skips near-duplicates', async () => {
     brainReplies.push({ preferences: ['Prefers short spoken answers'], style: '' });
     brainReplies.push({ preferences: ['prefers short spoken answers', 'A genuinely new fact about workflow'], style: '' });
-    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig(), env: AUTO_ON });
     await reflection.runNow('test');
     const res2 = await reflection.runNow('test');
     assert.equal(res2.written, 1); // duplicate dropped, new fact kept
@@ -104,15 +111,15 @@ describe('reflection learning loop', () => {
   });
 
   it('skips when too few conversations or brain offline', async () => {
-    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(2), identity, config: fakeConfig() });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(2), identity, config: fakeConfig(), env: AUTO_ON });
     assert.equal((await reflection.runNow('test')).skipped, 'too-few-conversations');
-    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig(), env: AUTO_ON });
     assert.equal((await reflection.runNow('test')).skipped, 'brain-unavailable'); // brainReplies empty → offline
   });
 
   it('noteTurn fires a pass every REFLECTION_EVERY_TURNS turns', async () => {
     brainReplies.push({ preferences: [], style: '' });
-    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig(), env: AUTO_ON });
     reflection.noteTurn();
     reflection.noteTurn();
     assert.equal(thinkCalls, 0);
@@ -123,7 +130,7 @@ describe('reflection learning loop', () => {
 
   it('rejects garbage preference shapes (too short/long)', async () => {
     brainReplies.push({ preferences: ['ok', 'x'.repeat(500), 'A perfectly reasonable durable fact'], style: '' });
-    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig() });
+    reflection = createReflection({ brain: fakeBrain(), memory: fakeMemory(10), identity, config: fakeConfig(), env: AUTO_ON });
     const res = await reflection.runNow('test');
     assert.equal(res.written, 1);
   });

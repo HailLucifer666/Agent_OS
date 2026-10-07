@@ -1435,9 +1435,10 @@ async function drag({ x1, y1, x2, y2 }) {
   return delegate({ cmd: 'drag', x1, y1, x2, y2 });
 }
 
-async function write_note({ text, title }) {
-  if (!text) return fail('Note text is required.');
-  return delegate({ cmd: 'write_note', text, title: title || null });
+async function write_note(args, callCtx) { // BUG-464 widened (2026-10-06): a note is permanent memory; remember's lock, see from-memory.js note_take
+  if (!args || !args.text) return fail('Note text is required.');
+  const consent = require('../leash/consent').verifyConsent(callCtx && callCtx.consent, 'write_note', args); // required here, and the return below is one statement: file at its size cap (2026-10-07)
+  return consent.ok ? delegate({ cmd: 'write_note', text: args.text, title: args.title || null }) : fail(`Not saved (${consent.reason}): a note is written only when the operator asks for one in their own words, or says yes after the exact text is read back to them.`);
 }
 
 async function capture_screenshot() {

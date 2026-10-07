@@ -375,12 +375,22 @@ function buildTools(ctx){
     return '<!-- mythos-provenance: '+label+(label==='hypothesis'?' (states a cause MYTHOS has not verified)':'')+' -->\n'+text;
   }
 
-  async function note_take(args){
+  // BUG-464 widened, operator decision 2026-10-06: a note is permanent memory too,
+  // so it takes remember's lock. 09-23 14:11:40 was an unrequested note (the
+  // adjacent instance BUG-464 named and left open). The token is minted only by
+  // voice/authority-gate.js, after the operator's own words asked for a note or a
+  // read-back was approved; the autonomous loop and the engagement executor carry
+  // none, so they cannot write one. Validation first, so a malformed call still
+  // fails with its own reason.
+  async function note_take(args, callCtx){
     if(!notes||typeof notes.write!=='function') return notesUnavailable();
     var title=(args&&(args.title||args.name)||'').trim();
     var text=(args&&(args.text||args.body||args.content)||'').trim();
     if(!title) return fail('title required — what to call the note');
     if(!text) return fail('text required — the note body');
+    var consent=verifyConsent(callCtx&&callCtx.consent,'note_take',args);
+    if(!consent.ok) return fail('Not saved ('+consent.reason+'): a note is written only when the operator asks for one '
+      +'in their own words, or says yes after the exact text is read back to them.');
     var label=provenanceOf(text);
     try{
       var res=notes.write({title:title,text:markEntry(text,label),mode:(args&&args.mode)||'append',

@@ -11,6 +11,10 @@ const { isStartupOnlyFact } = require('./startup-facts');
 //   - Fact one
 //   - Fact two
 
+// BUG-080: an identity claim (the operator's name, what to call them). See the
+// guard inside createSemanticStore for its history.
+const IDENTITY_CLAIM_RE = /\b(call (?:me|the operator|him|her|them)\b|my name is\b|the operator'?s? name is\b|the user'?s? name is\b|prefers? to be called\b|address (?:me|the operator|the user) as\b|will call me\b)/i;
+
 function createSemanticStore({ fs, config, bus, logger }) {
   const SIDECAR_RE = /<!--\s*(\{[^}]+\})\s*-->/g;
   const BULLET_RE = /^-\s+(.+)$/gm;
@@ -61,7 +65,8 @@ function createSemanticStore({ fs, config, bus, logger }) {
   // here. Stage 2 closes that specific hole; this guard is defense-in-depth
   // for the class of bug (self-authored/inferred text becoming a durable
   // identity fact), not a re-fix of the same line.
-  const IDENTITY_CLAIM_RE = /\b(call (?:me|the operator|him|her|them)\b|my name is\b|the operator'?s? name is\b|the user'?s? name is\b|prefers? to be called\b|address (?:me|the operator|the user) as\b|will call me\b)/i;
+  // IDENTITY_CLAIM_RE lives at module scope since 2026-10-06, exported so
+  // memory/operator-lines.js screens step 3 with this same pattern, not a copy.
   const IDENTITY_UNCONFIRMED_CONFIDENCE = 0.2;
 
   function isConfirmedOperatorUtterance(sources) {
@@ -433,4 +438,4 @@ function createSemanticStore({ fs, config, bus, logger }) {
   return { write, forget, recall, get, topic, pruneLowConfidence, consolidate, stats, init };
 }
 
-module.exports = { createSemanticStore };
+module.exports = { createSemanticStore, IDENTITY_CLAIM_RE };

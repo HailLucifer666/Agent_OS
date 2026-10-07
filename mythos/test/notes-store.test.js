@@ -39,6 +39,13 @@ let dir;
 let notes;
 let tools;
 
+// CHANGED 2026-10-06 (BUG-464 widened): note_take writes only with a consent
+// minted for exactly its arguments (test/bug-464-background-writers-need-the-
+// operator.test.js). These tests are about what the tool does with a save, so
+// each passes one, as from-memory.test.js does for remember.
+const { mintConsent } = require('../src/core/leash/consent');
+const take = (args) => tool('note_take').fn(args, { consent: mintConsent({ tool: 'note_take', args, basis: 'operator-request' }) });
+
 function tool(name) {
   const t = tools.find((x) => x.name === name);
   assert.ok(t, 'tool ' + name + ' must be registered by from-memory buildTools');
@@ -128,7 +135,7 @@ describe('memory/notes.js — a title is user text reaching the filesystem', () 
 
 describe('note_take / note_read / note_search effectors', () => {
   it('note_take writes the file and returns oracle-backed evidence', async () => {
-    const out = await tool('note_take').fn({ title: 'Voice Test', text: 'spoken body' });
+    const out = await take({ title: 'Voice Test', text: 'spoken body' });
     assert.equal(out.ok, true);
     const full = path.join(dir, 'Voice-Test.md');
     assert.equal(fs.existsSync(full), true);
@@ -144,7 +151,7 @@ describe('note_take / note_read / note_search effectors', () => {
     assert.equal(empty.result.count, 0);
     assert.match(empty.result.note, /NO NOTES EXIST YET/, 'an empty store must be stated, not implied');
 
-    await tool('note_take').fn({ title: 'Kept', text: 'x' });
+    await take({ title: 'Kept', text: 'x' });
     const listed = await tool('note_read').fn({});
     assert.deepEqual(listed.result.notes, ['Kept']);
 
@@ -155,7 +162,7 @@ describe('note_take / note_read / note_search effectors', () => {
   });
 
   it('note_read returns the real file content', async () => {
-    await tool('note_take').fn({ title: 'Readable', text: 'the body [[linked]]' });
+    await take({ title: 'Readable', text: 'the body [[linked]]' });
     const out = await tool('note_read').fn({ title: 'Readable' });
     assert.equal(out.ok, true);
     assert.match(out.result.content, /the body \[\[linked\]\]/);
@@ -163,7 +170,7 @@ describe('note_take / note_read / note_search effectors', () => {
   });
 
   it('note_search says nothing matched in words a reply cannot round off (BUG-172 shape)', async () => {
-    await tool('note_take').fn({ title: 'Only', text: 'unrelated content' });
+    await take({ title: 'Only', text: 'unrelated content' });
     const out = await tool('note_search').fn({ query: 'quantum' });
     assert.equal(out.ok, true);
     assert.equal(out.result.count, 0);
@@ -173,7 +180,7 @@ describe('note_take / note_read / note_search effectors', () => {
   });
 
   it('note_search returns quotable matches with evidence', async () => {
-    await tool('note_take').fn({ title: 'Findable', text: 'the refine loop is bounded at two iterations' });
+    await take({ title: 'Findable', text: 'the refine loop is bounded at two iterations' });
     const out = await tool('note_search').fn({ query: 'refine loop' });
     assert.equal(out.result.count, 1);
     assert.equal(out.result.matches[0].note, 'Findable');
@@ -192,7 +199,7 @@ describe('note_take / note_read / note_search effectors', () => {
   });
 
   it('all three tools carry evidence on the success path (evidence contract)', async () => {
-    const takeOut = await tool('note_take').fn({ title: 'Evidence', text: 'body' });
+    const takeOut = await take({ title: 'Evidence', text: 'body' });
     const readOut = await tool('note_read').fn({ title: 'Evidence' });
     const searchOut = await tool('note_search').fn({ query: 'body' });
     for (const [name, out] of [['note_take', takeOut], ['note_read', readOut], ['note_search', searchOut]]) {

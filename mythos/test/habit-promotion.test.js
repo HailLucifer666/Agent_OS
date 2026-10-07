@@ -24,8 +24,16 @@ const { TIER_TABLE } = require('../src/core/leash/tiers');
 
 function harness(opts) {
   const writes = [];
+  // CHANGED 2026-10-06 (operator decision): a habit now needs its plays on at
+  // least 2 different local days, because three plays in one sitting were a test
+  // session ("listens to lofi"). These tests are about counting, casing, topics
+  // and retries, so the injected clock moves one day per play; the day rule
+  // itself is pinned in test/bug-464-background-writers-need-the-operator.test.js
+  // (h1)-(h4).
+  let day = 0;
   const promoter = createHabitPromoter(Object.assign({
     semantic: { write: (topic, facts, meta) => { writes.push({ topic, facts, meta }); return { ref: topic }; } },
+    now: () => new Date(2026, 9, 1 + (day++), 12).getTime(),
   }, opts || {}));
   return { promoter, writes };
 }
@@ -143,7 +151,7 @@ describe('F9 — what must NOT become a fact', () => {
       } },
       config: {}, bus: { emit: (...args) => anomalies.push(args) }, logger: {},
     });
-    const promoter = createHabitPromoter({ semantic, promoteAfter: 1,
+    const promoter = createHabitPromoter({ semantic, promoteAfter: 1, minDays: 1, // 2026-10-06: a one-play threshold needs a one-day rule; this test is about retries
       logger: { info: (...args) => promotions.push(args) } });
     assert.equal(promoter.observe('spotify_play', { query: 'Radiohead' }, true), null);
     assert.equal(stored.size, 0);

@@ -450,12 +450,19 @@ describe('through the real adapter — hold, ask, and run exactly the proposal o
     assert.equal(h.dispatched.length, 0);
   });
 
-  it('(a7) "no" cancels through the existing spoken-no path, and the model is told', async () => {
+  it('(a7) CHANGED 2026-10-06: "no" cancels through the existing spoken-no path, with no cancel notice for a spoken proposal', async () => {
+    // Until 2026-10-06 this asserted the model was told by a "[SYSTEM] The operator
+    // said no. Cancelled: browser_click" notice. Every injection is a new Live turn,
+    // so that notice made MYTHOS speak unprompted (attended 09-25 02:14:29, "I've
+    // cancelled adding that preference to memory", BUG-464 residual (ii)). The model
+    // already heard the "no" in the turn it answered, and the hold told it nothing
+    // runs on anything but a yes. A click confirm still gets its notice:
+    // test/bug-464-background-writers-need-the-operator.test.js (c2).
     const h = live();
     await h.call('browser_click', CLICK, NOISE_0924);
     await h.end(NOISE_0924, ASKED_CLICK);
     await h.end('No, leave it.', 'Understood.');
-    assert.ok(h.notices.some((t) => /said no\. Cancelled: browser_click/.test(t)));
+    assert.equal(h.notices.filter((t) => /Cancelled: browser_click/.test(t)).length, 0);
     await h.end('Yes.', 'Okay.');
     assert.equal(h.dispatched.length, 0);
   });

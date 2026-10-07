@@ -13,7 +13,10 @@
 // pass; the next one tries again. One LLM call per ~15 turns on the free
 // simple lane keeps this affordable.
 
-function createReflection({ brain, memory, identity, config, logger, bus }) {
+var autoOperatorFactsOn = require('../memory/auto-operator-facts').autoOperatorFactsOn;
+
+// `env`: optional, for tests (memory/auto-operator-facts.js); production reads process.env.
+function createReflection({ brain, memory, identity, config, logger, bus, env }) {
   if (!brain || !memory || !identity) {
     throw new Error('createReflection requires brain, memory, identity');
   }
@@ -57,6 +60,22 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
   // cadence path passes no signal and is unchanged.
   async function runNow(reason, opts) {
     if (running) return { skipped: 'already-running' };
+    // BUG-464 widened, operator decision 2026-10-06: nothing goes into permanent
+    // memory unless the operator asked for it or approved the exact text read
+    // back. This pass writes learned preferences, the speaking style and the
+    // whole operator profile — all folded into every prompt by persona() — from
+    // conversation nobody asked it to mine. Attended run 2026-09-25: it rewrote
+    // the profile at 02:16:27 and 02:20:46 and learned 3 preferences, unasked.
+    // There is no operator turn here to read anything back in, so it follows
+    // BUG-463's precedent: off unless MEMORY_AUTO_USER_FACTS is exactly "true".
+    // Checked before the episodic read and the brain call, so off means the
+    // conversation is not even sent to a model. What is already in the profile
+    // stays; nothing is deleted or migrated. The action-outcome pass below is
+    // not about the operator and is not gated.
+    if (!autoOperatorFactsOn(env)) {
+      log.info('reflection.skip', { reason: 'auto-operator-facts-off' });
+      return { skipped: 'auto-operator-facts-off' };
+    }
     running = true;
     var signal = opts && opts.signal;
     var fenced = function() { return !!(signal && signal.aborted); };
