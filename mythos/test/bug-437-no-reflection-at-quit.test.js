@@ -130,6 +130,10 @@ describe('BUG-437 closure — quit does not run reflection', () => {
       memory: { episodic: { recall: () => { recalls += 1; return []; } }, identity: { readRaw: () => '' } },
       identity: { learn: async () => ({}), setOperatorStyle() {}, setOperatorProfile() {}, getOperatorProfile: () => '' },
       config: { REFLECTION_EVERY_TURNS: 3, REFLECTION_ACTION_EVERY_TURNS: 1000 },
+      // 2026-10-07: since BUG-464 (operator decision 2026-10-06) the identity pass runs
+      // only with MEMORY_AUTO_USER_FACTS=true. This premise is about the cadence, so it
+      // states the switch rather than depending on the machine's environment.
+      env: { MEMORY_AUTO_USER_FACTS: 'true' },
       logger: { info() {}, warn() {} },
     });
     reflection.noteTurn(); reflection.noteTurn();
