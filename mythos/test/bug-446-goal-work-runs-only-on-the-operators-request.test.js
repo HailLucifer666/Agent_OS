@@ -379,11 +379,12 @@ describe('(5) desktop_task_start needs the operator\'s words', () => {
     assert.equal(r.ok, false);
     assert.equal(r.notExecuted, true);
     assert.match(r.result, /ask|asks/i);
-    // 2026-10-06: the next step is a structured remedy, not prose naming the tool
-    // (remedy-prose-ratchet, BUG-425). `request` is left for the operator's words, so
-    // the model cannot fill it from this refusal. Probe: put the tool name back into
-    // the result text and drop the remedy -> this test and the ratchet both go red.
-    assert.doesNotMatch(r.result, /desktop_task_start/);
+    // 2026-10-07: the message names the next tool (src/core/CLAUDE.md, Refusals rule 1:
+    // the message is the channel the model reads) AND a structured remedy sits right
+    // beside it (remedy-prose-ratchet waives prose only there, BUG-425). `request` is
+    // left for the operator's words, so the model cannot fill it from this refusal.
+    // Probe 2026-10-06: remedy dropped, name kept -> this test and the ratchet go red.
+    assert.match(r.result, /desktop_task_start/);
     assert.deepEqual(r.remedy && { tool: r.remedy.tool, args: r.remedy.args, needsInput: r.remedy.needsInput }, { tool: 'desktop_task_start', args: {}, needsInput: ['request'] });
   });
   test('(5b) a forged token, a token for other arguments and a replayed token are not consent', async () => {

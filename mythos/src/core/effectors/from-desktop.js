@@ -16,7 +16,7 @@ function buildTools({ controller } = {}) {
   // the next step.
   const startWithConsent = (args, ctx) => {
     if (!verifyConsent(ctx && ctx.consent, 'desktop_task_start', args).ok) {
-      return { ok: false, notExecuted: true, result: 'Not started: a desktop task runs only when the operator asks for it in their own words this turn. Ask them what they want done first.', remedy: remedy('desktop_task_start', {}, 'start it only after the operator has said, in their own words, what to do', ['request']) };
+      return { ok: false, notExecuted: true, result: 'Not started: a desktop task runs only when the operator asks for it in their own words this turn. Ask them what they want done, then call desktop_task_start again.', remedy: remedy('desktop_task_start', {}, 'start it only after the operator has said, in their own words, what to do', ['request']) };
     }
     return invoke('start', args, ctx);
   };
