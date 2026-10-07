@@ -111,6 +111,10 @@ function refusal(a) {
       + (a.signal && a.signal.aborted
         ? ', whose caller stopped waiting before it finished. It has not reported back yet, so it may still go out.'
         : '.');
+  } else if (a.state === 'typed') {
+    why = 'REFUSED, and nothing was done by this call: an earlier attempt typed this exact message to ' + who
+      + ' and was stopped before submitting, so it was not sent, but the text may still be in the message box. '
+      + 'Sending it again would type it a second time after the first.';
   } else if (a.state === 'landed') {
     why = 'REFUSED, and nothing was done by this call: this exact message to ' + who
       + ' was sent by an earlier call that finished after its caller had stopped waiting. Sending again would duplicate it.';
@@ -136,7 +140,7 @@ function cancelledResult(stage, label) {
 // and how far it got. 'submitting' is the only stage where the world may have
 // changed without this call knowing for sure.
 function outcomeOf(a, result, threw) {
-  if (result && result.cancelled === true) return 'cancelled-before-submit';
+  if (result && result.cancelled === true) return a.stoppedAt === 'submit' ? 'cancelled-after-typing' : 'cancelled-before-submit';
   if (!threw && result && result.ok && result.result && result.result.sent === true) return 'sent';
   if (a.stage === 'submitting' && (threw || !result || !result.ok)) return 'submit-unproven';
   return 'not-sent';
@@ -152,6 +156,11 @@ function settle(key, a, result, threw, logger) {
   let held = null;
   if (outcome === 'sent' && callerGaveUp) held = 'landed';
   else if (outcome === 'submit-unproven' && (callerGaveUp || threw)) held = 'uncertain';
+  // Review finding, 2026-10-07: stopped AFTER typing, the text may still sit in the
+  // composer. Releasing the entry let a retry type the message a second time after
+  // it (whatsapp_send appends to an existing draft: "Hi Hi"), and let a raw Enter
+  // submit the leftover (refuseRawSubmit saw no entry). Held, both are refused.
+  else if (outcome === 'cancelled-after-typing') held = 'typed';
   if (held) {
     a.state = held;
     a.since = clock();
@@ -186,7 +195,11 @@ async function run({ number, message, label, ctx, logger }, steps) {
   const note = notes.get(key);
   notes.delete(key);
   const fence = {
-    checkpoint(stage) { return signal && signal.aborted ? cancelledResult(stage, label) : null; },
+    checkpoint(stage) {
+      if (!(signal && signal.aborted)) return null;
+      a.stoppedAt = stage;
+      return cancelledResult(stage, label);
+    },
     submitting() { a.stage = 'submitting'; },
   };
   let result, threw = null;
@@ -212,7 +225,7 @@ function refuseRawSubmit(app) {
   if (!/whatsapp/i.test(String(app || ''))) return null;
   expire();
   if (entries.size === 0) return null;
-  return 'Refusing to press Enter in WhatsApp: a WhatsApp send is still in flight or ended without proof, '
+  return 'Refusing to press Enter in WhatsApp: a WhatsApp send is still in flight, ended without proof, or was stopped with its text still in the box, '
     + 'and Enter would submit whatever is in the message box. Nothing was pressed.' + DO_NOT_RETRY;
 }
 

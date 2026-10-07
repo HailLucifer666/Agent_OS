@@ -249,6 +249,58 @@ describe('BUG-476 — a timed-out WhatsApp send is fenced', { timeout: 10000 }, 
     assert.match(String(retry.result.note), /earlier attempt.*sent nothing/i);
   });
 
+  // Review finding, 2026-10-07 (independent reviewer): stopped AFTER typing, the
+  // entry used to be released, so the retry test 7 invites typed the message again
+  // after the leftover draft, and a raw Enter submitted the leftover. Probes, same
+  // date: (a) held='typed' removed in settle() -> 7b and 7c red; (b) stoppedAt not
+  // recorded in checkpoint() -> 7b and 7c red. 7 (stopped before typing) stays free.
+  it('7b. a send stopped AFTER typing is held: an identical retry is refused and says the text may still be in the box', async () => {
+    const g = gate();
+    const { hub, count } = load({ gates: { ui_type: g } });
+    const ac = new AbortController();
+    const first = hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 seven b' }, { signal: ac.signal });
+    await until(() => count('ui_type') === 1, 'first send to type');
+    ac.abort();
+    await first;
+    g.open();
+    await tick(30);
+    const retry = await hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 seven b' }, {});
+    assert.equal(retry.ok, false, 'a retry after a typed-but-unsent attempt must not type the message again');
+    assert.match(String(retry.result), /message box/i);
+    assert.equal(count('ui_type'), 1, 'the retry typed a second copy after the leftover draft');
+    assert.equal(count('submitMessage'), 0);
+  });
+
+  it('7c. after a send stopped AFTER typing, a raw Enter into WhatsApp is refused (it would submit the leftover)', async () => {
+    const g = gate();
+    const { hub, count } = load({ gates: { ui_type: g } });
+    const ac = new AbortController();
+    const first = hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 seven c' }, { signal: ac.signal });
+    await until(() => count('ui_type') === 1, 'first send to type');
+    ac.abort();
+    await first;
+    g.open();
+    await tick(30);
+    assert.match(String(require('../src/core/effectors/send-fence').refuseRawSubmit('WhatsApp')), /still in the box/i);
+  });
+
+  it('7d. ADJACENT: once the hold has expired, the same message can be sent again', async () => {
+    let now = 1000000;
+    require('../src/core/effectors/send-fence')._resetForTests({ now: () => now });
+    const g = gate();
+    const { hub, count } = load({ gates: { ui_type: g } });
+    const ac = new AbortController();
+    const first = hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 seven d' }, { signal: ac.signal });
+    await until(() => count('ui_type') === 1, 'first send to type');
+    ac.abort();
+    await first;
+    g.open();
+    await tick(30);
+    now += require('../src/core/effectors/send-fence').UNCERTAIN_SEND_HOLD_MS + 1;
+    const later = await hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 seven d' }, {});
+    assert.equal(later.ok, true, String(later.result));
+  });
+
   it('8. ADJACENT: a different text, or a different recipient, is not blocked by a send in flight', async () => {
     const g = gate();
     const { hub, count } = load({ gates: { readComposeBox: g } });
