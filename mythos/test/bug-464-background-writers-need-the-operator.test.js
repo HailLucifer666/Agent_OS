@@ -289,6 +289,22 @@ describe('through the real Live adapter — notes follow the remember rule', () 
     assert.match(d.decision.args.text, /not verified by any tool/);
     assert.equal(verifyConsent(d.consent, 'write_note', d.decision.args).ok, true);
   });
+
+  // Independent review finding, 2026-10-07: the stamp is added before the hold, and
+  // the read-back target included it, so a model reading back only the note body
+  // never counted as having asked and the operator's yes approved nothing. Probe,
+  // same date: savedText() without withoutStamp() -> (a6) red (0 dispatched).
+  it('(a6) GOAL: a HELD stamped write_note, read back as its body only, is written on "Yes." with the stamped text', async () => {
+    const h = live();
+    await h.call('write_note', { text: 'the boiler code is 4471' }, 'I was saying the boiler code is 4471.');
+    assert.equal(h.dispatched.length, 0, 'premise: not asked for, so it is held');
+    await h.end('I was saying the boiler code is 4471.', 'Shall I save this note: "the boiler code is 4471"?');
+    await h.end('Yes.', 'Saved.');
+    assert.equal(h.dispatched.length, 1, 'the operator approved the read-back, and nothing was written');
+    const d = h.dispatched[0];
+    assert.match(d.decision.args.text, /not verified by any tool/, 'what is written still carries BUG-300\'s disclaimer');
+    assert.equal(verifyConsent(d.consent, 'write_note', d.decision.args).ok, true);
+  });
 });
 
 describe('the typed/batch path — the same rule for notes', () => {
@@ -472,6 +488,15 @@ describe('background writers about the operator — off unless MEMORY_AUTO_USER_
     const c = promoter({ episodic: episodic([rec(T0 - DAY, 'Radiohead'), { record: { kind: 'action', ts: T0 - DAY, outcome: 'fail', summary: 'spotify_play({"query":"Radiohead"})' } }, rec(T0, 'Radiohead')]) });
     c.p.observe('spotify_play', { query: 'Radiohead' }, true);
     assert.deepEqual(c.writes, [], 'a failed play is not a play');
+    // Independent review finding, 2026-10-07: Episodic keeps outcome 'ok' for an
+    // UNVERIFIED play too (ok:true, unverified:true; the full result is in `detail`),
+    // so earlier plays that never proved they happened still counted toward a habit,
+    // undoing dispatch-action's verified-only guard for the current play. Probe,
+    // same date: the unverified filter removed in playDays -> this assertion red.
+    const unverified = (ts) => ({ record: { kind: 'action', ts, outcome: 'ok', detail: { ok: true, unverified: true }, summary: 'spotify_play({"query":"Radiohead"})' } });
+    const d = promoter({ episodic: episodic([unverified(T0 - DAY), unverified(T0 - DAY + 60000), rec(T0, 'Radiohead')]) });
+    d.p.observe('spotify_play', { query: 'Radiohead' }, true);
+    assert.deepEqual(d.writes, [], 'plays that never proved they happened are not evidence of a habit');
   });
 
   it('(h2) step 3b and the shared predicate give one answer for every value (two routes, one answer)', () => {

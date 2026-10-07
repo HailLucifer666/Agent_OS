@@ -31,6 +31,7 @@
 const { judgeTrustedAction, judgeMemoryWrite, judgeNoteWrite, isAffirmativeReply, yesAndRest, restNamesCall, readBackMatches, leadingWords,
   KEY_WORDS } = require('./operator-authority');
 const { mintConsent, signatureOf } = require('../leash/consent');
+const { withoutStamp } = require('./note-stamp');
 
 // The leash reasons that exist only because a human connection is driving
 // (leash/index.js: isOperatorPresent). That premise is what BUG-461 broke.
@@ -77,9 +78,11 @@ function judgeSave(decision, input) {
   return NOTE_TOOLS.has(decision.tool) ? judgeNoteWrite(input) : judgeMemoryWrite({ ...input, text: savedText(decision.args) });
 }
 
+// What the operator must hear read back: the note WITHOUT BUG-300's disclaimer
+// (voice/note-stamp.js, 2026-10-07). The consent token still binds the stamped args.
 function savedText(args) {
   const a = args || {};
-  return String(a.text || a.fact || a.note || a.body || a.content || '').trim(); // body/content: note_take reads them too
+  return withoutStamp(String(a.text || a.fact || a.note || a.body || a.content || '').trim()); // body/content: note_take reads them too
 }
 
 // F04 (S1, 2026-09-25): the name of what a call acts on, in words a person can
@@ -390,5 +393,19 @@ function createTypedMemoryGate({ now = Date.now } = {}) {
   return { hold };
 }
 
+// Review finding, 2026-10-07: a clicked Approve on a confirm card is the operator
+// approving exactly that call. server/index.js's confirm-accept dispatched with no
+// consent, so a consent-gated tool that needed a click (autonomy ceiling 0, or a
+// boundaries.md that lowers it) was refused after the operator approved it ("Not
+// saved (no-consent)"). Minted here, because only this file mints (test-pinned).
+// The card shows the call's own arguments, and the token binds exactly those.
+// Only a reported 'click': the same route takes app.js's thumbs-up gesture, which
+// auto-clicked an approval once (G4, confirm-surface-attribution.test.js), and an
+// 'unknown' surface is no evidence of a person at all.
+function consentForClickedConfirm(decision, surface) {
+  return surface === 'click' && decision && CONSENT_TOOLS.has(decision.tool)
+    ? mintConsent({ tool: decision.tool, args: decision.args, basis: 'approved-proposal' }) : null;
+}
+
 module.exports = { createAuthorityGate, createTypedMemoryGate, HUMAN_PREMISE_REASONS, MEMORY_TOOLS, NOTE_TOOLS, CONSENT_TOOLS,
-  SPOKEN_APPROVAL_TTL_MS };
+  SPOKEN_APPROVAL_TTL_MS, consentForClickedConfirm };

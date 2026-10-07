@@ -1157,8 +1157,7 @@ function createLiveToolAdapter(deps) {
   // No classifier, nothing language-specific, no threshold to tune. That is the
   // whole reason it is safe to ship ahead of the measurement.
   const PROVENANCE_STAMPED_TOOLS = { write_note: true };
-  const UNBACKED_NOTE_STAMP = '\n\n[Recorded from conversation — not verified by any tool '
-    + 'during this exchange.]';
+  const { UNBACKED_NOTE_STAMP } = require('./note-stamp'); // shared with authority-gate's read-back (2026-10-07)
 
   // A persistence call is not evidence for the next persistence call: without the
   // exclusion, two notes in one turn would leave the second looking checked purely

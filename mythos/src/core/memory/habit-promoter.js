@@ -132,7 +132,9 @@ function createHabitPromoter(deps) {
       const since = now() - HABIT_WINDOW_DAYS * 24 * 3600 * 1000;
       const hits = episodic.recall('', { kind: 'action', limit: 1000, windowDays: HABIT_WINDOW_DAYS }) || [];
       return hits.map(function(h) { return (h && h.record) || h; })
-        .filter(function(r) { return r && r.outcome === 'ok' && (r.ts || 0) >= since && subjectFromSummary(tool, r.summary) === subject; })
+        // An unverified play is stored as outcome 'ok' with detail.unverified (2026-10-07):
+        // it might not have happened, so it is no evidence of a habit (see dispatch-action).
+        .filter(function(r) { return r && r.outcome === 'ok' && !(r.detail && r.detail.unverified) && (r.ts || 0) >= since && subjectFromSummary(tool, r.summary) === subject; })
         .map(function(r) { return dayKey(r.ts); });
     }
     const days = (daysSeen.get(key) || []).concat(dayKey(now()));
