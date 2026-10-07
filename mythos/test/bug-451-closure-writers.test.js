@@ -194,7 +194,10 @@ describe('(3) consolidation — a distilled memory inherits the doubt of what it
 
   it('(l) ADJACENT: when nothing it was distilled from stated a cause, the distilled fact stays an observation', async () => {
     const dir = tempVaultDir(); dirs.push(dir);
-    const brain = { think: async () => ({ content: 'the operator opened Spotify twice' }) };
+    // 2026-10-07: was 'the operator opened Spotify twice'. Since BUG-464 a distilled line
+    // describing the operator is dropped before the write (memory/operator-lines.js), so
+    // that fixture wrote nothing. This test is about provenance, so its line is neutral.
+    const brain = { think: async () => ({ content: 'Spotify was opened twice' }) };
     const memory = memoryOver(dir, brain);
     await memory.init();
     await memory.episodic.write({ kind: 'action', summary: 'open_app Spotify ok', salience: 0.9 });
