@@ -20,6 +20,13 @@ function selectionOrdinal(intent) {
   return intent?.kind === 'play-index' && Number.isInteger(intent.ordinal) && intent.ordinal >= 1 && intent.ordinal <= 20 ? intent.ordinal : null;
 }
 
+// "Could you please open YouTube?" -> "open YouTube". Shared by the server's desktop
+// route and BUG-446's consent judge (2026-10-07), so the words that start a task and
+// the words that consent to it are read the same way.
+function withoutPoliteness(text) {
+  return String(text || '').trim().replace(/^(?:(?:can|could|would|will) you\s+(?:please\s+)?|(?:I want|I need|I'd like) you to\s+)/i, '').replace(/\?$/, '');
+}
+
 function parseRequest(request, hasContext = false) {
   const text = typeof request === 'string' ? request.trim() : '';
   if (!text || text.length > 1000) return null;
@@ -36,4 +43,4 @@ function parseRequest(request, hasContext = false) {
   return null;
 }
 
-module.exports = { parseRequest, selectionOrdinal };
+module.exports = { parseRequest, selectionOrdinal, withoutPoliteness };

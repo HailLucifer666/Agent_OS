@@ -408,10 +408,30 @@ describe('(5) desktop_task_start needs the operator\'s words', () => {
     assert.equal(calls.length, 1);
   });
   test('(5d) the judge: asked in words proceeds; silence, noise, negation, hypothetical do not', () => {
-    const j = (said) => require('../src/core/voice/goal-authority').judgeGoalRequest({ tool: 'desktop_task_start', current: said }).proceed;
+    // 2026-10-07: the judge now also takes the model's `request`, because the token
+    // binds the model's arguments; the words and the request must be one command.
+    const j = (said, request) => require('../src/core/voice/goal-authority').judgeGoalRequest({ tool: 'desktop_task_start', current: said, request: request === undefined ? said : request }).proceed;
     assert.equal(j('Play the third video on YouTube'), true);
     assert.equal(j('Pause the video'), true);
+    assert.equal(j('Mythos, pause the video.', 'pause'), true, 'ADJACENT: an address before the command is still the command');
+    assert.equal(j('Okay. Next.', 'next'), true, 'ADJACENT: the command in its own sentence');
+    assert.equal(j('Could you please open YouTube?', 'open YouTube'), true, 'ADJACENT: the polite form the server route accepts (desktop-server.test.js)');
     for (const said of ['', 'What a lovely evening', "Don't play anything", 'What if I said play the video', 'I never said play it']) assert.equal(j(said), false, said);
+  });
+  // Independent review finding, 2026-10-07: the verb list this replaced counted any
+  // sentence with "next", "start" or "open" as asking, and the minted token was for
+  // whatever request the model chose. Probes, same date: (a) desktopCommandIn
+  // returning a parse of 'next' for any text -> (5f) red; (b) sameCommand ignoring
+  // kind -> (5g) red.
+  test('(5f) everyday sentences that merely contain a command word are not a desktop request', () => {
+    const j = (said) => require('../src/core/voice/goal-authority').judgeGoalRequest({ tool: 'desktop_task_start', current: said, request: 'next' }).proceed;
+    for (const said of ["what's next on my calendar", "I'll start dinner", 'open the window, it is warm', 'let us go to bed']) assert.equal(j(said), false, said);
+  });
+  test('(5g) the words must ask for the SAME command the model requested ("pause" cannot buy "open YouTube")', () => {
+    const j = (said, request) => require('../src/core/voice/goal-authority').judgeGoalRequest({ tool: 'desktop_task_start', current: said, request }).proceed;
+    assert.equal(j('Pause the video', 'open YouTube'), false);
+    assert.equal(j('Play the third video on YouTube', 'Play the fifth video on YouTube'), false);
+    assert.equal(j('Pause the video', undefined), false, 'no request argument is no command to match');
   });
   test('(5e) the server\'s desktop route (the operator\'s utterance, parsed server-side) mints the consent too, and only for a request', async () => {
     const { createDesktopConnection } = require('../server/desktop-connection');

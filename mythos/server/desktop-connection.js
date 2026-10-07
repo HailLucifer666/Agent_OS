@@ -1,9 +1,9 @@
 'use strict';
-const { parseRequest } = require('../src/core/desktop/intent');
+const { parseRequest, withoutPoliteness } = require('../src/core/desktop/intent');
 const { randomUUID } = require('node:crypto');
 const CONVERSATION_TOOLS = new Set(['get_time', 'get_weather', 'web_search', 'web_fetch', 'read_status', 'self_capabilities', 'recall_memory', 'note_read', 'note_search', 'desktop_task_status']);
 function classify(text, hasContext) {
-  const value = String(text || '').trim().replace(/^(?:(?:can|could|would|will) you\s+(?:please\s+)?|(?:I want|I need|I'd like) you to\s+)/i, '').replace(/\?$/, '');
+  const value = withoutPoliteness(text);
   if (/^(?:please\s+)?(?:stop|cancel)(?:\s+(?:it|that|the task|the desktop task))?[.!]?$/i.test(value)) return { control: 'cancel' };
   if (/^(?:please\s+)?pause (?:the )?(?:desktop )?task[.!]?$/i.test(value)) return { control: 'pause' };
   if (/^(?:please\s+)?resume (?:the )?(?:desktop )?task[.!]?$/i.test(value)) return { control: 'resume' };

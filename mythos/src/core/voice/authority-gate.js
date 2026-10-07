@@ -45,7 +45,7 @@ const MEMORY_TOOLS = new Set(['remember']);
 // one it saves a proposal instead. Derived in the test from from-dashboard.js.
 const GOAL_TOOLS = new Set(['create_goal', 'toggle_goal', 'desktop_task_start']);
 function goalConsent(decision, said) {
-  return judgeGoalRequest({ tool: decision.tool, current: said }).proceed
+  return judgeGoalRequest({ tool: decision.tool, current: said, request: decision.args && decision.args.request }).proceed
     ? { consent: mintConsent({ tool: decision.tool, args: decision.args, basis: 'operator-request' }) } : {};
 }
 // voice-agent.js's VOICE_SPOKEN_CONFIRM_TTL_MS default, for the same reason.
