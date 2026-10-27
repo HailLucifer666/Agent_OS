@@ -1,4 +1,4 @@
-import { escapeHtml, escapeAttr } from '../url.js';
+import { escapeHtml, escapeAttr, isVaultBuildUrl, PREVIEW_SANDBOX } from '../url.js';
 // views/web-panel.js — overlay panel for embedding web content (YouTube, URLs).
 // First iframe in the dashboard. render(body, payload) receives the resolved
 // content payload from the open_web tool. Cleanup removes the iframe to stop
@@ -69,14 +69,17 @@ export async function render(body, payload) {
     if (payload.widgetType === 'youtube' && videoId) {
       fallbackUrl = 'https://www.youtube.com/watch?v=' + videoId;
     }
+    // B3c: a build MYTHOS serves is model-written — sandboxed, and given none of
+    // the player's grants (a build holding the clipboard and full-screen grants
+    // could overwrite the clipboard or pose as the HUD after one click).
+    const isBuild = isVaultBuildUrl(embedUrl);
     // xss-safe: all interpolated fields escaped
     body.innerHTML = `
       <div class="web-iframe-wrap">
         <iframe
           class="web-iframe-fill"
+          ${isBuild ? `sandbox="${PREVIEW_SANDBOX}"` : 'allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen" allowfullscreen'}
           src="${escapeAttr(embedUrl)}"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-          allowfullscreen
           referrerpolicy="strict-origin-when-cross-origin"
           loading="eager"></iframe>
       </div>

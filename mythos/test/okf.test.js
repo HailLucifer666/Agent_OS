@@ -238,3 +238,142 @@ describe('okf effector — export / list / import', function() {
     assert.equal(imported.ok, false, 'importing a bundle that is not there must not look like an empty success');
   });
 });
+
+// 2026-09-29 audit, B2b. okf_export is tier 2, which the default autonomy
+// ceiling allows with no confirmation, and a concept's custom `filename` was
+// checked only for separators, "..", and a leading/trailing dot or space.
+// Measured the same day on Windows 11 (25H2), in a scratch directory:
+//   - "run.bat" was accepted and written as-is: an executable-typed file in the
+//     vault, from a tool that never asks.
+//   - Node created a bare "aux" — and so would create a bundle DIRECTORY named
+//     "con" — that cmd lists but cannot open: Node reaches the disk through \\?\
+//     paths, which skip the device rules, and cmd does not. Names WITH an
+//     extension ("con.md", "COM0.md") are ordinary files on this build: cmd
+//     created, read and deleted them (independent review, confirmed). They are
+//     refused anyway because Windows 10 and older reserve them too, per
+//     Microsoft's naming documentation (not measured here).
+//   - "notes.md:hidden.exe" created an NTFS alternate data stream: notes.md
+//     listed as 0 bytes, the content sat in a stream okf_list and okf_import
+//     never read.
+// Every assertion below checks the DISK as well as the return value: a refusal
+// that still wrote the file would pass a return-value test.
+//
+// STAGE 1, 2026-09-29: tests 1-6 below failed on the unfixed code; test 7 (the
+// adjacent names that must keep working) passed before and after.
+// PROVEN ABLE TO FAIL, 2026-09-29 — nine mutations, each diffed, run, and
+// restored from a byte copy, each turning the named test red:
+//   drop the .md check (1); let ":" through (2, 5); device regex without the
+//   trailing-space form (3), without superscript digits (3), bare names only
+//   (3, 6); no length limit (4, 5); generated device names not suffixed (6); the
+//   effector checking the segment instead of the final filename (1); refuse the
+//   concept but still write a file (1, 2, 3, 4 — the disk assertions, not the
+//   return values, are what catch this one).
+// After independent review (Opus), same day, four more, each red: delete
+// okf_import's bundle guard (this one PASSED the first version of test 5, whose
+// ok:false also holds for a merely absent bundle — it now asserts the reason);
+// let COM0 through; stop okf_list trimming; read through the untrimmed name.
+describe('okf_export — every final filename is a plain .md name (B2b)', function() {
+  let dir;
+  let tools;
+
+  beforeEach(function() {
+    dir = tempVaultDir();
+    tools = fromOkf.buildTools({ vault: createFsStore(() => dir, null) });
+  });
+
+  afterEach(function() {
+    cleanupVaultDir(dir);
+  });
+
+  function tool(name) {
+    return tools.filter(x => x.name === name)[0].fn;
+  }
+
+  function onDisk(bundle) {
+    const d = path.join(dir, 'Knowledge', bundle);
+    return fs.existsSync(d) ? fs.readdirSync(d) : [];
+  }
+
+  async function exportOne(filename, bundle) {
+    return tool('okf_export')({ bundle: bundle || 'b', writeIndex: false, concepts: [{ type: 'X', body: 'y', filename }] });
+  }
+
+  it('refuses a custom filename that does not end in .md, and writes nothing', async function() {
+    for (const name of ['run.bat', 'notes.txt', 'page.html', 'x.md.exe', 'noext']) {
+      const res = await exportOne(name);
+      assert.equal(res.ok, false, name);
+      assert.match(res.result.rejected[0].error, /must end in \.md/, name);
+      assert.match(res.result.rejected[0].error, /Omit `filename` and a safe one is generated from the title/, 'the refusal names the way forward');
+    }
+    assert.deepEqual(onDisk('b'), []);
+  });
+
+  it('refuses ":" and every other character Windows gives meaning to — no alternate data stream is created', async function() {
+    for (const name of ['notes.md:hidden.exe', 'a:b.md', 'a<b.md', 'a>b.md', 'a"b.md', 'a|b.md', 'a?b.md', 'a*b.md', 'tab\there.md', 'nul\u0000.md']) {
+      const res = await exportOne(name);
+      assert.equal(res.ok, false, JSON.stringify(name));
+      assert.match(res.result.rejected[0].error, /reserved character/, JSON.stringify(name));
+    }
+    assert.deepEqual(onDisk('b'), [], 'not even the 0-byte host file of a stream may appear');
+  });
+
+  it('refuses a Windows device name in any case, with or without an extension', async function() {
+    for (const name of ['con.md', 'CON.md', 'Con .md', 'nul.md', 'Aux.md', 'prn.md', 'com1.md', 'LPT9.md',
+      'conin$.md', 'CONOUT$.md', 'com\u00b9.md', 'aux.tar.md', 'com0.md', 'LPT0.md']) {
+      const res = await exportOne(name);
+      assert.equal(res.ok, false, name);
+      assert.match(res.result.rejected[0].error, /reserved device name/, name);
+    }
+    assert.deepEqual(onDisk('b'), []);
+  });
+
+  it('refuses an over-long filename', async function() {
+    const res = await exportOne('a'.repeat(200) + '.md');
+    assert.equal(res.ok, false);
+    assert.match(res.result.rejected[0].error, /longer than/);
+    assert.deepEqual(onDisk('b'), []);
+  });
+
+  it('applies the same rules to the bundle name, on export and on read', async function() {
+    for (const bundle of ['con', 'NUL', 'a:b', 'x'.repeat(200)]) {
+      const res = await tool('okf_export')({ bundle, concepts: [{ type: 'X', body: 'y' }] });
+      assert.equal(res.ok, false, bundle);
+      assert.match(res.result.error, /invalid bundle name/, bundle);
+      // The REASON is asserted, not only ok:false: okf_import returns ok:false for
+      // any bundle that merely does not exist, so a bare ok check here passed with
+      // the guard deleted (independent review, 2026-09-29).
+      assert.match((await tool('okf_list')({ bundle })).result.error, /invalid bundle name/, 'okf_list ' + bundle);
+      assert.match((await tool('okf_import')({ bundle })).result.error, /invalid bundle name/, 'okf_import ' + bundle);
+    }
+    assert.equal(fs.existsSync(path.join(dir, 'Knowledge')), false, 'no bundle directory may be created');
+  });
+
+  it('makes a GENERATED name safe instead of refusing it — a title is not a filename', async function() {
+    const res = await tool('okf_export')({
+      bundle: 'gen',
+      writeIndex: false,
+      concepts: [{ type: 'X', title: 'CON', body: 'a' }, { type: 'X', title: 'nul', body: 'b' }, { type: 'X', title: 'Com1', body: 'c' }]
+    });
+    assert.equal(res.ok, true, JSON.stringify(res.result));
+    assert.deepEqual(onDisk('gen').sort(), ['com1-concept.md', 'con-concept.md', 'nul-concept.md']);
+  });
+
+  it('okf_list trims the bundle name the way export and import do', async function() {
+    await tool('okf_export')({ bundle: 'notes', writeIndex: false, concepts: [{ type: 'X', title: 'A', body: 'x' }] });
+    const listed = await tool('okf_list')({ bundle: 'notes ' });
+    assert.equal(listed.ok, true, JSON.stringify(listed.result));
+    assert.equal(listed.result.bundle, 'notes');
+    assert.deepEqual(listed.result.concepts.map(c => c.file), ['a.md']);
+    assert.equal(listed.result.concepts[0].type, 'X', 'the concept must be READ through the trimmed name too');
+  });
+
+  // The adjacent cases: names that merely LOOK like the refused ones must keep working.
+  it('still accepts ordinary .md names, including ones that start like a device name', async function() {
+    const names = ['my-notes.md', 'Notes.MD', 'console.md', 'com10.md', 'nullable.md', 'auxiliary.md', 'a.b.md'];
+    for (const name of names) {
+      const res = await exportOne(name, 'fine');
+      assert.equal(res.ok, true, name + ': ' + JSON.stringify(res.result));
+    }
+    assert.deepEqual(onDisk('fine').sort(), names.slice().sort());
+  });
+});

@@ -406,6 +406,15 @@ function createIdentity({ bus, config, fs, identityStore }) {
       return boundaries.max_autonomous_tier;
     },
 
+    // B2d (2026-09-29 audit): boundaries.md's allowed_dirs was parsed and then
+    // read by nothing, although the seeded file told the operator "file tools are
+    // confined to these paths". from-computer.js now adds them as extra roots,
+    // after read-access-policy.js validates each one. A copy, so callers cannot
+    // edit the cached boundaries.
+    getAllowedDirs() {
+      return Array.isArray(boundaries && boundaries.allowed_dirs) ? boundaries.allowed_dirs.slice() : [];
+    },
+
     // exact destructured signature from §11 — do not paraphrase
     async learn({ signal, text, sourceEpId }) {
       if (signal && signal.aborted) return { ref: null, degraded: true };

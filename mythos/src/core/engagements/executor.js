@@ -269,14 +269,14 @@ function createEngagementExecutor(deps) {
       var decision = { tool: actions[i].tool, args: actions[i].args || {} };
       // 1. Leash check (mandatory, fail-closed — cortex pattern).
       if (leash && typeof leash.check === 'function') {
-        var lr = leash.check(decision, { goalId: record.goalId });
-        if (!lr.allow && lr.requireConfirm) {
+        if (leash.prepare) await leash.prepare(decision); var lr = leash.check(decision, { goalId: record.goalId }); // B2a
+        if (!lr.allow && lr.requireConfirm && !lr.perCallApproval) { // B2a: a 'system' confirm above tier 2 can never be accepted — denied below
           // Park on a checkpoint — same connectionId:'system' discipline as forge.
           var parked = await parkActionForConfirm(record, stage, decision, lr, ctx);
           if (parked) return { ok: false, error: 'awaiting-confirm', verified: false, parked: true };
         }
         if (!lr.allow) {
-          return { ok: false, error: 'leash-denied:' + (lr.reason || 'unknown'), verified: false };
+          return { ok: false, error: 'leash-denied:' + (lr.reason || 'unknown') + (lr.perCallApproval ? ' (' + lr.detail + ')' : ''), verified: false };
         }
       }
       // 2. Dispatch via the SHARED sequence (breaker→invoke→episodic→budget→emit).

@@ -204,13 +204,13 @@ test('C1: the grant is restricted to the main HUD window', () => {
   // the handler USES it and, separately, that the predicate really compares
   // against the HUD's webContents. Asserting only the call site would pass
   // against a predicate someone had quietly widened to `return true`.
-  assert.match(handler, /isHudContents\s*\(/,
-    'the handler must gate on the HUD-identity predicate — media-window.js shares this session and loads arbitrary URLs from open_web');
-  const predStart = src.indexOf('const isHudContents');
-  assert.ok(predStart !== -1, 'isHudContents must exist');
-  const pred = src.slice(predStart, predStart + 500);
-  assert.match(pred, /mainWindow/, 'isHudContents must compare against mainWindow');
-  assert.match(pred, /webContents/, 'isHudContents must compare webContents identity, not a URL or a title');
+  // Since 2026-09-29 (audit B3a) the predicate is electron/hud-trust.js, which
+  // also checks the frame and the document; its behaviour is tested directly in
+  // test/electron-hud-trust.test.js, so a widened `return true` fails there.
+  assert.match(handler, /hudTrust\.displayMedia\(request, webContents\)/,
+    'the handler must gate on the HUD predicate — media-window.js shares this session and loads arbitrary URLs from open_web');
+  const trustInit = src.slice(src.indexOf('const hudTrust = createHudTrust'), src.indexOf('const hudTrust = createHudTrust') + 300);
+  assert.match(trustInit, /mainWindow\.webContents/, 'the predicate must be anchored to the real HUD window, not a URL or a title');
 });
 
 test('C1: display-capture is not blanket-granted by the permission-check handler', () => {

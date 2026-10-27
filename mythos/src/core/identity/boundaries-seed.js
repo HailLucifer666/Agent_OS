@@ -65,8 +65,10 @@ max_autonomous_tier: ${tier}
 # deny: kill_session
 
 ## Allowed Directories
-# File tools are confined to these paths. An empty list means the built-in
-# default applies.
+# File tools can always reach the MYTHOS folder and nothing else by default.
+# List any other folder they may use, one per line as "- <absolute path>". A
+# whole drive, a network path or a credential folder is refused, and credential
+# files (.env*, keys.json, ~/.ssh, browser profiles) stay unreadable everywhere.
 allowed_dirs:
 `;
 }

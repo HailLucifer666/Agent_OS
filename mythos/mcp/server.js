@@ -122,6 +122,7 @@ function createMcpServer({ hub, leash, dispatch, bus, config, logger }) {
     var decision = { tool: toolName, args: args };
 
     // THE SECURITY GATE — goalId is always null over MCP. See file header.
+    if (leash.prepare) await leash.prepare(decision); // B2a: resolve before authorizing
     var leashResult = leash.check(decision, { goalId: null });
 
     if (!leashResult.allow) {
@@ -310,7 +311,7 @@ if (require.main === module) {
     // run, so no observed failure is explained by it.
     // Guarded by test/mcp-effector-ctx-parity.test.js, which also pins the
     // five OTHER effectors still drifting from main.js on this surface.
-    registerFromComputer(hub, { brain: brain, config: config, logger: logger });
+    registerFromComputer(hub, { brain: brain, config: config, logger: logger, identity: identity }); // B2d: boundaries.md allowed_dirs, same as src/main.js
     registerFromPc(hub, { brain: brain, fs: memory.fs });
     registerFromBrowser(hub, { config: config, getBridge: () => null, isDesktopTask: () => false });
     registerFromSkills(hub);
