@@ -62,7 +62,8 @@ test('closed Live speaks a slow outcome once; open Live sends only context', asy
     const adapter = createLiveToolAdapter({ leash: { check: () => ({ allow: true, tier: 0 }) },
       dispatchAction: () => new Promise(r => { resolve = r; }), bus: { emit() {} }, logger: { info() {}, warn() {} },
       memory: { working: {}, episodic: { write: async () => {} } }, historyAppend() {}, reflection: {},
-      summarizeActionsForResult: () => null, now: () => now, config: { LIVE_VOICE_HONESTY_ENABLED: enabled },
+      summarizeActionsForResult: () => null, now: () => now, toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06; this fixture was missed then, added in review 2026-10-27): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path these tests pin
+      config: { LIVE_VOICE_HONESTY_ENABLED: enabled },
       speakWhenClosed: text => spoken.push(text), getLiveSession: () => ({ isOpen: () => open, sendText: t => reject ? false : notices.push(t) }) });
     await adapter.handleLiveToolCalls([{ id: 'slow', name: 'dsh_task', args: {} }], { sendToolResponse() {} });
     now = age; resolve({ ok: true, result: 'page built' });
@@ -76,7 +77,8 @@ test('late failure speech passes through the adapter sanitizer', async () => {
   const adapter = createLiveToolAdapter({ leash: { check: () => ({ allow: true, tier: 0 }) },
     dispatchAction: () => new Promise(r => { resolve = r; }), bus: { emit() {} }, logger: { info() {}, warn() {} },
     memory: { working: {}, episodic: { write: async () => {} } }, historyAppend() {}, reflection: {},
-    summarizeActionsForResult: () => null, now: () => now, getLiveSession: () => null,
+    summarizeActionsForResult: () => null, now: () => now, toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06; this fixture was missed then, added in review 2026-10-27): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path these tests pin
+    getLiveSession: () => null,
     sanitizeErrorForClient: err => String(err.message || err).replaceAll('SECRET_PATH_MARKER', '[redacted]'),
     speakWhenClosed: text => spoken.push(text) });
   await adapter.handleLiveToolCalls([{ id: 'private-failure', name: 'dsh_task', args: {} }], { sendToolResponse() {} });
@@ -101,7 +103,7 @@ for (const open of [false, true]) test(`real dsh_task keeps model evidence acros
     const adapter = createLiveToolAdapter({ leash: { check: () => ({ allow: true, tier: 0 }) },
       dispatchAction: () => tool({ task: 'first' }).then(r => { results.push(r); return r; }),
       bus: { emit() {} }, logger: { info() {}, warn() {} }, memory: { working: {}, episodic: { write: async () => {} } },
-      historyAppend() {}, reflection: {}, summarizeActionsForResult: () => null, now: () => now,
+      historyAppend() {}, reflection: {}, summarizeActionsForResult: () => null, now: () => now, toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06; this fixture was missed then, added in review 2026-10-27): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path these tests pin
       getLiveSession: () => ({ isOpen: () => open, sendText: t => notices.push(t) }), speakWhenClosed: t => spoken.push(t) });
     await adapter.handleLiveToolCalls([{ id: 'fallback-direct', name: 'dsh_task', args: {} }], { sendToolResponse() {} });
     await tool({ task: 'second' }); now = 90000; finishFirst('first reply '.repeat(1000));

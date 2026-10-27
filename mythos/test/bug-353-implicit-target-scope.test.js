@@ -24,6 +24,7 @@
 // identical sequence without the opt-out, so a green result proves the opt-out
 // is what does the work rather than something incidental to the harness.
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -43,7 +44,7 @@ function stubPcChild(calls, opts) {
   const o = opts || {};
   return {
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (c) => {
+    sendCommand: async (c) => { const resolvedTarget = answersResolve(c); if (resolvedTarget) return resolvedTarget;
       calls.push(c);
       if (c.cmd === 'launch_app') {
         if (o.launchFails) return { ok: false, result: 'no application by that name' };

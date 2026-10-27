@@ -101,7 +101,31 @@ describe('BUG-006: YouTube embed mode configuration', () => {
     assert.match(result.result.embedUrl, /youtube-nocookie\.com\/embed\//, 'Should have an embed URL');
   });
 
-  it('with YOUTUBE_MODE="newtab", returns widgetType:"newtab" with YouTube URL', async () => {
+  // REWRITTEN 2026-10-06 (BUG-468). This test used to assert only that newtab mode
+  // RETURNS a widgetType:'newtab' descriptor, through the renderer path - which
+  // under Electron has no surface at all (media window refuses it, window.open is
+  // denied), so on the attended machine it passed while nothing could ever play.
+  // It pinned the dead end. With the shell's external opener installed (the
+  // Electron case) the url must now REACH the opener; the descriptor shape is
+  // kept. The no-opener variant below keeps the old renderer path on purpose
+  // (a plain browser HUD can still window.open it).
+  it('with YOUTUBE_MODE="newtab" and an external opener, the YouTube watch URL reaches the opener', async () => {
+    ctx.config = { YOUTUBE_MODE: 'newtab' };
+
+    const tools = buildTools(ctx);
+    const seen = [];
+    tools.setExternalOpener(async (u) => { seen.push(u); return { opened: true, reason: null }; });
+    const open_web = toolFn(tools, 'open_web');
+    const result = await open_web({ type: 'youtube', query: 'test video' });
+
+    assert.equal(result.ok, true, 'Should succeed');
+    assert.equal(result.result.widgetType, 'newtab', 'Should return newtab widget type');
+    assert.deepEqual(seen, [`https://www.youtube.com/watch?v=${STUB_VIDEO_ID}`], 'the url must reach the shell opener');
+    assert.match(result.result.url, /youtube\.com\/watch\?v=/, 'URL should be a YouTube watch link');
+    assert.ok(result.result.title, 'Should have a title');
+  });
+
+  it('with YOUTUBE_MODE="newtab" and NO external opener (plain browser HUD), still returns the newtab descriptor via the renderer path', async () => {
     ctx.config = { YOUTUBE_MODE: 'newtab' };
 
     const tools = buildTools(ctx);
@@ -110,7 +134,6 @@ describe('BUG-006: YouTube embed mode configuration', () => {
 
     assert.equal(result.ok, true, 'Should succeed');
     assert.equal(result.result.widgetType, 'newtab', 'Should return newtab widget type');
-    assert.ok(result.result.url, 'Should have a URL');
     assert.match(result.result.url, /youtube\.com\/watch\?v=/, 'URL should be a YouTube watch link');
     assert.ok(result.result.title, 'Should have a title');
   });
@@ -164,10 +187,17 @@ describe('BUG-006: YouTube embed mode configuration', () => {
     // The query now matches the stub's own title. All four original assertions
     // are kept verbatim — this file is about YOUTUBE_MODE branching, and that is
     // still what it tests.
-    const result = await toolFn(buildTools(ctx), 'open_web')({ type: 'youtube', query: STUB_TITLE });
+    // BUG-468 (2026-10-06): the fallback hand-off is asserted at the opener, not
+    // only as a returned descriptor - the descriptor alone reached no surface
+    // under Electron.
+    const built = buildTools(ctx);
+    const opened = [];
+    built.setExternalOpener(async (u) => { opened.push(u); return { opened: true, reason: null }; });
+    const result = await toolFn(built, 'open_web')({ type: 'youtube', query: STUB_TITLE });
     assert.deepEqual(probes, [`https://www.youtube.com/watch?v=${STUB_VIDEO_ID}`]);
     assert.equal(result.result.widgetType, 'newtab');
     assert.equal(result.result.url, probes[0]);
+    assert.deepEqual(opened, [probes[0]], 'the fallback url must reach the shell opener');
   });
 
 });

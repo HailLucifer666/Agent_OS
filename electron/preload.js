@@ -5,9 +5,9 @@
 // the privileged main process.
 //
 // AD-8 (V2 spine §1): "Secrets never reach the renderer." This preload exposes
-// a contextBridge surface of EXACTLY ten functions — getKeyNames, setKey,
+// a contextBridge surface of EXACTLY eleven functions — getKeyNames, setKey,
 // hasKey, onHotkey, notifyReady, restartServer, onUpdateStatus, installUpdate,
-// getSettings and setSetting — and NOTHING that returns a key VALUE. Names,
+// getSettings, setSetting and setSettings — and NOTHING that returns a key VALUE. Names,
 // booleans, short strings/numbers (onHotkey, onUpdateStatus — the latter now
 // three plain primitives: state, version, percent), status objects
 // (restartServer, installUpdate, setSetting) and NON-SECRET configuration
@@ -116,5 +116,12 @@ contextBridge.exposeInMainWorld('mythos', {
   // child. An empty-string value clears the key rather than storing ''.
   setSetting: function setSetting(name, value) {
     return ipcRenderer.invoke('mythos:set-setting', name, value);
+  },
+  // setSettings(changes) → { ok, needsRestart, results } | { ok:false, error }.
+  // B3b (2026-09-29 audit): the settings panel's Save. The main process shows
+  // ONE native confirmation listing every name = value, and writes nothing
+  // unless the operator confirms. setKey and setSetting confirm the same way.
+  setSettings: function setSettings(changes) {
+    return ipcRenderer.invoke('mythos:set-settings', changes);
   },
 });

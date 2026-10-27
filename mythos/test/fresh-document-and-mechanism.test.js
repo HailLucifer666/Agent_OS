@@ -21,6 +21,7 @@
 // while being told the document was fresh. The oracle is now a rising TAB COUNT
 // plus an empty active document, via UIA's Add-New-Tab button.
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -53,7 +54,7 @@ function pcChild(handlers) {
   return {
     calls,
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (c) => {
+    sendCommand: async (c) => { const resolvedTarget = answersResolve(c); if (resolvedTarget) return resolvedTarget;
       calls.push(c);
       const h = handlers[c.cmd];
       if (typeof h === 'function') return h(c);

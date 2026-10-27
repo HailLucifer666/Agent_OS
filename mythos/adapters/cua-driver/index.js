@@ -220,7 +220,14 @@ function processQueue() {
   // call is method 'tools/call'. Reading `method` here would classify a click as
   // read-only and defeat the whole split.
   const toolName = (request.method === 'tools/call' && request.params && request.params.name) || null;
-  commandInFlight = { id: id, resolve: resolve, reject: reject, timer: null };
+  // B3b, at the moment of sending: a click queued before a confirmation dialog
+  // opened is refused here, not written to the driver after it (2026-10-05).
+  if (toolName !== null && inputInhibit.isInputInhibited() && !READ_ONLY_TOOLS.has(toolName)) {
+    resolve({ error: { message: inputInhibit.REFUSAL } });
+    processQueue();
+    return;
+  }
+  commandInFlight = { id: id, resolve: resolve, reject: reject, timer: null, toolName: toolName };
 
   const timer = setTimeout(() => {
     if (commandInFlight === null || commandInFlight.id !== id) return;
@@ -285,11 +292,66 @@ function sendRequest(method, params) {
   });
 }
 
+const inputInhibit = require('../input-inhibit');
+const READ_ONLY_TOOLS = new Set(['list_windows', 'get_window_state']);
+
+// B2e (2026-09-29 audit, review 2026-09-30): cua-driver's clicks never reach
+// ps-automation.ps1's input gate, so the same judgement runs here, at this
+// adapter's one door, for every tool that is not a read: the window the call
+// acts in (named by its pid - without one there is nothing to check, so it is
+// refused) is asked of pc-child's read-only input_target; MYTHOS's own window and
+// an unidentifiable one are refused; a command window runs only inside the
+// operator's approval scope for that exact window (pc-child/input-approval.js).
+// Every caller is covered - cua_click and spotify_play's direct clicks alike.
+const CUA_NOT_INPUT = new Set(['list_windows', 'get_window_state', 'bring_to_front']);
+async function inputGate(toolName, args) {
+  if (CUA_NOT_INPUT.has(toolName)) return null;
+  const pid = Number(args && args.pid);
+  if (!Number.isInteger(pid) || pid <= 0) return 'Refused: a cua-driver ' + toolName + ' needs the pid of its window, so that window can be checked first. Nothing was sent.';
+  const pcChild = require('../pc-child');
+  const inputApproval = require('../pc-child/input-approval');
+  let res;
+  try { res = await pcChild.sendCommand({ cmd: 'input_target', target: { cmd: 'ui_click', pid } }); } catch (err) { res = { ok: false, error: err && err.message }; }
+  const w = res && res.ok && res.result && Array.isArray(res.result.windows) ? res.result.windows[0] : null;
+  if (!w) return 'Refused: the window for pid ' + pid + ' could not be checked (' + String((res && res.error) || 'no answer') + '). Nothing was sent.';
+  if (w.kind === 'own') return 'Refused: pid ' + pid + ' is MYTHOS\'s own window (' + w.why + '). MYTHOS never clicks into itself; its prompts are the operator\'s to answer.';
+  if (w.kind === 'unknown') return 'Refused: the window for pid ' + pid + ' could not be identified (' + w.why + '). Nothing was sent.';
+  if (w.kind === 'command') {
+    const approved = inputApproval.currentApproved() || [];
+    const same = approved.some((a) => a.pid === Number(w.pid) && a.start === String(w.start || '') && (!a.hwnd || a.hwnd === Number(w.hwnd)));
+    if (!same) return 'Refused: pid ' + pid + ' is ' + (w.process || 'a program') + ' - ' + w.why + '. Input there can run commands, so it needs the operator\'s approval for this one call.';
+  }
+  return null;
+}
+
+// The server acks a confirmation's inhibit only once no input call is still
+// running here, as it does for pc-child (whenInputIdle there). true = idle.
+function whenInputIdle(maxMs) {
+  const until = Date.now() + (Number(maxMs) || 2000);
+  return new Promise((resolve) => {
+    (function poll() {
+      const busy = commandInFlight && commandInFlight.toolName && !READ_ONLY_TOOLS.has(commandInFlight.toolName);
+      if (!busy) return resolve(true);
+      if (Date.now() > until) return resolve(false);
+      setTimeout(poll, 20);
+    })();
+  });
+}
+
 // Call a cua-driver MCP tool (names confirmed against 0.8.3 — see header).
 // Returns { ok, result } where result is the FULL MCP tool result object
 // ({ content, structuredContent, isError }) so callers can read
 // structuredContent.elements etc.; on failure result is an error string.
 async function invoke(toolName, args) {
+  // B3b: while a MYTHOS confirmation dialog is open, only the read tools run
+  // (adapters/input-inhibit.js). Everything else could click or focus.
+  // Runs BEFORE the identity gate: it needs no pid and no round-trip, so it
+  // answers the cheapest, most absolute refusal first.
+  if (inputInhibit.isInputInhibited() && !READ_ONLY_TOOLS.has(toolName)) {
+    return { ok: false, result: inputInhibit.REFUSAL };
+  }
+  const refusal = await inputGate(toolName, args);
+  if (refusal) return { ok: false, result: refusal };
   if (state !== 'ONLINE') {
     return { ok: false, result: hint || 'cua-driver unavailable' };
   }
@@ -496,5 +558,6 @@ module.exports = {
   startCuaDriver: startCuaDriver,
   shutdownCuaDriver: shutdownCuaDriver,
   invoke: invoke,
+  whenInputIdle: whenInputIdle,
   getStatus: getStatus
 };

@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const { effectorFromTool } = require('./adapter');
 const { resolveSandboxed } = require('./from-computer');
 const { chunkProse } = require('../memory/chunker');
+const { redactText } = require('./credential-scanner');
 const defaultEmbeddings = require('../../../providers/embeddings');
 // The evidence contract: document_answer cites chunks by ref, and a citation
 // is only honest if the ref resolves to a real chunk file — see evidence.js's
@@ -59,7 +60,7 @@ function createDocumentsEffector({ documents, documentsIndex, embed, brain }) {
       if (stat.size > MAX_READ_BYTES) {
         return fail('File is too large to ingest (' + Math.round(stat.size / 1024) + 'KB, limit ' + (MAX_READ_BYTES / 1024 / 1024) + 'MB).');
       }
-      text = fsSync.readFileSync(sandboxed.resolved, 'utf8');
+      text = redactText(fsSync.readFileSync(sandboxed.resolved, 'utf8')); // B2d: before chunking, storing or embedding
     } catch (err) {
       return fail(err.message);
     }
@@ -131,7 +132,7 @@ function createDocumentsEffector({ documents, documentsIndex, embed, brain }) {
         filePath: rec.filePath,
         lineStart: rec.lineStart,
         lineEnd: rec.lineEnd,
-        snippet: String(rec.text || '').slice(0, 200),
+        snippet: redactText(String(rec.text || '')).slice(0, 200), // B2d: chunks stored before redaction existed
       });
     }
     return ok({ results: results });
@@ -197,7 +198,7 @@ function createDocumentsEffector({ documents, documentsIndex, embed, brain }) {
         ? { lineStart: rec.lineStart, lineEnd: rec.lineEnd }
         : { wordStart: rec.wordStart, wordEnd: rec.wordEnd };
       sources.push({ ref: h.ref, docId: rec.docId, span: span });
-      passages.push(rec.text);
+      passages.push(redactText(String(rec.text || ''))); // B2d: legacy chunks are redacted on the way to the model
     }
 
     if (sources.length === 0) {

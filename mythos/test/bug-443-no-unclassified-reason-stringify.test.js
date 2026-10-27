@@ -72,7 +72,8 @@ const CLASSIFIED = {
       + 'own header); a structured value here would be a protocol violation, not a rendering bug.',
     'res.reason': 'same protocol, same field.',
   },
-  'from-pc.js': {
+  // Moved with launch_app's fresh-document step to launch-app.js (B2a, 2026-09-29).
+  'launch-app.js': {
     'focused.result': 'focused comes from delegate(), normalized since BUG-443.',
   },
   'from-app-reply.js': {

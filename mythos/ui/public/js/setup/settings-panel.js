@@ -156,15 +156,17 @@ export function mountSettingsPanel(root, opts) {
     status.classList.remove('is-error');
     status.textContent = `Saving ${plan.changes.length}…`;
 
+    // B3b: ONE call for the whole batch, so the main process asks the operator
+    // once, in a native dialog listing every change, before anything is written.
     const failed = [];
-    for (const change of plan.changes) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const res = await bridge.setSetting(change.name, change.value);
-        if (!res || res.ok !== true) failed.push(`${change.name}: ${(res && res.error) || 'refused'}`);
-      } catch (err) {
-        failed.push(`${change.name}: ${(err && err.message) || 'refused'}`);
+    try {
+      const res = await bridge.setSettings(plan.changes.map((c) => ({ name: c.name, value: c.value })));
+      if (!res || res.ok !== true) {
+        const each = (res && Array.isArray(res.results)) ? res.results.filter((r) => !r.ok).map((r) => `${r.name}: ${r.error || 'refused'}`) : [];
+        failed.push(...(each.length ? each : [(res && res.error) || 'refused']));
       }
+    } catch (err) {
+      failed.push((err && err.message) || 'refused');
     }
 
     if (failed.length) {
