@@ -5,13 +5,16 @@
 // Progressively looser so an exact label always beats a coincidental
 // substring — "Mou" must not win over "Mousumi" when both are present.
 
+const { normalizeOcrText } = require('./ocr-text-match.js');
+
 function matchRegions(regions, query) {
-  const want = String(query || '').trim().toLowerCase();
+  // BUG-471: one shared normaliser (dash/quote/whitespace folding, nothing deleted).
+  const want = normalizeOcrText(query);
   if (!want) return [];
   const usable = (regions || []).filter((r) =>
     r && typeof r.x === 'number' && typeof r.y === 'number' &&
     r.width > 0 && r.height > 0 && String(r.text || '').trim());
-  const norm = (r) => String(r.text).trim().toLowerCase();
+  const norm = (r) => normalizeOcrText(r.text);
 
   const exact = usable.filter((r) => norm(r) === want);
   if (exact.length) return exact;

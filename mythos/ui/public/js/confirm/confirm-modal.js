@@ -73,7 +73,13 @@ export function mountConfirmModal(root, opts) {
     // focus returns to whatever had focus before this popped up — none of
     // which existed before (a keyboard user could previously tab straight
     // out of a live confirm dialog into the HUD canvas behind it).
-    releaseTrap = trapFocus(overlay, { onEscape: closeModal });
+    //
+    // Focus starts on DENY (2026-09-29 audit, B2a review). Focus on Approve meant
+    // one Space or Enter approved — and send_key is a tier-2 tool the model can
+    // call with no confirm, while this window is in front. Deny-first makes a
+    // stray or model-sent key refuse instead. It does NOT stop "Tab, then Space":
+    // input tools aimed at MYTHOS's own window are refused separately (B2e).
+    releaseTrap = trapFocus(overlay, { onEscape: closeModal, initialFocus: '.confirm-reject' });
   }
 
   const unsub = subscribe(['confirm-request'], (msg) => showModal(msg.payload));

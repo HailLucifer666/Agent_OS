@@ -54,12 +54,20 @@ function createLoopbackHostGuard({ configuredPort }) {
 // The rule, for browser-shaped requests only (a non-browser client — curl, the
 // phone node, Electron's main process — sends neither header, and on a token
 // deployment still needs the token):
-//   - an Origin header must name this request's own Host, or be on
-//     ALLOWED_ORIGINS. The SCHEME is not compared: behind a proxy that
-//     terminates TLS the page is https:// while this server sees http://, and
-//     only this server's own site can present its own Host. `Origin: null`
-//     (sandboxed frames, file://, data:) never parses to a host, so it is
-//     never allowed.
+//   - an Origin header must be this request's own ORIGIN — scheme, host and
+//     port — or be on ALLOWED_ORIGINS. `Origin: null` (sandboxed frames,
+//     file://, data:) never matches, so it is never allowed.
+//     Until 2026-09-29 (audit, B3a) the scheme was NOT compared, so that a page
+//     behind a TLS-terminating proxy (https:// outside, http:// here) passed
+//     implicitly. That deployment already had to list its https:// origin on
+//     ALLOWED_ORIGINS for the WebSocket, whose verifyClient compares full
+//     origins (server/index.js), so the implicit pass only ever made /api
+//     looser than the socket beside it. It is now the same explicit entry.
+//     This server's own scheme is https only when its own socket is encrypted.
+//     Not req.secure: under Express's `trust proxy` that reads X-Forwarded-Proto,
+//     a header the client can send, and a header the client sends cannot vouch
+//     for the client. Today the server listens on plain HTTP only
+//     (server/index.js app.listen), so every request compares as http://.
 //   - Sec-Fetch-Site, when present, must be 'same-origin' or 'none' (the operator
 //     typed the URL). 'same-site' is refused on purpose: another port on
 //     localhost is same-site, and it is exactly the local dev server or rogue
@@ -80,10 +88,13 @@ function crossOriginRefusal(req, allowedOrigins) {
   const h = (req && req.headers) || {};
   const origin = h.origin;
   if (origin !== undefined) {
-    let originHost = null;
-    try { originHost = new URL(origin).host; } catch (_) { /* 'null' or garbage */ }
-    const sameHost = !!originHost && !!h.host && originHost.toLowerCase() === String(h.host).toLowerCase();
-    if (!sameHost && !(allowedOrigins && allowedOrigins.has(origin))) return 'origin';
+    let ownOrigin = null;
+    let theirOrigin = null;
+    const tls = !!(req.socket && req.socket.encrypted);
+    try { if (h.host) ownOrigin = new URL(`${tls ? 'https' : 'http'}://${h.host}`).origin; } catch (_) { /* bad Host */ }
+    try { theirOrigin = new URL(origin).origin; } catch (_) { /* 'null' or garbage */ }
+    const sameOrigin = !!ownOrigin && !!theirOrigin && theirOrigin !== 'null' && theirOrigin === ownOrigin;
+    if (!sameOrigin && !(allowedOrigins && allowedOrigins.has(origin))) return 'origin';
   }
   const site = h['sec-fetch-site'];
   if (site !== undefined && site !== 'same-origin' && site !== 'none') return 'sec-fetch-site';

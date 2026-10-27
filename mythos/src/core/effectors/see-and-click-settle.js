@@ -39,6 +39,8 @@
 
 // Three post-click attempts. Raising this widens the false-positive window
 // described above — see the block comment before changing it.
+const { normalizeOcrText } = require('./ocr-text-match.js'); // BUG-471
+
 const SETTLE_ATTEMPTS = 3;
 const SETTLE_BACKOFF_MS = 500;
 
@@ -71,13 +73,13 @@ async function settleForChange(opts) {
     ? options.attempts : SETTLE_ATTEMPTS;
   const backoffMs = Number.isFinite(options.backoffMs) ? options.backoffMs : SETTLE_BACKOFF_MS;
   const wait = options.wait || sleep;
-  const want = options.expect ? String(options.expect).trim().toLowerCase() : '';
+  const want = options.expect ? normalizeOcrText(options.expect) : '';
 
   let after = null;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     after = await read();
     if (!after || !after.ok) return { kind: 'unreadable', after: after, attempts: attempt };
-    if (want && String(after.text || '').toLowerCase().includes(want)) {
+    if (want && normalizeOcrText(after.text).includes(want)) {
       return { kind: 'expected', after: after, attempts: attempt };
     }
     if (after.text !== beforeText) return { kind: 'changed', after: after, attempts: attempt };

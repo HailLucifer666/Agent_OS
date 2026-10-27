@@ -16,6 +16,7 @@
 // mocked sendCommand below throws on any unexpected cmd, so a call reaching
 // it proves the guard did NOT engage.
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -46,7 +47,7 @@ function withMocks({ pcChildMock, openFolderMock }, fn) {
 function explodingPcChild() {
   return {
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       throw new Error('pc-child must not be called for this branch: ' + JSON.stringify(cmdObj));
     },
   };
@@ -82,7 +83,7 @@ test('an unmapped app name still falls through to the real launch tiers (no over
   let sawLaunchAppCall = false;
   const pcChildMock = {
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       if (cmdObj.cmd === 'launch_app') { sawLaunchAppCall = true; return { ok: true, result: { pid: 42, matchedBy: 'process', name: 'notepad' } }; }
       throw new Error('unexpected cmd: ' + cmdObj.cmd);
     },
