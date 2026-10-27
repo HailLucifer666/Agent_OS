@@ -763,8 +763,8 @@ async function main() {
       if (!pipelineEffector) throw new Error("server boot: effectors.get('pipeline-effector') missing — P7 must register it before P9 can serve /api/pipeline");
 
       // P4 Jarvis upgrade: the learning loop — extracts operator preferences +
-      // speaking style from conversation episodics every ~15 turns and at
-      // graceful shutdown. Best-effort: constructor deps all exist by now.
+      // speaking style from conversation episodics every ~15 turns (no pass at
+      // quit since 2026-10-06, BUG-437). Best-effort: deps all exist by now.
       reflection = createReflection({ brain: brain, memory: memory, identity: identity, config: config, logger: logger, bus: bus });
 
       // Learning loop (Layer 4): reflectOnActions was previously bound to the
@@ -1326,13 +1326,13 @@ async function main() {
 
   // D-07: full graceful shutdown sequence — server-close (step 0, registered
   // separately via registerStopServer above) -> stop-loops -> episodic-flush
-  // -> checkpoint-write -> audit-flush -> reflection-final-pass LAST, all
-  // under one deadline with SHUTDOWN_MS as the hard-exit(1) backstop. BUG-437
-  // (2026-09-23): the order, and why reflection moved from second to last, is in
-  // src/core/lifecycle/shutdown-steps.js. `memory` and `reflection` are read
-  // late through getters: both are populated by boot steps that run after this.
+  // -> checkpoint-write -> audit-flush, all under one deadline with
+  // SHUTDOWN_MS as the hard-exit(1) backstop. BUG-437: the order, and why there
+  // is no reflection pass at quit (2026-10-06), is in
+  // src/core/lifecycle/shutdown-steps.js. `memory` is read late through a
+  // getter: it is populated by a boot step that runs after this.
   require('./core/lifecycle/shutdown-steps').registerCoreShutdownSteps(lifecycle, {
-    stopRunningLoops, getMemory: () => memory, getReflection: () => reflection,
+    stopRunningLoops, getMemory: () => memory,
   });
 
   // Register signal handlers — the ONE path that drives shutdown on SIGINT/SIGTERM

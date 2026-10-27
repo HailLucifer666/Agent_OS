@@ -1,9 +1,8 @@
 'use strict';
 
 // identity/reflection.js — the learning loop (P4 Jarvis upgrade). Every N
-// conversation turns (REFLECTION_EVERY_TURNS, default 15) and once at
-// graceful shutdown, one cheap brain call reads the recent conversation
-// episodics and extracts:
+// conversation turns (REFLECTION_EVERY_TURNS, default 15) one cheap brain
+// call reads the recent conversation episodics and extracts:
 //   - 0-3 NEW durable operator preferences (written via identity.learn(),
 //     which persona() folds into every subsequent brain call), and
 //   - a one-line operator speaking-style note (identity.setOperatorStyle()).
@@ -49,12 +48,14 @@ function createReflection({ brain, memory, identity, config, logger, bus }) {
     });
   }
 
-  // BUG-437 (2026-09-23): at shutdown this runs LAST, under the step's deadline.
-  // `opts.signal` is that deadline. It is handed to the brain, and checked
-  // before EVERY write: a pass whose answer arrives after the deadline writes
-  // nothing, because by then the process is exiting and a half-applied profile
-  // rewrite (a preference written, the profile not) is worse than none. The
-  // cadence path passes no signal and is unchanged.
+  // BUG-437 (2026-09-23): `opts.signal` is a caller's deadline. It is handed to
+  // the brain, and checked before EVERY write: a pass whose answer arrives after
+  // the deadline writes nothing, because by then the process may be exiting and a
+  // half-applied profile rewrite (a preference written, the profile not) is worse
+  // than none. NO PRODUCTION CALLER passes a signal since 2026-10-06: the quit
+  // step that used to be that caller was removed (BUG-437 closure,
+  // lifecycle/shutdown-steps.js). The cadence path passes none, so the fence is
+  // kept as a unit-tested backstop for a future bounded caller.
   async function runNow(reason, opts) {
     if (running) return { skipped: 'already-running' };
     running = true;
