@@ -86,6 +86,8 @@ async function deepThink(brain, opts) {
 
   const question = String(o.question || '').trim().slice(0, MAX_QUESTION_CHARS);
   if (!question) {
+    // BUG-478 2026-10-06: the other silent early return; same line as the rest.
+    if (log) log.info('deepthink.refused', { reason: 'empty-question' });
     return {
       content: null, provider: null, model: null, offline: true, timedOut: false,
       ms: 0, reason: 'no question was given to think about',
