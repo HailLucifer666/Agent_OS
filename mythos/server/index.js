@@ -20,6 +20,7 @@ const sttChain = require('../providers/stt');
 const { splitSentences, createSentenceStreamer, truncateAtSentenceBoundary } = require('../src/core/effectors/voice');
 const { sanitizeSpoken } = require('../src/core/voice/spoken-text');
 const { createVoiceAgent, RULES } = require('../src/core/voice/voice-agent');
+const { approvalConsentFor } = require('../src/core/voice/authority-gate'); // B2a: the click-accept mints through the one minter
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
 const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause, startupInstructionsClause } = require('../src/core/conversation/briefing');
 const { isStartupOnlyFact, startupOnlyFacts } = require('../src/core/memory/startup-facts'); // BUG-463
@@ -894,6 +895,15 @@ function createServer(deps) {
   // BUG-317: a signed artifact link substitutes for the bearer token.
   app.use('/vault/builds', crossOriginGuard);
   app.use('/vault/builds', require('../src/core/effectors/artifact-token').createArtifactAccess({ secret: AUTH_TOKEN, requireToken }));
+  // B3c (2026-09-29 audit): an allowed NAVIGATION to a build is redirected once
+  // into /vault/p/<capability>/, where the sandboxed page's own files load
+  // through the path (src/core/server/preview-isolation.js).
+  const previewIsolation = require('../src/core/server/preview-isolation');
+  const previewCaps = previewIsolation.createPreviewCapabilities({ ttlMs: AUTH_TOKEN ? previewIsolation.PREVIEW_TTL_TOKEN_MS : previewIsolation.PREVIEW_TTL_MS });
+  const previewRoutes = previewIsolation.createPreviewRoutes({ buildsDir: memory.fs.vaultPath('builds'), caps: previewCaps });
+  app.use('/vault/builds', previewRoutes.refuseProtected); // a build's credential-named files are never served (2026-10-05)
+  app.use('/vault/builds', previewRoutes.redirectNavigation);
+  app.use('/vault/p', previewRoutes.serve);
 
   // ---- static asset delivery: compression + caching -----------------------
   //
@@ -1063,9 +1073,12 @@ function createServer(deps) {
   // also holds Episodic/Semantic/Identity/Audit/Checkpoints that should never
   // be served as plain static files. Generated content the operator iterates on,
   // so it must never be cached beyond revalidation.
+  // B3c (2026-09-29 audit): and every response carries a CSP sandbox without
+  // allow-same-origin, so a build runs in an opaque origin of its own and cannot
+  // script the HUD or reach /api as it (src/core/server/preview-isolation.js).
   app.use('/vault/builds', express.static(memory.fs.vaultPath('builds'), {
     etag: true, lastModified: true, maxAge: 0,
-    setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+    setHeaders: require('../src/core/server/preview-isolation').setPreviewHeaders,
   }));
 
   // MediaPipe tasks-vision runtime assets (gesture recognition runs fully
@@ -1119,7 +1132,8 @@ function createServer(deps) {
     let session = null;
     let episodic = '';
     try { session = memory.fs.readJSON('Conversation/session.json', null); } catch (_) { /* no vault, or unreadable */ }
-    try { episodic = (memory.fs.readLines('Episodic/' + today + '.jsonl') || []).filter(Boolean).join('\n'); } catch (_) { /* no file yet today */ }
+    // BUG-466: raw text. readLines() returns PARSED objects, and join('\n') turned each into "[object Object]".
+    try { episodic = memory.fs.readText('Episodic/' + today + '.jsonl', ''); } catch (_) { /* unreadable file: the panel shows the session half */ }
     // Each half degrades on its own: a missing session.json still yields the
     // episodic history, and vice versa. The panel renders whatever arrives.
     res.json({ session: session, episodic: episodic });
@@ -1238,7 +1252,8 @@ function createServer(deps) {
   // existing MYTHOS on this machine. The scan is read-only and the import writes
   // only what the operator confirms; secret values are never carried. See
   // routes/import-existing.js and src/core/setup/import-existing.js. ----
-  require('./routes/import-existing').mountImportRoutes(app, { config, logger });
+  // B3b: every import is confirmed in Electron's native dialog first.
+  require('./routes/import-existing').mountImportRoutes(app, { config, logger, confirmImport: (summary) => confirmImportInElectron(summary) });
 
   // ---- /api/engagements — Engagement Layer (Phase 1 contract, W9: extracted) ----
   // Factory matches Phase 1's UI contract exactly (ui/public/js/views/
@@ -3600,7 +3615,10 @@ function createServer(deps) {
         // on a T3+ popup), not the voice agent deciding on its own — label it
         // as such instead of the wrapper's default, and correlate it back to
         // the specific confirm popup that was approved.
-        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', origin: action.origin, traceId: confirmId, surface: surface, acceptedScope: acceptedScope });
+        // B2a: a call held for per-call approval runs only with a token bound to
+        // the resolved target the operator was shown; this click IS that approval.
+        const outcome = await dispatchAction(decision, { goalId: action.goalId, tier: action.tier, channel: 'confirm-accept', origin: action.origin, traceId: confirmId, surface: surface, acceptedScope: acceptedScope,
+          consent: approvalConsentFor(decision) });
         // S2S (Phase 5): feed the real outcome back to the Live session as a
         // realtimeInput text turn, so the model reports what ACTUALLY
         // happened (AD-4) rather than whatever it assumed while waiting. A
@@ -4223,6 +4241,25 @@ function createServer(deps) {
         pending.resolve(Boolean(msg.closed));
         return;
       }
+      if (msg && msg.channel === 'mythos:confirm-import-answer' && pendingImportConfirm) {
+        pendingImportConfirm.settle(String(msg.answer || 'no'));
+        return;
+      }
+      // B3b (2026-09-29 audit): Electron is showing a key/settings confirmation
+      // dialog. Until it says otherwise, pc-child refuses keyboard and mouse
+      // commands, so MYTHOS's own input tools cannot answer the operator's dialog.
+      if (msg && msg.channel === 'mythos:input-inhibit') {
+        require('../adapters/input-inhibit').setInputInhibited(msg.on === true);
+        // Acked with the request's own sequence number (B3b review) and, for "on",
+        // whether BOTH input backends went idle within 2 s: Electron draws the
+        // dialog only on idle:true (2026-10-05 security bundle).
+        const ack = (idle) => { try { process.send({ channel: 'mythos:input-inhibit-ack', on: msg.on === true, seq: msg.seq, idle: idle === true }); } catch (_) { /* no ack: Electron does not draw the dialog */ } };
+        if (msg.on === true) {
+          Promise.all([pcChild.whenInputIdle(2000), require('../adapters/cua-driver').whenInputIdle(2000)])
+            .then((r) => ack(r.every((x) => x === true)), () => ack(false));
+        } else ack(true);
+        return;
+      }
       // BUG-272 T2 — the ack for mythos:open-external. Same single-pending-slot
       // shape as close-media-window above: one browser hand-off at a time, so a
       // reqId-keyed Map would be more machinery than the problem needs.
@@ -4287,6 +4324,12 @@ function createServer(deps) {
         })();
       }
     });
+    // A child started while a confirmation dialog was open began inhibited from
+    // MYTHOS_INPUT_INHIBITED; ask for the current state now that the handler above
+    // can hear the answer (2026-10-05 security bundle).
+    if (typeof process.send === 'function') {
+      try { process.send({ channel: 'mythos:input-inhibit-sync' }); } catch (_) { /* no Electron parent: nothing to sync */ }
+    }
   }
   function requestCloseMediaWindow() {
     return new Promise((resolve) => {
@@ -4335,6 +4378,21 @@ function createServer(deps) {
         clearTimeout(timer);
         resolve({ opened: false, reason: err.message });
       }
+    });
+  }
+
+  // B3b review: /api/setup/import asks Electron to confirm before it writes. One
+  // at a time; 'no-shell' when there is no Electron to ask (headless). A dialog
+  // left unanswered for ten minutes counts as Cancel.
+  let pendingImportConfirm = null;
+  function confirmImportInElectron(summary) {
+    return new Promise((resolve) => {
+      if (typeof process.send !== 'function') { resolve('no-shell'); return; }
+      if (pendingImportConfirm) { resolve('busy'); return; }
+      const timer = setTimeout(() => { if (pendingImportConfirm) pendingImportConfirm.settle('no'); }, 10 * 60 * 1000);
+      pendingImportConfirm = { settle: (answer) => { clearTimeout(timer); pendingImportConfirm = null; resolve(answer); } };
+      try { process.send({ channel: 'mythos:confirm-import', summary }); }
+      catch (_) { pendingImportConfirm.settle('no'); }
     });
   }
 

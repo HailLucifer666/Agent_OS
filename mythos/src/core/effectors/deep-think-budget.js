@@ -92,6 +92,20 @@ function cooldownRefusal(sinceLast, minIntervalMs, caller) {
     + 'already know — you are capable of it, and a fast good answer beats a slow better one.';
 }
 
+// BUG-478 (2026-10-06): a refusal that returns before deepThink() runs wrote no
+// log line at all, so a missing `deepthink.attempt` was ambiguous between "the
+// call was refused" and "the call vanished" — two real calls in one minute
+// looked like lost results and were just the 60s cooldown. Every refusal now
+// writes one `deepthink.refused` line. Attack answers: (1) what else matches —
+// only think_deeply's early returns call this; (2) hides evidence — the
+// opposite, it adds a row and never swallows the refusal, and a throwing logger
+// is caught so instrumentation cannot change the tool result; (3) who reads it —
+// the operator reading logs; nothing parses it, so no field needs protecting.
+function logRefusal(logger, reason, extra) {
+  if (!logger || typeof logger.info !== 'function') return;
+  try { logger.info('deepthink.refused', { reason, ...(extra || {}) }); } catch (_) { /* logging only */ }
+}
+
 function stampDeepThink(caller) {
   lastDeepThinkAt = Date.now();
   lastDeepThinkBy = caller || 'the background loop';
@@ -106,6 +120,7 @@ module.exports = {
   DEEP_THINK_MIN_INTERVAL_DEFAULT_MS,
   deepThinkMinIntervalMs,
   cooldownRefusal,
+  logRefusal,
   stampDeepThink,
   deepThinkState,
   resetDeepThinkBudget,

@@ -20,19 +20,27 @@
 
 const fs = require('fs');
 const path = require('path');
+const { isWindowsDeviceName } = require('./okf');
 
 // A note title becomes a filename, so it goes through the same discipline as
 // every other user-string-to-path in this repo: allowlist, not blocklist.
 // Wikilinks reference notes by TITLE, so the slug has to stay legible —
 // spaces become hyphens rather than being stripped.
+//
+// A slug whose file would be a Windows device name ("CON" -> CON.md, and
+// "con.txt" -> con.txt.md, since the reserved stem is what counts) gets a
+// "-note" suffix, the same rule okf.js applies to concept files: a title is
+// not a filename, so it is renamed, never refused. It happens HERE, not in
+// write(), because read() slugifies too and the two must land on one file.
 function slugifyTitle(title) {
-  return String(title == null ? '' : title)
+  const slug = String(title == null ? '' : title)
     .trim()
     .replace(/[^\w\s.-]+/g, '')     // drop anything that is not word/space/dot/hyphen
     .replace(/\s+/g, '-')
     .replace(/\.+/g, '.')           // collapse dots so '..' can never survive
     .replace(/^[.-]+|[.-]+$/g, '')  // no leading/trailing dot or hyphen
     .slice(0, 80);
+  return isWindowsDeviceName(slug + '.md') ? slug + '-note' : slug;
 }
 
 // Scanning ceiling. A notes directory is operator-scale (hundreds), not

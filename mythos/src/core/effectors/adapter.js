@@ -75,10 +75,17 @@ function noReasonGiven(toolName, result) {
 }
 
 function effectorFromTool(tool) {
+  // B2e (2026-09-29 audit): a keyboard or mouse tool gets the input-target
+  // prepare/approvalFor and its approval scope here, at the one door every tool
+  // registration passes, so no file that defines one can forget. Required at
+  // call time: input-target reaches pc-child, which this module must not load.
+  tool = require('./input-target').guardIfInput(tool);
   return {
     id: tool.name,
     tier: tierOf(tool.name),
     dangerWhen: tool.dangerWhen,           // read by leash.check() at gate time — not here
+    prepare: tool.prepare,                 // B2a: async resolution, run by leash.prepare() before check()
+    approvalFor: tool.approvalFor,         // B2a: resolved target -> { approval: 'none'|'required'|'refuse', detail }
     describe: function() { return tool.description; },
     // BUG-017: expose the tool's real {name, description, params} so callers (the
     // effector hub's catalog(), in turn the voice agent) can build a tool catalog

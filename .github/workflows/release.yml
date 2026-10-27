@@ -38,9 +38,12 @@ name: release
 on:
   push:
     tags: ['v*']
-  # Manual re-run for a tag whose upload failed halfway. electron-builder
-  # overwrites its own artifacts on the existing draft/release rather than
-  # duplicating them, so re-running is the documented recovery, not a hazard.
+  # Manual re-run for a tag whose upload failed halfway. The upload step
+  # (scripts/publish-scanned-release.js) adds only the files the release is
+  # missing and REFUSES to replace one already published, so a re-run cannot
+  # swap an installer people have downloaded. It also refuses an existing
+  # draft: delete that by hand first — publishing a half-uploaded draft is how
+  # 0.1.10 ended up with a blockmap and no installer.
   workflow_dispatch:
     inputs:
       tag:
@@ -55,6 +58,12 @@ permissions:
 jobs:
   publish:
     runs-on: windows-latest
+    # The tag reaches every step through the environment and is never spliced
+    # into a run: script. A workflow_dispatch input is free text, and
+    # "${{ ... }}" inside run: is pasted into the shell source before the shell
+    # parses it. publish-scanned-release.js validates it as v1.2.3 on arrival.
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +71,10 @@ jobs:
           # electron-builder reads the git history for nothing here, but a shallow
           # clone has bitten enough tools that the full one is cheap insurance.
           fetch-depth: 0
+          # checkout otherwise leaves the contents:write token in .git/config,
+          # readable by every later step — including the build, which is meant
+          # to hold no upload rights. Nothing here pushes, so nothing needs it.
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
@@ -83,7 +96,7 @@ jobs:
       - name: Verify the tag matches package.json's version
         shell: pwsh
         run: |
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $tag = $env:RELEASE_TAG
           $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
           Write-Host "tag=$tag packageVersion=$version"
           if ($tag -ne "v$version") {
@@ -98,12 +111,30 @@ jobs:
       - name: Build release notes from the commit log
         run: node scripts/build-release-notes.js
 
-      - name: Build and publish the installer
+      # Build, scan, upload: three steps, so the installer can be inspected
+      # between being built and being published (2026-09-29 audit, B1). The build
+      # never publishes — `--publish never` is explicit because electron-builder
+      # otherwise publishes on its own when it sees a git tag in CI, which is
+      # exactly this workflow's trigger. No GH_TOKEN here on purpose: the build
+      # has no business holding upload rights.
+      - name: Build the installer (publishing disabled)
+        run: npx electron-builder --win --publish never
+
+      # Reads the finished artifacts — app.asar, app.asar.unpacked,
+      # extraResources and the NSIS installer itself — against
+      # electron/package-policy.js, and writes dist/package-scan.json only when
+      # every layer was read and nothing is forbidden. A fresh clone should never
+      # hold a .env backup; this proves it rather than assuming it.
+      - name: Scan the build for credential and scratch files
+        run: node mythos/scripts/verify-package-contents.js --dist dist --receipt dist/package-scan.json
+
+      - name: Upload exactly the scanned artifacts
         env:
           # Scoped to this repository by GitHub. Never a personal token, and
           # nothing here reads CSC_* (see the header).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --publish always
+        shell: pwsh
+        run: node scripts/publish-scanned-release.js "$env:RELEASE_TAG"
 
       # v0.1.4 shipped as a DRAFT and no installed app was ever offered it: the
       # workflow went green, the assets uploaded, and the release was invisible to
@@ -117,7 +148,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: pwsh
         run: |
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $tag = $env:RELEASE_TAG
           $isDraft = (gh release view $tag --repo "$env:GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
           Write-Host "tag=$tag isDraft=$isDraft"
           if ($isDraft -eq 'true') {

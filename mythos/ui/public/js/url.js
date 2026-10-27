@@ -47,6 +47,23 @@ export function safeSameOriginUrl(url) {
   return trimmed.startsWith('/') ? trimmed : null;
 }
 
+// B3c (2026-09-29 audit): a generated build MYTHOS serves itself. The server
+// already sends it a CSP sandbox without allow-same-origin
+// (src/core/server/preview-isolation.js, PREVIEW_SANDBOX — this string is kept
+// equal to it by test/preview-isolation.test.js); a frame showing one carries the
+// same sandbox attribute as a second line. The path match is case-insensitive
+// because Express mounts are.
+export const PREVIEW_SANDBOX = 'allow-scripts allow-forms allow-modals allow-popups allow-downloads';
+export function isVaultBuildUrl(url, base) {
+  try {
+    const origin = new URL(base || location.href).origin;
+    const u = new URL(String(url), base || location.href);
+    return u.origin === origin && /^\/vault\/(builds|p)\//i.test(u.pathname);
+  } catch {
+    return false;
+  }
+}
+
 // safeHref — the href variant. Same scheme test, but it returns the URL with
 // any double quote already entity-escaped, because its one caller interpolates
 // the result straight into href="..." inside a markdown renderer whose input

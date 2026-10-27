@@ -167,7 +167,11 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
     // writes nothing. toggleGoal/deleteGoal on a null id are inert no-ops.
     var map = loadBridgeMap() || [];
     return rows.map(function(row) {
-      return { id: findGoalIdFor(map, row), text: row.text, category: row.category, done: row.done };
+      var id = findGoalIdFor(map, row);
+      var goal = id ? goalSystem.get(id) : null;
+      // BUG-470 2026-10-06: carry the goal system's status so every reader
+      // (stats, HUD list, briefing) uses ONE predicate. null = an unmapped row.
+      return { id: id, text: row.text, category: row.category, done: row.done, status: goal ? goal.status : null };
     });
   }
 
@@ -271,7 +275,21 @@ function createGoalsMdBridge({ fs, goalSystem, bus }) {
 
   function stats() {
     var all = listGoals();
-    return { total: all.length, done: all.filter(function(g) { return g.done; }).length, active: all.filter(function(g) { return !g.done; }).length };
+    // BUG-470 (2026-10-06): `active` used to be `!g.done` — "not ticked" — so 14
+    // paused goals read "14 ACTIVE" on the HUD and in the greeting while the goal
+    // system said active=0. It now means status 'active', the word goals/index.js
+    // stats() and the cortex arbiter use. Attack answers: (1) what else matches —
+    // a ticked row whose status lags still must not count (`!g.done` kept), and an
+    // unmapped row (status null) is not active; (2) hides evidence — no log path
+    // touched; (3) consumers — briefing.js x2, server/routes/goals.js (HUD tile and
+    // chip) and from-dashboard.js all read this one number, so none is patched
+    // separately; the HUD's Active LIST filter was a second `!g.done` and now uses
+    // status too. NOT covered: `total`/`done` stay Goals.md-row counts.
+    return {
+      total: all.length,
+      done: all.filter(function(g) { return g.done; }).length,
+      active: all.filter(function(g) { return !g.done && g.status === 'active'; }).length
+    };
   }
 
   // ---- Phase 4 / Area D (V5) — proposed goals ----

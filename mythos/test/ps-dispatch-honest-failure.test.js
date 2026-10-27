@@ -103,10 +103,71 @@ test('a genuinely successful command still returns ok:true (classification fix m
 // gained the same string=failure guard. Each test below uses a deterministic
 // failure path that needs no real window and has no desktop side effect.
 
-test('launch_app with an unresolvable name returns ok:false (no explorer fallback, no false success)', async () => {
+// B2a (2026-09-29): launch_app no longer launches by NAME at all — it launches
+// only a record resolve_app produced, so a bare name is refused before anything
+// starts. These use the REAL script; every case is a refusal, so nothing opens.
+test('launch_app with a bare name and no resolved target returns ok:false and starts nothing', async () => {
   const resp = await sendOneCommand({ cmd: 'launch_app', name: 'definitely-not-an-installed-app-xyz', id: 5 });
   assert.equal(resp.ok, false, `expected ok:false, got: ${JSON.stringify(resp)}`);
-  assert.match(String(resp.error || ''), /failed to launch/i);
+  assert.match(String(resp.error || ''), /needs a resolved target/i);
+});
+
+test('resolve_app answers an unresolvable name with resolved:false, and a path or URI as not-an-app-name', async () => {
+  const none = await sendOneCommand({ cmd: 'resolve_app', name: 'definitely-not-an-installed-app-xyz', id: 51 });
+  assert.equal(none.ok, true, JSON.stringify(none));
+  assert.equal(none.result.resolved, false);
+  assert.match(String(none.result.reason), /no application matches/);
+  for (const [i, name] of [['52', 'C:\\Windows\\System32\\cmd.exe'], ['53', 'ms-settings:'], ['54', '\\\\server\\share\\x.exe']]) {
+    const r = await sendOneCommand({ cmd: 'resolve_app', name, id: Number(i) });
+    assert.equal(r.result.resolved, false, name);
+    assert.equal(r.result.reason, 'not-an-app-name', name);
+  }
+});
+
+test('launch_app refuses a record whose kind or executable it cannot validate', async () => {
+  const unknownKind = await sendOneCommand({ cmd: 'launch_app', name: 'x', target: { resolved: true, kind: 'shell' }, id: 55 });
+  assert.equal(unknownKind.ok, false);
+  assert.match(String(unknownKind.error), /unknown target kind/);
+  const notRooted = await sendOneCommand({ cmd: 'launch_app', name: 'x', target: { resolved: true, kind: 'app-paths', executable: 'cmd.exe' }, id: 56 });
+  assert.equal(notRooted.ok, false);
+  assert.match(String(notRooted.error), /not a rooted \.exe on disk/);
+  const forgedKnown = await sendOneCommand({ cmd: 'launch_app', name: 'discord', target: { resolved: true, kind: 'known', identity: 'discord', executable: 'C:\\Windows\\System32\\cmd.exe' }, id: 57 });
+  assert.equal(forgedKnown.ok, false);
+  assert.match(String(forgedKnown.error), /does not match this script's own KnownApps table/);
+});
+
+// B2a review (2026-09-29). The app-paths and start-apps branches used to accept
+// ANY rooted .exe on disk / ANY existing Start menu id. They now re-resolve the
+// record's name and require the same answer. The executable below is a harmless
+// console tool, so even a regressed guard would only flash a console; the AppID
+// does not exist, so nothing can start on that path either.
+test('launch_app refuses an app-paths or start-apps record that its own name does not resolve to', async () => {
+  const sysRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
+  const forgedPath = await sendOneCommand({ cmd: 'launch_app', name: 'x',
+    target: { resolved: true, kind: 'app-paths', identity: 'definitely-not-an-installed-app-xyz', executable: sysRoot + '\\System32\\hostname.exe' }, id: 63 });
+  assert.equal(forgedPath.ok, false, JSON.stringify(forgedPath));
+  assert.match(String(forgedPath.error), /does not match what App Paths resolves/);
+  const forgedEntry = await sendOneCommand({ cmd: 'launch_app', name: 'x',
+    target: { resolved: true, kind: 'start-apps', identity: 'definitely-not-an-installed-app-xyz', appId: 'B2a.Review.NoSuchApp!App' }, id: 64 });
+  assert.equal(forgedEntry.ok, false, JSON.stringify(forgedEntry));
+  assert.match(String(forgedEntry.error), /does not match what the Start menu resolves/);
+});
+
+test('resolve_app refuses wildcards instead of expanding them ("p*" resolved PowerShell.exe)', async () => {
+  for (const [i, name] of [[65, 'p*'], [66, 'note?ad'], [67, '[a-z]otepad']]) {
+    const r = await sendOneCommand({ cmd: 'resolve_app', name, id: i });
+    assert.equal(r.result.resolved, false, name);
+    assert.equal(r.result.reason, 'wildcard-in-name', name);
+  }
+});
+
+test('open_uri refuses anything but a Spotify track/search or a WhatsApp chat link', async () => {
+  for (const [i, uri] of [['58', 'ms-settings:privacy'], ['59', 'spotify:track:short'], ['60', 'whatsapp://send?phone=12345678&text=x'],
+    ['61', 'https://example.com'], ['62', 'SPOTIFY:track:0123456789abcdefABCDEF']]) {
+    const r = await sendOneCommand({ cmd: 'open_uri', uri, id: Number(i) });
+    assert.equal(r.ok, false, uri);
+    assert.match(String(r.error), /open_uri refused/, uri);
+  }
 });
 
 test('focus_window on a nonexistent pid returns ok:false (honest focus failure must not ship as ok:true)', async () => {

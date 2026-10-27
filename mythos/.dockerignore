@@ -53,3 +53,20 @@ scripts/e2e/artifacts/
 # session/tooling junk
 .browser-agent.pid
 .tmp-*
+
+# Packaging policy: electron/package-policy.js dockerIgnorePatterns(), the same
+# credential and scratch rules the installer uses. Keep this the LAST block and
+# in this order; test/package-policy.test.js asserts it. The .env lines above
+# match only the context ROOT in .dockerignore syntax, and case-sensitively;
+# these match at any depth and in any case.
+**/*.[eE][nN][vV]*
+**/*.[pP][fF][xX]
+**/*.[pP]12
+[cC][oO][nN][fF][iI][gG]*.[jJ][sS][oO][nN]*
+[kK][eE][yY][sS]*.[jJ][sS][oO][nN]*
+[aA][uU][tT][hH]-[sS][eE][sS][sS][iI][oO][nN][sS]*.[jJ][sS][oO][nN]*
+[mM][yY][tT][hH][oO][sS]-[sS][eE][tT][tT][iI][nN][gG][sS]*.[jJ][sS][oO][nN]*
+.[bB][rR][oO][wW][sS][eE][rR]-[aA][gG][eE][nN][tT].[pP][iI][dD]
+[vV][aA][uU][lL][tT]
+[vV][aA][uU][lL][tT]_[tT][eE][sS][tT]_[aA][uU][dD][iI][tT]_*
+.[tT][mM][pP]-*

@@ -58,7 +58,10 @@ describe('crossOriginRefusal — the rule, cell by cell', () => {
   const cases = [
     ['no Origin, no Sec-Fetch-Site (non-browser client)', { host }, null],
     ['own host, same-origin (the HUD)', { host, origin: 'http://127.0.0.1:4478', 'sec-fetch-site': 'same-origin' }, null],
-    ['own host behind a TLS proxy', { host, origin: 'https://127.0.0.1:4478', 'sec-fetch-site': 'same-origin' }, null],
+    // Changed 2026-09-29 (audit B3a): the scheme is part of the origin. A TLS
+    // proxy lists its https:// origin on ALLOWED_ORIGINS — as the WebSocket's
+    // full-origin check already required — instead of passing implicitly.
+    ['own host under another scheme (a TLS proxy not on ALLOWED_ORIGINS)', { host, origin: 'https://127.0.0.1:4478', 'sec-fetch-site': 'same-origin' }, 'origin'],
     ['own host, Host header in mixed case', { host: 'LocalHost:5000', origin: 'http://localhost:5000' }, null],
     ['on ALLOWED_ORIGINS', { host, origin: 'http://localhost:4478' }, null],
     ['operator typed the URL', { host, 'sec-fetch-site': 'none' }, null],
@@ -73,6 +76,17 @@ describe('crossOriginRefusal — the rule, cell by cell', () => {
   for (const [name, headers, expected] of cases) {
     test(name, () => assert.equal(crossOriginRefusal(req(headers), allowed), expected));
   }
+
+  test('a TLS proxy passes by an explicit ALLOWED_ORIGINS entry; TLS this server terminates passes by itself', () => {
+    const overTls = (headers) => ({ headers, socket: { encrypted: true } });
+    assert.equal(crossOriginRefusal(req({ host, origin: 'https://127.0.0.1:4478' }), new Set(['https://127.0.0.1:4478'])), null);
+    assert.equal(crossOriginRefusal(overTls({ host, origin: 'https://127.0.0.1:4478' }), allowed), null);
+    assert.equal(crossOriginRefusal(overTls({ host, origin: 'http://127.0.0.1:4478' }), allowed), 'origin',
+      'and the reverse: an http page talking to a server that received TLS is another origin');
+    // req.secure is NOT the server's scheme: under `trust proxy` Express derives it
+    // from X-Forwarded-Proto, which the client controls (independent review, 2026-09-29).
+    assert.equal(crossOriginRefusal(req({ host, origin: 'https://127.0.0.1:4478' }, true), allowed), 'origin');
+  });
 
   test('ADJACENT: a missing Host never makes a foreign Origin look like our own', () => {
     assert.equal(crossOriginRefusal(req({ origin: 'http://evil.example' }), allowed), 'origin');

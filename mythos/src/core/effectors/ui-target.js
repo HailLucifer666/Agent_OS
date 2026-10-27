@@ -166,6 +166,9 @@ function readWindowNote(targetPid, windows) {
     + ' — if that is not the app you meant, this is the wrong pid.';
 }
 
+// BUG-471: an expect that is a description is reported as not checkable (ocr-text-match.js).
+const { expectMissNote } = require('./ocr-text-match.js');
+
 // ROW 10. click_at(1336, 1433) returned {"clicked":true} while the URL never
 // changed and the <video> still read paused:true, t:0 — the element's rect was
 // y 1399, height 67, below the fold, so the click hit whatever pixel was there.
@@ -189,20 +192,23 @@ function clickVerdict(settleKind, want, x, y) {
   if (settleKind === 'changed') {
     return { verified: false, reason:
       'the click landed and the screen changed, but "' + want + '" did not appear, so the change '
-      + 'may not be the one you wanted' };
+      + 'may not be the one you wanted' + expectMissNote(want) };
   }
   if (settleKind === 'unreadable') {
     return { verified: false, reason:
-      'the click was delivered but the screen could not be re-read afterwards, so nothing is confirmed' };
+      'the click was delivered but the screen could not be re-read afterwards, so nothing is confirmed' + expectMissNote(want) };
   }
   return { verified: false, reason:
     'the click was delivered and the screen reads exactly the same afterwards, so I cannot tell '
     + 'that it hit anything that mattered — those pixels may be behind another window, or below '
-    + 'the visible part of a scrolling page' };
+    + 'the visible part of a scrolling page' + expectMissNote(want) };
 }
 
 module.exports.readWindowNote = readWindowNote;
 module.exports.clickVerdict = clickVerdict;
+// BUG-471: re-exported so from-pc.js's see_and_click can use the same note
+// without a fourth require - that file is at its size ceiling.
+module.exports.expectMissNote = expectMissNote;
 
 // The whole remedy for a see_and_click miss, both branches, so from-pc keeps one
 // line instead of the branch plus its two message bodies.

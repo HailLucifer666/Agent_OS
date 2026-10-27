@@ -124,6 +124,70 @@ describe('memory/notes.js — a title is user text reaching the filesystem', () 
   it('a title with no usable characters is refused, not silently renamed', () => {
     assert.throws(() => notes.write({ title: '///', text: 'body' }), /no usable characters/);
   });
+
+  // Windows device names (2026-09-29 audit, follow-up to B2b). note_take is
+  // tier 1, so a dictated title of "CON" wrote CON.md with no confirmation.
+  // Windows 11 25H2 treats that as an ordinary file; Windows 10 and older
+  // reserve it (Microsoft's naming documentation), and a vault moves between
+  // machines. A title is not a filename, so the slug is suffixed, never refused.
+  //
+  // The expected listings are written out by hand rather than computed with
+  // okf.js's isWindowsDeviceName: a test that asked the helper whether the disk
+  // is clean would pass vacuously if the helper broke.
+  //
+  // Before the fix, (a) and (c) failed with CON.md, nul.md, Com1.md, aux.md,
+  // con.txt.md and LPT9.md on disk; (b) passed before and after.
+  // Mutation probes, 2026-09-30: six, each applied to the file, confirmed on
+  // disk, run against this file, then restored from a byte copy and checked by
+  // sha256. All killed:
+  //   1. slugifyTitle returns the slug with no device check         -> (a) (c)
+  //   2. every slug gets the "-note" suffix                          -> (b)
+  //   3. okf.js WINDOWS_DEVICE_NAME loses its `i` flag               -> (a) (c)
+  //   4. okf.js WINDOWS_DEVICE_NAME loses its `(\..*)?` group        -> (a) (c)
+  //   5. read() strips the suffix before looking the note up         -> (c)
+  //   6. the check reads the raw title instead of the slug           -> (a) (b)
+  //      ("prn?" slips past as typed; "COM¹" is caught as typed although its
+  //      slug "COM" is not a device, so the guard over-matches too)
+  it('(a) a device-named title never produces a device-named file on disk', () => {
+    // "prn?" is not a device name as typed; its slug "prn" is. It pins the check
+    // to the SLUG, which is what reaches the disk, not to the raw title.
+    for (const title of ['CON', 'nul', 'Com1', 'aux', 'con.txt', 'LPT9', 'prn?']) {
+      notes.write({ title: title, text: 'body of ' + title });
+    }
+    assert.deepEqual(fs.readdirSync(dir).sort(), [
+      'Com1-note.md', 'LPT9-note.md', 'aux-note.md', 'con.txt-note.md', 'CON-note.md', 'nul-note.md',
+      'prn-note.md',
+    ].sort());
+  });
+
+  it('(b) names that only resemble a device name keep their plain filename', () => {
+    // console/com10/nullable/auxiliary share a prefix with a device name; "COM¹"
+    // loses its superscript to the slug allowlist and becomes plain "COM", which
+    // is not a device either. Any of these renamed is the guard over-matching.
+    const titles = ['console', 'com10', 'nullable', 'auxiliary', 'Con Edison', 'COM¹', 'lpt'];
+    for (const title of titles) notes.write({ title: title, text: 'x' });
+    assert.deepEqual(fs.readdirSync(dir).sort(), [
+      'COM.md', 'Con-Edison.md', 'auxiliary.md', 'com10.md', 'console.md', 'lpt.md', 'nullable.md',
+    ].sort());
+  });
+
+  it('(c) note_take and note_read agree on the suffixed name, so the note reads back by its title', async () => {
+    const took = await tool('note_take').fn({ title: 'CON', text: 'dictated body' });
+    assert.equal(took.ok, true);
+    assert.deepEqual(fs.readdirSync(dir), ['CON-note.md'],
+      'the tier-1 tool is the surface the audit named; its file must be the suffixed one');
+    const back = await tool('note_read').fn({ title: 'CON' });
+    assert.equal(back.ok, true, 'reading by the title the operator used must find the note');
+    assert.match(back.result.content, /dictated body/);
+    assert.match(back.result.content, /^# CON$/m, 'the heading keeps the title as written');
+    // note_read with no title lists "CON-note" (listings come from filenames),
+    // so reading by the LISTED name has to reach the same file.
+    const listed = await tool('note_read').fn({});
+    assert.deepEqual(listed.result.notes, ['CON-note']);
+    const byListedName = await tool('note_read').fn({ title: 'CON-note' });
+    assert.equal(byListedName.ok, true);
+    assert.match(byListedName.result.content, /dictated body/);
+  });
 });
 
 describe('note_take / note_read / note_search effectors', () => {

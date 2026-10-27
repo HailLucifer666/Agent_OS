@@ -21,7 +21,7 @@ const { visionThink } = require('./vision-call');
 // `lastLaunchedPid` here that any launch overwrote and nothing expired (BUG-353).
 const implicitTarget = require('./implicit-target');
 const uiTarget = require('./ui-target');
-const { clickVerdict, scopedMissRemedy } = uiTarget;
+const { clickVerdict, scopedMissRemedy, expectMissNote } = uiTarget;
 const { makeClickAt } = require('./click-at-evidence');
 // A fresh module instance owns no target — see forget() for why this line exists.
 implicitTarget.forget();
@@ -177,173 +177,15 @@ async function foregroundThenRetry(pid, cmdObj, opts) {
 // and nothing enforced it.
 var SESSION_RESTORING_APPS = /^notepad(\.exe)?$/i;
 
-// BUG-075 (Stage 5, "open YouTube on the Electron app"). launch_app("youtube")
-// was logged failing 3x on 2026-07-31 — correctly, since nothing named
-// YouTube is installed on Windows, but three wasted retries with no better
-// path offered. These names are web destinations, not executables; route
-// them through the SAME 'ui.open-web' signal open_web already emits
-// (dispatch-action.js -> server/index.js -> electron/main.js's media-window
-// bridge, added this stage), so they open in a real Electron window instead
-// of failing all 3 launch tiers.
-//
-// ponytail: intentionally tiny — only the names actually seen failing in the
-// transcript. Upgrade path: anything else still gets an explicit pointer to
-// open_web below instead of a silent PS-tier failure.
-var KNOWN_WEB_APPS = {
-  youtube: 'https://www.youtube.com',
-  gmail: 'https://mail.google.com',
-  maps: 'https://maps.google.com',
-};
-
-// BUG-075 (Stage 5). launch_app("explorer.exe \"D:\\...\"") was logged 3x on
-// 2026-07-31 — a shape that can never resolve, since launch_app takes an app
-// NAME and never parses arguments. open_folder (BUG-058) already exists for
-// exactly "open this folder path"; redirect instead of failing a fourth time.
-var EXPLORER_PATH_ARG = /^explorer(\.exe)?\s+"?([a-zA-Z]:\\[^"]*?)"?$/i;
-
-async function launch_app({ name, existing }, ctx) {
-  if (!name) return fail('App name is required.');
-  var trimmed = String(name).trim();
-
-  var explorerMatch = EXPLORER_PATH_ARG.exec(trimmed);
-  if (explorerMatch) {
-    return open_folder({ path: explorerMatch[2] });
-  }
-
-  var webApp = KNOWN_WEB_APPS[trimmed.toLowerCase()];
-  if (webApp) {
-    var payload = { widgetType: 'web', embedUrl: webApp, title: trimmed };
-    if (ctx && ctx.bus && typeof ctx.bus.emit === 'function') {
-      ctx.bus.emit('ui.open-web', payload);
-    }
-    // Same shape/oracle-honesty as open_web (from-dashboard.js): opening a
-    // dashboard/Electron UI surface is not itself evidence-contract "world
-    // changing" state, so open_web doesn't wrap its result in evidence.js
-    // either — matched here for consistency, not an oversight.
-    return ok(payload);
-  }
-
-  // BUG-353 "clear on launch": a launch ATTEMPT invalidates the old target even
-  // when it FAILS, or "open Spotify" that did not open types into Notepad. Full
-  // reasoning on forget() in implicit-target.js. INTERNAL callers are exempt.
-  if (!implicitTarget.isInternal(ctx)) implicitTarget.forget();
-  var res = await delegate({ cmd: 'launch_app', name });
-
-  // WAVE 1. ps-automation.ps1 now distinguishes a real resolution
-  // (matchedBy:'process') from a mere window-TITLE coincidence
-  // (matchedBy:'title', reported as candidatePid with NO pid field). The title
-  // case is why launch_app("notepad") returned the operator's IDE and two
-  // ui_type calls typed into it. Both guards below are deliberate: the absent
-  // pid already stops us, and the explicit matchedBy check keeps it stopped if a
-  // future PS change ever starts returning a pid for a title match.
-  var r = res.result || {};
-  // BUG-272 T1: 'partial' joins 'title' as a CANDIDATE, not a resolution. An
-  // unanchored substring hit on a process name ('ZCode' -like '*code*') used to be
-  // labelled matchedBy:'process' and was therefore indistinguishable from an exact
-  // match — which is how launch_app("code") reported the operator's unrelated CLI
-  // as a fully verified launch of VS Code.
-  var byProcess = typeof r.pid === 'number' && r.matchedBy !== 'title' && r.matchedBy !== 'partial';
-
-  // BUG-272 T1: does the process we actually landed on match what was asked for?
-  //
-  // This is the check that previously had nothing to check against.
-  // New-LaunchResult echoed the REQUESTED name back as `name`, and the oracle
-  // below built its `observed` field out of that echo — so the "proof" of a launch
-  // was the request itself plus a pid, and the pid came from a substring match.
-  // Circular, and the wrong process passed every honesty gate. The PS side now
-  // reports resolvedName (the real ProcessName), so a mismatch is finally visible.
-  //
-  // Compared case-insensitively with .exe and whitespace stripped: 'Code' vs
-  // 'code' and 'Notepad' vs 'notepad' agree, while 'ZCode' vs 'code' does not —
-  // the requested name must be the WHOLE resolved name, not merely inside it.
-  // Absent resolvedName (an older adapter build) the check abstains rather than
-  // failing every launch: a missing field is not evidence of a mismatch.
-  var resolvedName = typeof r.resolvedName === 'string' && r.resolvedName ? r.resolvedName : null;
-  var normName = function (v) {
-    return String(v || '').trim().replace(/\.exe$/i, '').replace(/\s+/g, '').toLowerCase();
-  };
-  var nameAgrees = !(byProcess && resolvedName) || normName(resolvedName) === normName(name);
-
-  if (res.ok && byProcess) {
-    // BUG-353: from-whatsapp.js and from-spotify.js launch apps to resolve a
-    // window they then drive by explicit pid. Their launches used to evict the
-    // operator's target, so a pid-omitted ui_type after "message someone on
-    // WhatsApp" typed into WhatsApp. They now pass implicitTarget.INTERNAL.
-    // r.pid raw: byProcess above already required it to be a number.
-    if (!implicitTarget.isInternal(ctx)) implicitTarget.remember(r.pid);
-
-    // Fresh document. Best-effort by design: if focus or the new-tab step fails the
-    // launch itself still succeeded, and reporting a launch failure because a
-    // convenience step didn't land would be its own dishonesty. The outcome is
-    // reported so the voice layer can be accurate about which document it typed
-    // into rather than assuming a blank one.
-    //
-    // WAVE 9 (BUG-062). This used to fire `send_key ctrl+n` and set
-    // freshDocument:true on nothing more than send_key returning ok. Measured
-    // 2026-07-31: ctrl+n does not open a Notepad tab at all, because it rides
-    // SendInput and Win11's packaged Notepad silently discards it (BUG-061). So
-    // the operator asked for a fresh Notepad, got their own .env restored in a
-    // tab, and was told freshDocument:true. new_document instead invokes the
-    // Add-New-Tab button through UIA and requires the tab count to rise AND the
-    // active document to be empty before it will claim anything.
-    if (!existing && SESSION_RESTORING_APPS.test(String(name).trim())) {
-      // NOTE: fail() puts its message in .result, not .error (see the helper at
-      // the top of this file) — reading .error here would silently discard the
-      // real reason and report a generic one.
-      var focused = await delegate({ cmd: 'focus_window', pid: r.pid });
-      if (focused.ok) {
-        var fresh = await delegate({ cmd: 'new_document', pid: r.pid });
-        res.result.freshDocument = Boolean(fresh.ok && fresh.result && fresh.result.fresh);
-        if (!res.result.freshDocument) {
-          res.result.freshDocumentError = String((fresh.result && fresh.result.error) || fresh.result || 'could not confirm a blank document');
-        } else if (fresh.result.via) {
-          res.result.freshDocumentVia = String(fresh.result.via);
-        }
-      } else {
-        res.result.freshDocument = false;
-        res.result.freshDocumentError = String(focused.result || 'could not focus the window to open a new document');
-      }
-    }
-  }
-
-  if (!res.ok) return res;
-
-  // Evidence contract (effectors/evidence.js). The oracle for a launch is that a
-  // live process whose NAME matches owns a real window — an enumeration of what
-  // exists afterwards, not the launch call's own say-so. Without a resolution we
-  // report the launch as attempted: the app may genuinely have started, but there
-  // is no window we can honestly claim as the target, and saying so is what stops
-  // the next ui_type from guessing.
-  if (byProcess && nameAgrees) {
-    return evidence.verifiedOk(res, {
-      oracle: 'process-window',
-      expected: String(name).trim(),
-      // BUG-272 T1: the RESOLVED process name when we have one, never the echoed
-      // request. An oracle whose "observed" value is the caller's own input
-      // proves nothing about the world.
-      observed: String(resolvedName || r.name || name) + ' (pid ' + r.pid + ')',
-    });
-  }
-  // BUG-272 T1: a pid belonging to a DIFFERENT application is worse than no pid,
-  // because a later ui_type would type into it happily. Downgrade, clear the
-  // implicit target, and name both sides so the model asks instead of assuming.
-  // Failing loudly beats a confident wrong answer.
-  if (byProcess && !nameAgrees) {
-    implicitTarget.forgetIf(r.pid);
-    return evidence.unverified(res, 'asked for "' + String(name).trim() + '" but the windowed process ' +
-      'that came up is "' + resolvedName + '" (pid ' + r.pid + '), a different application — not ' +
-      'targeting it. Call list_windows to see what is actually open.');
-  }
-  if (r.matchedBy === 'partial') {
-    return evidence.unverified(res, 'no process is named exactly "' + name + '" — the closest was "' +
-      (resolvedName || 'an unrelated process') + '", whose name merely contains it, so I am not ' +
-      'targeting it');
-  }
-  return evidence.unverified(res, r.candidateTitle
-    ? 'no process named like "' + name + '" owns a window — the only match was an unrelated window titled "' +
-      r.candidateTitle + '", which I am not targeting'
-    : String(r.note || 'launched, but no windowed process matching the name could be confirmed'));
-}
+// launch_app lives in ./launch-app.js since 2026-09-29 (audit B2a): it resolves
+// the name through pc-child's resolve_app, is authorized on the RESOLVED target
+// (launch-policy.js; an execution surface needs the operator's per-call
+// approval), and launches exactly that target. KNOWN_WEB_APPS moved with it.
+const launchApp = require('./launch-app').createLaunchApp({
+  ok, fail, delegate, open_folder, implicitTarget, evidence, SESSION_RESTORING_APPS,
+});
+const { launch_app } = launchApp;
+const { KNOWN_WEB_APPS } = require('./launch-app');
 
 async function list_windows() {
   return delegate({ cmd: 'list_windows' });
@@ -1164,7 +1006,7 @@ async function send_key({ key, pid }) {
     // every route it tried is already a superset of what send_key could do, and one of
     // them may have half-landed, so retrying risks sending twice.
     if (guard.messaging) {
-      return submitMessage(guard.pid);
+      return require('./messaging-enter').guardedSubmit(guard, submitMessage, fail);
     }
   }
   return keyPressed(await delegate(withPid({ cmd: 'send_key', key: raw })), raw);
@@ -1386,11 +1228,11 @@ async function see_and_click({ text, occurrence, expect, pid }) {
   });
   const seen = { clicked: target.text, x: point.x, y: point.y, attempts: settled.attempts };
   if (settled.kind === 'expected') return ok(Object.assign({ evidence: 'ocr', confirmed: String(expect) }, seen));
-  if (settled.kind === 'changed') return ok(Object.assign({ evidence: 'ocr', note: 'the screen changed after the click' }, seen));
+  if (settled.kind === 'changed') return ok(Object.assign({ evidence: 'ocr', note: 'the screen changed after the click' + (expect ? expectMissNote(expect) : '') }, seen));
   return evidence.unverified({ ok: true, result: seen }, 'clicked "' + target.text + '" but '
     + (settled.kind === 'unreadable'
       ? 'the screen could not be re-read afterwards, so I cannot confirm anything happened'
-      : 'the screen reads exactly the same afterwards, so I cannot tell that anything happened'));
+      : 'the screen reads exactly the same afterwards, so I cannot tell that anything happened') + expectMissNote(expect));
 }
 
 // ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----
@@ -1481,7 +1323,7 @@ async function capture_screenshot() {
 const KNOWN_DESKTOP_APPS = ['slack', 'discord', 'teams'];
 
 const TOOLS = [
-  { name: 'launch_app', description: 'Launch a Windows application by name (e.g. "notepad", "chrome", "code"). Also accepts a small set of web destinations that are not real Windows apps ("youtube", "gmail", "maps") and opens them in MYTHOS\'s own Electron window — use this, not open_web, when the operator says "open X app" or "on the Electron/desktop app". For a specific YouTube video/search instead of the site itself, use open_web(type:"youtube") instead. Never pass a folder path or a command with arguments (e.g. explorer.exe "D:\\...") — use open_folder for that; this takes an app NAME only. Notepad ALWAYS opens a blank new document, because it is single-instance and restores its previous tabs otherwise. Only pass existing:true when the operator explicitly asks for the notepad/document they already had open.', params: { name: 'string - application name or path', existing: 'boolean (optional) - true ONLY if the operator asked to reuse the already-open document instead of a fresh one' }, danger: false, fn: launch_app },
+  { name: 'launch_app', description: 'Launch a Windows application by name (e.g. "notepad", "chrome", "calculator"). Also accepts a small set of web destinations that are not real Windows apps ("youtube", "gmail", "maps") and opens them in MYTHOS\'s own Electron window — use this, not open_web, when the operator says "open X app" or "on the Electron/desktop app". For a specific YouTube video/search instead of the site itself, use open_web(type:"youtube") instead. Never pass a folder path, a file path, a URL or a command with arguments (e.g. explorer.exe "D:\\...") — use open_folder, open_file or open_web for those; this takes an app NAME only. Shells, terminals, consoles, system tools and any app not on MYTHOS\'s reviewed list need the operator\'s approval for each launch: the call then waits for their yes. Notepad ALWAYS opens a blank new document, because it is single-instance and restores its previous tabs otherwise. Only pass existing:true when the operator explicitly asks for the notepad/document they already had open.', params: { name: 'string - application name (never a path or URL)', existing: 'boolean (optional) - true ONLY if the operator asked to reuse the already-open document instead of a fresh one' }, danger: false, fn: launch_app, prepare: launchApp.prepare, approvalFor: launchApp.approvalFor },
   { name: 'list_windows', description: 'List all open windows with their PIDs, titles, process names, and visibility status.', params: {}, danger: false, fn: list_windows, needs_result: true },
   { name: 'focus_window', description: 'Bring a window to the foreground and restore it if minimized.', params: { pid: 'number - process ID of the window' }, danger: false, fn: focus_window },
   { name: 'close_window', description: 'Gracefully close a window by PID (sends WM_CLOSE, waits 3s).', params: { pid: 'number - process ID of the window' }, danger: true, fn: close_window },
@@ -1497,8 +1339,8 @@ const TOOLS = [
   { name: 'ui_click', description: 'Click a UI element. PREFER `name` — pass the element\'s visible label (e.g. "Save as") and the path is resolved for you. Use `elementPath` only with indices ui_elements actually returned; NEVER extend a path past what you were shown, because deeper indices cannot be inferred and will fail. Drives the element through its UIA pattern (Invoke, Toggle, SelectionItem, ExpandCollapse or RangeValue) and reports whether it visibly reacted — it never falls back to clicking coordinates; use click_at or see_and_click for that. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { pid: 'number (optional) - window process ID; defaults to the last launched app', name: 'string (optional) - the element\'s visible label; fails and lists the matches if more than one element shares it', automationId: 'string (optional) - the element\'s automationId, when a name is ambiguous or absent', elementPath: 'array of number strings (optional) - element indices from root to target, exactly as returned by ui_elements', hwnd: 'number (optional) - the hwnd ui_elements reported, so the click resolves against the same window the tree came from' }, danger: true, fn: ui_click },
   { name: 'ui_type', description: 'Type text into the currently focused element, or a specific UI element if pid and elementPath are provided. Uses Unicode SendInput. If you just called launch_app, OMIT pid — the last-launched window is targeted automatically. NEVER invent or guess a pid; only pass one you actually received from a tool result.', params: { text: 'string - text to type', pid: 'number (optional) - target window PID', elementPath: 'array (optional) - target element path' }, danger: false, fn: ui_type },
   { name: 'send_key', description: 'Send a virtual key press (enter, tab, escape, space, up, down, left, right, delete, home, end, pageup, pagedown, f1-f12, a single letter, or a combo like ctrl+n). pageup/pagedown are how you SCROLL a page by voice — they act on whichever window owns the keyboard caret, so focus that window first. Uses real VK codes for apps that ignore Unicode input, and escalates to posted key messages for packaged apps that silently swallow injected input. Enter inside a chat app is routed through the verified send path, which confirms the message actually left the compose box.', params: { key: 'string - key name: enter|tab|escape|space|up|down|left|right|delete|home|end|pageup|pagedown|f1-f12, a letter, or a combo like ctrl+n', pid: 'number (optional) - target window PID; when given, the key is refused if the keyboard caret belongs to a different app' }, danger: false, fn: send_key },
-  { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it. Reports UNVERIFIED unless you pass expect: a raw coordinate click cannot know what was at those pixels, and a coordinate can sit below the visible part of a scrolling page or behind another window. Pass expect with text that should appear afterwards and it is checked and reported as proven; otherwise prefer see_and_click, which finds the label first.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate', expect: 'string (optional) - text you expect to see on screen after the click, used as proof it worked' }, danger: true, fn: click_at },
-  { name: 'see_and_click', description: 'USE THIS FIRST to click anything in a chat app, Electron app or browser UI (WhatsApp, Spotify, YouTube, Discord), and ALWAYS after ui_click fails with an element-path or empty-tree error — those apps expose no usable UIA tree, so no elementPath exists to pass and guessing one cannot work. Needs no pid and no element path: it OCRs the screen, finds the label, and clicks the middle of it. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it lists the matches and refuses rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those. Pass pid (from list_windows or get_foreground_window) whenever you know which window the label is in — that scopes the OCR to that window, so a label MYTHOS\'s own HUD or another app happens to show cannot be matched by mistake.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - text you expect to appear on screen afterwards, used as proof the click worked', pid: 'number (optional) - look for the label only inside this window (from list_windows / get_foreground_window) instead of the whole desktop' }, danger: true, fn: see_and_click },
+  { name: 'click_at', description: 'Click at an absolute screen coordinate (x, y) using a native mouse click. Use when a UI element bounding rect is known but no UIA element path is available for it. Reports UNVERIFIED unless you pass expect: a raw coordinate click cannot know what was at those pixels, and a coordinate can sit below the visible part of a scrolling page or behind another window. Pass expect with text that should appear afterwards and it is checked and reported as proven; otherwise prefer see_and_click, which finds the label first.', params: { x: 'number - absolute screen x coordinate', y: 'number - absolute screen y coordinate', expect: 'string (optional) - words that will be literally visible on screen after the click (a title, a button label), used as proof it worked; a description such as "video starts playing" can never be matched and is reported as not checkable' }, danger: true, fn: click_at },
+  { name: 'see_and_click', description: 'USE THIS FIRST to click anything in a chat app, Electron app or browser UI (WhatsApp, Spotify, YouTube, Discord), and ALWAYS after ui_click fails with an element-path or empty-tree error — those apps expose no usable UIA tree, so no elementPath exists to pass and guessing one cannot work. Needs no pid and no element path: it OCRs the screen, finds the label, and clicks the middle of it. Give the label exactly as it appears ("Mousumi", "Send", "Settings"). If the same text appears more than once it lists the matches and refuses rather than guess — pass occurrence to choose. Cannot click icons with no text; use ui_click or cua_click for those. Pass pid (from list_windows or get_foreground_window) whenever you know which window the label is in — that scopes the OCR to that window, so a label MYTHOS\'s own HUD or another app happens to show cannot be matched by mistake.', params: { text: 'string - the visible label to click, as it appears on screen', occurrence: 'number (optional) - which match to click when the label appears more than once, 1-based', expect: 'string (optional) - words that will be literally visible on screen afterwards (a title, a button label), used as proof the click worked; a description such as "video starts playing" can never be matched and is reported as not checkable', pid: 'number (optional) - look for the label only inside this window (from list_windows / get_foreground_window) instead of the whole desktop' }, danger: true, fn: see_and_click },
   { name: 'move_window', description: 'Move and resize a window by PID to an exact screen rectangle (x, y, width, height).', params: { pid: 'number - window process ID', x: 'number - new x', y: 'number - new y', width: 'number - new width', height: 'number - new height' }, danger: false, fn: move_window },
   { name: 'snap_window', description: 'Snap a window by PID to a screen position: left half, right half, maximize, minimize, or restore.', params: { pid: 'number - window process ID', position: 'string - left|right|maximize|minimize|restore' }, danger: false, fn: snap_window },
   { name: 'scroll_at', description: 'Scroll the mouse wheel at a screen coordinate. Moves to (x,y) first, then scrolls. Defaults: amount 3 ticks, direction down.', params: { x: 'number - absolute screen x', y: 'number - absolute screen y', amount: 'number (optional) - ticks to scroll, default 3', direction: 'string (optional) - up or down, default down' }, danger: false, fn: scroll_at },
