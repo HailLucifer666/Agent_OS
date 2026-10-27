@@ -63,7 +63,7 @@ function baseDeps(overrides) {
     dispatchAction: async () => ({ ok: true, result: { done: true } }),
     bus: { emit() {} },
     logger: { warn() {}, info() {}, error() {} },
-    connectionId: 'conn-273',
+    connectionId: 'conn-273', toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path this test pins
     memory: { working: {}, episodic: { write: async () => {} } },
     historyAppend: () => {},
     reflection: { noteTurn() {} },

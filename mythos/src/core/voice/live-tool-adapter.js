@@ -58,7 +58,7 @@ const {
 const { createRecentActionLedger, actionStatus, pendingAck, STARTED_MESSAGE } = require('./action-evidence-ledger'); const { describeAction } = require('./action-semantics'); // B2b-2: every row says what it did, to what
 const { isAssertionOnUnintelligibleInput } = require('./fragment-guard'); // BUG-299 / BUG-460
 const { createAuthorityGate } = require('./authority-gate'); // BUG-461 / BUG-464: ask before acting on words that did not ask
-const { createHeldReplies, TOOL_RESULT_HOLD_MAX_MS, cancelledNotice } = require('./held-reply'); // BUG-457: hold a slow reply instead of injecting it as user text
+const { createHeldReplies, TOOL_RESULT_HOLD_MAX_MS, cancelledNotice, createSlowToolRoute, answeredByHeldReply } = require('./held-reply'); // BUG-457: hold a slow reply instead of injecting it as user text
 // BUG-398 R5a: the five claim sentences moved to their own module when adding a
 // fifth pushed this file past the size ratchet's ceiling. Pure text, no closure
 // use — the comments explaining each one moved with it, verbatim, because they
@@ -84,7 +84,7 @@ function createLiveToolAdapter(deps) {
     goals,                          // BUG-113: raw GoalSystem, optional — commitment ledger only
     toolAckDeadlineMs,              // BUG-128: test seam only — see TOOL_ACK_DEADLINE_MS
     onToolWait,                     // BUG-456: ({ callId, pending }) — the HUD's one soft chime (ui/public/js/voice/wait-chime.js)
-    toolResultHoldMaxMs,            // BUG-457: test seam only — see held-reply.js TOOL_RESULT_HOLD_MAX_MS; 0 selects today's path
+    toolResultHoldMaxMs,            // BUG-457: test seam only - see held-reply.js TOOL_RESULT_HOLD_MAX_MS; 0 selects today's path. A fixture that names a SLOW_TOOL only to reach the late path MUST pass 0, or the call waits the full window first (four files missed this in the 2026-10-27 review and added ~205 s to the suite).
   } = deps;
   // BUG-456: a call answered "started" begins a silent wait; its late result ends it. Advisory only — never breaks dispatch.
   const toolWait = (callId, pending) => { if (typeof onToolWait === 'function') { try { onToolWait({ callId: String(callId), pending }); } catch (_) { /* advisory */ } } };
@@ -122,11 +122,11 @@ function createLiveToolAdapter(deps) {
   const PENDING_CONFIRM_TTL_MS = 10 * 60 * 1000;
   const MAX_SUMMARY_CHARS = 300;
 
-  // WAVE 3 — tools whose wall-clock exceeds a Live turn, so awaiting them inside
-  // the turn guarantees the model narrates before the answer exists. Membership is
-  // about DURATION, not risk: spotify_play drives cua-driver (5-10s per click
-  // sequence), dsh_task runs an agent (minutes), and the cua_* tools each do a
-  // full UIA hit-test round trip. Everything else is fast enough to await.
+  // WAVE 3 — tools whose wall-clock exceeds a Live turn. Membership is about
+  // DURATION, not risk: spotify_play drives cua-driver (5-10s per click sequence),
+  // dsh_task runs an agent (minutes), the cua_* tools each do a UIA round trip.
+  // Since 2026-10-06 (BUG-457 R2) a listed call is HELD like any other unless its
+  // last measured run overran the hold window: held-reply.js createSlowToolRoute.
   const SLOW_TOOLS = {
     spotify_play: true,
     dsh_task: true,
@@ -141,7 +141,7 @@ function createLiveToolAdapter(deps) {
     browser_switch: true,
     // 2026-08-10 — the vision pair. By this list's own rule membership is about
     // DURATION, and two real screen_look calls that session took 16s and 63s
-    // (audit: 09:53:47 -> 09:54:03, 09:51:40 -> 09:52:43) against a 1500ms ack
+    // (audit: 09:53:47 -> 09:54:03, 09:51:40 -> 09:52:43; before vision-call.js's 12 s bound, and 3.5-4.6 s on 09-25, so now held: BUG-457 R2) against a 1500ms ack
     // deadline. The operator asked "can you see? you didn't answer", and the model
     // — holding no answer and no instruction — invented one. Acking instantly with
     // "say what you are DOING, do not claim completion" is the difference between
@@ -184,14 +184,13 @@ function createLiveToolAdapter(deps) {
   // The general fix is to stop letting ANY call outlive its turn unanswered.
   // Since BUG-457 a call unresolved at this deadline is held for its real reply
   // (the model waits for it); past the hold it gets SLOW_TOOLS' status:'started'
-  // and a late [SYSTEM] notice, as before. SLOW_TOOLS stays because it acks instantly — the model is
-  // told "say what you are doing" without the operator hearing 1.5s of silence
-  // first. This is the net underneath it, not a replacement for it.
+  // and a late [SYSTEM] notice, as before. Since 2026-10-06 a SLOW_TOOLS call is held too unless a
+  // measured run of it overran the hold window (BUG-457 R2, held-reply.js createSlowToolRoute).
   const TOOL_ACK_DEADLINE_MS = Number.isFinite(toolAckDeadlineMs) ? toolAckDeadlineMs : 1500;
   const DEADLINE_EXCEEDED = Symbol('tool-ack-deadline-exceeded');
   // BUG-457: past the deadline the reply is HELD for the rest of this budget, then today's path. A cancellation (the operator spoke) ends the hold early — see held-reply.js.
   const HOLD_BUDGET_MS = Math.max(0, (Number.isFinite(toolResultHoldMaxMs) ? toolResultHoldMaxMs : TOOL_RESULT_HOLD_MAX_MS) - TOOL_ACK_DEADLINE_MS);
-  const heldReplies = createHeldReplies(); if (bus && typeof bus.subscribe === 'function') bus.subscribe('voice.live.toolcancel', (e) => heldReplies.cancel(e && e.payload && e.payload.ids));
+  const heldReplies = createHeldReplies(); if (bus && typeof bus.subscribe === 'function') bus.subscribe('voice.live.toolcancel', (e) => heldReplies.cancel(e && e.payload && e.payload.ids)); const slowRoute = createSlowToolRoute({ holdWindowMs: HOLD_BUDGET_MS > 0 ? TOOL_ACK_DEADLINE_MS + HOLD_BUDGET_MS : 0, now: deps.now || Date.now }); // BUG-457 R2: window = this deadline + this budget; same clock as startedAt
 
   // Settle to {outcome} | {error} | DEADLINE_EXCEEDED. The timer is cleared on
   // the fast path so a resolved dispatch never holds the event loop open for
@@ -548,7 +547,8 @@ function createLiveToolAdapter(deps) {
         // outcome arrives later through reportLateOutcome, which does its own
         // announcing, so sending "outcome pending" here would be noise ahead
         // of the answer.
-        if (!entry.started) {
+        // Nor is a HELD reply: it is already answered by its tool response (BUG-457 R1, 2026-10-06; why and its attack in held-reply.js).
+        if (!entry.started && !answeredByHeldReply(heldAnswered, entry.traceId)) {
           // BUG-295: the fourth narration site, and it is a RE-narration — the
           // instruction is recomputed here from {tool, ok} because the outcome
           // object is long gone by now. Tool name is all this branch has, which
@@ -709,13 +709,13 @@ function createLiveToolAdapter(deps) {
       // never reach the effector unstamped by going down the slow branch.
       stampProvenanceIfUnbacked(decision); routeMemory.note(call.name, call.args || {}); const startedAt = (deps.now || Date.now)();
 
-      if (SLOW_TOOLS[call.name]) {
+      if (SLOW_TOOLS[call.name] && slowRoute.acksAtOnce(call.name)) { // BUG-457 R2: only after a measured overrun of the hold window, or with the hold off
         commitAction(pendingAck(call.name, call.id, describeAction(call.name, call.args)));
         responses.push({ id: call.id, name: call.name, response: {
           status: 'started', message: STARTED_MESSAGE,
         }}); toolWait(call.id, true);
         // Deliberately not awaited: the whole point is that the turn does not wait.
-        dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent })
+        slowRoute.timed(call.name, dispatchAction(decision, { tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent }), startedAt)
           .then((outcome) => reportLateOutcome(call.name, outcome, call.id, startedAt, call.args))
           .catch((err) => reportLateOutcome(call.name, { ok: false, result: sanitize(err) }, call.id, startedAt, call.args));
         continue;
@@ -726,9 +726,9 @@ function createLiveToolAdapter(deps) {
         // still running at TOOL_ACK_DEADLINE_MS is HELD (held-reply.js) and answered
         // with its real result; only past the hold, on a cancellation or on typed
         // words is it answered "started" and reconciled later, like a SLOW_TOOLS call.
-        const pending = dispatchAction(decision, {
+        const pending = slowRoute.timed(call.name, dispatchAction(decision, {
           tier: verdict.tier, channel: 'voice-live', traceId: call.id, consent: held.consent,
-        });
+        }), startedAt);
         let settled = await raceDeadline(pending, TOOL_ACK_DEADLINE_MS);
         if (settled === DEADLINE_EXCEEDED) {
           logger.info('live.tool-ack-deadline', { tool: call.name, callId: call.id, deadlineMs: TOOL_ACK_DEADLINE_MS });

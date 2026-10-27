@@ -95,4 +95,75 @@ function createHeldReplies({ now = () => Date.now(), setTimer = setTimeout, clea
   return { hold, cancel, releaseAll, get size() { return held.size; } };
 }
 
-module.exports = { createHeldReplies, TOOL_RESULT_HOLD_MAX_MS, cancelledNotice };
+// BUG-457 residual 2 (2026-10-06): which SLOW_TOOLS calls still ack "started" at
+// once. Before this, all of them did, so screen_look's result reached the model as
+// user-role text and cut MYTHOS mid-sentence 6 of 6 times on 09-25, each 3.5-4.6 s
+// after the call: inside the hold window. The list's 16 s / 63 s figures for the
+// vision pair are from 2026-08-10, before vision-call.js bounded a call
+// (VISION_CALL_TIMEOUT_MS, 12 s by default); launch_app's worst measured run is
+// 9.86 s and spotify_play's 5-10 s. Every Live-reachable member's measured
+// duration now fits the window, so the list alone cannot say "too slow to hold".
+//
+// THE RULE, derived rather than typed (gate D): a listed call is held like any
+// other unless THIS tool's last settled run in this session took longer than the
+// hold window; then it acks at once, because holding it would only add up to 12 s
+// of silence before the same "started". The measurement is taken on both paths,
+// so a tool that fits again is held again. With the hold switched off (window 0)
+// every listed call acks at once: today's path, unchanged.
+//
+// ATTACK, 2026-10-06. (1) What else matches: any listed tool, including one that
+// overran once by accident; its next call alone acks at once, then it re-measures.
+// A tool that never settles is never measured and is held every time, bounded by
+// the window. (2) Evidence: every hold still logs live.tool-held. (5) The window
+// is the adapter's own deadline plus hold budget, not a second constant. (8) What
+// it newly needs: a held listed call now delays later calls in its batch by up to
+// the window, as BUG-457 already says of every held call. What it KILLS (gate F):
+// nothing; the instant ack is reached cold only with the hold off, and warm only
+// after a measured overrun. Not covered: a cold first call of a tool that really
+// runs past the window (dsh_task, minutes, is not on the Live allowlist today)
+// costs one silent window before "started".
+function createSlowToolRoute({ holdWindowMs, now = () => Date.now() } = {}) {
+  const lastRunMs = new Map(); // tool -> duration of its most recent settled run
+
+  function acksAtOnce(tool) {
+    if (!(holdWindowMs > 0)) return true;
+    const ms = lastRunMs.get(String(tool));
+    return ms !== undefined && ms > holdWindowMs;
+  }
+
+  // Records how long the run took, whatever its outcome; returns the SAME promise.
+  function timed(tool, promise, startedAt) {
+    const note = () => { lastRunMs.set(String(tool), now() - startedAt); };
+    Promise.resolve(promise).then(note, note);
+    return promise;
+  }
+
+  return { acksAtOnce, timed };
+}
+
+// BUG-457 residual 1 (2026-10-06): one call, one terminal outcome. At 02:12:44 on
+// 09-25 Gemini issued think_deeply + use_skill and the operator's words closed the
+// turn 131 ms later, with no toolCallCancellation. think_deeply was held 569 ms
+// past the deadline and ended `end=outcome`, so its result went out as the tool
+// response, and ALSO as a late-for-turn [SYSTEM] notice: the adapter's late branch
+// only knew `entry.started`, which is false for a held reply. The notice opened an
+// unprompted turn. live-tool-adapter.js commitAction now skips that notice for an
+// id this batch held and answered. Its one delivery is the tool response, or, if
+// the session refuses that (a rotation), reportLateOutcome: still exactly one.
+//
+// ATTACK, 2026-10-06. (1) What else matches: only ids in THIS batch's heldAnswered,
+// which is written only on end=outcome|error. A released, cancelled or hold-max
+// call is committed as a 'started' entry and was never announced here anyway.
+// (2) Evidence: the live-tool-outcome-late-for-turn anomaly still fires for it,
+// and live.tool-held still logs. (A, unmeasured) It assumes Gemini reads a tool
+// response for a call it never cancelled after an interrupted turn. BUG-457's probe
+// showed the model waits for a held reply, but never ran an interruption without
+// a cancellation; the attended check must. (F) For a held reply the late-for-turn
+// notice is now unreachable, on purpose. NOT changed: a call answered INSIDE the
+// deadline whose turn closed (use_skill at 02:12:46.793) still gets both, the
+// notice per G3/BUG-297; pinned by bug-457-residuals (c), an operator decision.
+function answeredByHeldReply(heldAnswered, traceId) {
+  return Array.isArray(heldAnswered) && heldAnswered.some((a) => a && a.id === traceId);
+}
+
+module.exports = { createHeldReplies, TOOL_RESULT_HOLD_MAX_MS, cancelledNotice, createSlowToolRoute, answeredByHeldReply };

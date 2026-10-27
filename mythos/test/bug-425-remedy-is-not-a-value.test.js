@@ -54,7 +54,7 @@ test('a poisoned URL still fails verbatim before browser access', async () => {
 test('late results retain a structured remedy on the existing system-notice path', async () => {
   const outcome = await openWeb()({ type: 'web', query: 'youtube.com' }), notices = [];
   const adapter = createLiveToolAdapter({ leash: { check: () => ({ allow: true, tier: 0 }) },
-    dispatchAction: async () => outcome, bus: { emit() {} }, logger: { info() {}, warn() {} },
+    dispatchAction: async () => outcome, bus: { emit() {} }, logger: { info() {}, warn() {} }, toolResultHoldMaxMs: 0, /* BUG-457 R2 (2026-10-06): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path this test pins */
     memory: { working: {}, episodic: { write: async () => {} } }, historyAppend() {}, reflection: {},
     summarizeActionsForResult: () => null, getLiveSession: () => ({ isOpen: () => true, sendText: t => notices.push(t) }) });
   await adapter.handleLiveToolCalls([{ id: 'late-remedy', name: 'dsh_task', args: {} }], { sendToolResponse() {} });

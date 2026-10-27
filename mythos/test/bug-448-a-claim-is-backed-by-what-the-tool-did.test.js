@@ -164,7 +164,7 @@ describe('what each row records', () => {
       logger: { warn() {}, info() {} }, connectionId: 'conn-b2b2',
       memory: { working: { tick: 1 }, episodic: { write: (rec) => episodic.push(rec) } },
       historyAppend: () => {}, reflection: null, summarizeActionsForResult,
-      getLiveSession: () => ({ isOpen: () => true, sendText: () => {} }), toolAckDeadlineMs: 500,
+      getLiveSession: () => ({ isOpen: () => true, sendText: () => {} }), toolAckDeadlineMs: 500, toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path this test pins
     });
     const heard = { sendToolResponse: () => {}, userTextSoFar: 'Can you start the debug browser please?' };
     const claims = () => anomalies.filter((a) => a.kind === 'claimed-action-not-taken').map((a) => a.target);

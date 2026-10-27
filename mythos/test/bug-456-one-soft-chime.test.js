@@ -227,7 +227,10 @@ describe('BUG-456 — the server and the bridge are wired to it', () => {
 
   it('(k2) the slow-tool path signals too', () => {
     const src = fs.readFileSync(path.join(ROOT, 'src', 'core', 'voice', 'live-tool-adapter.js'), 'utf8');
-    const slow = src.slice(src.indexOf('if (SLOW_TOOLS[call.name]) {'), src.indexOf('continue;', src.indexOf('if (SLOW_TOOLS[call.name]) {')));
+    // Anchor re-pointed 2026-10-06: BUG-457 R2 added `&& slowRoute.acksAtOnce(..)` to this condition. A missing anchor now fails by name.
+    const at = src.indexOf('if (SLOW_TOOLS[call.name] && slowRoute.acksAtOnce(call.name)) {');
+    assert.ok(at > 0, 'the slow-tool branch must still exist');
+    const slow = src.slice(at, src.indexOf('continue;', at));
     assert.match(slow, /toolWait\(call\.id, true\)/);
     const late = src.slice(src.indexOf('function reportLateOutcome('), src.indexOf('function reportLateOutcome(') + 200);
     assert.match(late, /toolWait\(traceId, false\)/, 'settled first, whatever the outcome');
