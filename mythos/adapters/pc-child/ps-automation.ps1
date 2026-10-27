@@ -25,6 +25,12 @@
 #   { "ok": true, "result": <any> }
 #   { "ok": false, "error": "reason string" }
 
+# B2e (2026-09-29 audit): MYTHOS's own process ids, passed by pc-child/index.js at
+# spawn and fixed for this child's life. Input into their windows is refused (see
+# "Input gate" below). A script parameter rather than an environment variable, so
+# nothing inherited from the environment can set it.
+param([string]$InputOwnPids = '')
+
 $ErrorActionPreference = 'Continue'
 
 # ---- Console I/O encoding ----
@@ -377,6 +383,7 @@ function Get-RectBounds($rect) {
 }
 
 function Send-VkKey($vk) {
+    if (-not (Test-InputLandingAllowed 'keys')) { $script:LastVkSent = 0; return }
     $inputs = @(
         (New-Object 'NativeInput+INPUT'),
         (New-Object 'NativeInput+INPUT')
@@ -598,6 +605,7 @@ function Send-UnicodeText($text) {
     $script:LastVkSent = 0
     # Send each character as a Unicode key event pair (down + up)
     foreach ($ch in $text.ToCharArray()) {
+        if (-not (Test-InputLandingAllowed 'keys')) { break }
         $inputs = @(
             (New-Object 'NativeInput+INPUT'),
             (New-Object 'NativeInput+INPUT')
@@ -629,7 +637,8 @@ function Resolve-AppPathFromRegistry($name) {
     )
     foreach ($root in $roots) {
         try {
-            $key = Get-Item -Path (Join-Path $root $exeName) -ErrorAction Stop
+            # -LiteralPath: with -Path, "p*" expanded and resolved PowerShell.exe (B2a review, 2026-09-29).
+            $key = Get-Item -LiteralPath (Join-Path $root $exeName) -ErrorAction Stop
             $resolved = $key.GetValue('')
             if ($resolved -and (Test-Path -LiteralPath $resolved)) { return $resolved }
         } catch { }
@@ -652,11 +661,11 @@ function Resolve-AppViaStartApps($name) {
     try {
         $apps = @(Get-StartApps -ErrorAction Stop)
         $exact = $apps | Where-Object { $_.Name -ieq $name } | Select-Object -First 1
-        if ($exact) { return $exact.AppID }
+        if ($exact) { return $exact }
         $prefix = $apps | Where-Object { $_.Name -like "$name*" } | Sort-Object { $_.Name.Length } | Select-Object -First 1
-        if ($prefix) { return $prefix.AppID }
+        if ($prefix) { return $prefix }
         $sub = $apps | Where-Object { $_.Name -like "*$name*" } | Sort-Object { $_.Name.Length } | Select-Object -First 1
-        if ($sub) { return $sub.AppID }
+        if ($sub) { return $sub }
     } catch { }
     return $null
 }
@@ -847,109 +856,149 @@ function New-LaunchResult($Name, $ResolvedPid, $Resolution, $Via) {
     return $r
 }
 
-function Handle-LaunchApp($name) {
-    if (-not $name) { return 'App name is required.' }
-    # A bare non-string JSON value (e.g. a number) reaches here as-is; coerce
-    # before .ToLowerInvariant() below, which only exists on [string] and would
-    # otherwise throw a MethodInvocationException that crashes this dispatch
-    # loop (transient DoS - pc-child auto-restarts, but every in-flight command
-    # is lost until it does).
+# B2a (2026-09-29 audit): RESOLUTION, separated from launching. The ladder is
+# the one Handle-LaunchApp always walked - Spotify, KnownApps (with their fixed
+# args), registry App Paths, Start Apps - and then it STOPS. The generic
+# `Start-Process -FilePath $name` that used to follow handed the raw,
+# model-chosen string to ShellExecute, which runs cmd, powershell, a full path,
+# a UNC path, ms-settings:, a .cpl - with no confirmation, because launch_app is
+# tier 2. Unresolved now means unresolved.
+# Read-only: registry reads and Get-StartApps. Nothing is started here. The Node
+# side (effectors/launch-app.js + launch-policy.js) decides whether the record
+# may run at all, and the operator approves anything that is not an ordinary app.
+function Resolve-LaunchTarget($name) {
+    if (-not $name) { return @{ resolved = $false; reason = 'App name is required.' } }
     $name = [string]$name
-
-    # Special handling for Spotify - use URI scheme (works for both desktop and Windows Store/UWP apps)
-    if ($name -eq 'spotify' -or $name -like 'spotify:*') {
-        # Use Spotify URI scheme - works for both desktop and Windows Store versions
-        # Supports spotify: (launch app), spotify:track:<id>, spotify:search:<query>
-        try {
-            Start-Process $name -ErrorAction Stop
-            Start-Sleep -Milliseconds 1500
-            # Try to get the PID after launch
-            $proc = Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($proc) {
-                return @{ pid = $proc.Id; name = $name; launched = $true }
-            }
-            return @{ name = $name; launched = $true; note = 'launched via URI scheme' }
-        } catch {
-            return ('Failed to launch Spotify via URI: ' + $_.Exception.Message)
-        }
-    }
-
-    # FIX 6: known installed desktop app - resolve before the generic
-    # Start-Process attempt below, which can't find apps with no PATH entry.
+    # A path, a URI or a command line is not an app name (effectors/launch-app.js
+    # refuses these first; this is the same rule where the lookup happens).
+    if ($name -match '[\\/:]') { return @{ resolved = $false; reason = 'not-an-app-name' } }
+    # Wildcards: -like below (Start Apps) would expand them, so "p*" meant "any app starting with p".
+    if ($name -match '[\*\?\[\]]') { return @{ resolved = $false; reason = 'wildcard-in-name' } }
+    if ($name -ieq 'spotify') { return @{ resolved = $true; kind = 'spotify'; identity = 'spotify'; fixedArgs = @() } }
     $attempted = @()
     $known = $script:KnownApps[$name.ToLowerInvariant()]
-    if ($known -and (Test-Path $known.path)) {
-        try {
-            $procArgs = @{ FilePath = $known.path; PassThru = $true; ErrorAction = 'Stop' }
-            if ($known.args) { $procArgs.ArgumentList = $known.args }
-            $proc = Start-Process @procArgs
-            Start-Sleep -Milliseconds 500
-            # AUDIT FIX: launcher-style entries (Discord's Squirrel Update.exe)
-            # spawn the real app and exit - $proc.Id would be the bootstrapper's
-            # transient PID, poisoning lastLaunchedPid upstream. Resolve the
-            # real process by name, same pattern as the Spotify branch above.
-            if ($known.procName) {
-                Start-Sleep -Milliseconds 1000
-                $real = Get-Process -Name $known.procName -ErrorAction SilentlyContinue | Select-Object -First 1
-                if ($real) { return @{ pid = $real.Id; name = $name; launched = $true } }
-                return @{ name = $name; launched = $true; note = 'launched via bootstrapper; app process not yet visible' }
-            }
-            return @{ pid = $proc.Id; name = $name; launched = $true }
-        } catch {
-            return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
+    if ($known) {
+        if (Test-Path -LiteralPath $known.path) {
+            $fixed = @()
+            if ($known.args) { $fixed = @($known.args) }
+            $rec = @{ resolved = $true; kind = 'known'; identity = $name.ToLowerInvariant(); executable = $known.path; fixedArgs = $fixed }
+            if ($known.procName) { $rec.procName = $known.procName }
+            return $rec
         }
-    } else {
-        # FIX 7: KnownApps only knows a literal per-user Win32 exe path. Apps
-        # reinstalled via a different channel - e.g. Slack as a Microsoft Store
-        # package - register under HKCU App Paths instead, or need the
-        # shell:AppsFolder\<AppID> launch form entirely. Both steps are
-        # best-effort and additive: any failure just falls through to the
-        # generic Start-Process attempt below, preserving the honest-failure
-        # contract.
-        if ($known) { $attempted += ('KnownApps path missing on disk: ' + $known.path) }
+        $attempted += ('KnownApps path missing on disk: ' + $known.path)
+    }
+    $regPath = Resolve-AppPathFromRegistry $name
+    if ($regPath) { return @{ resolved = $true; kind = 'app-paths'; identity = $name; executable = $regPath; fixedArgs = @() } }
+    $attempted += 'registry App Paths: no match'
+    $entry = Resolve-AppViaStartApps $name
+    if ($entry) { return @{ resolved = $true; kind = 'start-apps'; identity = $name; appId = [string]$entry.AppID; startName = [string]$entry.Name; fixedArgs = @() } }
+    $attempted += 'Get-StartApps: no match'
+    return @{ resolved = $false; reason = ('no application matches "' + $name + '". Tried: ' + ($attempted -join '; ')) }
+}
 
-        $regPath = Resolve-AppPathFromRegistry $name
-        if ($regPath) {
-            try {
-                $proc = Start-Process -FilePath $regPath -PassThru -ErrorAction Stop
+# B2a: launch EXACTLY a record resolve_app produced - never a name. The Node side
+# hands back the same record it resolved (and, for anything that is not an
+# ordinary app, only after the operator approved that record). Each kind is
+# re-validated here against this script's own tables before anything starts,
+# because the record arrives from outside this process and this is the last
+# place a path or an argument could be smuggled in.
+function Handle-LaunchApp($name, $target) {
+    if (-not $target) { return 'launch_app needs a resolved target: call resolve_app first (the by-name launch was removed on 2026-09-29).' }
+    $name = [string]$name
+    $kind = [string]$target.kind
+    try {
+        switch ($kind) {
+            'spotify' {
+                # The bare scheme only: tracks and searches go through open_uri.
+                Start-Process 'spotify:' -ErrorAction Stop
+                Start-Sleep -Milliseconds 1500
+                $proc = Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($proc) { return @{ pid = $proc.Id; name = $name; launched = $true } }
+                return @{ name = $name; launched = $true; note = 'launched via URI scheme' }
+            }
+            'known' {
+                $known = $script:KnownApps[[string]$target.identity]
+                if (-not $known -or $known.path -ne [string]$target.executable) { return 'launch_app refused: that record does not match this script''s own KnownApps table.' }
+                if (-not (Test-Path -LiteralPath $known.path)) { return ('launch_app: ' + $known.path + ' is no longer on disk.') }
+                # The TABLE's arguments, never the record's (Discord's
+                # --processStart Discord.exe is the only one today).
+                $procArgs = @{ FilePath = $known.path; PassThru = $true; ErrorAction = 'Stop' }
+                if ($known.args) { $procArgs.ArgumentList = $known.args }
+                $proc = Start-Process @procArgs
+                Start-Sleep -Milliseconds 500
+                # AUDIT FIX: launcher-style entries (Discord's Squirrel Update.exe)
+                # spawn the real app and exit - resolve the real process by name.
+                if ($known.procName) {
+                    Start-Sleep -Milliseconds 1000
+                    $real = Get-Process -Name $known.procName -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($real) { return @{ pid = $real.Id; name = $name; launched = $true } }
+                    return @{ name = $name; launched = $true; note = 'launched via bootstrapper; app process not yet visible' }
+                }
+                return @{ pid = $proc.Id; name = $name; launched = $true }
+            }
+            'app-paths' {
+                $exe = [string]$target.executable
+                if (-not [System.IO.Path]::IsPathRooted($exe) -or $exe -notmatch '\.exe$' -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+                    return 'launch_app refused: the resolved executable is not a rooted .exe on disk.'
+                }
+                # Re-resolve the name through the registry and require the SAME path:
+                # the checks above accept any rooted .exe, so without this a record
+                # naming an arbitrary executable would pass (B2a review, 2026-09-29).
+                if ((Resolve-AppPathFromRegistry ([string]$target.identity)) -ne $exe) {
+                    return 'launch_app refused: that record does not match what App Paths resolves for this name.'
+                }
+                # No ArgumentList: no arguments are ever passed on this path.
+                $proc = Start-Process -FilePath $exe -PassThru -ErrorAction Stop
                 Start-Sleep -Milliseconds 500
                 $realPid = Resolve-RealProcessAfterLaunch $proc $name
                 $resolution = $null
                 if (-not $realPid) { $resolution = Resolve-WindowedProcessByName $name 6000 }
                 return (New-LaunchResult $name $realPid $resolution 'registry-app-paths')
-            } catch { $attempted += ('registry path ' + $regPath + ': ' + $_.Exception.Message) }
-        } else { $attempted += 'registry App Paths: no match' }
-
-        $appId = Resolve-AppViaStartApps $name
-        if ($appId) {
-            try {
-                Start-Process "shell:AppsFolder\$appId" -ErrorAction Stop
+            }
+            'start-apps' {
+                $appId = [string]$target.appId
+                # Re-resolve the name and require the SAME entry, as for app-paths
+                # above: "any existing AppID" would accept a record naming another app.
+                $entry = Resolve-AppViaStartApps ([string]$target.identity)
+                if (-not $entry -or [string]$entry.AppID -ne $appId) { return 'launch_app refused: that record does not match what the Start menu resolves for this name.' }
+                Start-Process ('shell:AppsFolder\' + $appId) -ErrorAction Stop
                 Start-Sleep -Milliseconds 800
                 # A Store/UWP activation has no launcher process to follow, but the
-                # app it activates does own a real windowed process - find it by
-                # name. Returning no pid here is what left ui_type with nothing to
-                # foreground (see Resolve-WindowedProcessByName's comment).
+                # app it activates owns a real windowed process - find it by name.
                 $resolution = Resolve-WindowedProcessByName $name 8000
                 return (New-LaunchResult $name $null $resolution 'start-apps')
-            } catch { $attempted += ('shell:AppsFolder ' + $appId + ': ' + $_.Exception.Message) }
-        } else { $attempted += 'Get-StartApps: no match' }
-    }
-
-    # Try Start-Process with the name
-    try {
-        $proc = Start-Process -FilePath $name -PassThru -ErrorAction Stop
-        Start-Sleep -Milliseconds 500
-        $realPid = Resolve-RealProcessAfterLaunch $proc $name
-        $resolution = $null
-        if (-not $realPid) { $resolution = Resolve-WindowedProcessByName $name 6000 }
-        return (New-LaunchResult $name $realPid $resolution $null)
+            }
+            default { return ('launch_app refused: unknown target kind "' + $kind + '".') }
+        }
     } catch {
-        # FIX 4: an unresolvable name must report an honest failure, not
-        # silently fall back to opening File Explorer / triggering a browser
-        # web-search while still claiming success - a mistyped or unknown app
-        # name previously opened the wrong thing and reported launched:true.
-        $attempted += ('Start-Process "' + $name + '": ' + $_.Exception.Message)
-        return ('Failed to launch "' + $name + '". Tried: ' + ($attempted -join '; '))
+        return ('Failed to launch "' + $name + '": ' + $_.Exception.Message)
+    }
+}
+
+# B2a: the only URIs MYTHOS opens for itself - a Spotify track or search, and a
+# WhatsApp chat - as one narrow operation instead of launch_app's old
+# "Start-Process whatever-string". effectors/launch-app.js validates first; this
+# re-validates, because it is the last thing before ShellExecute.
+$script:AllowedUriPatterns = @(
+    '^spotify:track:[A-Za-z0-9]{22}$',
+    '^spotify:search:[A-Za-z0-9%._~!*''()\-]{1,2000}$',
+    '^whatsapp://send\?phone=[1-9][0-9]{7,14}$'
+)
+function Handle-OpenUri($uri) {
+    $uri = [string]$uri
+    $allowed = $false
+    foreach ($p in $script:AllowedUriPatterns) { if ($uri -cmatch $p) { $allowed = $true; break } }
+    if (-not $allowed) { return 'open_uri refused: only a Spotify track or search, or a WhatsApp chat link, may be opened this way.' }
+    try {
+        Start-Process $uri -ErrorAction Stop
+        if ($uri -clike 'spotify:*') {
+            Start-Sleep -Milliseconds 1500
+            $proc = Get-Process -Name 'Spotify' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($proc) { return @{ pid = $proc.Id; name = $uri; launched = $true } }
+        }
+        return @{ name = $uri; launched = $true }
+    } catch {
+        return ('Failed to open ' + $uri + ': ' + $_.Exception.Message)
     }
 }
 
@@ -1458,6 +1507,7 @@ function Handle-ScrollAt($x, $y, $amount, $direction) {
     $wheel.u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_WHEEL
 
     $inputs = @($move, $wheel)
+    if (-not (Test-InputLandingAllowed 'point' $x $y)) { return $script:InputLandingRefusal }
     [void][NativeInput]::SendInput(2, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
     return @{ scrolled = $true; x = [int]$x; y = [int]$y; amount = $amt; direction = $dir }
 }
@@ -1485,6 +1535,7 @@ function Handle-RightClickAt($x, $y) {
     $inputs[2].type = [NativeInput]::INPUT_MOUSE
     $inputs[2].u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_RIGHTUP
 
+    if (-not (Test-InputLandingAllowed 'point' $x $y)) { return $script:InputLandingRefusal }
     [void][NativeInput]::SendInput(3, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
     return @{ rightClicked = $true; x = [int]$x; y = [int]$y }
 }
@@ -1534,6 +1585,7 @@ function Handle-Drag($x1, $y1, $x2, $y2) {
     $up.u.mi.dwFlags = [NativeInput]::MOUSEEVENTF_LEFTUP
     $inputs += $up
 
+    if (-not (Test-InputLandingAllowed 'point' $x1 $y1) -or -not (Test-InputLandingAllowed 'point' $x2 $y2)) { return $script:InputLandingRefusal }
     [void][NativeInput]::SendInput($inputs.Count, $inputs, [System.Runtime.InteropServices.Marshal]::SizeOf($inputs[0]))
     return @{ dragged = $true; from = @{ x = [int]$x1; y = [int]$y1 }; to = @{ x = [int]$x2; y = [int]$y2 }; steps = $steps }
 }
@@ -4393,6 +4445,7 @@ function Send-VkCombo($modifierVks, $vk) {
 # Send-VkKey above -- the [Type] overload is unreliable for a nested type name on
 # PowerShell 5.1.
 function Send-VkKeyDown($vk) {
+    if (-not (Test-InputLandingAllowed 'keys')) { $script:LastVkSent = 0; return }
     $inputs = @((New-Object 'NativeInput+INPUT'))
     $inputs[0].type = [NativeInput]::INPUT_KEYBOARD
     $inputs[0].u.ki.wVk = $vk
@@ -4401,6 +4454,7 @@ function Send-VkKeyDown($vk) {
 }
 
 function Send-VkKeyUp($vk) {
+    if (-not (Test-InputLandingAllowed 'keys')) { $script:LastVkSent = 0; return }
     $inputs = @((New-Object 'NativeInput+INPUT'))
     $inputs[0].type = [NativeInput]::INPUT_KEYBOARD
     $inputs[0].u.ki.wVk = $vk
@@ -4960,6 +5014,7 @@ function Resolve-UIAElementOnce($TargetPid, $elementPath, $Hwnd) {
 }
 
 function Click-AtScreenCoords($x, $y) {
+    if (-not (Test-InputLandingAllowed 'point' $x $y)) { return }
     # SendInput absolute move + left click
     # Normalize to 0-65535 range for MOUSEEVENTF_ABSOLUTE
     $screenW = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width
@@ -5606,6 +5661,346 @@ function Handle-UiaPumpProbe($TargetPid) {
 }
 
 # ---- Main Loop ----
+# ---- Input gate (2026-09-29 audit, B2e) ----
+#
+# THE DEFECT. ui_type, send_key, click_at and the other input commands below
+# sent keystrokes and clicks to whatever window would receive them, and nothing
+# looked at what that window was. Two kinds of window turn input into action:
+#   - a COMMAND window - cmd, PowerShell, Windows Terminal, the Run box, Start
+#     search, File Explorer's address bar, an editor's built-in terminal: typed
+#     text followed by Enter RUNS. With a voice session connected, ui_type and
+#     click_at are auto-allowed ("operator-present-trusted") and send_key is
+#     tier 2, so a model steered by a web page or a document could type a command
+#     into a terminal and press Enter with no prompt at all.
+#   - MYTHOS's OWN window. Its confirm dialog lives there, so send_key tab then
+#     space reached Approve: a held call could approve itself.
+#
+# THE FIX. Every input command is checked HERE, when this process is about to
+# run it, against the window that will actually receive it - not against what
+# the model named, and not seconds earlier when it was approved:
+#   own window      -> refused, always. Nothing can approve it.
+#   command window  -> refused unless the command carries the operator's approval
+#                      for THAT window: same process id AND the same process
+#                      start time (a new process that reuses the id is a
+#                      different window), and the same window handle when one
+#                      was recorded.
+#   no window, or a window whose program cannot be named -> refused: input with
+#                      no known destination is not sent.
+#   anything else   -> runs exactly as before.
+# input_target returns the same classification without acting, and the leash's
+# approval prompt is built from it, so the prompt and this gate cannot disagree.
+# The "approved" list reaches this process only from pc-child/input-approval.js,
+# which strips it from every command that was not sent inside a consent-checked
+# call (see that file).
+#
+# WHICH WINDOW RECEIVES IT. Keystrokes go to the foreground window, so the keys
+# commands are checked against it, and against the target pid's window as well
+# when a pid is given (a UIA SetFocus inside the handler can move focus there).
+# A click goes to the window under the point. A pid-only command (it focuses
+# that pid itself) is checked against that pid's window. A command missing what
+# it needs to act (no text, no key, no numeric point) is left to its handler,
+# which refuses it: nothing is sent, so there is nothing to check.
+#
+# NOT COVERED, and said so: every SendInput is re-judged (Test-InputLandingAllowed,
+# below), so what remains is the instant between that check and the send; a program not on the lists below is ordinary even if
+# it has a way to run commands (a browser's address bar, an app's own console);
+# an elevated process's start time cannot be read from here, so its identity is
+# its pid alone - Windows' UIPI drops input into an elevated window only while
+# MYTHOS itself runs unelevated. An approval covers a whole window: a terminal's
+# tabs switched after approval are the same window. File dialogs, launchers not
+# listed here, and command lines inside ordinary programs are ordinary.
+
+$script:InputOwnPidSet = @{}
+foreach ($p in ([string]$InputOwnPids -split '[,;\s]+')) {
+    $n = 0
+    if ([int]::TryParse($p, [ref]$n) -and $n -gt 0) { $script:InputOwnPidSet[$n] = $true }
+}
+# The HUD's own title (ui/public/index.html). "MYTHOS" alone, or a browser's
+# "MYTHOS - Google Chrome" when the HUD runs in a tab. Case-sensitive, so a file
+# called mythos-notes.txt is not MYTHOS's window.
+# Edge with other tabs open writes "MYTHOS and 2 more pages - Personal - Microsoft Edge"
+# (B2e review, 2026-09-30), so the tab count is allowed before the browser part.
+$script:InputOwnTitleRe = '^MYTHOS( and \d+ more pages?)?( [-\u2013\u2014] .*)?$'
+$script:InputCommandClasses = @{
+    'ConsoleWindowClass' = 'a console window'
+    'PseudoConsoleWindow' = 'a console window'
+    'CASCADIA_HOSTING_WINDOW_CLASS' = 'Windows Terminal'
+    'mintty' = 'a terminal (mintty)'
+    'VirtualConsoleClass' = 'a terminal (ConEmu)'
+    'PuTTY' = 'a remote shell (PuTTY)'
+}
+$script:InputCommandProcesses = @{
+    # shells and terminals
+    'cmd' = 'Command Prompt'; 'powershell' = 'Windows PowerShell'; 'pwsh' = 'PowerShell'
+    'powershell_ise' = 'PowerShell ISE'; 'windowsterminal' = 'Windows Terminal'; 'wt' = 'Windows Terminal'
+    'openconsole' = 'a console window'; 'conhost' = 'a console window'; 'bash' = 'a bash shell'
+    'wsl' = 'a Linux shell (WSL)'; 'wslhost' = 'a Linux shell (WSL)'; 'mintty' = 'a terminal (mintty)'
+    'alacritty' = 'a terminal (Alacritty)'; 'wezterm-gui' = 'a terminal (WezTerm)'; 'hyper' = 'a terminal (Hyper)'
+    'tabby' = 'a terminal (Tabby)'; 'kitty' = 'a terminal (kitty)'; 'putty' = 'a remote shell (PuTTY)'
+    'conemu' = 'a terminal (ConEmu)'; 'conemu64' = 'a terminal (ConEmu)'; 'cmder' = 'a terminal (Cmder)'
+    # places in Windows where typed text or a click runs a program or changes the system
+    'explorer' = 'Windows Explorer (its address bar and the Run box run commands; a double-click runs a file)'
+    'searchhost' = 'Windows search (it runs what is typed)'; 'searchapp' = 'Windows search (it runs what is typed)'
+    'searchui' = 'Windows search (it runs what is typed)'; 'startmenuexperiencehost' = 'the Start menu'
+    'taskmgr' = 'Task Manager (it can run a new task and end processes)'; 'regedit' = 'Registry Editor'
+    'mmc' = 'a Windows management console'; 'systemsettings' = 'Windows Settings'
+    'sechealthui' = 'Windows Security'; 'control' = 'Control Panel'; 'rundll32' = 'a Control Panel dialog'
+    'credentialuibroker' = 'a Windows credential prompt'; 'msiexec' = 'a Windows installer'
+    # editors with a built-in terminal
+    'code' = 'VS Code (its built-in terminal runs commands)'; 'code - insiders' = 'VS Code (its built-in terminal runs commands)'
+    'cursor' = 'Cursor (its built-in terminal runs commands)'; 'windsurf' = 'Windsurf (its built-in terminal runs commands)'
+    'devenv' = 'Visual Studio (its built-in terminal runs commands)'
+    'idea64' = 'IntelliJ IDEA (its built-in terminal runs commands)'; 'pycharm64' = 'PyCharm (its built-in terminal runs commands)'
+    'webstorm64' = 'WebStorm (its built-in terminal runs commands)'; 'rider64' = 'Rider (its built-in terminal runs commands)'
+    'clion64' = 'CLion (its built-in terminal runs commands)'; 'goland64' = 'GoLand (its built-in terminal runs commands)'
+    'phpstorm64' = 'PhpStorm (its built-in terminal runs commands)'; 'rustrover64' = 'RustRover (its built-in terminal runs commands)'
+    'studio64' = 'Android Studio (its built-in terminal runs commands)'
+    'vscodium' = 'VSCodium (its built-in terminal runs commands)'
+    # launchers - the Run box by another name (B2e review, 2026-09-30)
+    'powertoys.powerlauncher' = 'PowerToys Run (it runs what is typed; ">" runs a shell command)'
+    'microsoft.cmdpal.ui' = 'the PowerToys Command Palette (it runs what is typed)'
+    'flow.launcher' = 'Flow Launcher (it runs what is typed)'; 'everything' = 'Everything (it opens and runs files)'
+    # editors with a way to run commands
+    'notepad++' = 'Notepad++ (its Run menu runs commands)'; 'gvim' = 'Vim (:! runs commands)'; 'vim' = 'Vim (:! runs commands)'
+    'sublime_text' = 'Sublime Text (its console runs code)'; 'emacs' = 'Emacs (it runs commands)'; 'runemacs' = 'Emacs (it runs commands)'
+    'pythonw' = 'a Python window (IDLE runs code)'
+    # remote and virtual machines - input there reaches another computer's desktop
+    'mstsc' = 'Remote Desktop'; 'vmconnect' = 'a Hyper-V virtual machine'; 'virtualboxvm' = 'a VirtualBox virtual machine'
+    'mobaxterm' = 'MobaXterm (a remote shell)'; 'securecrt' = 'SecureCRT (a remote shell)'; 'termius' = 'Termius (a remote shell)'
+}
+$script:InputKeysCmds = @("ui_type", "send_key", "diagnose_type", "submit_message", "clear_focused_box")
+$script:InputPidCmds = @("ui_click", "focus_message_box", "new_document", "uia_pump_probe")
+$script:InputPointCmds = @("click_at", "right_click_at", "scroll_at")
+$script:InputGuardedCmds = $script:InputKeysCmds + $script:InputPidCmds + $script:InputPointCmds + @("drag")
+
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class InputGuardNative {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X; public int Y; }
+    [DllImport("user32.dll")]
+    public static extern IntPtr WindowFromPoint(POINT p);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
+}
+'@ -Language CSharp
+
+function Test-InputNumber($v) {
+    $d = 0.0
+    return ($null -ne $v) -and [double]::TryParse([string]$v, [ref]$d)
+}
+
+# Who owns this window: its top-level window, that window's process, and the
+# process's start time (UTC ticks, as a string - JSON numbers lose precision).
+function Get-InputWindowIdentity([IntPtr]$hwnd) {
+    if ($hwnd -eq [IntPtr]::Zero) { return $null }
+    $root = [InputGuardNative]::GetAncestor($hwnd, 2)   # GA_ROOT
+    if ($root -ne [IntPtr]::Zero) { $hwnd = $root }
+    $wpid = 0
+    [void][NativeInput]::GetWindowThreadProcessId($hwnd, [ref]$wpid)
+    $cls = New-Object System.Text.StringBuilder 256
+    [void][InputGuardNative]::GetClassName($hwnd, $cls, 256)
+    if ($cls.ToString() -eq 'ApplicationFrameWindow') {
+        # A Store app's frame belongs to ApplicationFrameHost; the app itself owns
+        # the CoreWindow inside it (Windows Settings, Calculator), so name that.
+        $core = [InputGuardNative]::FindWindowEx($hwnd, [IntPtr]::Zero, 'Windows.UI.Core.CoreWindow', $null)
+        if ($core -ne [IntPtr]::Zero) {
+            $cpid = 0
+            [void][NativeInput]::GetWindowThreadProcessId($core, [ref]$cpid)
+            if ($cpid) { $wpid = $cpid }
+        }
+    }
+    $ttl = New-Object System.Text.StringBuilder 512
+    [void][NativeInput]::GetWindowText($hwnd, $ttl, 512)
+    $name = $null
+    $start = ''
+    try {
+        $proc = Get-Process -Id ([int]$wpid) -ErrorAction Stop
+        $name = $proc.ProcessName
+        try { $start = $proc.StartTime.ToUniversalTime().Ticks.ToString() } catch { }
+    } catch { }
+    return @{ hwnd = [int64]$hwnd; pid = [int]$wpid; start = $start; process = $name; className = $cls.ToString(); title = $ttl.ToString() }
+}
+
+function Get-InputPidIdentity($TargetPid) {
+    $n = 0
+    if (-not [int]::TryParse([string]$TargetPid, [ref]$n) -or $n -le 0) { return $null }
+    try { $proc = Get-Process -Id $n -ErrorAction Stop } catch { return $null }
+    if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {
+        # The window's identity, even when it names another pid: for an
+        # ApplicationFrameHost frame it is the Store app inside (B2e review).
+        $w = Get-InputWindowIdentity $proc.MainWindowHandle
+        if ($w) { return $w }
+    }
+    $start = ''
+    try { $start = $proc.StartTime.ToUniversalTime().Ticks.ToString() } catch { }
+    return @{ hwnd = [int64]0; pid = $n; start = $start; process = $proc.ProcessName; className = ''; title = [string]$proc.MainWindowTitle }
+}
+
+function Get-InputPointIdentity($x, $y) {
+    $pt = New-Object InputGuardNative+POINT
+    $pt.X = [int][double]$x
+    $pt.Y = [int][double]$y
+    return Get-InputWindowIdentity ([InputGuardNative]::WindowFromPoint($pt))
+}
+
+# The windows this command would put input into, each with a role. An empty
+# list means "not enough to act on" - the handler refuses it.
+function Get-InputWindows($c) {
+    $list = @()
+    $name = [string]$c.cmd
+    if ($script:InputPointCmds -contains $name) {
+        if ((Test-InputNumber $c.x) -and (Test-InputNumber $c.y)) {
+            $list += , @{ role = 'the window under the point'; window = (Get-InputPointIdentity $c.x $c.y) }
+        }
+    } elseif ($name -eq "drag") {
+        if ((Test-InputNumber $c.x1) -and (Test-InputNumber $c.y1) -and (Test-InputNumber $c.x2) -and (Test-InputNumber $c.y2)) {
+            $list += , @{ role = 'the window the drag starts in'; window = (Get-InputPointIdentity $c.x1 $c.y1) }
+            $list += , @{ role = 'the window the drag ends in'; window = (Get-InputPointIdentity $c.x2 $c.y2) }
+        }
+    } elseif ($script:InputPidCmds -contains $name) {
+        # The handler casts hwnd with [int], which reads "0x10" as 16 and "0" as no
+        # handle, so this parses it the same way (B2e review: "0" and "0x10" used to
+        # leave the list EMPTY and the command unjudged).
+        $h = 0L
+        try { if ($null -ne $c.hwnd -and [string]$c.hwnd -ne '') { $h = [int64]$c.hwnd } } catch { $h = 0L }
+        if ($h -gt 0) {
+            $list += , @{ role = 'the target window'; window = (Get-InputWindowIdentity ([IntPtr]$h)) }
+        } elseif ($c.pid) {
+            $list += , @{ role = 'the target window'; window = (Get-InputPidIdentity $c.pid) }
+        } elseif ($name -eq "ui_click") {
+            $list += , @{ role = 'the window with the keyboard'; window = (Get-InputWindowIdentity ([NativeInput]::GetForegroundWindow())) }
+        }
+    } elseif ($script:InputKeysCmds -contains $name) {
+        $hasPayload = $true
+        if ($name -eq "ui_type") { $hasPayload = [bool]$c.text }
+        if ($name -eq "send_key") { $hasPayload = [bool]$c.key }
+        if ($hasPayload) {
+            # With a pid the handler brings that window forward (or refuses when the
+            # caret is elsewhere), so the command is judged by it; where the keys
+            # finally land is judged again at SendInput (Test-InputLandingAllowed).
+            if ($c.pid) { $list += , @{ role = 'the target window'; window = (Get-InputPidIdentity $c.pid) } }
+            else { $list += , @{ role = 'the window with the keyboard'; window = (Get-InputWindowIdentity ([NativeInput]::GetForegroundWindow())) } }
+        }
+    }
+    return , $list
+}
+
+# 'own' | 'command' | 'unknown' | 'ordinary', with a plain-words reason.
+function Get-InputWindowKind($w) {
+    if ($null -eq $w -or -not $w.pid) { return @{ kind = 'unknown'; why = 'no window is there' } }
+    if ($script:InputOwnPidSet.ContainsKey([int]$w.pid)) { return @{ kind = 'own'; why = 'it belongs to MYTHOS itself (pid ' + $w.pid + ')' } }
+    if ([string]$w.title -cmatch $script:InputOwnTitleRe) { return @{ kind = 'own'; why = 'it is titled "' + $w.title + '", which is MYTHOS''s own window' } }
+    if (-not $w.process) { return @{ kind = 'unknown'; why = 'the program that owns it (pid ' + $w.pid + ') cannot be named' } }
+    $cls = [string]$w.className
+    if ($cls -and $script:InputCommandClasses.ContainsKey($cls)) { return @{ kind = 'command'; why = $script:InputCommandClasses[$cls] } }
+    $p = ([string]$w.process).ToLowerInvariant()
+    if ($script:InputCommandProcesses.ContainsKey($p)) { return @{ kind = 'command'; why = $script:InputCommandProcesses[$p] } }
+    return @{ kind = 'ordinary'; why = '' }
+}
+
+function Test-InputApproved($c, $w) {
+    # Exactly "approved": PowerShell reads properties case-insensitively, and the
+    # JS stamp strips only that spelling, so an "Approved" must count for nothing.
+    $prop = $null
+    if ($c -and $c.PSObject) { $prop = $c.PSObject.Properties | Where-Object { $_.Name -ceq 'approved' } | Select-Object -First 1 }
+    foreach ($a in @($(if ($prop) { $prop.Value } else { @() }))) {
+        if ($null -eq $a) { continue }
+        $samePid = ([int]$a.pid -eq [int]$w.pid)
+        $sameStart = ([string]$a.start -eq [string]$w.start)
+        $aHwnd = 0L
+        [void][int64]::TryParse([string]$a.hwnd, [ref]$aHwnd)
+        $sameWindow = ($aHwnd -eq 0) -or ($aHwnd -eq [int64]$w.hwnd)
+        if ($samePid -and $sameStart -and $sameWindow) { return $true }
+    }
+    return $false
+}
+
+function Get-InputDescription($w) {
+    return ([string]$w.process + '.exe, "' + [string]$w.title + '"')
+}
+
+# $null when the command may run; otherwise the refusal, in plain words.
+function Test-InputAllowed($c) {
+    foreach ($entry in (Get-InputWindows $c)) {
+        $w = $entry.window
+        $k = Get-InputWindowKind $w
+        if ($k.kind -eq 'own') {
+            return ('Refused: ' + $entry.role + ' is MYTHOS''s own window - ' + $k.why + '. MYTHOS never types or clicks into itself; its prompts are the operator''s to answer.')
+        }
+        if ($k.kind -eq 'unknown') {
+            return ('Refused: nothing was sent, because ' + $entry.role + ' could not be identified - ' + $k.why + '.')
+        }
+        if ($k.kind -eq 'command' -and -not (Test-InputApproved $c $w)) {
+            return ('Refused: ' + $entry.role + ' is ' + (Get-InputDescription $w) + ' - ' + $k.why + '. Input there can run commands, so it needs the operator''s approval for this one call, for this exact window.')
+        }
+    }
+    return $null
+}
+
+# RE-JUDGED AT SENDINPUT (B2e review, 2026-09-30). The gate above judges a command
+# before its handler runs, but handlers take time and move focus themselves:
+# ui_type clicks into an edit box and types character by character, new_document
+# falls back to ctrl+n in whatever is in front. So every SendInput below first asks
+# Test-InputLandingAllowed where THIS keystroke or click lands, and sends nothing
+# when that window is MYTHOS's own, unidentifiable, or a command window this call
+# was not approved for. The dispatcher then reports the refusal. The window last
+# found allowed is remembered by handle for the rest of the command, so typing a
+# long text is one lookup, not one per character. Outside a gated command (a
+# media key) it allows. What remains is the instant between this check and the
+# SendInput call on the next line.
+$script:InputGateCmd = $null
+$script:InputLandingRefusal = $null
+$script:InputLandingOkHwnd = [IntPtr]::Zero
+
+function Test-InputLandingAllowed($mode, $x, $y) {
+    if ($null -eq $script:InputGateCmd) { return $true }
+    if ($script:InputLandingRefusal) { return $false }
+    try {
+        if ($mode -eq 'keys') {
+            $h = [NativeInput]::GetForegroundWindow()
+            if ($h -ne [IntPtr]::Zero -and $h -eq $script:InputLandingOkHwnd) { return $true }
+            $w = Get-InputWindowIdentity $h
+            $role = 'the window with the keyboard'
+        } else {
+            $w = Get-InputPointIdentity $x $y
+            $role = 'the window under the point'
+        }
+        $k = Get-InputWindowKind $w
+        $why = $null
+        if ($k.kind -eq 'own') { $why = 'Refused while sending: ' + $role + ' is MYTHOS''s own window - ' + $k.why + '. Nothing more was sent.' }
+        elseif ($k.kind -eq 'unknown') { $why = 'Refused while sending: ' + $role + ' could not be identified - ' + $k.why + '. Nothing more was sent.' }
+        elseif ($k.kind -eq 'command' -and -not (Test-InputApproved $script:InputGateCmd $w)) { $why = 'Refused while sending: ' + $role + ' is ' + (Get-InputDescription $w) + ' - ' + $k.why + ', which this call was not approved for. Nothing more was sent.' }
+        if ($why) { $script:InputLandingRefusal = $why; return $false }
+        if ($mode -eq 'keys') { $script:InputLandingOkHwnd = $h }
+        return $true
+    } catch {
+        $script:InputLandingRefusal = 'Refused while sending: the input check itself failed (' + $_.Exception.Message + '), so nothing more was sent.'
+        return $false
+    }
+}
+
+# Read-only twin of the gate for the leash's prepare step: what would receive
+# $target's input, and how each window is classified. Never acts.
+function Handle-InputTarget($target) {
+    if ($null -eq $target -or -not $target.cmd) { return 'input_target needs the command it should check.' }
+    if (-not ($script:InputGuardedCmds -contains [string]$target.cmd)) { return ('input_target: "' + $target.cmd + '" is not an input command.') }
+    $out = @()
+    foreach ($entry in (Get-InputWindows $target)) {
+        $w = $entry.window
+        $k = Get-InputWindowKind $w
+        $row = @{ role = $entry.role; kind = $k.kind; why = $k.why }
+        if ($w) { foreach ($key in @('hwnd', 'pid', 'start', 'process', 'className', 'title')) { $row[$key] = $w[$key] } }
+        $out += , $row
+    }
+    return @{ windows = $out }
+}
+
 # Read JSON lines from stdin, process, write JSON lines to stdout
 $reader = [Console]::In
 
@@ -5633,9 +6028,28 @@ while ($true) {
         Write-Response $false 'Missing "cmd" field.'
         continue
     }
+    # B2e review: a list here would skip the gate (-contains is false) while the
+    # switch below runs EVERY arm that matches, so the name must be one string.
+    if ($command -isnot [string]) {
+        Write-Response $false 'The "cmd" field must be one command name.'
+        continue
+    }
 
     $result = $null
     $err = $null
+
+    # B2e input gate ("Input gate" above): decided before any handler runs. An
+    # error inside the check refuses; it never lets the input through.
+    if ($script:InputGuardedCmds -contains $command) {
+        $inputRefusal = $null
+        try { $inputRefusal = Test-InputAllowed $cmd } catch { $inputRefusal = ('Refused: the input check itself failed (' + $_.Exception.Message + '), so nothing was sent.') }
+        if ($inputRefusal) { Write-Response $false $inputRefusal; continue }
+        $script:InputGateCmd = $cmd
+    } else {
+        $script:InputGateCmd = $null
+    }
+    $script:InputLandingRefusal = $null
+    $script:InputLandingOkHwnd = [IntPtr]::Zero
 
     switch ($command) {
         'ping' {
@@ -5663,8 +6077,17 @@ while ($true) {
             # the payload - the exact shape this bug is about.
             if ($result -is [string]) { $err = $result; $result = $null }
         }
+        'resolve_app' {
+            # B2a: read-only. Answers what a name resolves to; never starts anything.
+            $result = Resolve-LaunchTarget $cmd.name
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
+        'open_uri' {
+            $result = Handle-OpenUri $cmd.uri
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
         'launch_app' {
-            $result = Handle-LaunchApp $cmd.name
+            $result = Handle-LaunchApp $cmd.name $cmd.target
             # FIX 4: this case was missing the string-result-is-failure guard
             # every other handler below already has - a genuine "Failed to
             # launch..." string (including FIX 4's new honest failure) shipped
@@ -5771,6 +6194,12 @@ while ($true) {
             $result = Handle-DiagnoseType $cmd.text $cmd.pid
             if ($result -is [string]) { $err = $result; $result = $null }
         }
+        'input_target' {
+            # B2e: read-only - which windows would receive this input, and how each
+            # is classified. The leash builds its approval prompt from this.
+            $result = Handle-InputTarget $cmd.target
+            if ($result -is [string]) { $err = $result; $result = $null }
+        }
         'get_foreground_window' {
             $result = Handle-GetForegroundWindow
             if ($result -is [string]) { $err = $result; $result = $null }
@@ -5853,6 +6282,12 @@ while ($true) {
     # The per-arm copies are left in place: they run first and become no-ops, and
     # each one documents the incident that put it there.
     if ($null -eq $err -and $result -is [string]) { $err = $result; $result = $null }
+
+    # A keystroke or click refused at SendInput (Test-InputLandingAllowed) is the
+    # answer, whatever the handler made of the injected-event count.
+    if ($script:InputLandingRefusal) { $err = $script:InputLandingRefusal; $result = $null }
+    $script:InputGateCmd = $null
+    $script:InputLandingRefusal = $null
 
     if ($err) {
         Write-Response $false $err

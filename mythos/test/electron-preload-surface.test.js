@@ -4,7 +4,7 @@
 //
 // Asserts the Electron preload's contextBridge surface is EXACTLY
 // { getKeyNames, setKey, hasKey, onHotkey, notifyReady, restartServer,
-// onUpdateStatus, installUpdate, getSettings, setSetting } — no more, no
+// onUpdateStatus, installUpdate, getSettings, setSetting, setSettings } — no more, no
 // fewer — and that each function forwards to its named IPC channel with the
 // right args.
 //
@@ -102,10 +102,22 @@ describe('§13/§14 phase-8: Electron preload contextBridge surface', () => {
       // that the onHotkey listener is registered, so the push-to-talk
       // ready-latch may flush. It is the surface's only renderer→main function:
       // a payload-free send, so it widens no inbound (AD-8) surface at all.
+      // setSettings was added by B3b (2026-09-29 audit): the settings panel's Save
+      // as ONE call, so the main process shows one native confirmation listing
+      // every change before writing any. It carries the same non-secret settings
+      // setSetting does, and returns only status — no value crosses back.
       assert.deepEqual(
         Object.keys(exposedApi).sort(),
-        ['getKeyNames', 'getSettings', 'hasKey', 'installUpdate', 'notifyReady', 'onHotkey', 'onUpdateStatus', 'restartServer', 'setKey', 'setSetting'],
-        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey/notifyReady/restartServer/onUpdateStatus/installUpdate/getSettings/setSetting',
+        ['getKeyNames', 'getSettings', 'hasKey', 'installUpdate', 'notifyReady', 'onHotkey', 'onUpdateStatus', 'restartServer', 'setKey', 'setSetting', 'setSettings'],
+        'preload must expose exactly getKeyNames/setKey/hasKey/onHotkey/notifyReady/restartServer/onUpdateStatus/installUpdate/getSettings/setSetting/setSettings',
+      );
+
+      // setSettings(changes) -> ipcRenderer.invoke('mythos:set-settings', changes), the list as given.
+      await exposedApi.setSettings([{ name: 'VOICE_TTS_PROVIDER', value: 'piper' }]);
+      assert.deepEqual(
+        invokeCalls[invokeCalls.length - 1],
+        ['mythos:set-settings', [{ name: 'VOICE_TTS_PROVIDER', value: 'piper' }]],
+        'setSettings must invoke channel mythos:set-settings with (changes)',
       );
 
       // restartServer() → ipcRenderer.invoke('mythos:restart-server'), no args.

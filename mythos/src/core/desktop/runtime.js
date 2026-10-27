@@ -26,6 +26,7 @@ function createDesktopRuntime({ goals, effectors, leash, memory, config, bus, lo
       signals.set(ctx.goalId, ctx.signal);
     }
     const decision = { tool, args, rationale: 'Observed desktop task step' };
+    if (leash.prepare) await leash.prepare(decision); // B2a: resolve before authorizing
     const verdict = leash.check(decision, { goalId: ctx.goalId, connectionId: ctx.connectionId });
     if (!verdict.allow) return { ok: false, result: verdict.reason || 'Action requires confirmation', confirmPending: !!verdict.requireConfirm, notExecuted: true };
     return dispatchAction(decision, { ...ctx, tier: verdict.tier, channel: 'desktop', traceId: ctx.goalId, effectors, goals, memory, config, bus });

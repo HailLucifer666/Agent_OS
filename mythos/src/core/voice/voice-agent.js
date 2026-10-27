@@ -508,10 +508,10 @@ function createVoiceAgent({ brain, leash, dispatch, bus, config, hub, getCapabil
     // session grant (leash/index.js) is scoped to the WS connection that
     // actually accepted the confirm — was silently dropped here before,
     // so leash could never tell which connection was asking.
-    const verdict = leash.check(decision, { connectionId });
+    if (leash.prepare) await leash.prepare(decision); const verdict = leash.check(decision, { connectionId }); // B2a: resolve, then authorize
 
     if (verdict.requireConfirm) {
-      const summary = `Voice: ${decision.tool}${Object.keys(decision.args).length ? ` (${humanizeArgs(decision.args)})` : ''}`;
+      const summary = `Voice: ${decision.tool}${Object.keys(decision.args).length ? ` (${humanizeArgs(decision.args)})` : ''}` + (verdict.detail ? ' — ' + verdict.detail : ''); // B2a: show what resolved
       const confirmId = leash.confirm.create(summary, { decision, goalId: null, tier: verdict.tier }, connectionId || 'system');
 
       // WAVE 8 — a send the operator just asked for out loud is confirmed out

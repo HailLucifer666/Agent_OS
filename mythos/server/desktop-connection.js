@@ -35,6 +35,7 @@ function createDesktopConnection({ runtime, connectionId, leash, dispatch, reply
   const unwatch = runtime.watch?.(connectionId, result => send({ type: 'desktop-task', ...result }));
   async function call(tool, args, requestId) {
     const decision = { tool, args };
+    if (leash.prepare) await leash.prepare(decision); // B2a: resolve before authorizing
     const verdict = leash.check(decision, ctx);
     if (!verdict.allow) return { ok: false, result: verdict.reason || 'Desktop request requires confirmation' };
     return dispatch(decision, { ...ctx, requestId, traceId: requestId, tier: verdict.tier, channel: 'desktop-request' });

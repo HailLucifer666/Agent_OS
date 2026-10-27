@@ -88,10 +88,13 @@ describe('BUG-228 — sites that refuse framing must fall through to a new tab',
     const window = SRC.slice(at, at + 700);
     assert.match(window, /host === NO_EMBED_DOMAINS\[d\] \|\| host\.endsWith\('\.' \+ NO_EMBED_DOMAINS\[d\]\)/,
       'both the exact-host and the subdomain test must survive');
-    assert.match(window, /widgetType:\s*'newtab'/,
+    // UPDATED 2026-10-06 (BUG-468 gate B): the branch now calls openNewtab(), the shared
+    // hand-off that builds the newtab descriptor (and reaches the external opener under
+    // Electron), instead of spelling the descriptor inline. Same invariant, new spelling.
+    assert.match(window, /openNewtab\(/,
       'a listed domain must route to newtab');
     const embedAt = window.indexOf("widgetType: 'web'");
-    const newtabAt = window.indexOf("widgetType: 'newtab'");
+    const newtabAt = window.indexOf("openNewtab(");
     assert.ok(newtabAt !== -1 && (embedAt === -1 || newtabAt < embedAt),
       'the newtab return must come before the embed fallthrough, or the list is bypassed');
   });

@@ -395,7 +395,15 @@ function createCortex({ bus, memory, goals, brain, leash, effectors, config }) {
     }
 
     // 1. Leash check — mandatory, fail-closed (createCortex requires leash to construct)
+    if (leash.prepare) await leash.prepare(decision); // B2a: resolve before authorizing
     var leashResult = leash.check(decision, { goalId: working.activeGoalId });
+    // B2a review (2026-09-29): a per-call approval could only be parked here as a
+    // 'system' confirm, and server/index.js accepts those only up to tier 2 — so
+    // Approve would do nothing. Denied instead, saying what the name resolved to.
+    if (leashResult.perCallApproval) {
+      leashResult = Object.assign({}, leashResult, { requireConfirm: false,
+        reason: leashResult.reason + ': ' + leashResult.detail + ' — the autonomous loop cannot ask for this; the operator can request it directly' });
+    }
     if (!leashResult.allow && leashResult.requireConfirm) {
       // [Phase 9 — spec Ambiguity #2 contract] Register the paused action with
       // leash.confirm BEFORE emitting, and embed the returned confirmId in the

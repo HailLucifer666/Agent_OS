@@ -173,7 +173,7 @@ describe('BUG-448 — through the real adapter: the true launch is not retracted
       leash: { check: () => ({ allow: true, requireConfirm: false, tier: 2, reason: 'within-autonomous-max' }),
         confirm: { create: () => 'confirm-448', reject: () => {} } },
       dispatchAction: async () => ({ ok: true, result: { launched: true, pid: 4242 } }),
-      bus: { emit() {} }, logger: { info() {}, warn() {} }, connectionId: 'conn-448',
+      bus: { emit() {} }, logger: { info() {}, warn() {} }, connectionId: 'conn-448', toolResultHoldMaxMs: 0, // BUG-457 R2 (2026-10-06): a SLOW_TOOLS call is now HELD when it fits the hold window; 0 selects the instant-ack late path this test pins
       memory: { working: { tick: 1 }, episodic: { write: async () => {} } }, historyAppend: () => {},
       reflection: null, summarizeActionsForResult, config: {},
       getLiveSession: () => ({ isOpen: () => true, sendText: (text, meta) => { sent.push(meta && meta.site); return true; } }),
