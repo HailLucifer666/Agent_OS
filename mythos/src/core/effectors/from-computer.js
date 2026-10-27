@@ -747,8 +747,7 @@ let deepThinkLogger = null;
 // that names which surface consumed it.
 async function think_deeply({ question, context }, ctx) {
   if (!deepThinkBrain || typeof deepThinkBrain.think !== 'function') {
-    deepBudget.logRefusal(deepThinkLogger, 'no-brain'); // BUG-478 2026-10-06
-    return fail('No brain is wired for deep reasoning, so I cannot think this through properly.');
+    deepBudget.logRefusal(deepThinkLogger, 'no-brain'); return fail('No brain is wired for deep reasoning, so I cannot think this through properly.'); // BUG-478 2026-10-06
   }
   // Checked AFTER the brain check on purpose: telling the operator to wait 45
   // seconds for a lane that is not wired at all would be a confident wrong
@@ -763,8 +762,7 @@ async function think_deeply({ question, context }, ctx) {
   const lastDeepThinkAt = deepBudget.deepThinkState().lastDeepThinkAt;
   const sinceLast = Date.now() - lastDeepThinkAt;
   if (minIntervalMs > 0 && lastDeepThinkAt > 0 && sinceLast < minIntervalMs) {
-    deepBudget.logRefusal(deepThinkLogger, 'cooldown', { sinceLastMs: sinceLast }); // BUG-478 2026-10-06
-    return fail(deepBudget.cooldownRefusal(sinceLast, minIntervalMs, (ctx && ctx.channel) || null));
+    deepBudget.logRefusal(deepThinkLogger, 'cooldown', { sinceLastMs: sinceLast }); return fail(deepBudget.cooldownRefusal(sinceLast, minIntervalMs, (ctx && ctx.channel) || null)); // BUG-478 2026-10-06
   }
   // Stamped BEFORE the call, not after. A lane that is down burns the full
   // timeout on every attempt, so a failing call is the one most worth spacing
