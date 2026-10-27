@@ -24,6 +24,10 @@
 //   (c) drop "...again without target" from the refusal          -> reds "a stray target ... names the way forward"
 //   (d) never offer `target` (ADJACENT: `false && getBridge()`)  -> reds "with a bridge: every CDP tool ..." and "read LIVE"
 //   Each applied once, diffed, restored from a copy and hash-verified.
+// REVIEW PROBES, 2026-10-27 (same discipline):
+//   (e) remove the try/catch around the probe -> reds "a bridge probe that throws degrades ..."
+//   (f) revert the first test to the module-level export only -> it passes with
+//       the wrapper's target offer disabled, i.e. it proves nothing (why it was rewritten)
 //
 // ADJACENT CASES THAT MUST KEEP PASSING: with a bridge the param IS offered and is
 // never "required" (validate() passes without it); a call with no target still
@@ -35,7 +39,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const { withBrowserDriver } = require('../src/core/effectors/browser-driver-tools');
 const { effectorFromTool } = require('../src/core/effectors/adapter');
-const { TOOLS } = require('../src/core/effectors/from-browser');
+const { TOOLS, RAW_TOOLS } = require('../src/core/effectors/from-browser');
 
 // Tools that have an extension counterpart AND a CDP implementation. Derived from
 // the wrapper's own behaviour, not typed: a tool qualifies when handing it a
@@ -50,16 +54,28 @@ function cdpTool(name, fn) { return { name, description: 'd', params: { thing: '
 
 describe('BUG-462 side-finding: the schema offers `target` only when a bridge exists', () => {
   test('no bridge: no CDP tool in the real catalog offers `target` (the snapshot refusal can no longer be invited)', () => {
-    const offering = TOOLS
+    // Review, 2026-10-27: this used to read the module-level `TOOLS` export,
+    // whose getBridge is a hardcoded `() => null` - so the assertion could not
+    // distinguish "there is no bridge" from "the wrapper never offers target".
+    // It passed even if the feature was dead. Wrap the REAL definitions in both
+    // states instead: the same tools must gain `target` once a bridge exists.
+    const noBridge = withBrowserDriver(RAW_TOOLS, { getBridge: () => null });
+    const bridged = withBrowserDriver(RAW_TOOLS, { getBridge: () => ({ execute() {} }) });
+    const offering = (tools) => tools
       .filter((t) => 'target' in (effectorFromTool(t).describeMeta().params || {}))
       .map((t) => t.name)
       .sort();
     // browser_media_state / browser_media_control are extension-only tools (no CDP
     // implementation, `target` is their identity) - a separate, unchanged matter.
-    assert.deepEqual(offering, ['browser_media_control', 'browser_media_state'],
+    assert.deepEqual(offering(noBridge), ['browser_media_control', 'browser_media_state'],
       'with no bridge, only the extension-only tools may carry target');
+    assert.equal('target' in schemaOf(noBridge, 'browser_snapshot'), false);
+    assert.equal('target' in schemaOf(noBridge, 'browser_click'), false);
+    assert.equal('target' in schemaOf(bridged, 'browser_snapshot'), true,
+      'the real definitions must offer target when a bridge exists, or the assertion above proves nothing');
+    assert.equal('target' in schemaOf(bridged, 'browser_click'), true);
+    // The module-level export is still the no-bridge shape, deliberately.
     assert.equal('target' in schemaOf(TOOLS, 'browser_snapshot'), false);
-    assert.equal('target' in schemaOf(TOOLS, 'browser_click'), false);
   });
 
   test('with a bridge: every CDP tool that has an extension counterpart offers `target`', () => {
@@ -118,5 +134,28 @@ describe('BUG-462 side-finding: the schema offers `target` only when a bridge ex
     const res = await tools.find((t) => t.name === 'browser_snapshot').fn({ target: { tabId: 1 } }, { goalId: 'task' });
     assert.equal(res.ok, true);
     assert.deepEqual(calls, ['observe']);
+  });
+
+  // Review, 2026-10-27. `params` is read by describeMeta() on every catalog
+  // build, by validate() on every dispatch and by JSON.stringify() when a tool
+  // is logged. The getter called getBridge() unguarded, so a probe that throws
+  // threw out of all three: a browser-extension problem became a whole-catalog
+  // failure (and a voice session that cannot declare any tool). A probe that
+  // cannot answer has not found a bridge.
+  test('a bridge probe that throws degrades to "no bridge" instead of breaking the catalog', async () => {
+    const tools = withBrowserDriver([cdpTool('browser_snapshot', () => ({ ok: true, result: 'cdp' }))], {
+      isDesktopTask: () => true,
+      getBridge: () => { throw new Error('desktop runtime not constructed yet'); },
+    });
+    const eff = effectorFromTool(tools.find((t) => t.name === 'browser_snapshot'));
+    assert.deepEqual(eff.describeMeta().params, { thing: 'string (optional) - x' },
+      'a schema read must never throw because the bridge probe did');
+    assert.doesNotThrow(() => JSON.stringify(tools[0]), 'a logged tool must not throw either');
+    assert.deepEqual(eff.validate({}), { ok: true }, 'dispatch-time validation must not throw');
+    const res = await tools[0].fn({ target: { tabId: 1 } }, {});
+    assert.equal(res.ok, false);
+    assert.equal(res.notExecuted, true);
+    assert.match(String(res.result), /not configured/i,
+      'a probe failure is "no bridge", not a thrown exception out of the effector');
   });
 });

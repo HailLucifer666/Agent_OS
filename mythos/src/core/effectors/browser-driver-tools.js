@@ -10,6 +10,14 @@ const OPERATIONS = {
 };
 const TARGET = 'object (optional) - exact target capsule returned by the last observation';
 function withBrowserDriver(tools, { getBridge = () => null, isDesktopTask = () => false } = {}) {
+  // BUG-462 review, 2026-10-27. `params` is read by describeMeta() on every
+  // catalog build, by validate() on every dispatch, and by JSON.stringify() when
+  // a tool is logged. A bridge probe that throws used to throw out of all three -
+  // so a browser-extension problem would take down the whole tool catalog (and
+  // the voice session that builds from it) instead of simply withholding
+  // `target`. A probe that cannot answer has not found a bridge: degrade, never
+  // propagate.
+  const bridgeNow = () => { try { return getBridge(); } catch (_) { return null; } };
   const added = [
     { name: 'browser_video_list', description: 'Observe the selected existing browser tab and its relevant video list. Ads and separately labeled Shorts do not count. References expire when the document changes.', params: { browserId: 'string - observed browser identity', tabId: 'number - observed tab identity', frameId: 'number (optional) - frame identity' } },
     { name: 'browser_media_state', description: 'Read current video identity, advertisement state, playback time and pause state from a bound tab. One sample alone does not prove playback.', params: { target: 'object - exact observed target capsule' } },
@@ -36,7 +44,7 @@ function withBrowserDriver(tools, { getBridge = () => null, isDesktopTask = () =
         const desktop = isDesktopTask(ctx.goalId);
         if (!desktop && !args.target && tool.fn) return tool.fn(args, ctx);
         if (!desktop) return { ok: false, result: 'A desktop-owned task is required for extension browser control. To use the attached debug browser instead, call ' + tool.name + ' again without target.', notExecuted: true };
-        const bridge = getBridge();
+        const bridge = bridgeNow();
         if (!bridge) return { ok: false, result: 'Browser extension is not configured. Complete local extension setup first.', notExecuted: true };
         let op = OPERATIONS[tool.name];
         if (tool.name === 'browser_scroll') {
@@ -51,7 +59,7 @@ function withBrowserDriver(tools, { getBridge = () => null, isDesktopTask = () =
         return result?.ok === false && result.result == null ? { ...result, result: result.error || result.code || 'Extension operation failed' } : result;
       },
     };
-    Object.defineProperty(wrapped, 'params', { enumerable: true, get: () => (tool.fn && getBridge() ? { ...tool.params, target: TARGET } : tool.params) });
+    Object.defineProperty(wrapped, 'params', { enumerable: true, get: () => (tool.fn && bridgeNow() ? { ...tool.params, target: TARGET } : tool.params) });
     return wrapped;
   });
 }
