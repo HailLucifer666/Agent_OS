@@ -1006,7 +1006,7 @@ async function send_key({ key, pid }) {
     // every route it tried is already a superset of what send_key could do, and one of
     // them may have half-landed, so retrying risks sending twice.
     if (guard.messaging) {
-      return submitMessage(guard.pid);
+      return require('./messaging-enter').guardedSubmit(guard, submitMessage, fail);
     }
   }
   return keyPressed(await delegate(withPid({ cmd: 'send_key', key: raw })), raw);
