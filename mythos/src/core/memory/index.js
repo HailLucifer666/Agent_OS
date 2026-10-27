@@ -14,6 +14,7 @@ const { createAuditWriter } = require('./audit-writer');
 const { createCheckpointStore } = require('./checkpoints');
 const { createDocumentsStore } = require('./documents');
 const { createLessonsStore } = require('./lessons');
+const { provenanceOf, HYPOTHESIS } = require('./provenance');
 const { createNotesStore } = require('./notes');
 const { createVectorIndex, rrfMerge } = require('./vector-index');
 const embeddings = require('../../../providers/embeddings');
@@ -127,7 +128,12 @@ function createMemory({ config, bus, logger, brain }) {
         var m;
         var re = /^-\s+(.+)$/gm;
         while ((m = re.exec(content)) !== null) bullets.push(m[1].trim());
-        if (bullets.length > 0) topics.push({ file: files[i].path, facts: bullets });
+        // BUG-451 closure: remember whether any input was already a hypothesis, so the merge
+        // below cannot launder it by rewording (the merger returns plain strings with no
+        // way to say which input each came from).
+        var seen = semantic.topic(files[i].name.replace(/\.md$/, ''));
+        var doubted = !!(seen && seen.provenance && seen.provenance.indexOf(HYPOTHESIS) !== -1);
+        if (bullets.length > 0) topics.push({ file: files[i].path, facts: bullets, doubted: doubted });
       }
     } catch (_) { return null; }
 
@@ -182,7 +188,8 @@ function createMemory({ config, bus, logger, brain }) {
     try {
       writeResult = semantic.write('consolidated-' + Date.now(), mergedFacts, {
         confidence: 0.7,
-        sources: topics.map(function (t) { return t.file; })
+        sources: topics.map(function (t) { return t.file; }),
+        inferred: topics.some(function (t) { return t.doubted; })
       });
     } catch (err) {
       throw new Error('mergeConsolidatedTopics: semantic.write threw: ' + err.message);
@@ -356,9 +363,26 @@ function createMemory({ config, bus, logger, brain }) {
                 });
               } else {
                 try {
+                  // BUG-451 closure (2026-10-06): the 09-23 consolidated memory repeated the false
+                  // cause, and the model's rewrite carried no cause marker ("...(rapid re-rendering)
+                  // is resolved"), so the shape rule alone cannot see it. A distilled fact inherits
+                  // the doubt of what it was distilled from: if any record it drew on already
+                  // carried a hypothesis label (a thought whose text states a cause or a
+                  // limitation) or states one by today's rule, the fact is stored as a hypothesis.
+                  // A NEUTRAL thought does not count on its own (review, 2026-10-27): thoughts are
+                  // frequent, and labelling every distillation would make the tag meaningless.
+                  // Conversation turns and sensor perceptions are the operator's words and the
+                  // world's, and do not count either.
+                  // Over-labels (one doubtful line doubts the whole distillation) - the
+                  // safe direction; the opposite error is the one the ticket is about.
+                  const inheritsDoubt = highSalience.some(function(e) {
+                    return e.provenance === HYPOTHESIS ||
+                      (e.kind !== 'conversation' && e.kind !== 'perception' && provenanceOf(e.summary) === HYPOTHESIS);
+                  });
                   semantic.write('consolidated-' + Date.now(), [result.content], {
                     confidence: 0.6,
-                    sources: highSalience.map(function(e) { return e.id; })
+                    sources: highSalience.map(function(e) { return e.id; }),
+                    inferred: inheritsDoubt
                   });
                 } catch (writeErr) {
                   bus.emit('memory.consolidate-skip', { reason: 'semantic-write-failed', detail: writeErr && writeErr.message });

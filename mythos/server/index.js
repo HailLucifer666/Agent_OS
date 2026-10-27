@@ -24,6 +24,7 @@ const { approvalConsentFor } = require('../src/core/voice/authority-gate'); // B
 const { createConversationAnnouncer } = require('../src/core/conversation/announcer');
 const { buildBriefingFacts, GREETING_FACT_DISCIPLINE, greetingRelationshipClause, startupInstructionsClause } = require('../src/core/conversation/briefing');
 const { isStartupOnlyFact, startupOnlyFacts } = require('../src/core/memory/startup-facts'); // BUG-463
+const { provenanceOf, labelText } = require('../src/core/memory/provenance'); // BUG-451
 const { TOOL_RESPONSE_DISCIPLINE } = require('../src/core/voice/narration-claims');
 const { snapshotSystemMetrics } = require('./routes/system');
 const spend = require('../src/core/brain/spend');
@@ -3275,6 +3276,7 @@ function createServer(deps) {
               pending[0].ref !== lastThoughtRef) {
             var thoughtText = pending[0].record.detail.text || pending[0].record.summary;
             if (thoughtText) {
+              thoughtText = labelText(thoughtText, pending[0].record.provenance || provenanceOf(thoughtText)); // BUG-451: a guess is injected as a guess
               lastThoughtRef = pending[0].ref;
               memoryContext = (memoryContext ? memoryContext + '\n' : '') +
                 'YOU NOTED EARLIER (mention naturally if relevant, do not force): ' + thoughtText;

@@ -37,11 +37,32 @@ const CAUSE_MARKERS = new RegExp([
   '\\bsuggests? that\\b', '\\b(?:leads?|led) to\\b', '\\bthanks to\\b',
 ].join('|'), 'i');
 
+// BUG-451 closure, 2026-10-06. The 2026-09-24 incident ("Operator expects direct browser
+// link opening; MYTHOS only offers dashboard rendering or app launch") stated no cause at
+// all: it stated a LIMITATION of MYTHOS, and that was false (open_web with browser:true
+// does open links - BUG-459). A claim about what the system cannot do is as unobserved as a
+// claim about why something failed, and is written as fact in the same way, so it takes the
+// same label. NARROW ON PURPOSE: the subject must be MYTHOS or the system, because a quoted
+// tool error ("unable to find element e5") is an observation and must stay one - the
+// adjacent case in test/bug-451-closure-writers.test.js (t) pins both sides.
+const LIMITATION_MARKERS = new RegExp(
+  '\\b(?:mythos|the system|the assistant)\\s+(?:only|cannot|can\'t|can not|does not|doesn\'t|never|is unable to|has no|lacks)\\b', 'i');
+
 const OBSERVATION = 'observation';
 const HYPOTHESIS = 'hypothesis';
 
 function provenanceOf(text) {
-  return CAUSE_MARKERS.test(String(text == null ? '' : text)) ? HYPOTHESIS : OBSERVATION;
+  const s = String(text == null ? '' : text);
+  return CAUSE_MARKERS.test(s) || LIMITATION_MARKERS.test(s) ? HYPOTHESIS : OBSERVATION;
 }
 
-module.exports = { provenanceOf, OBSERVATION, HYPOTHESIS, CAUSE_MARKERS };
+// How a hypothesis is shown to whoever reads the record back (the model, in a prompt or a
+// tool result). The label lives beside the record; this puts it in front of the TEXT, because
+// a reader that never looks at the label is the reader the false cause fooled. Display only:
+// the stored text is never rewritten, so an operator who opens the file sees their own words.
+const UNVERIFIED_TAG = '(unverified) ';
+function labelText(text, label) {
+  return label === HYPOTHESIS ? UNVERIFIED_TAG + text : text;
+}
+
+module.exports = { provenanceOf, labelText, UNVERIFIED_TAG, OBSERVATION, HYPOTHESIS, CAUSE_MARKERS, LIMITATION_MARKERS };

@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { isStartupOnlyFact } = require('./startup-facts');
+const { provenanceOf, labelText, OBSERVATION, HYPOTHESIS } = require('./provenance');
 
 // Semantic memory — human-readable markdown with parseable sidecar
 // vault/Semantic/<topic>.md
@@ -40,6 +41,49 @@ function createSemanticStore({ fs, config, bus, logger }) {
 
   function generateId() {
     return 'sem-' + crypto.randomUUID();
+  }
+
+  // BUG-451 closure (2026-10-06): PROVENANCE OF A SEMANTIC FACT. Every durable prose writer
+  // that is not Lessons or Notes ends here - remember, the habit promoter, log_incident's
+  // semantic copy, conversation distillation, the consolidated-* distillation and the
+  // consolidated-* merge - so the label is assigned at this one choke point from the text
+  // (provenance.js), never taken from a caller. The 09-23 consolidated memory repeated the
+  // false cause with no label because nothing here knew one.
+  //
+  // WHERE THE LABEL LIVES. Facts are bullets; forget() and the append dedup rewrite the file
+  // by LINE, so a label stored by position would slide onto the wrong fact. The sidecar keeps
+  // `hyp`, the hashes of the facts labelled hypothesis, and `prov: 1`, the mark that this file
+  // was written with labels. Hashes follow the fact. A flat array, because SIDECAR_RE cannot
+  // parse a nested object. A file without `prov` is classified from its text at read, and is
+  // never rewritten by reading.
+  //
+  // ATTACK, 2026-10-06. (1) What else matches? The shape rule over-fires on the operator's own
+  // words ("I use dark mode because my eyes hurt"), so a fact written on the operator's say-so
+  // (sources voice-explicit / operator-approved) is not relabelled - it is theirs, not an
+  // inference. (2) Can a caller forge it? opts.inferred can only ADD doubt; no option can lower
+  // it or produce "verified". (3) Who reads? recall() snippets (auto-recall, recall_memory,
+  // the cortex cache) and topic() (the Live session-open facts) - both tag a hypothesis.
+  // (4) What is it blind to? A distilled fact with no cause words and no inferred flag
+  // reads as an observation: the consolidation paths pass the flag, other callers cannot know.
+  const OPERATOR_BASES = ['voice-explicit', 'operator-approved'];
+  function isOperatorStated(sources) {
+    return Array.isArray(sources) && sources.some(function(s) { return OPERATOR_BASES.indexOf(s) !== -1; });
+  }
+  function normalizeFact(f) { return String(f).trim().toLowerCase().replace(/[.!?]+$/, ''); }
+  function factKey(f) { return crypto.createHash('sha1').update(normalizeFact(f)).digest('hex').slice(0, 12); }
+
+  // [{ text, label }] for every bullet, in file order.
+  function labelledFacts(content) {
+    const sc = parseSidecar(content)[0] || {};
+    const hyp = new Set(Array.isArray(sc.hyp) ? sc.hyp : []);
+    const written = sc.prov === 1;
+    const operator = isOperatorStated(sc.sources);
+    return parseFacts(content).map(function(text) {
+      const label = written
+        ? (hyp.has(factKey(text)) ? HYPOTHESIS : OBSERVATION)
+        : (operator ? OBSERVATION : provenanceOf(text));
+      return { text: text, label: label };
+    });
   }
 
   // BUG-080 (Stage 6, item #18): every semantic.write() caller funnels
@@ -117,12 +161,17 @@ function createSemanticStore({ fs, config, bus, logger }) {
     // with a trailing period were treated as different facts (confirmed
     // duplicate in the 2026-07-29 audit's user-facts.md). Also strip
     // trailing punctuation before comparing.
-    function normalizeFact(f) { return String(f).trim().toLowerCase().replace(/[.!?]+$/, ''); }
+    const operatorStated = isOperatorStated(sources);
+    const labelOfNew = function(f) {
+      return opts.inferred === true ? HYPOTHESIS : (operatorStated ? OBSERVATION : provenanceOf(f));
+    };
     let allFacts = facts;
+    let keptExisting = [];
     if (opts.append) {
       const existing = fs.readText(relPath, '');
       const newTriggers = facts.map(directiveTriggerOf).filter(Boolean);
-      const existingFacts = parseFacts(existing).filter(function(f) {
+      keptExisting = labelledFacts(existing).filter(function(lf) {
+        const f = lf.text;
         // Exact-match dedup (P3-9) — unchanged.
         if (facts.some(function(nf) { return normalizeFact(nf) === normalizeFact(f); })) return false;
         // BUG-160 supersede: a DIRECTIVE fact ("when the operator asks X, do Y")
@@ -137,10 +186,13 @@ function createSemanticStore({ fs, config, bus, logger }) {
         if (trig && newTriggers.indexOf(trig) !== -1) return false;
         return true;
       });
-      allFacts = existingFacts.concat(facts);
+      allFacts = keptExisting.map(function(lf) { return lf.text; }).concat(facts);
     }
+    const hypKeys = keptExisting.filter(function(lf) { return lf.label === HYPOTHESIS; })
+      .map(function(lf) { return factKey(lf.text); })
+      .concat(facts.filter(function(f) { return labelOfNew(f) === HYPOTHESIS; }).map(factKey));
 
-    const sidecar = JSON.stringify({ id: id, ts: Date.now(), confidence: confidence, sources: sources });
+    const sidecar = JSON.stringify({ id: id, ts: Date.now(), confidence: confidence, sources: sources, prov: 1, hyp: Array.from(new Set(hypKeys)) });
     const bulletLines = allFacts.map(function(f) { return '- ' + f; }).join('\n');
     const content = '## ' + topic + '\n\n<!-- ' + sidecar + ' -->\n' + bulletLines + '\n';
 
@@ -330,7 +382,8 @@ function createSemanticStore({ fs, config, bus, logger }) {
 
       if (score >= minScore && score > 0) {
         const sidecars = parseSidecar(content);
-        const facts = parseFacts(content);
+        const labelled = labelledFacts(content);
+        const facts = labelled.map(function(l) { return l.text; });
         const sc = sidecars[0] || {};
         // BUG-172: a topic file that MATCHES the query but parses to zero
         // facts (header-only, or every fact archived) produced a hit whose
@@ -340,12 +393,14 @@ function createSemanticStore({ fs, config, bus, logger }) {
         // nothing to say. A hit with no text is not a hit; drop it here, at
         // the one place that knows WHY it is empty.
         // BUG-463: a note saved for startup is the boot greeting's, never a recall snippet's.
-        const snippet = facts.filter((f) => !isStartupOnlyFact(f)).slice(0, 3).join('; ').slice(0, 200);
+        // BUG-451 closure: a hypothesis is shown as one in the snippet every reader takes.
+        const snippet = labelled.filter((l) => !isStartupOnlyFact(l.text)).slice(0, 3)
+          .map((l) => labelText(l.text, l.label)).join('; ').slice(0, 200);
         if (!snippet) continue;
         hits.push({
           ref: sc.id || files[i].name,
           score: score,
-          record: { topic: files[i].name.replace('.md', ''), sidecar: sc, facts: facts },
+          record: { topic: files[i].name.replace('.md', ''), sidecar: sc, facts: facts, provenance: labelled.map(function(l) { return l.label; }) },
           snippet: snippet,
           store: 'semantic'
         });
@@ -367,10 +422,13 @@ function createSemanticStore({ fs, config, bus, logger }) {
     if (!safe || safe === '.' || safe === '..') return null;
     const content = fs.readText('Semantic/' + safe + '.md', '');
     if (!content) return null;
-    const facts = parseFacts(content);
+    const labelled = labelledFacts(content);
     // Same reasoning as recall()'s BUG-172 guard: a factless file is not a hit.
-    if (!facts.length) return null;
-    return { topic: safe, facts: facts };
+    if (!labelled.length) return null;
+    // BUG-451 closure: the Live session-open composer reads these as "durable memory" - a
+    // hypothesis is tagged here so it is not presented to the model as an established fact.
+    return { topic: safe, facts: labelled.map(function(l) { return labelText(l.text, l.label); }),
+      provenance: labelled.map(function(l) { return l.label; }) };
   }
 
   function get(ref) {
