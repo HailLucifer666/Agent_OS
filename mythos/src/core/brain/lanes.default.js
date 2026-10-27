@@ -136,7 +136,7 @@ const PREF_VOICE = [
   // budget above already said this ("Groq is now last-resort everywhere except
   // PREF_SIMPLE"), and brain.test.js pins it. A model that is three times faster
   // and unavailable every second turn is slower than one that always answers.
-  { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 906ms (2026-09-11); 961-1030ms, 4/4, no flags (2026-08-14)
+  { provider: 'google',   model: 'gemini-3.5-flash-lite' },       // PINNED 2026-10-06 from gemini-flash-lite-latest (see UNPINNED ALIASES note). Alias timings: 906ms (2026-09-11); 961-1030ms, 4/4, no flags (2026-08-14)
   // DEMOTED 2026-09-11 from rank 2. Not dead and not removed: every call on this
   // key now returns `429 Rate limit exceeded`, and the same 429 hits
   // mistral-medium-3.5, -2604 and magistral-medium while ministral-8b/14b and
@@ -328,7 +328,7 @@ const PREF_SIMPLE = [
   { provider: 'mistral',  model: 'ministral-3b-latest' },         // 1212ms (2026-09-11); 315ms (2026-08-14)
   // REMOVED 2026-09-11: nim/meta/llama-3.1-8b-instruct — absent from the NVIDIA
   // catalog, see KNOWN_DEAD.
-  { provider: 'google',   model: 'gemini-flash-lite-latest' },    // 906ms (2026-09-11); 643ms (2026-08-14)
+  { provider: 'google',   model: 'gemini-3.5-flash-lite' },       // PINNED 2026-10-06 from gemini-flash-lite-latest. Alias timings: 906ms (2026-09-11); 643ms (2026-08-14)
   // ADDED 2026-08-22 on the operator's instruction, restoring a Groq rung to
   // this lane after llama-3.1-8b-instant was deleted as a 404. Placed HERE and
   // not at the head, because the measurement disagreed with the assumption:
@@ -503,6 +503,27 @@ const PREF_EMBED = [
   { provider: 'google',  model: 'gemini-embedding-001' }, // 521ms at outputDimensionality 1024 (2026-09-11)
 ];
 
+// MOVING ALIASES, 2026-10-06. Google's docs do not say what an alias points to
+// (ai.google.dev/gemini-api/docs/models, updated 2026-10-01: it "will get
+// hot-swapped with every new release"), so each was MEASURED: one generateContent
+// call per alias on 2026-10-06, reading `modelVersion` from the response.
+//   - gemini-flash-lite-latest -> gemini-3.5-flash-lite (HTTP 200). That id is
+//     "Free of charge" on ai.google.dev/gemini-api/docs/pricing (updated
+//     2026-10-01) and already on route-policy's GOOGLE_FREE_TIER. PINNED in voice
+//     and simple, so both keep their measured-best free rung.
+//   - gemini-flash-latest -> gemini-3.8-flash (HTTP 200 on retry; the first try
+//     was 503 UNAVAILABLE). Free on the same pricing page, but NOT pinned: that id
+//     is on TOO_SLOW_NOT_DEAD below (503 on 2 of 3 calls, 38s for the success,
+//     2026-09-11), the 503 recurred today, and test/lane-fallback-depth.test.js
+//     forbids listing it. The vision alias rung below stays refused under the free
+//     default; vision's head (gemini-3.5-flash-lite) is unaffected.
+//   - ollama:kimi-k2.5:cloud (text): stays refused. ollama.com/pricing (read
+//     2026-10-06) gives the free plan "starter models" and does not list kimi-k2.5.
+// An alias re-measured later can move: pin the measured id, never the alias.
+// Recorded as data (PINNED_FROM_ALIAS) so a guard can tell a pin from a new
+// choice: voice's head now names the same model as vision's head, and that
+// sharing is not new — the alias already resolved there (measured 2026-10-06).
+// test/bug-467-per-job-model-choice.test.js (n) fails if an alias is ever ALLOWED.
 // Every lane a caller may name MUST be registered here. registry.js's chainFor()
 // falls back to BRAIN_TABLES.text for an unknown kind, so an unregistered name
 // (or a typo — 'resoning') produces no error, just quietly worse answers from a
@@ -575,8 +596,15 @@ const UNBILLED_NOT_DEAD = [
   { provider: 'cerebras', model: 'gpt-oss-120b', reason: '402 Payment required — unbilled account, not a dead model' },
 ];
 
+// Each entry: a table whose entry `model` replaced `alias` on 2026-10-06, after a
+// live generateContent call showed the alias resolving to that model.
+const PINNED_FROM_ALIAS = Object.freeze([
+  Object.freeze({ table: 'PREF_VOICE', provider: 'google', alias: 'gemini-flash-lite-latest', model: 'gemini-3.5-flash-lite' }),
+  Object.freeze({ table: 'PREF_SIMPLE', provider: 'google', alias: 'gemini-flash-lite-latest', model: 'gemini-3.5-flash-lite' }),
+]);
+
 module.exports = {
-  BRAIN_TABLES, KNOWN_DEAD, UNBILLED_NOT_DEAD, TOO_SLOW_NOT_DEAD,
+  BRAIN_TABLES, KNOWN_DEAD, UNBILLED_NOT_DEAD, TOO_SLOW_NOT_DEAD, PINNED_FROM_ALIAS,
   // BUG-418: exported so a guard can derive "the free-tier head of this lane"
   // rather than typing the BYO provider names a second time (gate D).
   BYO_PREMIUM,

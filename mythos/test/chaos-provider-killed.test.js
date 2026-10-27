@@ -113,9 +113,14 @@ describe('chaos drill: provider-killed', () => {
 
     chain = require('../src/core/brain/chain');
     createBrain = require('../src/core/brain').createBrain;
+    // 2026-10-06 (BUG-467 closure): GROQ_API_URL points groq at a local fake, which
+    // is not Groq's official host, so the route is unclassified and refused unless
+    // chosen. The fixture chooses it for the voice job these tests walk.
+    require('../src/core/brain/model-choice').install({ file: null, choices: { voice: { provider: 'groq', model: 'chaos-model' } } });
   });
 
   after(() => {
+    require('../src/core/brain/model-choice').install(null);
     groqServer.close();
     ollamaServer.close();
     delete process.env.GROQ_API_URL;

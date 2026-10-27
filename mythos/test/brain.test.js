@@ -42,7 +42,7 @@ describe('brain/lanes.default', function() {
     // disqualifier flags, which matters most on the lane that is SPOKEN ALOUD
     // (a chain-of-thought leak here is read out).
     assert.equal(head(lanes.PREF_VOICE).provider, 'google');
-    assert.equal(head(lanes.PREF_VOICE).model, 'gemini-flash-lite-latest');
+    assert.equal(head(lanes.PREF_VOICE).model, 'gemini-3.5-flash-lite'); // pinned 2026-10-06: what gemini-flash-lite-latest resolved to (measured); the alias is refused by the free default
     // RE-POINTED 2026-08-22. This used to assert `groqIdx > 0` — groq retained
     // as a fallback rather than leading. Groq is now ABSENT from this lane, and
     // the assertion changes because the fact changed, not to make a red test
@@ -97,11 +97,11 @@ describe('brain/lanes.default', function() {
     // Google's quota is per-MODEL, so the whole point of this head is that it is
     // a DIFFERENT model from the vision and voice heads. Sharing one would merge
     // three buckets back into one and undo the load spread.
-    const googleHeads = [head(lanes.PREF_MEMORY), head(lanes.PREF_VISION), head(lanes.PREF_VOICE)]
-      .filter(function(p) { return p.provider === 'google'; })
-      .map(function(p) { return p.model; });
+    // 2026-10-06: voice's pinned head IS vision's head; measured, the alias already resolved there, so the pin is judged as its alias (lanes.PINNED_FROM_ALIAS). Any other sharing still fails.
+    const googleHeads = [['PREF_MEMORY', head(lanes.PREF_MEMORY)], ['PREF_VISION', head(lanes.PREF_VISION)], ['PREF_VOICE', head(lanes.PREF_VOICE)]].filter(function(e) { return e[1].provider === 'google'; })
+      .map(function(e) { const pin = lanes.PINNED_FROM_ALIAS.find(function(x) { return x.table === e[0] && x.model === e[1].model; }); return pin ? pin.alias : e[1].model; });
     assert.equal(new Set(googleHeads).size, googleHeads.length,
-      'two lane heads share one Google model — that is one quota bucket, not two');
+      'two lane heads share one Google model that no measured alias pin explains — that is one quota bucket, not two');
   });
 
   it('vision lane leads with google and keeps NIM last among cloud entries', function() {
@@ -611,6 +611,7 @@ describe('brain/index — D-56 regression: lane routing consults its own CHAIN_*
     process.env.ZCODE_API_KEY = 'test-key';
     process.env.CHAIN_BUILD = 'zcode:build-override-model';
     process.env.CHAIN_TEXT = 'zcode:text-override-model';
+    const modelChoice = require('../src/core/brain/model-choice'); modelChoice.install({ file: null, choices: { build: { provider: 'zcode', model: 'build-override-model' }, text: { provider: 'zcode', model: 'text-override-model' } } }); // 2026-10-06 BUG-467 closure: zcode is unclassified, refused unless chosen; each override is chosen for its OWN job, so a wrong-table walk still shows. One line: brain.test.js is at its size ratchet.
 
     try {
       const brain = createBrain({ config: {}, bus: null });
@@ -619,9 +620,9 @@ describe('brain/index — D-56 regression: lane routing consults its own CHAIN_*
       assert.equal(result.offline, false);
       assert.equal(result.provider, 'zcode');
       assert.equal(result.model, 'build-override-model', 'must resolve via CHAIN_BUILD, not CHAIN_TEXT');
-      assert.deepEqual(seenModels, ['build-override-model']);
+      assert.deepEqual(seenModels, ['build-override-model']); assert.deepEqual(require('../src/core/brain/registry').lanePrefs('build', {}).map((p) => p.model), ['build-override-model'], 'with no choice, the build lane is exactly CHAIN_BUILD');
     } finally {
-      zcode.chat = origChat;
+      zcode.chat = origChat; modelChoice.install(null);
       delete process.env.ZCODE_API_KEY;
       delete process.env.CHAIN_BUILD;
       delete process.env.CHAIN_TEXT;
@@ -651,7 +652,7 @@ describe('brain/chain — P20 onToken passthrough', function() {
       return 'hello';
     };
     process.env.ZCODE_API_KEY = 'test-key';
-    process.env.CHAIN_BUILD = 'zcode:some-model';
+    process.env.CHAIN_BUILD = 'zcode:some-model'; require('../src/core/brain/model-choice').install({ file: null, choices: { build: { provider: 'zcode', model: 'some-model' } } }); // 2026-10-06 BUG-467: zcode refused unless chosen
 
     const deltas = [];
     try {
@@ -664,7 +665,7 @@ describe('brain/chain — P20 onToken passthrough', function() {
       assert.deepEqual(deltas, ['hel', 'lo']);
       assert.equal(result.content, 'hello');
     } finally {
-      zcode.chat = origChat;
+      zcode.chat = origChat; require('../src/core/brain/model-choice').install(null);
       delete process.env.ZCODE_API_KEY;
       delete process.env.CHAIN_BUILD;
     }

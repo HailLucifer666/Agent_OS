@@ -60,12 +60,19 @@ function normalizeMime(mimeType) {
   return m;
 }
 
+// The one route this sender calls — also what brain/model-choice.js reports and
+// validates a 'stt' choice against, so the two cannot disagree.
+function billingRoute() {
+  return { provider: 'google', model: process.env.GEMINI_STT_MODEL || DEFAULT_MODEL, endpoint: BASE, mode: 'stt' };
+}
+
 async function transcribe(buffer, mimeType) {
   const key = getApiKey();
   if (!key) throw new Error('gemini-stt: GOOGLE_API_KEY is not set');
-  const model = process.env.GEMINI_STT_MODEL || DEFAULT_MODEL;
   // Wave 0c: GEMINI_STT_MODEL is operator-settable; judged before the request.
-  routePolicy.assertAllowed({ provider: 'google', model, endpoint: BASE, mode: 'stt' });
+  const route = billingRoute();
+  const model = route.model;
+  routePolicy.assertAllowed(route);
 
   const res = await fetch(`${BASE}/${model}:generateContent?key=${key}`, {
     method: 'POST',
@@ -102,4 +109,4 @@ async function transcribe(buffer, mimeType) {
   return text;
 }
 
-module.exports = { name: 'gemini-stt', isAvailable, transcribe, DEFAULT_MODEL };
+module.exports = { name: 'gemini-stt', isAvailable, transcribe, billingRoute, DEFAULT_MODEL };

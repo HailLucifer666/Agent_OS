@@ -65,12 +65,18 @@ function extFor(mimeType) {
 
 // Transcribe an audio Buffer. Throws on any failure — the server route turns
 // that into an honest HTTP error, never a silent hang.
+// The one route this sender calls — also what brain/model-choice.js reports and
+// validates a 'stt' choice against.
+function billingRoute() {
+  return { provider: 'groq', model: MODEL, endpoint: BASE, mode: 'stt' };
+}
+
 async function transcribe(buffer, mimeType) {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('GROQ_API_KEY missing — add it to mythos/.env to enable voice input');
   if (!buffer || !buffer.length) throw new Error('empty audio');
   // Wave 0c: GROQ_API_URL can point this at a non-Groq host; judged before the request.
-  routePolicy.assertAllowed({ provider: 'groq', model: MODEL, endpoint: BASE, mode: 'stt' });
+  routePolicy.assertAllowed(billingRoute());
 
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: mimeType || 'audio/webm' }), `utterance.${extFor(mimeType)}`);
@@ -141,4 +147,4 @@ function isStockHallucination(text) {
   return HALLUCINATION_PHRASES.has(normalized);
 }
 
-module.exports = { name: 'groq-stt', isAvailable, transcribe };
+module.exports = { name: 'groq-stt', isAvailable, transcribe, billingRoute };

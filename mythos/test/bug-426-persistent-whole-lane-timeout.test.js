@@ -5,7 +5,7 @@
 // Accepted: a real shared outage can bench hot pairs for 60s after recovery.
 // Probe 2026-09-10 (review fold): restore `if (!names.length) return;` before the
 // warn — the walk-3 assertion fails with rows.length 2. Verified red, then restored.
-const { it, beforeEach, after } = require('node:test');
+const { it, before, beforeEach, after } = require('node:test');
 const assert = require('node:assert/strict');
 const chain = require('../src/core/brain/chain');
 const registry = require('../src/core/brain/registry');
@@ -20,6 +20,12 @@ async function walk() {
     config: { BREAKER_FAIL_THRESHOLD: 1, CHAIN_BREAKERS_ENABLED: true },
     bus: { emit: (type, data) => events.push({ type, data }) } });
 }
+// 2026-10-06 (BUG-467 closure): google:'B' is an unclassified model id, refused
+// for any job nobody chose it for, so the walk would never reach it. The fixture
+// chooses it for the reasoning job; the per-pair streak logic is what is tested.
+const modelChoice = require('../src/core/brain/model-choice');
+before(() => modelChoice.install({ file: null, choices: { reasoning: { provider: 'google', model: 'B' } } }));
+after(() => modelChoice.install(null));
 beforeEach(() => {
   chain._internal._resetCooldowns(); chain._internal._resetBreakers(); health._reset();
   if (chain._internal.wholeLaneTimeoutStreaks) chain._internal.wholeLaneTimeoutStreaks.clear();
