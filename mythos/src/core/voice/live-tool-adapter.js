@@ -84,7 +84,7 @@ function createLiveToolAdapter(deps) {
     goals,                          // BUG-113: raw GoalSystem, optional — commitment ledger only
     toolAckDeadlineMs,              // BUG-128: test seam only — see TOOL_ACK_DEADLINE_MS
     onToolWait,                     // BUG-456: ({ callId, pending }) — the HUD's one soft chime (ui/public/js/voice/wait-chime.js)
-    toolResultHoldMaxMs,            // BUG-457: test seam only — see held-reply.js TOOL_RESULT_HOLD_MAX_MS; 0 selects today's path
+    toolResultHoldMaxMs,            // BUG-457: test seam only - see held-reply.js TOOL_RESULT_HOLD_MAX_MS; 0 selects today's path. A fixture that names a SLOW_TOOL only to reach the late path MUST pass 0, or the call waits the full window first (four files missed this in the 2026-10-27 review and added ~205 s to the suite).
   } = deps;
   // BUG-456: a call answered "started" begins a silent wait; its late result ends it. Advisory only — never breaks dispatch.
   const toolWait = (callId, pending) => { if (typeof onToolWait === 'function') { try { onToolWait({ callId: String(callId), pending }); } catch (_) { /* advisory */ } } };
