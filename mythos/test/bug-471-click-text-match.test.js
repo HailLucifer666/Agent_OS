@@ -35,10 +35,12 @@
 
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
+const Module = require('node:module');
 const { matchRegions } = require('../src/core/effectors/see-and-click-match.js');
 const { settleForChange } = require('../src/core/effectors/see-and-click-settle.js');
 const { makeClickAt } = require('../src/core/effectors/click-at-evidence.js');
 const { clickVerdict } = require('../src/core/effectors/ui-target.js');
+const { looksLikeOutcomeDescription, expectMissNote } = require('../src/core/effectors/ocr-text-match.js');
 const evidence = require('../src/core/effectors/evidence.js');
 
 const region = (text, x = 10) => ({ text, x, y: 10, width: 100, height: 20 });
@@ -100,6 +102,94 @@ describe('settleForChange — the `expect` compare uses the same normaliser', ()
   test('adjacent: a plain literal expect still verifies', async () => {
     const r = await settleForChange({ read: reading('Subscribe'), beforeText: 'old', expect: 'subscribe', wait: noWait });
     assert.equal(r.kind, 'expected');
+  });
+});
+
+// Review finding, 2026-10-27. The first cut put `will|should` in OUTCOME_CUE,
+// which is one word wide: a CONTACT named "Will Smith" was classified as an
+// outcome description, so a failed click on his chat told the operator his name
+// "reads like a description of what should happen". A bare modal is much weaker
+// evidence than a verb of becoming - "Should work" is a button label - so it now
+// only counts from three words up, where it reads as a sentence about the future.
+describe('looksLikeOutcomeDescription - a modal verb alone is not enough', () => {
+  test('a contact named Will Smith is NOT a description', () => {
+    assert.equal(looksLikeOutcomeDescription('Will Smith'), false);
+    assert.equal(expectMissNote('Will Smith'), '');
+  });
+  test('a two-word label starting with a modal is NOT a description', () => {
+    assert.equal(looksLikeOutcomeDescription('Should work'), false);
+    assert.equal(expectMissNote('Should work'), '');
+  });
+  test('a modal in a three-word sentence IS a description', () => {
+    assert.equal(looksLikeOutcomeDescription('the app will open'), true);
+    assert.equal(looksLikeOutcomeDescription('it should show'), true);
+    assert.match(expectMissNote('the app will open'), /not checkable/);
+  });
+  test('the verb-of-becoming cues still flag at two words', () => {
+    assert.equal(looksLikeOutcomeDescription('Video starts playing'), true);
+    assert.equal(looksLikeOutcomeDescription('Page appears'), true);
+  });
+  test('a name that merely contains a cue as a substring is NOT flagged', () => {
+    assert.equal(looksLikeOutcomeDescription('Willow Smith'), false, '"will" must match as a word, not a prefix');
+    assert.equal(looksLikeOutcomeDescription('Starting Lineup'), true, 'a real label that reads as a cue is the accepted trade');
+  });
+});
+
+// Review finding, 2026-10-27. `expectMissNote` was wired into the two
+// "screen did not change" branches but NOT into the "could not re-read" one, so
+// an operator who passed a description got the generic unreadable sentence and
+// no explanation that the expect could never have been checked. Both surfaces
+// that report an unreadable screen carry it now.
+describe('expectMissNote - the unreadable branch explains a description too', () => {
+  test('clickVerdict: unreadable + a description expect carries the note', () => {
+    const v = clickVerdict('unreadable', 'Video starts playing', 10, 20);
+    assert.equal(v.verified, false);
+    assert.match(v.reason, /could not be re-read/);
+    assert.match(v.reason, /not checkable/);
+  });
+  test('clickVerdict: unreadable + a literal expect keeps the plain wording', () => {
+    const v = clickVerdict('unreadable', 'Add to queue', 10, 20);
+    assert.match(v.reason, /could not be re-read/);
+    assert.doesNotMatch(v.reason, /not checkable/);
+  });
+  test('see_and_click: an unreadable re-read still names the description', async () => {
+    const PC_CHILD_PATH = require.resolve('../adapters/pc-child');
+    const FROM_PC = require.resolve('../src/core/effectors/from-pc');
+    const asOcr = (regions) => ({ ok: true, result: { text: regions.map((r) => r.text).join('\n'), lineCount: regions.length, regions } });
+    const HOME = [
+      { text: 'YouTube', x: 100, y: 40, width: 90, height: 20 },
+      { text: 'Will Smith interview', x: 300, y: 700, width: 250, height: 30 },
+    ];
+    const original = Module._load;
+    let reads = 0;
+    Module._load = function (request, parent) {
+      const resolved = (() => { try { return require.resolve(request, { paths: [parent.path] }); } catch { return null; } })();
+      if (resolved === PC_CHILD_PATH) {
+        return {
+          getStatus: () => ({ state: 'ONLINE' }),
+          sendCommand: async (cmd) => {
+            if (cmd.cmd === 'screen_read_text') return (reads++ === 0) ? asOcr(HOME) : { ok: false, error: 'OCR engine unavailable' };
+            if (cmd.cmd === 'click_at') return { ok: true, result: { clicked: true } };
+            return { ok: true, result: {} };
+          },
+        };
+      }
+      return original.apply(this, arguments);
+    };
+    let res;
+    try {
+      delete require.cache[FROM_PC];
+      const fromPc = require(FROM_PC);
+      // "Will Smith" is the review case: it used to be classified as a
+      // description, so this test would have passed for the WRONG reason.
+      res = await fromPc.see_and_click({ text: 'Will Smith', occurrence: 1, expect: 'the video will start' });
+    } finally {
+      Module._load = original;
+      delete require.cache[FROM_PC];
+    }
+    assert.equal(res.unverified, true);
+    assert.match(res.reason, /could not be re-read/);
+    assert.match(res.reason, /not checkable/, 'an unreadable screen must still explain that the expect was a description');
   });
 });
 

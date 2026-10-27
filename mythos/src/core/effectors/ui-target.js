@@ -196,7 +196,7 @@ function clickVerdict(settleKind, want, x, y) {
   }
   if (settleKind === 'unreadable') {
     return { verified: false, reason:
-      'the click was delivered but the screen could not be re-read afterwards, so nothing is confirmed' };
+      'the click was delivered but the screen could not be re-read afterwards, so nothing is confirmed' + expectMissNote(want) };
   }
   return { verified: false, reason:
     'the click was delivered and the screen reads exactly the same afterwards, so I cannot tell '
@@ -206,6 +206,9 @@ function clickVerdict(settleKind, want, x, y) {
 
 module.exports.readWindowNote = readWindowNote;
 module.exports.clickVerdict = clickVerdict;
+// BUG-471: re-exported so from-pc.js's see_and_click can use the same note
+// without a fourth require - that file is at its size ceiling.
+module.exports.expectMissNote = expectMissNote;
 
 // The whole remedy for a see_and_click miss, both branches, so from-pc keeps one
 // line instead of the branch plus its two message bodies.

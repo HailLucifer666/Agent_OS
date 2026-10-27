@@ -52,15 +52,22 @@ function normalizeOcrText(value) {
 // flagged expect that IS on screen still verifies; one that is not is reported
 // as "not checkable" instead of "missing". No confidence value is invented.
 // Needs two or more words so a one-word label ("Loading…", "Subscribe") is never
-// flagged. Known blind spot: a description with none of these cues is just
-// reported as "did not appear", as before.
-const OUTCOME_CUE = /\b(starts?|starting|begins?|should|will|appears?)\b/i;
+// flagged. A bare MODAL is weaker evidence than a verb of becoming: "Will Smith"
+// is a contact and "Should work" is a label, so a modal only counts from three
+// words up ("the app will open", "it should show"). Known blind spot: a
+// description with none of these cues is just reported as "did not appear", as
+// before.
+const OUTCOME_CUE = /\b(starts?|starting|begins?|appears?)\b/i;
+const MODAL_CUE = /\b(should|will)\b/i;
 const TRAILING_ELLIPSIS = /(\u2026|\.{3})\s*$/;
 
 function looksLikeOutcomeDescription(expect) {
   const text = String(expect == null ? '' : expect).trim();
-  if (!text || text.split(/\s+/).length < 2) return false;
-  return TRAILING_ELLIPSIS.test(text) || OUTCOME_CUE.test(text);
+  if (!text) return false;
+  const words = text.split(/\s+/);
+  if (words.length < 2) return false;
+  if (TRAILING_ELLIPSIS.test(text) || OUTCOME_CUE.test(text)) return true;
+  return words.length >= 3 && MODAL_CUE.test(text);
 }
 
 // Appended to an unverified/unconfirmed reason when `expect` was not found.

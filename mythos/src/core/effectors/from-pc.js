@@ -21,7 +21,7 @@ const { visionThink } = require('./vision-call');
 // `lastLaunchedPid` here that any launch overwrote and nothing expired (BUG-353).
 const implicitTarget = require('./implicit-target');
 const uiTarget = require('./ui-target');
-const { clickVerdict, scopedMissRemedy } = uiTarget;
+const { clickVerdict, scopedMissRemedy, expectMissNote } = uiTarget;
 const { makeClickAt } = require('./click-at-evidence');
 // A fresh module instance owns no target — see forget() for why this line exists.
 implicitTarget.forget();
@@ -1091,7 +1091,6 @@ async function readScreenRegions(target) {
 
 const { matchRegions, centreOf } = require('./see-and-click-match.js');
 const { settleForChange } = require('./see-and-click-settle.js');
-const { expectMissNote } = require('./ocr-text-match.js'); // BUG-471
 
 
 // BUG-398 row 10: click_at gains an oracle (bodies in click-at-evidence.js).
@@ -1233,7 +1232,7 @@ async function see_and_click({ text, occurrence, expect, pid }) {
   return evidence.unverified({ ok: true, result: seen }, 'clicked "' + target.text + '" but '
     + (settled.kind === 'unreadable'
       ? 'the screen could not be re-read afterwards, so I cannot confirm anything happened'
-      : 'the screen reads exactly the same afterwards, so I cannot tell that anything happened' + expectMissNote(expect)));
+      : 'the screen reads exactly the same afterwards, so I cannot tell that anything happened') + expectMissNote(expect));
 }
 
 // ---- Phase 3: window move/resize/snap + scroll/right-click/drag ----
