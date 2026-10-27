@@ -82,6 +82,9 @@ function walkBreadthFirst(root, opts) {
   const maxScan = typeof o.maxScan === 'number' ? o.maxScan : 5000;
   const maxEntries = typeof o.maxEntries === 'number' ? o.maxEntries : 50;
   const skip = o.skipDirs || SKIP_DIRS;
+  // B2d: a path the caller excludes (a protected credential path) is neither
+  // reported nor descended into.
+  const exclude = o.exclude || (() => false);
 
   const entries = [];
   let scanned = 0;
@@ -103,6 +106,7 @@ function walkBreadthFirst(root, opts) {
         scanned++;
         if (scanned > maxScan) { truncated = true; break; }
         const full = path.join(dir, entry.name);
+        if (exclude(full)) continue;
         if (match(entry.name)) {
           if (entries.length >= maxEntries) { truncated = true; break; }
           entries.push({ name: entry.name, full: full, dirent: entry });
@@ -124,4 +128,32 @@ function walkBreadthFirst(root, opts) {
   return { entries, truncated, scanned };
 }
 
-module.exports = { SKIP_DIRS, walkBreadthFirst };
+// The first maxBytes of a file as UTF-8 — read with a bounded buffer, so a file
+// that grew after its size was checked is still read only this far (B2d).
+function readHead(file, maxBytes) {
+  const buf = Buffer.alloc(maxBytes);
+  const fd = fs.openSync(file, 'r');
+  try { return buf.subarray(0, fs.readSync(fd, buf, 0, maxBytes, 0)).toString('utf8'); } finally { fs.closeSync(fd); }
+}
+
+// The canonical path, or null. .native (GetFinalPathNameByHandle), not the JS
+// walk: the JS walk keeps an 8.3 short name ("SSH~1") and a stream suffix
+// ("::$DATA") exactly as typed, so the canonical path named neither .ssh nor the
+// real file (B2d review, 2026-09-29). Moved here from from-computer.js.
+function realpathOrNull(p) {
+  try { return fs.realpathSync.native(p); } catch { return null; }
+}
+
+// The nearest ancestor of dir (or dir itself) that exists. Moved here from
+// from-computer.js, where the reasoning for walking all the way up is kept.
+function nearestExistingAncestor(dir) {
+  let probe = path.resolve(dir);
+  while (!fs.existsSync(probe)) {
+    const parent = path.dirname(probe);
+    if (parent === probe) break; // reached a filesystem root; stop
+    probe = parent;
+  }
+  return probe;
+}
+
+module.exports = { SKIP_DIRS, walkBreadthFirst, readHead, realpathOrNull, nearestExistingAncestor };

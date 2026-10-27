@@ -12,7 +12,9 @@
 // wire this into overlay-manager.js's openPanel().
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-export function trapFocus(root, { onEscape } = {}) {
+// initialFocus: a selector inside root to focus first instead of the first
+// focusable element — the confirm modal starts on Deny (see confirm-modal.js).
+export function trapFocus(root, { onEscape, initialFocus } = {}) {
   const trigger = document.activeElement;
 
   function focusables() {
@@ -35,7 +37,7 @@ export function trapFocus(root, { onEscape } = {}) {
   }
 
   document.addEventListener('keydown', onKeydown);
-  const first = focusables()[0];
+  const first = (initialFocus && root.querySelector(initialFocus)) || focusables()[0];
   if (first) first.focus();
 
   return function release() {

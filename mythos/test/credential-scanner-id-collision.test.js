@@ -77,6 +77,8 @@ describe('credential scanner still catches real provider keys (true positives)',
     ['openai-key', 'sk-svcacct-' + 'Cc7Mn4Pl'.repeat(5)],
     ['groq-key', 'gsk_' + 'D4e5F6g7H8i9J0k1'.repeat(3)],
     ['nvidia-key', 'nvapi-' + 'E5f6G7h8I9j0K1l2'.repeat(3)],
+    // B2d (2026-09-29): GEMINI_API_KEY / GOOGLE_API_KEY shape, "AIza" + 35.
+    ['google-api-key', 'AI' + 'za' + 'Sy' + 'F6g7H8i9J0k1L2m3'.repeat(2) + 'N'],
   ];
 
   for (const [expected, value] of realShapes) {
@@ -99,6 +101,36 @@ describe('credential scanner still catches real provider keys (true positives)',
     for (const m of result.matches) {
       assert.ok(!m.sample.includes(secret),
         'sample must not contain the whole secret: ' + m.sample);
+    }
+  });
+});
+
+// B2d review (2026-09-29): with no left boundary, every word ending in "sk"
+// before a hyphen was an OpenAI key. Probe the same day: the lookbehind removed
+// fails the first test here.
+describe('the openai-key pattern needs a boundary before "sk-"', () => {
+  test('article slugs and prose are not keys', () => {
+    for (const v of ['risk-management-framework-guide-2026', 'task-management-software-for-teams', 'the desk-organizer-project-v2-release']) {
+      assert.equal(scan({ v }).found, false, v);
+    }
+  });
+  test('ADJACENT: a key after =, a quote, a space or a colon is still a key', () => {
+    const k = 'sk-' + 'proj-' + 'Bb9Xy7Zq'.repeat(5);
+    for (const v of ['k=' + k, '"' + k + '"', 'key ' + k, 'key:' + k, k]) assert.equal(scan({ v }).found, true, v);
+  });
+});
+
+// Probe, 2026-09-29: the quantifier widened to {34,} fails "34 do not" below.
+describe('the google-api-key pattern is exactly the documented shape (B2d)', () => {
+  test('35 characters after AIza match; 34 do not', () => {
+    const tail = 'Sy' + 'F6g7H8i9J0k1L2m3'.repeat(2);
+    assert.equal(scan({ k: 'AI' + 'za' + tail + 'N' }).found, true);
+    assert.equal(scan({ k: 'AI' + 'za' + tail }).found, false, '34 characters is not a Google key');
+  });
+
+  test('no MYTHOS id carries the prefix', () => {
+    for (const make of [skillId, lessonId, refinementId, auditId]) {
+      assert.equal(scan({ note: make() }).matches.some((m) => m.name === 'google-api-key'), false);
     }
   });
 });

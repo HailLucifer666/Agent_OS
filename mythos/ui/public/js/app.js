@@ -232,6 +232,10 @@ const mic = {
 
 let voice = null;
 let wakeword = null;
+// Declared HERE, not beside ensureWakeWord(): the Electron load-time arm below runs
+// ensureWakeWord() synchronously during module evaluation, so a `let` declared
+// after that call is still in its temporal dead zone and throws ReferenceError.
+let _wakewordArming = false;
 // Last-known voice-loop state — createVoiceLoop's returned API has no state
 // getter, so onVoiceState (called on every transition, including 'speaking'
 // during TTS playback) is the only way to know it here. Used by wake-word's
@@ -687,7 +691,6 @@ if (typeof navigator !== 'undefined' && navigator.mediaDevices
 // (scripts/setup-wakeword.js). Deliberately NOT paused on visibilitychange —
 // unlike hud-canvas.js's render-pause pattern, always-on standby listening is
 // the entire point of this feature, so a backgrounded tab must keep listening.
-let _wakewordArming = false;
 function ensureWakeWord() {
   // BUG-175: this used to be a bare `if (wakeword)`, which made a detector
   // that had stopped — or was constructed and then failed — permanently

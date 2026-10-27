@@ -207,8 +207,14 @@ test('Slice 3 / electron: setDisplayMediaRequestHandler is registered', () => {
 
 test('Slice 3 / electron: no screen source degrades honestly instead of hanging', () => {
   const src = readSource(REPO_ROOT, 'electron', 'main.js');
-  const start = src.indexOf('setDisplayMediaRequestHandler');
-  const region = src.slice(start, start + 1600);
+  // Anchored on the handler itself, not the first mention of its name. Until
+  // 2026-09-29 the 1600-character window from that first mention reached only an
+  // unrelated `} catch (_)` in the requester lookup, never getSources()'s own
+  // .catch — so the assertion below passed without seeing the path it names.
+  const start = src.indexOf('setDisplayMediaRequestHandler((request, callback)');
+  const region = src.slice(start, start + 2600);
+  assert.match(region, /getSources\([^)]*\)\.then\([\s\S]*?\}\)\.catch\(\(err\) =>/,
+    'the rejection of getSources() itself must be caught');
   // The handler's callback MUST be invoked on every path. An un-invoked callback
   // leaves the renderer's getDisplayMedia() promise pending forever, which looks
   // exactly like a hung app (AD-9's "degrade, never hang" in spirit).

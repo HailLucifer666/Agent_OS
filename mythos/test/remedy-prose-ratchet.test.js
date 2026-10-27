@@ -92,11 +92,14 @@ const PROSE_BASELINE = {
     "c8d8190cd3986a1b",
     "f486563d8a299dcf"
   ],
+  // B2c (2026-09-29): open_file moved to open-file.js. Its executable refusal
+  // (09f5a40ee7100b7c, "that is run_command") left with it and now names no tool;
+  // its description was reworded (09080c48eaf359ed -> db035aaf7fc4035b) to state the
+  // display/refuse/approval policy. 8 -> 7.
   "from-computer.js": [
     "71e2bec2aa22f70c",
     "bfdfd4be06a391b3",
-    "09f5a40ee7100b7c",
-    "09080c48eaf359ed",
+    "db035aaf7fc4035b",
     "e299246974cda7c0",
     "52f45bb33bb4f0c9",
     "b4b209450216ba82",
@@ -138,10 +141,19 @@ const PROSE_BASELINE = {
     "9358477ca0a7cc55",
     "f133837a748af9ea"
   ],
+  // B2a (2026-09-29): launch_app moved to launch-app.js, taking one recorded
+  // site with it (53064c650ac240b7, "Call list_windows..."), and its tool
+  // description was reworded (c5aa7c5cbc0fa800 -> 6644f2adef2c4283: it now also
+  // names open_file/open_web for paths and links, and says approval is asked for;
+  // then -> 5ab9e18a9e50a07c, the review's fix: its example "code" became
+  // "calculator", because an unreviewed app now asks for approval).
+  // Same count; the two new refusals carry structured remedies and are exempt.
+  "launch-app.js": [
+    "53064c650ac240b7"
+  ],
   "from-pc.js": [
     "059cedc981388d7f",
-    "53064c650ac240b7",
-    "c5aa7c5cbc0fa800",
+    "5ab9e18a9e50a07c",
     "5a9c34c38d64387f",
     "6b78d2c777ff3d14",
     "25d8db1367a1b965",

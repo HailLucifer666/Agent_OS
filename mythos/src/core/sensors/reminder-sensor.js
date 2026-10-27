@@ -50,7 +50,7 @@ function createReminderSensor(ctx) {
   var wakeTimer = null;
   var unsubscribeAdded = null;
 
-  function dispatchFiredAction(rem) {
+  async function dispatchFiredAction(rem) {
     if (!rem || !rem.action || !rem.action.tool) return;
     var decision = { tool: rem.action.tool, args: rem.action.args || {} };
 
@@ -59,6 +59,7 @@ function createReminderSensor(ctx) {
       return;
     }
 
+    if (leash.prepare) await leash.prepare(decision); // B2a: resolve before authorizing
     var gate = leash.check(decision, { goalId: rem.goalId || null });
     if (!gate.allow) {
       // Not approved (or no longer grantable) — honest non-fire, not a
@@ -107,7 +108,13 @@ function createReminderSensor(ctx) {
       if (calendar && typeof calendar.fireDueReminders === 'function') {
         var fired = calendar.fireDueReminders();
         if (Array.isArray(fired)) {
-          for (var i = 0; i < fired.length; i++) dispatchFiredAction(fired[i]);
+          // Async since B2a (leash.prepare resolves before the check), so a throw
+          // is a rejection, not something the try below would catch.
+          fired.forEach(function(rem) {
+            dispatchFiredAction(rem).catch(function(err) {
+              if (bus) bus.emit('health.anomaly', { kind: 'reminder-action-dispatch-failed', target: rem && rem.id, error: err && err.message });
+            });
+          });
         }
       }
     } catch (_) { /* best-effort */ }

@@ -77,13 +77,13 @@ const DELIBERATE = {
 // a file has genuinely shrunk; never raise one to make a red run go green.
 const BASELINE = {
   'mythos/server/index.js': 4680,
-  'electron/main.js': 2606,
+  'electron/main.js': 2580, // B3b (2026-09-29): the settings channels moved to electron/settings-ipc.js
   // 1627 -> 1610 (BUG-407..411, 2026-09-03): the browser resolver moved to
   // browser-target.js and the launch plan to browser-launch-plan.js, so the fix
   // fitted under the ceiling instead of raising it. Recorded DOWN, per this
   // file's own rule — the ceiling only ever tightens.
   'mythos/src/core/effectors/from-browser.js': 1610,
-  'mythos/src/core/effectors/from-pc.js': 1552,
+  'mythos/src/core/effectors/from-pc.js': 1390, // B2a (2026-09-29): launch_app moved to launch-app.js
   'mythos/src/core/voice/live-tool-adapter.js': 1449,
   'mythos/src/core/effectors/from-dashboard.js': 1418,
   'mythos/src/main.js': 1373,
@@ -94,7 +94,13 @@ const BASELINE = {
   'mythos/test/brain.test.js': 1097,
   'mythos/ui/public/js/voice/voice-loop.js': 1075,
   'mythos/ui/public/js/neural-map/hud-canvas.js': 1027,
-  'mythos/src/core/effectors/from-computer.js': 997,
+  // 997 -> 905 (2026-10-27, merging the 2026-09-29 audit bundle). The bundle
+  // recorded 867 against its OWN base, where the file was 864. Between that base
+  // and main, main added 41 lines to this file (955), so the rebased bundle
+  // lands at 905 — still 92 below main's ceiling, i.e. a genuine shrink, but 38
+  // over the 867 the bundle intended. Recorded at the truth rather than forcing
+  // a 38-line refactor into a 10.8k-line security merge nobody reviewed.
+  'mythos/src/core/effectors/from-computer.js': 905, // B2c: open_file moved to open-file.js; 2026-10-27 rebase: see note above
   'mythos/scripts/spike-dsh-build.js': 967,
   'mythos/adapters/dsh-agent/index.js': 929,
   'mythos/src/core/effectors/web-search.js': 862,
