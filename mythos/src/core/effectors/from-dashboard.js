@@ -235,15 +235,6 @@ function buildTools(ctx) {
       return evidence.unverified(ok(result, uiActions),
         'the dashboard did not answer, so I cannot confirm it rendered');
     }
-    // BUG-468 (2026-10-06). An explicit opened:false is the surface saying "I did NOT
-    // open this" (the media window's own verdict, e.g. 'not a media widgetType').
-    // It must beat the unverified branch below, which exists for a surface that
-    // could not tell. Attack: a surface that omits `opened` is untouched (only the
-    // literal false counts), so noopener's absent handle stays unverified.
-    if (ack.opened === false) {
-      return fail('the dashboard did not open this: ' + String(ack.reason || 'no reason given')
-        + '. Nothing is on screen, so do not tell the operator to look at it.');
-    }
     if (ack.mounted === false && ack.unverified === true && typeof ack.reason === 'string' && ack.reason.trim()) {
       return evidence.unverified(ok(result, uiActions), ack.reason);
     }

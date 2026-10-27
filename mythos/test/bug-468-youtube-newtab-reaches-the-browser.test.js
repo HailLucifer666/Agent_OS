@@ -25,16 +25,34 @@
 //   (a) mode call site back to openWebResult(newtab)      -> reds "hands the watch url ...", "a refusing opener ...", "a THROWING opener ..."
 //   (b) `if (!handoff.opened)` -> `if (false)`              -> reds "a refusing opener is a FAILURE ..."
 //   (c) fallback call site back to openWebResult(newtab)   -> reds "the no-embeddable fallback ..."
-//   (d) drop the `ack.opened === false` clause             -> reds "opened:false + unverified:true fails ..."
-//   (e) always take the external route (drop the no-opener guard) -> reds the ADJACENT "NO opener keeps the renderer path"
-//   (f) drop the call-site `await` on openYoutubeNewtab    -> reds "a THROWING opener ..." (a thrown opener escaped open_web's try/catch)
-//   (g) drop the `await` on handToBrowser in the browser:true branch -> reds bug-272-open-external's "a thrown opener ..."
-//   (h) NO_EMBED web call site back to openWebResult(newtab) (2026-10-06 gate B) -> reds both "NO_EMBED web newtab" opener tests
+//   (d) always take the external route (drop the no-opener guard) -> reds the ADJACENT "NO opener keeps the renderer path"
+//   (e) drop the call-site `await` on openYoutubeNewtab    -> reds "a THROWING opener ..." (a thrown opener escaped open_web's try/catch)
+//   (f) drop the `await` on handToBrowser in the browser:true branch -> reds bug-272-open-external's "a thrown opener ..."
+//   (g) NO_EMBED web call site back to openWebResult(newtab) (2026-10-06 gate B) -> reds both "NO_EMBED web newtab" opener tests
 //   SURVIVOR (gate F): an `await` on handToBrowser INSIDE openYoutubeNewtab is redundant once the call
 //   site awaits the async function, so it was removed rather than kept as dead defence.
-//   NOTE: "opened:false alone fails too" was already green BEFORE the fix (an ack with no
-//   `mounted` hit the old `!ack.mounted` failure); it is pinned as an adjacent case, not a red-first one.
 //   Each applied once, diffed, restored from a copy and hash-verified.
+//
+// REMOVED 2026-10-27 (review of #156): an `ack.opened === false` branch and the two
+// tests that fed it. Nothing in production can produce that field, so the branch was
+// unreachable and the tests pinned a fabricated ack shape:
+//   - The only widgetRenderer ever installed is serverHandle.requestWidgetRender
+//     (src/main.js:930). For widgetType youtube/web under Electron it resolves null
+//     immediately (server/index.js:430) - before any ack - so openWebResult takes the
+//     silence branch.
+//   - The HUD's own ack (ui/public/js/app.js:1069-1102) carries only
+//     {mounted, unverified, surface, reason}, and the resolver at
+//     server/index.js:3867 rebuilds exactly those four keys - `opened` is dropped.
+//   - The Electron media-window ack that DOES carry `opened`
+//     (electron/main.js:982, channel 'mythos:ui.open-web-ack') has no handler in
+//     server/index.js, whose child channels are close-media-window-ack,
+//     confirm-import-answer, input-inhibit, open-external-ack, open-path-ack, ocr-grab.
+// Wiring it would not be a drop-in: handleOpenWeb returns opened:true straight after
+// loadURL (electron/media-window.js:84-86,102-104) with no did-finish-load, so
+// "accepted" is not "rendered" and mapping it onto `mounted` would fabricate
+// verification. The branch also sat BEFORE the `mounted` check, so a future
+// {opened:false, mounted:true} would have been a false failure. Deleted rather than
+// guessed at; if that ack is ever wired, the mapping belongs on the load event.
 //
 // ADJACENT CASES THAT MUST KEEP PASSING: electron mode still renders in the HUD
 // and never touches the opener; newtab mode with NO opener still goes to the
@@ -152,28 +170,6 @@ describe('BUG-468 — youtube newtab goes to the external opener', () => {
     assert.equal(res.unverified, true);
   });
 
-  describe('an explicit opened:false from the surface is a failure with its reason', () => {
-    // (d) The media window answers {opened:false, reason}. Even when the same ack
-    // also says unverified:true (which the unverified branch used to take first),
-    // an explicit "did not open" is not silence.
-    it('opened:false + unverified:true fails and names the reason', async () => {
-      global.fetch = stubFetch({ embeddable: true });
-      const { built, open_web } = build({});
-      built.setWidgetRenderer(async () => ({ opened: false, mounted: false, unverified: true, reason: 'not a media widgetType' }));
-      const res = await open_web({ type: 'youtube', query: TITLE });
-      assert.equal(res.ok, false);
-      assert.match(String(res.error || res.result), /not a media widgetType/);
-    });
-
-    it('opened:false alone fails too, with a stated reason', async () => {
-      global.fetch = stubFetch({ embeddable: true });
-      const { built, open_web } = build({});
-      built.setWidgetRenderer(async () => ({ opened: false, reason: null }));
-      const res = await open_web({ type: 'youtube', query: TITLE });
-      assert.equal(res.ok, false);
-      assert.match(String(res.error || res.result), /did not open|no reason/i);
-    });
-  });
 });
 
 // Gate B follow-up (2026-10-06): the reason ("a newtab result has no surface under
