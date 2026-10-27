@@ -141,3 +141,26 @@ describe('standby visibility', () => {
       'the caption should name the phrase the operator is meant to say');
   });
 });
+
+// 2026-10-05 — the wake word was dead on a freshly started shell with no error
+// anywhere but the renderer console: `ReferenceError: Cannot access
+// '_wakewordArming' before initialization`. The Electron load-time arm calls
+// ensureWakeWord() synchronously while app.js is still being evaluated, and the
+// `let _wakewordArming` it reads sat ~400 lines BELOW that call, so it was still
+// in its temporal dead zone. Every other test here is source-shape, so this one
+// pins the ORDER: any `let`/`const` that ensureWakeWord() reads must be declared
+// before the load-time arm block. Probe (2026-10-05): moving the declaration back
+// beside ensureWakeWord() fails test (a); adjacent case (b) keeps `wakeword`,
+// which was always early, passing.
+describe('wake word arming — module-evaluation order', () => {
+  const armAt = APP_JS.indexOf('const armInShell');
+  it('(a) _wakewordArming is declared before the load-time arm runs', () => {
+    const decl = APP_JS.indexOf('let _wakewordArming');
+    assert.ok(armAt > 0, 'armInShell block not found');
+    assert.ok(decl > 0 && decl < armAt, '_wakewordArming must be declared above armInShell (TDZ)');
+  });
+  it('(b) wakeword is declared before the load-time arm runs', () => {
+    const decl = APP_JS.indexOf('let wakeword = null');
+    assert.ok(decl > 0 && decl < armAt);
+  });
+});
