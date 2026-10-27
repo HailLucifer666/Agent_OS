@@ -1132,7 +1132,8 @@ function createServer(deps) {
     let session = null;
     let episodic = '';
     try { session = memory.fs.readJSON('Conversation/session.json', null); } catch (_) { /* no vault, or unreadable */ }
-    try { episodic = (memory.fs.readLines('Episodic/' + today + '.jsonl') || []).filter(Boolean).join('\n'); } catch (_) { /* no file yet today */ }
+    // BUG-466: raw text. readLines() returns PARSED objects, and join('\n') turned each into "[object Object]".
+    try { episodic = memory.fs.readText('Episodic/' + today + '.jsonl', ''); } catch (_) { /* unreadable file: the panel shows the session half */ }
     // Each half degrades on its own: a missing session.json still yields the
     // episodic history, and vice versa. The panel renders whatever arrives.
     res.json({ session: session, episodic: episodic });
