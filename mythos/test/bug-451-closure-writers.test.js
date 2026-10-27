@@ -104,13 +104,23 @@ describe('(4) incidents — log_incident writes the label with the record', () =
     assert.equal(byText('only offers').provenance, 'hypothesis');
   });
 
-  it('(d) a status note the model writes carries its label too', async () => {
+  it('(d) a status note the model writes carries its label too, and the label reaches the reader', async () => {
     const v = vault();
     const tools = buildTools({ fs: v.fs, semantic: v.semantic, memory: { lessons: v.lessons } });
     await tools.find((t) => t.name === 'log_incident').fn({ text: 'launch_app returned pid 0 for Notepad' });
     await tools.find((t) => t.name === 'incident_status').fn({ status: 'resolved', query: 'pid 0', note: 'fixed because the MSIX stub exits' });
     const status = incidentLines(v.dir).find((r) => r.kind === 'status');
     assert.equal(status.noteProvenance, 'hypothesis');
+    // The label used to stop at the file: readIncidents dropped noteProvenance and list_incidents
+    // never returned the note, so the write was the only thing the test could see (2026-10-27).
+    const res = tools.find((t) => t.name === 'list_incidents').fn({ status: 'resolved', limit: 10 });
+    assert.match(String(res.result.incidents[0].statusNote), /unverified/i, 'list_incidents shows the note as a suspicion');
+    // ADJACENT: a note that reports what was measured reads exactly as written.
+    await tools.find((t) => t.name === 'log_incident').fn({ text: 'launch_app returned pid 0 for Calculator' });
+    await tools.find((t) => t.name === 'incident_status').fn({ status: 'resolved', query: 'Calculator', note: 're-launched and the window appeared' });
+    const res2 = tools.find((t) => t.name === 'list_incidents').fn({ status: 'resolved', limit: 10 });
+    const plain = res2.result.incidents.find((i) => /Calculator/.test(i.text));
+    assert.equal(plain.statusNote, 're-launched and the window appeared');
   });
 });
 

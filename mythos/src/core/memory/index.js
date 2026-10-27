@@ -366,10 +366,14 @@ function createMemory({ config, bus, logger, brain }) {
                   // BUG-451 closure (2026-10-06): the 09-23 consolidated memory repeated the false
                   // cause, and the model's rewrite carried no cause marker ("...(rapid re-rendering)
                   // is resolved"), so the shape rule alone cannot see it. A distilled fact inherits
-                  // the doubt of what it was distilled from: if any record it drew on was a model
-                  // inference or stated a cause, the fact is stored as a hypothesis. Conversation
-                  // turns and sensor perceptions are the operator's words and the world's, and do
-                  // not count. Over-labels (one doubtful line doubts the whole distillation) - the
+                  // the doubt of what it was distilled from: if any record it drew on already
+                  // carried a hypothesis label (a thought whose text states a cause or a
+                  // limitation) or states one by today's rule, the fact is stored as a hypothesis.
+                  // A NEUTRAL thought does not count on its own (review, 2026-10-27): thoughts are
+                  // frequent, and labelling every distillation would make the tag meaningless.
+                  // Conversation turns and sensor perceptions are the operator's words and the
+                  // world's, and do not count either.
+                  // Over-labels (one doubtful line doubts the whole distillation) - the
                   // safe direction; the opposite error is the one the ticket is about.
                   const inheritsDoubt = highSalience.some(function(e) {
                     return e.provenance === HYPOTHESIS ||

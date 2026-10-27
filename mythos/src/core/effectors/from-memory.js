@@ -222,7 +222,7 @@ function buildTools(ctx){
       var e=lines[i];
       if(!e||!e.id) continue;
       if(e.kind==='status'){
-        if(!statusById.has(e.id)) statusById.set(e.id,{status:e.status,ts:e.ts,note:e.note||''});
+        if(!statusById.has(e.id)) statusById.set(e.id,{status:e.status,ts:e.ts,note:e.note||'',noteProvenance:e.noteProvenance});
         continue;
       }
       if(!byId.has(e.id)) byId.set(e.id,e);
@@ -257,8 +257,15 @@ function buildTools(ctx){
     }
     return ok({status:status,count:filtered.length,total:incidents.length,
       incidents:filtered.slice(0,limit).map(function(i){
-        return {id:i.id,text:labelText(i.text.slice(0,200),i.provenance),provenance:i.provenance,severity:i.severity,status:i.status,
+        var row={id:i.id,text:labelText(i.text.slice(0,200),i.provenance),provenance:i.provenance,severity:i.severity,status:i.status,
           when:new Date(i.ts).toISOString().slice(0,16).replace('T',' ')};
+        // BUG-451 closure: the status note is durable prose too, and it used to be written with
+        // a label (incident_status) that nothing ever read - readIncidents dropped the field and
+        // this tool did not return the note at all. A note written before labels existed is
+        // classified here, like every other read-time label.
+        var note=i.statusNote||'';
+        if(note) row.statusNote=labelText(note, i.noteProvenance||provenanceOf(note));
+        return row;
       })});
   }
 
