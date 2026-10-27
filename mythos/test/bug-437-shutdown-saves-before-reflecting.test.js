@@ -19,8 +19,8 @@
 //
 // What this file pins (the mechanism is in src/core/lifecycle/index.js and
 // src/core/lifecycle/shutdown-steps.js):
-//   (a) the production order: the saving steps run BEFORE reflection, and a
-//       reflection that never returns cannot stop them;
+//   (a) the production order: the four saving steps run in order, and a
+//       reflection handed in is never started (2026-10-06);
 //   (b) a stalled server drain is bounded and the steps still run;
 //   (c) a stalled step is cut at the deadline, logged as `timeout` with its
 //       elapsed time, and the sequence moves on — `complete` says clean:false;

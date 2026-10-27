@@ -763,8 +763,8 @@ async function main() {
       if (!pipelineEffector) throw new Error("server boot: effectors.get('pipeline-effector') missing — P7 must register it before P9 can serve /api/pipeline");
 
       // P4 Jarvis upgrade: the learning loop — extracts operator preferences +
-      // speaking style from conversation episodics every ~15 turns and at
-      // graceful shutdown. Best-effort: constructor deps all exist by now.
+      // speaking style from conversation episodics every ~15 turns (no pass at
+      // quit since 2026-10-06, BUG-437). Best-effort: deps all exist by now.
       reflection = createReflection({ brain: brain, memory: memory, identity: identity, config: config, logger: logger, bus: bus });
 
       // Learning loop (Layer 4): reflectOnActions was previously bound to the

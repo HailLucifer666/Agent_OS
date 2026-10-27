@@ -28,7 +28,10 @@
 // turns (identity/reflection.js), plus reflectOnActions on main.js's
 // actionReflectTimer. What IS lost: the up-to-14 turns since the last cadence
 // pass are not reflected on at quit; they are still in the episodic vault and
-// are folded in by the next session's pass. Deliberately no 'getReflection'
+// are folded in by the next session's pass - IF that pass is enabled at all
+// (BUG-464: it is off unless MEMORY_AUTO_USER_FACTS is "true", so with the
+// default the profile simply stops learning from conversation; that is the
+// operator's 2026-10-06 decision, not a silent loss). Deliberately no 'getReflection'
 // parameter: a registrar that cannot be handed reflection cannot run it.
 // Attack answers: (1) nothing else matched — the step name was unique; (2) no
 // evidence hidden — the saving steps' log lines are unchanged; (3) the only
