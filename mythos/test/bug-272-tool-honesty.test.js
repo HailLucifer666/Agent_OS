@@ -10,6 +10,7 @@
 // T4: launch_app/open_web ran against a 1500ms ack deadline while one launch
 //     legitimately took 9860ms.
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { test, describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -36,7 +37,7 @@ function withMockedPcChild(mock, fn) {
 
 const online = (launchResult) => ({
   getStatus: () => ({ state: 'ONLINE' }),
-  sendCommand: async (cmd) => {
+  sendCommand: async (cmd) => { const resolvedTarget = answersResolve(cmd); if (resolvedTarget) return resolvedTarget;
     if (cmd.cmd === 'launch_app') return { ok: true, result: launchResult };
     return { ok: true, result: {} };
   },
@@ -175,7 +176,7 @@ describe('BUG-272 T3/T4 — smaller honesty gaps', () => {
   test('focus_window names the recovery step on a stale pid', async () => {
     await withMockedPcChild({
       getStatus: () => ({ state: 'ONLINE' }),
-      sendCommand: async (cmd) => {
+      sendCommand: async (cmd) => { const resolvedTarget = answersResolve(cmd); if (resolvedTarget) return resolvedTarget;
         if (cmd.cmd === 'focus_window') {
           // The real transport shape: delegate() maps an adapter failure to
           // fail(resp.error), so the PowerShell text arrives on `error`.

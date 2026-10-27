@@ -10,7 +10,7 @@ const path = require('path');
 const fsSync = require('fs');
 const crypto = require('crypto');
 const { effectorFromTool } = require('./adapter');
-const { resolveSandboxed, isInsideAllowedRoots, allowedRoots } = require('./from-computer');
+const { resolveSandboxed, isInsideAllowedRoots, allowedRoots, isProtected } = require('./from-computer');
 const { chunkCode } = require('../memory/chunker');
 const defaultEmbeddings = require('../../../providers/embeddings');
 
@@ -21,6 +21,7 @@ const CODE_EXT = new Set(['.js', '.ts', '.py', '.md', '.json']);
 // Python packages from mythos/.venv and did not index from-pc.js at all, so
 // search_code was searching a virtualenv rather than MYTHOS. Shared now.
 const { SKIP_DIRS } = require('./file-walk');
+const { redactText } = require('./credential-scanner');
 const MAX_FILES = 2000;
 const MAX_CHUNKS = 5000;
 const MAX_FILE_BYTES = 1 * 1024 * 1024; // 1MB per file, matches from-computer.js's read_file cap
@@ -28,11 +29,12 @@ const MAX_FILE_BYTES = 1 * 1024 * 1024; // 1MB per file, matches from-computer.j
 function ok(result) { return { ok: true, result: result }; }
 function fail(reason) { return { ok: false, result: reason }; }
 
-// index_project's own default when `dir` is omitted — from-code-search.js is
-// at src/core/effectors/ — 4 levels up reaches the mythos/ project root
-// (same derivation from-computer.js's allowedRoots() fallback already uses).
+// index_project's own default when `dir` is omitted: the mythos/ folder, three
+// levels up from src/core/effectors/. Until B2d (2026-09-29) this said mythos/
+// and went FOUR levels up, to the repository root — the same slip as
+// from-computer.js's allowedRoots(), which now also stops at mythos/.
 function projectRoot() {
-  return path.resolve(__dirname, '..', '..', '..', '..');
+  return path.resolve(__dirname, '..', '..', '..');
 }
 
 // Recursive file walk capped at MAX_FILES, skipping irrelevant directories
@@ -45,6 +47,11 @@ function walk(dir, out, budget) {
   for (const entry of entries) {
     if (out.files.length >= budget) { out.truncated = true; return; }
     if (entry.isSymbolicLink()) continue;
+    // B2d: credential files and key folders are never indexed (CODE_EXT alone
+    // took .json, so keys.json and auth-sessions.json went into the index).
+    // isProtected, not protectedReason alone: it knows the settings folder, so a
+    // batch boot's mythos/config.json is left out too (B2d review, 2026-09-29).
+    if (isProtected(path.join(dir, entry.name))) continue;
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name)) continue;
       walk(path.join(dir, entry.name), out, budget);
@@ -90,7 +97,7 @@ function createCodeSearchEffector({ documents, documentsIndex, embed }) {
       try {
         const fstat = fsSync.statSync(filePath);
         if (fstat.size > MAX_FILE_BYTES) continue;
-        text = fsSync.readFileSync(filePath, 'utf8');
+        text = redactText(fsSync.readFileSync(filePath, 'utf8')); // B2d: before chunking, storing or embedding
       } catch (_) { continue; }
 
       const chunks = chunkCode(text);
@@ -150,7 +157,7 @@ function createCodeSearchEffector({ documents, documentsIndex, embed }) {
         filePath: rec.filePath,
         lineStart: rec.lineStart,
         lineEnd: rec.lineEnd,
-        snippet: String(rec.text || '').slice(0, 200),
+        snippet: redactText(String(rec.text || '')).slice(0, 200), // B2d: chunks stored before redaction existed
       });
       if (results.length >= 10) break;
     }

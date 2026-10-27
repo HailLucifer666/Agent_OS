@@ -654,7 +654,7 @@ function createLiveToolAdapter(deps) {
       if (suggestedProcedures.matches(skillRef, call.name, decision.args)) decision.skillRef = skillRef;
       let verdict;
       try {
-        verdict = leash.check(decision, { connectionId, goalId: null });
+        if (leash.prepare) await leash.prepare(decision); verdict = leash.check(decision, { connectionId, goalId: null }); // B2a: resolve, then authorize
       } catch (err) {
         logger.warn('live.leash-threw', { tool: call.name, error: err.message });
         responses.push({ id: call.id, name: call.name, response: {
@@ -666,7 +666,7 @@ function createLiveToolAdapter(deps) {
 
       if (verdict.requireConfirm) {
         const summary = `Voice: ${decision.tool}` +
-          (Object.keys(decision.args).length ? ` (${humanizeLiveArgs(decision.args)})` : '');
+          (Object.keys(decision.args).length ? ` (${humanizeLiveArgs(decision.args)})` : '') + (verdict.detail ? ' — ' + verdict.detail : ''); // B2a
         // Security-review fix: fall back to 'system' exactly like
         // voice-agent.js's executeAction() does — leash/confirm.js treats a
         // falsy connectionId as UNSCOPED (any connection may later accept it),
@@ -681,14 +681,14 @@ function createLiveToolAdapter(deps) {
         commitAction({ tool: call.name, ok: false, confirmPending: true, summary, traceId: call.id, act: describeAction(call.name, call.args) });
         responses.push({ id: call.id, name: call.name, response: {
           status: 'awaiting_human_confirmation',
-          message: `Tier ${verdict.tier} action. Tell the operator you need approval, then wait.`,
+          message: `Tier ${verdict.tier} action${verdict.detail ? ' — ' + verdict.detail : ''}. Tell the operator you need approval, then wait.`,
         }});
         continue;
       }
 
       if (!verdict.allow) {
         commitAction({ tool: call.name, ok: false, summary: `Denied: ${verdict.reason}`, traceId: call.id });
-        responses.push({ id: call.id, name: call.name, response: { status: 'denied', reason: verdict.reason } });
+        responses.push({ id: call.id, name: call.name, response: verdict.remedy ? { status: 'denied', reason: verdict.reason, remedy: verdict.remedy } : { status: 'denied', reason: verdict.reason } }); // B2a: a prepared refusal names its next tool in reason AND remedy
         continue;
       }
       const held = authorityGate.hold(call, decision, verdict, { spoken: userTextSoFar, typed: typedTextSoFar }); // BUG-461/464

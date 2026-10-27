@@ -77,7 +77,10 @@ isolation and catches this class of mistake before CI does.
 
 ## Building the desktop installer
 
-`npm run dist` (electron-builder --win) builds the packaged app. Because
+`npm run dist` builds the packaged app (`electron-builder --win --publish never`)
+and then scans what it built (`mythos/scripts/verify-package-contents.js`, below),
+writing the scan receipt `dist/package-scan.json` only if the scan is clean.
+Because
 `build.publish` points at GitHub Releases, a build also produces the
 **`latest.yml`** metadata and `.blockmap` that electron-updater polls, and
 embeds `app-update.yml` in the packaged app — so the update check is live by
@@ -98,6 +101,33 @@ One thing is opt-in via an environment variable — **never** via a tracked file
   build still *checks* for updates (a read against the releases API); what it
   cannot do is verify a downloaded installer (see below).
 
+### The package scan: what may never ship
+
+electron-builder packages the **working directory**, not the git tree, so a file
+git ignores can still land in an installer. On 2026-09-23 a local build carried
+four `.env` backups (`.env.bak-*`, `.env.pre-*.bak`) because `build.files`
+excluded only the literal `mythos/.env`.
+
+The rules now live in one place, `electron/package-policy.js`. At any depth and
+in any case: every name containing `.env` (`.env`, `.env.bak-*`, `.env~`,
+`.env - Copy`, `Nvidia NIM.env`), and `.pfx`/`.p12` certificates. At the app root
+only: `config*.json*`, `keys*.json*`, `auth-sessions*.json*` and
+`mythos-settings*.json*` (each file and the copies people make of it),
+`.browser-agent.pid`, `vault/`, `vault_test_audit_*/` and `.tmp-*/`. A copy that
+drops the name entirely (`env.txt`) is not caught, and neither is a secret pasted
+into an ordinary file: the rules read names, not contents. `build.files` and
+`mythos/.dockerignore` end with patterns generated from the policy, and
+`test/package-policy.test.js` fails if either drifts.
+
+`mythos/scripts/verify-package-contents.js` then reads the finished artifact:
+`app.asar`, `app.asar.unpacked`, `extraResources` and the NSIS installer itself
+(`--installer <file>` alone reads a published installer). Exit 0 means clean; 1
+names each forbidden file and the rule it broke; 2 means something could not be
+read, so nothing is proven. It reports names only. The only thing it extracts is
+the `app.asar` container, to read its file list; it never opens a listed file.
+If it names a file of yours, move it out of `mythos/` and build again. Do not add
+a waiver to make a release go through.
+
 ### One command: `npm run release`
 
 `scripts/release.js <patch|minor|major|x.y.z>` does the whole sequence below in
@@ -110,14 +140,27 @@ tag with no artifacts, artifacts with a stale version) is worse than none.
 It is a **dry run** until you pass `--yes`; without it, it prints the exact
 commands it would run. `--no-publish` builds and tags without uploading.
 
+The order is **build, scan, re-check origin, commit and tag, push, upload**. The
+build never uploads by itself. The scan must pass before anything is committed,
+so a red scan leaves only the bumped version line in `package.json`
+(`git checkout -- package.json` undoes it). origin/main is checked again after
+the build, because the build takes minutes and another machine may push. The
+upload (`scripts/publish-scanned-release.js`) sends only the files the scan's
+receipt (`dist/package-scan.json`) names. It re-hashes each file first, then
+reads GitHub's own SHA-256 for every uploaded file back. It **never replaces a
+file on a published release**: onto an existing release it adds only the files
+that are missing, succeeds without uploading if the release already holds the
+scanned bytes, and refuses if any file there differs — to change a published
+file, cut a new version. Each step that can fail prints its own recovery.
+
 **The route that needs no personal token: `--ci`.**
 
 ```
 node scripts/release.js patch --yes --ci
 ```
 
-This bumps, commits, tags, builds locally as a smoke test, and pushes the branch
-and the tag — then `.github/workflows/release.yml` does the upload on the tag
+This bumps, builds and scans locally as a smoke test, commits, tags, and pushes
+the branch and the tag — then `.github/workflows/release.yml` does the upload on the tag
 push, using the `GITHUB_TOKEN` that GitHub scopes to this repository
 automatically. Nothing to mint, store, or rotate, and no dependency on which
 account the local `gh` happens to be logged in as. With `--ci`, a missing
@@ -137,13 +180,15 @@ build is how an evening gets lost.
 
 ### Publishing a release that the update check can actually see
 
-1. **Tag the release.** electron-builder's default publish policy is
-   `onTagOrDraft`: a plain `npm run dist` on an untagged commit builds the
-   artifacts and never attempts an upload. Publishing happens when the build
-   runs on a tagged commit with `GH_TOKEN` set, or explicitly with
-   `npx electron-builder --win --publish always`. `GH_TOKEN` comes from the
-   environment — never from a tracked file. The GitHub provider uploads the
-   installer, its `.blockmap`, and `latest.yml` together as a release; keep
+1. **Tag the release, and upload only what was scanned.** Every build route
+   passes `--publish never`. Without that flag electron-builder decides for
+   itself, and it decides to upload under `npm run release` and on any CI run
+   that can see a tag, which skips the scan. Never run
+   `electron-builder --publish always`. The upload is
+   `node scripts/publish-scanned-release.js <tag>`, after a clean scan.
+   `GH_TOKEN` comes from the environment, never from a tracked file. The
+   installer, its `.blockmap` and `latest.yml` are uploaded together, under the
+   names `latest.yml` tells the updater to fetch; keep
    them together, because a `latest.yml` naming a file that is not beside it
    is how an update check "succeeds" and then fails at download time.
 2. **Bump `version` in package.json** for each release. electron-updater

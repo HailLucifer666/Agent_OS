@@ -23,6 +23,7 @@
 // cross-check itself rather than Windows behaviour. The real desktop path is
 // covered by scripts/verify-notepad-typing.js.
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 
@@ -37,7 +38,7 @@ function withFakeChild(handler) {
     startPcChild: async () => {},
     shutdownPcChild: async () => {},
     getStatus: () => ({ state: 'ONLINE', hint: '', queueDepth: 0 }),
-    sendCommand: async (cmd) => {
+    sendCommand: async (cmd) => { const resolvedTarget = answersResolve(cmd); if (resolvedTarget) return resolvedTarget;
       fake.calls.push(cmd);
       return handler(cmd, fake.calls);
     },

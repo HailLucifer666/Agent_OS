@@ -24,6 +24,7 @@ var MAX_CHARS = 4000;
 // they are written and diverge silently afterwards. The local aliases below
 // keep every call site in this file — and its whole test suite — unchanged.
 const { isPrivateAddress, isBlockedHostname, embeddedIPv4, guardedLookup } = require('./net-address');
+const { secretInOutbound, outboundRefusal } = require('./outbound-secret');
 const isPrivateIp = isPrivateAddress;
 
 async function isInternalUrl(raw) {
@@ -213,6 +214,14 @@ var MAX_REDIRECTS = 5;
 async function guardedFetch(startUrl, init) {
   var current = startUrl;
   for (var hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    // B2d: a redirect can carry a credential the first URL did not, so every hop
+    // is checked, and a hit is "blocked" like an SSRF hop — no Jina retry.
+    var carried = secretInOutbound(current);
+    if (carried) {
+      var leak = new Error('blocked: ' + outboundRefusal('that request', carried));
+      leak.ssrfBlocked = true;
+      throw leak;
+    }
     if (await isInternalUrl(current)) {
       var blocked = new Error("blocked: redirect targets a private or internal network");
       blocked.ssrfBlocked = true;
@@ -240,6 +249,9 @@ async function web_fetch({ url }) {
   if (!url || !String(url).trim()) return { ok: false, error: 'A URL is required.' };
   var raw = String(url).trim();
   if (!/^https?:\/\//i.test(raw)) return { ok: false, error: 'URL must start with http:// or https://' };
+  // B2d: before the request — and before the Jina fallback could send it on.
+  var carriedAtStart = secretInOutbound(raw);
+  if (carriedAtStart) return { ok: false, error: outboundRefusal('that URL', carriedAtStart) };
 
   // SSRF guard: reject URLs targeting internal/private networks
   if (await isInternalUrl(raw)) {

@@ -9,6 +9,7 @@
 // Resolve-UIAElement and needs a real UIA tree to exercise — not covered here;
 // see the comment in that file for the fix (retry-once + candidate labels).
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -39,7 +40,7 @@ test('BEFORE-this-fix behavior would be: a dead pid returns the raw focus failur
   const calls = [];
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj.cmd);
       // 'calc' (not 'notepad') deliberately — SESSION_RESTORING_APPS would make
       // launch_app itself call focus_window for the fresh-document flow, which
@@ -80,7 +81,7 @@ test('a focus miss that succeeds on the retry proceeds normally (the retry is no
   let focusAttempt = 0;
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj.cmd);
       if (cmdObj.cmd === 'focus_window') {
         focusAttempt++;
@@ -113,7 +114,7 @@ test('a focus miss that succeeds on the retry proceeds normally (the retry is no
 test('ui_click does not turn "still foreground" into a verified click', async () => {
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_click') return { ok: true, result: { clicked: true, invoked: true } };
       if (cmdObj.cmd === 'get_foreground_window') return { ok: true, result: { pid: 4242, title: 'Notepad' } };
@@ -131,7 +132,7 @@ test('ui_click does not turn "still foreground" into a verified click', async ()
 test('ui_click reports unverified (never a bare ok:true) when the foreground check cannot confirm the target', async () => {
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_click') return { ok: true, result: { clicked: true, invoked: true } };
       // The click apparently switched focus away from the target entirely.
@@ -154,7 +155,7 @@ test('ui_click reports unverified (never a bare ok:true) when the foreground che
 test('ui_type into a console host (cmd.exe) is unverified, never graded a failure, even though the raw readBack looks like a mismatch', async () => {
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_type') {
         // Real incident shape: pid 9152, mechanism sendinput-unicode, correct
@@ -195,7 +196,7 @@ test('ui_type into a console host (cmd.exe) is unverified, never graded a failur
 test('ui_type accepts a WebView2 renderer child as the target app (typedIntoSameApp), instead of refusing a landed message', async () => {
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_type') {
         return {
@@ -226,7 +227,7 @@ test('ui_type accepts a WebView2 renderer child as the target app (typedIntoSame
 test('ui_type still refuses a genuinely different app, even when the pid mismatch looks identical', async () => {
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_type') {
         return {
@@ -264,7 +265,7 @@ test('ui_type with no typedIntoSameApp field: a REAL different app still fails, 
   // hard failure it became on 2026-08-10 — pinned above.
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_type') {
         // First ui_type lands in a real named app; second in the WebView2
@@ -298,7 +299,7 @@ test('ui_type with no typedIntoSameApp field: a REAL different app still fails, 
 test('ui_type into a normal (non-console) app is unaffected — a real mismatch still fails', async () => {
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_type') {
         return {

@@ -55,6 +55,28 @@ const { EventEmitter } = require('node:events');
 const ADAPTER_PATH = path.resolve(__dirname, '../adapters/cua-driver/index.js');
 const FROM_CUA_PATH = path.resolve(__dirname, '../src/core/effectors/from-cua.js');
 
+// B2e (2026-09-30): cua-driver's door asks pc-child which window a click reaches
+// before it sends one (adapters/cua-driver/index.js, inputGate). These tests are
+// about the driver's timeouts, so pc-child answers that pid 1 is an ordinary
+// window; the door itself is tested in input-gate.test.js.
+const { before: beforeAll, after: afterAll } = require('node:test');
+const pcChildForDoor = require('../adapters/pc-child');
+beforeAll(async () => {
+  await pcChildForDoor.startPcChild({ spawnImpl: () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => {};
+    child.stdin = { write: (s) => {
+      const c = JSON.parse(s);
+      const result = c.cmd === 'input_target' ? { windows: [{ role: 'the target window', kind: 'ordinary', why: '', hwnd: 1, pid: 1, start: '1', process: 'spotify', title: 'Spotify' }] } : {};
+      queueMicrotask(() => child.stdout.emit('data', Buffer.from(JSON.stringify({ id: c.id, ok: true, result }) + '\n')));
+    } };
+    return child;
+  } });
+});
+afterAll(() => pcChildForDoor.shutdownPcChild());
+
 // A cua-driver that answers the MCP handshake and then goes deaf. Every
 // tools/call is swallowed, which is exactly the wedged-driver shape the timeout
 // exists for.
