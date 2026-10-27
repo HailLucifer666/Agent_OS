@@ -1536,6 +1536,11 @@ function registerFromBrowser(hub, ctx) {
 module.exports = {
   registerFromBrowser,
   _buildLaunchResult: buildLaunchResult, // tests (BUG-345 caveat)
+  // The un-wrapped definitions. `TOOLS` below is wrapped with a hardcoded
+  // no-bridge probe (it is a module-level export, so it has no runtime to ask),
+  // which makes it unable to show whether `target` WOULD be offered. Schema
+  // tests that need both states wrap this instead - BUG-462 review, 2026-10-27.
+  RAW_TOOLS: TOOLS,
   TOOLS: require('./browser-driver-tools').withBrowserDriver(TOOLS),
   browser_navigate, browser_click, browser_type, browser_screenshot, browser_get_title,
   browser_get_text, browser_scroll, browser_tabs, browser_go_back, browser_evaluate,
