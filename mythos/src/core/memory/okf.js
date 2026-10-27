@@ -32,6 +32,22 @@
 
 var RESERVED_FILENAMES = ['index.md', 'log.md'];
 
+// Windows device names (2026-09-29 audit, B2b). Measured on this Windows 11
+// build (25H2) the same day, and corrected after independent review: only BARE
+// names are still devices here. cmd cannot create or open a file called "aux";
+// Node, which reaches the disk through \\?\ paths that skip the device rules,
+// creates one that cmd then lists but cannot open. With an extension ("con.md",
+// "COM0.md") cmd creates, reads and deletes an ordinary file. Windows 10 and
+// older treat "NUL.txt" as NUL — Microsoft's naming documentation says so; not
+// measured here — and a vault moves between machines, so the extension forms
+// are refused as well, along with trailing spaces before the extension and the
+// COM/LPT digits that documentation lists (0-9 and the superscripts ¹²³).
+var WINDOWS_DEVICE_NAME = /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3]|conin\$|conout\$)\s*(\..*)?$/i;
+
+function isWindowsDeviceName(name) {
+  return WINDOWS_DEVICE_NAME.test(String(name || ''));
+}
+
 // ---------------------------------------------------------------------------
 // Scalar encoding
 // ---------------------------------------------------------------------------
@@ -216,8 +232,13 @@ function parse(text) {
   return { ok: true, doc: doc };
 }
 
-// A concept filename inside a bundle. Reserved names are refused rather than
-// silently renamed — a caller that meant to write the index should say so.
+// A concept filename GENERATED from a title. A title is not a filename, so a slug
+// that lands on a reserved OKF name (index.md, log.md) or a Windows device name
+// (con.md, nul.md, com1.md) is suffixed, never refused. A filename the caller
+// SUPPLIES is the opposite case: from-okf.js refuses a reserved one rather than
+// renaming it, because silently rewriting a name somebody asked for is how a
+// guard becomes a surprise. (This comment used to say reserved names were
+// refused here; the code has always renamed them.)
 function conceptFilename(title) {
   var slug = String(title || '')
     .toLowerCase()
@@ -226,7 +247,7 @@ function conceptFilename(title) {
     .slice(0, 80);
   if (!slug) slug = 'concept';
   var name = slug + '.md';
-  if (RESERVED_FILENAMES.indexOf(name) !== -1) name = slug + '-concept.md';
+  if (RESERVED_FILENAMES.indexOf(name) !== -1 || isWindowsDeviceName(name)) name = slug + '-concept.md';
   return name;
 }
 
@@ -239,6 +260,7 @@ module.exports = {
   parse: parse,
   conceptFilename: conceptFilename,
   isReservedFilename: isReservedFilename,
+  isWindowsDeviceName: isWindowsDeviceName,
   RESERVED_FILENAMES: RESERVED_FILENAMES,
   // Exported for tests:
   _encodeScalar: encodeScalar,

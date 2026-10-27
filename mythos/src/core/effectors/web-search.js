@@ -27,6 +27,7 @@ var EXA_SEARCH_URL = 'https://api.exa.ai/search'
 // its file-size ratchet ceiling, and their shared SSE frame reader is a
 // correctness concern in its own right (see mcp-search.js).
 var mcpSearch = require('./mcp-search')
+var { secretInOutbound, outboundRefusal } = require('./outbound-secret')
 var exaMcpSearch = mcpSearch.exaMcpSearch
 var parseExaMcpText = mcpSearch.parseExaMcpText
 var youMcpSearch = mcpSearch.youMcpSearch
@@ -437,6 +438,9 @@ async function web_search({ query, maxResults, bus }) {
   try {
     if (!query || !String(query).trim()) return { ok: false, result: 'A search query is required.' }
     var q = String(query).trim()
+    // B2d: a query is sent to a search provider as-is — a credential in it leaves.
+    var carried = secretInOutbound(q)
+    if (carried) return { ok: false, result: outboundRefusal('that search', carried) }
     var max = Math.min(maxResults || 5, 10)
 
     // BUG-276 F4 (2026-08-20) — WHAT WAS TRIED, AND WHY EACH ONE FAILED.

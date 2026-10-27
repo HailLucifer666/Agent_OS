@@ -7,6 +7,7 @@
 // focused. This file covers the defaulting behavior itself — the retry
 // mechanics are already covered by from-pc-ui-type-retry.test.js.
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -33,7 +34,7 @@ test('ui_type with no pid defaults to the pid of the immediately preceding launc
   const calls = [];
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj);
       if (cmdObj.cmd === 'launch_app') return { ok: true, result: { pid: 5555, launched: true } };
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
@@ -59,7 +60,7 @@ test('ui_click with no pid defaults to the pid of the immediately preceding laun
   const calls = [];
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj);
       if (cmdObj.cmd === 'launch_app') return { ok: true, result: { pid: 7777, launched: true } };
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
@@ -84,7 +85,7 @@ test('an explicit pid always wins over lastLaunchedPid (backward compatibility)'
   const calls = [];
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj);
       if (cmdObj.cmd === 'launch_app') return { ok: true, result: { pid: 1111, launched: true } };
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
@@ -106,7 +107,7 @@ test('ui_type with no pid and no prior launch_app in this module instance still 
   const calls = [];
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj);
       if (cmdObj.cmd === 'ui_type') return { ok: true, result: { typed: true } };
       throw new Error('unexpected cmd: ' + cmdObj.cmd);
@@ -141,7 +142,7 @@ test('ui_type with a garbage non-numeric pid and a prior launch_app falls back t
   const calls = [];
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj);
       if (cmdObj.cmd === 'launch_app') return { ok: true, result: { pid: 5555, launched: true } };
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
@@ -166,7 +167,7 @@ test('ui_type with a numeric-string pid and no prior launch_app coerces it to a 
   const calls = [];
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj);
       if (cmdObj.cmd === 'focus_window') return { ok: true, result: { focused: true } };
       if (cmdObj.cmd === 'ui_type') return { ok: true, result: { typed: true } };
@@ -186,7 +187,7 @@ test('ui_type with a garbage non-numeric pid and no prior launch_app falls back 
   const calls = [];
   await withMockedPcChild({
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       calls.push(cmdObj);
       if (cmdObj.cmd === 'ui_type') return { ok: true, result: { typed: true } };
       throw new Error('unexpected cmd: ' + cmdObj.cmd);

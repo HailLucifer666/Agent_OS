@@ -182,7 +182,7 @@ test('the update state reaches the HUD as strings on one named channel, and inst
     'the HUD button needs a channel to install through');
   const handler = /ipcMain\.handle\('mythos:install-update'[\s\S]*?\n\}\);/.exec(text);
   assert.ok(handler, 'the install handler must exist');
-  assert.match(handler[0], /isHudContents\(event\.sender\)/,
+  assert.match(handler[0], /hudTrust\.ipc\(event\)\.ok/, // window, frame and document since 2026-09-29 (B3a)
     'only the real HUD window may trigger an install — media-window.js loads caller-supplied URLs ' +
     'through the same preload (see the B2/H6 comment in main.js)');
   assert.doesNotMatch(handler[0], /event,\s*\w+/,

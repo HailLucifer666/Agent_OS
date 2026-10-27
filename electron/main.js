@@ -59,6 +59,10 @@ const { resolveVaultRoot, adoptSiblingVault, adoptSiblingUserDataFiles } = requi
 const { recryptForeignStore } = require('./keystore-recrypt');
 const { createNoWindowRelaunchPrompt } = require('./relaunch-no-window');
 const { rotateLogIfOver } = require('./log-rotate');
+const { createHudTrust, hudOriginFor } = require('./hud-trust');
+// B3b: a native confirmation before any key or setting changes (see the file).
+const { createSettingsConfirm, createChildInputInhibit, isProviderKeyName, refusalFor, NOT_A_KEY } = require('./settings-confirm');
+const { registerSettingsIpc } = require('./settings-ipc');
 const settingsStore = require('../mythos/src/core/config/settings-store');
 
 // ---- ONE app identity -----------------------------------------------------------
@@ -369,7 +373,7 @@ async function waitForLateReady() {
     return;
   }
   log(`mythos server became ready ${Date.now() - startedAt}ms late — reloading the window.`);
-  try { mainWindow.loadURL(`http://${BIND}:${PORT}`); }
+  try { mainWindow.loadURL(hudTrust.documentUrl()); }
   catch (err) { log('late reload failed:', err && err.message); }
 }
 
@@ -533,18 +537,17 @@ let isQuitting = false;
 // installer handover already did the quit-time work".
 let installerHandover = false;
 
-// security-reviewer B2/H6 (2026-08-08): the key-store IPC channels below used to
-// answer ANY sender holding a contextBridge handle to this preload — including
-// electron/media-window.js's window, which loadURL()s a caller-supplied URL (the
-// open_web tool, Tier 0 auto-allowed — see mythos/src/core/effectors/from-dashboard.js
-// and mythos/src/core/leash/tiers.js) and can therefore run arbitrary third-party
-// JS. That page could call window.mythos.setKey('GEMINI_API_KEY', attacker_key)
-// and reroute all model traffic. isHudContents is the SAME trust boundary the
-// 2026-08-05 mic/screen-capture review already applies (see the permission and
-// display-media grant handlers further down) — only the one real BrowserWindow
-// loading the loopback HUD counts. Kept at module scope so the handlers registered below
-// can use it, and moved (not duplicated) out of the whenReady() block, where the
-// mic/screen handlers now reference this same instance instead of a second copy.
+// Who counts as the HUD (security-reviewer B2/H6, 2026-08-08; widened 2026-09-29,
+// audit B3a). The key-store and settings IPC, mic/camera permission, screen
+// capture and HUD-window navigation all ask hudTrust (electron/hud-trust.js),
+// which checks the window, the frame AND the document. The media window loads
+// caller-supplied URLs (open_web), so "any sender holding this preload" was never
+// a boundary. The window-only check this replaces granted mic permission to an
+// iframe inside the HUD and let a /vault/builds page load in the HUD window (both
+// measured). NOT closed here: a same-origin iframe calling the bridge through
+// window.parent reports the MAIN frame (measured), and the preload runs only in the
+// main frame, so the IPC 'subframe' refusal is a backstop. Isolating generated
+// pages from the HUD origin (B3c) closes that. isHudContents: log line above only.
 const isHudContents = (wc) => {
   try {
     return !!(wc && mainWindow && !mainWindow.isDestroyed() && wc === mainWindow.webContents);
@@ -552,6 +555,19 @@ const isHudContents = (wc) => {
     return false; // a destroyed window mid-teardown is not the HUD
   }
 };
+const hudTrust = createHudTrust({ // hudOriginFor never throws: this runs while main.js loads
+  getHudWebContents: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
+  origin: hudOriginFor(BIND, PORT),
+});
+
+// B3b (2026-09-29 audit): native confirmations, input refused while open (./settings-confirm.js).
+const childInputInhibit = createChildInputInhibit({ getChild: () => child, log });
+const settingsConfirm = createSettingsConfirm({
+  // dialog is required at the use site, like shell/session/screen elsewhere here.
+  showMessageBox: (...args) => require('electron').dialog.showMessageBox(...args),
+  getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+  inhibitInput: childInputInhibit.inhibit,
+});
 
 // Denylist for env-injection vectors: `name` is written verbatim into the
 // forked server child's env (see decryptedKeysForChild()/startChild()), and the
@@ -572,21 +588,24 @@ ipcMain.handle('mythos:set-key', async (event, name, value) => {
   // B2: only the HUD's own webContents may touch the key store. Throw loudly —
   // a silent {ok:false} reads as "it ran but did nothing", which is exactly the
   // quiet failure an attacker page depends on to keep probing unnoticed.
-  if (!isHudContents(event.sender)) {
+  if (!hudTrust.ipc(event).ok) {
     throw new Error('mythos:set-key: denied — sender is not the HUD window');
   }
-  // security-reviewer MEDIUM: validate the name charset/length and reject the
-  // prototype-poisoning reserved names. name becomes a child env var verbatim,
-  // so keep it to a conservative identifier shape.
+  // security-reviewer MEDIUM: validate the name charset/length and reject reserved names.
+  // name becomes a child env var verbatim, so keep it to a conservative identifier shape.
   if (typeof name !== 'string' || !/^[A-Za-z0-9_]{1,64}$/.test(name)) {
     return { ok: false, error: 'invalid key name (use letters, digits, underscore; max 64)' };
   }
   if (ENV_INJECTION_DENYLIST.has(name.toUpperCase())) {
     return { ok: false, error: 'this key name is reserved (env-injection vector) and cannot be stored' };
   }
+  if (!isProviderKeyName(name)) return { ok: false, error: NOT_A_KEY }; // B3b review: settings-confirm.js
   if (typeof value !== 'string') {
     return { ok: false, error: 'invalid key value' };
   }
+  // B3b: a native dialog naming the key (never its value) answers 'yes', 'no' or 'busy'.
+  const keyAnswer = await settingsConfirm.confirmKey(name);
+  if (keyAnswer !== 'yes') return { ok: false, error: refusalFor(keyAnswer) };
   const store = loadStore();
   if (safeStorage.isEncryptionAvailable()) {
     // security-reviewer HIGH: serialize the Buffer as base64, not as JSON's
@@ -602,14 +621,14 @@ ipcMain.handle('mythos:set-key', async (event, name, value) => {
 });
 
 ipcMain.handle('mythos:get-key-names', async (event) => {
-  if (!isHudContents(event.sender)) {
+  if (!hudTrust.ipc(event).ok) {
     throw new Error('mythos:get-key-names: denied — sender is not the HUD window');
   }
   return Object.keys(loadStore());
 });
 
 ipcMain.handle('mythos:has-key', async (event, name) => {
-  if (!isHudContents(event.sender)) {
+  if (!hudTrust.ipc(event).ok) {
     throw new Error('mythos:has-key: denied — sender is not the HUD window');
   }
   if (typeof name !== 'string') return false;
@@ -632,7 +651,7 @@ ipcMain.handle('mythos:has-key', async (event, name) => {
 // check as the key channels — a page that could trigger server restarts at will
 // would have a cheap denial-of-service.
 ipcMain.handle('mythos:restart-server', async (event) => {
-  if (!isHudContents(event.sender)) {
+  if (!hudTrust.ipc(event).ok) {
     throw new Error('mythos:restart-server: denied — sender is not the HUD window');
   }
   if (child) {
@@ -661,49 +680,9 @@ function settingsPath() {
   return path.join(app.getPath('userData'), 'config.json');
 }
 
-// Reading is a value-returning channel, which the key store deliberately does
-// NOT have (AD-8). That is not a contradiction: these keys are non-secret by
-// construction, and settings-store.js's own secret filter is applied again here
-// so a hand-written secret in config.json still never reaches the renderer.
-ipcMain.handle('mythos:get-settings', async (event) => {
-  if (!isHudContents(event.sender)) {
-    throw new Error('mythos:get-settings: denied — sender is not the HUD window');
-  }
-  const read = settingsStore.readSettings({ settingsPath: settingsPath() });
-  const values = {};
-  for (const [name, value] of Object.entries(read.values)) {
-    if (settingsStore.isSecretShaped(name)) continue; // presence is the server's story to tell
-    values[name] = value;
-  }
-  return {
-    file: read.file,
-    values,
-    unknown: read.unknown,
-    dropped: read.dropped,
-    error: read.error || null,
-  };
-});
-
-ipcMain.handle('mythos:set-setting', async (event, name, value) => {
-  if (!isHudContents(event.sender)) {
-    throw new Error('mythos:set-setting: denied — sender is not the HUD window');
-  }
-  // The name lands verbatim in the child's env at fork() (startChild below), so
-  // the env-injection denylist that guards mythos:set-key guards this too. In
-  // practice no schema key collides with it, which is exactly why the check must
-  // be here rather than assumed.
-  if (typeof name === 'string' && ENV_INJECTION_DENYLIST.has(name.toUpperCase())) {
-    return { ok: false, error: 'this key name is reserved (env-injection vector) and cannot be stored' };
-  }
-  const res = settingsStore.writeSetting({ name, value, settingsPath: settingsPath() });
-  if (!res.ok) return res;
-  // Deliberately does NOT restart the server. The wizard/panel calls
-  // mythos:restart-server once, after a batch of edits — one re-fork for ten
-  // changed keys, not ten. Saying "saved" while the running child still has the
-  // old value is the same dishonesty interpretStoreResult already refuses, so
-  // the flag is returned rather than hidden.
-  return { ok: true, needsRestart: true, cleared: res.cleared === true };
-});
+// The settings channels (get-settings, set-setting, set-settings) live in
+// ./settings-ipc.js since B3b gave every write a native confirmation.
+registerSettingsIpc({ ipcMain, hudTrust, settingsStore, settingsPath, settingsConfirm, ENV_INJECTION_DENYLIST });
 
 // Stage 5 (BUG-075) — routes 'ui.open-web' (relayed from the server child over
 // the fork() IPC channel below — see server/index.js's process.send() call in
@@ -870,7 +849,7 @@ function startChild() {
     cwd: MYTHOS_DIR,
     env: {
       ...process.env,
-      ...decryptedKeysForChild(),
+      ...decryptedKeysForChild(), ...childInputInhibit.envFor(),
       MYTHOS_VAULT_ROOT: vaultRoot,
       // Installer parity — where the child reads its non-secret settings.
       // Injected rather than derived server-side because only the main process
@@ -982,6 +961,8 @@ function startChild() {
   // closes it and acks back so close_panel can report what really happened.
   child.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return;
+    if (childInputInhibit.handles(msg)) return; // mythos:input-inhibit-ack / -sync (settings-confirm.js)
+    if (msg.channel === 'mythos:confirm-import') { settingsConfirm.confirmImport(msg.summary).then((answer) => { try { child.send({ channel: 'mythos:confirm-import-answer', answer }); } catch (_) { /* the server times out as Cancel */ } }); return; }
     if (msg.channel === 'mythos:ocr-result') {
       // BUG-268 D4 (2026-09-16): the OCR hotkey's result, toasted and copied
       // from HERE because the HUD is unfocused when the hotkey fires and the
@@ -1098,7 +1079,7 @@ function startChild() {
 
 function stopChild() {
   if (!child) return;
-  const dying = child;
+  const dying = child; childInputInhibit.track(dying);
   child = null;
   // BUG-437 (2026-09-16): this used to be `dying.kill()` and then the
   // awaitChildExit ladder (BUG-225). On Windows kill() is TerminateProcess — no
@@ -1366,7 +1347,7 @@ function sendUpdateState() {
 // renderer-supplied version or path would be a way for a page to choose what
 // gets executed.
 ipcMain.handle('mythos:install-update', async (event) => {
-  if (!isHudContents(event.sender)) {
+  if (!hudTrust.ipc(event).ok) {
     throw new Error('mythos:install-update: denied — sender is not the HUD window');
   }
   if (updateState.state === 'ready' && updaterRef) {
@@ -2079,21 +2060,21 @@ if (!gotLock) {
     // so isolating that window would silently disable ad blocking for exactly the
     // surface that shows ads (see BUG-115, where an ad blocker that was never
     // present got debugged as though it were misconfigured).
-    // isHudContents is now declared at module scope (shared with the key-store
-    // IPC handlers above, B2/H6 fix) — no local redefinition here.
-    session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
+    // hudTrust (module scope, shared with the IPC handlers) decides both: the HUD
+    // window's main document only — an iframe inside it is refused (measured).
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
       const allowed = ['media', 'audioCapture', 'microphone'];
       // Mic capture belongs to the HUD alone. The media window plays audio, which
       // needs no permission at all — only CAPTURE does.
-      callback(allowed.includes(permission) && isHudContents(wc));
+      callback(allowed.includes(permission) && hudTrust.permissionRequest(wc, details).ok);
     });
     // Pre-seed the permission so getUserMedia doesn't even have to ask:
-    session.defaultSession.setPermissionCheckHandler((wc, permission) => {
+    session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
       const allowed = ['media', 'audioCapture', 'microphone', 'display-capture'];
       if (!allowed.includes(permission)) return false;
       // display-capture is the whole desktop; a blanket true here let any
       // webContents on this session pre-seed it and skip the request handler.
-      return isHudContents(wc);
+      return hudTrust.permissionCheck(wc, details).ok;
     });
 
     // --- Screen share for Live video (Slice 3, spine §13's desktopCapturer) ---
@@ -2134,15 +2115,9 @@ if (!gotLock) {
         // Fails CLOSED when the mapping is unavailable (older Electron without
         // webContents.fromFrame): for a whole-desktop capture, refusing a request
         // we cannot attribute is the only defensible default.
-        let requester = null;
-        try {
-          if (request && request.frame && webContents && typeof webContents.fromFrame === 'function') {
-            requester = webContents.fromFrame(request.frame);
-          }
-        } catch (_) { requester = null; }
-        if (!isHudContents(requester)) {
-          log('display-media: DENIED — request did not come from the HUD window'
-            + (requester ? '' : ' (requester could not be identified)'));
+        const verdict = hudTrust.displayMedia(request, webContents);
+        if (!verdict.ok) {
+          log(`display-media: DENIED — request did not come from the HUD's own document (${verdict.reason})`);
           callback({});
           return;
         }
@@ -2260,7 +2235,7 @@ if (!gotLock) {
     // resolveAuthTokenForPriming/primeAuthSession above), and never fatal —
     // a failed prime just leaves the existing gate exactly as it was.
     await primeAuthSession(mainWindow, resolveAuthTokenForPriming(), PORT);
-    mainWindow.loadURL(`http://${BIND}:${PORT}`);
+    mainWindow.loadURL(hudTrust.documentUrl());
     if (!ready) waitForLateReady();
 
     // The launch that follows an update has no foreground rights (NSIS starts
@@ -2307,14 +2282,13 @@ if (!gotLock) {
     // will-navigate — would carry that preload's trust to whatever page loads
     // next. Only the HUD's own origin may load in this window; everything else
     // is denied (the in-app web panel/media window are the correct paths for
-    // external content and are unaffected).
-    const hudOrigin = `http://${BIND}:${PORT}`;
-    mainWindow.webContents.on('will-navigate', (navEvent, url) => {
-      if (!url.startsWith(hudOrigin)) {
-        navEvent.preventDefault();
-        log('will-navigate: denied navigation away from the HUD origin to', url);
-      }
-    });
+    // external content and are unaffected). hudTrust.navigation, not a prefix
+    // compare: startsWith admitted :44780, user@host tricks and /vault/builds pages.
+    const denyForeignHudLoad = (navEvent, url) => { // will-redirect fires for iframes too; only the main frame carries the preload
+      if (navEvent.isMainFrame !== false && !hudTrust.navigation(url).ok) { navEvent.preventDefault(); log('HUD navigation denied — not a HUD document:', url); }
+    };
+    mainWindow.webContents.on('will-navigate', denyForeignHudLoad);
+    mainWindow.webContents.on('will-redirect', denyForeignHudLoad);
 
     mainWindow.on('closed', () => {
       mainWindow = null;
@@ -2431,7 +2405,7 @@ const talkHotkeyLatch = createHotkeyLatch({
 // The renderer's ready signal — its onHotkey listener is registered, so the
 // latch may flush. Payload-free by design (preload's notifyReady sends nothing),
 // so nothing structured can ride this channel into the main process either.
-ipcMain.on('mythos:renderer-ready', () => talkHotkeyLatch.markReady());
+ipcMain.on('mythos:renderer-ready', (event) => { if (hudTrust.ipc(event).ok) talkHotkeyLatch.markReady(); });
 
 function talkHotkeyCandidates() {
   const configured = String(process.env.MYTHOS_HOTKEY_TALK || '').trim();

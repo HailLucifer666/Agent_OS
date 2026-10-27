@@ -3008,7 +3008,8 @@ includes pages inside the app.
 
 **Fix.** `createCrossOriginGuard` in `src/core/server/boot-guards.js`, mounted on `/api` before CORS and every
 handler. A browser-shaped request is refused when its `Origin` names neither this request's own Host nor an
-`ALLOWED_ORIGINS` entry (the scheme is not compared, so a TLS-terminating proxy still works; `Origin: null` never
+`ALLOWED_ORIGINS` entry (the scheme was not compared until 2026-09-29; since audit step B3a it is, so a TLS-terminating proxy
+lists its https:// origin on `ALLOWED_ORIGINS`, as the WebSocket already required; `Origin: null` never
 parses to a host), or when `Sec-Fetch-Site` is anything but `same-origin` or `none`. `same-site` is refused on
 purpose: another localhost port is same-site. A non-browser client sends neither header and is unaffected.
 

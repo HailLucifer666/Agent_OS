@@ -23,10 +23,15 @@ const pcChild = require('../../../adapters/pc-child');
 // second pattern — see resolveSandboxed()'s vault branch below for why this file
 // needed it too.
 const { vaultRelativePath } = require('./vault-url');
+const { openUrlExternally } = require('./open-url');
+const { readHead, realpathOrNull, nearestExistingAncestor } = require('./file-walk');
+const readAccess = require('./read-access-policy');
+const { redactText, redactCounted } = require('./credential-scanner');
 
 const MAX_LIST_ENTRIES = 50;
 const MAX_READ_BYTES = 1 * 1024 * 1024; // 1MB cap
 const READ_HEAD_BYTES = 16 * 1024; // 16KB head for summarization
+const REDACT_MARGIN_BYTES = 8 * 1024; // B2d: read past the head so redaction sees a whole key at the cut
 const MAX_EMAIL_BODY_CHARS = 1800;
 
 const RESERVED_DEVICE_NAMES = new Set([
@@ -42,21 +47,52 @@ function fail(reason) {
   return { ok: false, result: reason };
 }
 
+// B2d (2026-09-29 audit): mythos/ (three levels up — it was documented as mythos/
+// and resolved FOUR levels up, to the repository root), the vault, and the
+// operator's content folders instead of the whole profile. The rule and its
+// reasons live in read-access-policy.js computeRoots(); what it rejected is kept
+// for the refusal text.
+let rejectedRoots = [];
 function allowedRoots() {
-  const raw = process.env.VOICE_ALLOWED_DIRS || '%USERPROFILE%';
-  const roots = raw
-    .split(';')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => s.replace(/%USERPROFILE%/gi, os.homedir()))
-    .map((s) => path.resolve(s));
-  // Always include the project root so the cortex can read its own source tree.
-  // from-computer.js is at src/core/effectors/ — 4 levels up reaches the mythos/ root.
-  var projectRoot = path.resolve(__dirname, '..', '..', '..', '..');
-  if (!roots.some(function(r) { return path.resolve(r) === projectRoot; })) {
-    roots.push(projectRoot);
+  const r = readAccess.computeRoots({
+    mythosRoot: path.resolve(__dirname, '..', '..', '..'), vaultRoot: realVaultRoot(), settingsDir: settingsDirOf(),
+    envValue: process.env.VOICE_ALLOWED_DIRS, homedir: os.homedir(), oneDrive: process.env.OneDrive, exists: fs.existsSync,
+    identityDirs: identityRef && typeof identityRef.getAllowedDirs === 'function' ? identityRef.getAllowedDirs() : [],
+  });
+  rejectedRoots = r.rejected;
+  return r.roots;
+}
+// B2d review: boundaries.md can now WIDEN these roots and caps the autonomy
+// tier, so no file tool writes, moves or deletes it, or a folder holding it.
+function boundariesRefusal(resolved) {
+  return [resolved, canonicalOf(resolved)].some((p) => p && readAccess.touchesBoundaries(p, realVaultRoot()))
+    ? 'Identity/boundaries.md is human-editable only: file tools never write, move, rename or delete it (or the folder holding it). The operator can edit it themselves.'
+    : null;
+}
+var identityRef = null;
+function isProtected(full) { return !!readAccess.protectedReason(full, { settingsDir: settingsDirOf() }); }
+function settingsDirOf() { const v = realVaultRoot(); return v ? path.dirname(v) : null; }
+// Protected wins over every root, on the lexical path AND the canonical one, so a
+// link named notes.txt that points at .env is refused as well (B2d).
+// The real spelling of a path that may not exist yet: its nearest existing
+// ancestor resolved natively, plus the rest of the path as given.
+function canonicalOf(resolved) {
+  const anc = nearestExistingAncestor(resolved);
+  const real = realpathOrNull(anc);
+  return real ? path.join(real, path.relative(anc, path.resolve(resolved))) : null;
+}
+function guarded(raw, resolved) {
+  // B2d review: "file::$DATA" and "folder::$INDEX_ALLOCATION" are other NAMES for
+  // the same file or folder, so a name rule never saw keys.json in them. Checked on
+  // the RESOLVED path (after file:///vault/... has been mapped): a ":" after the
+  // drive letter is never an ordinary path.
+  if (path.resolve(resolved).replace(/^[A-Za-z]:/, '').includes(':')) {
+    return { ok: false, reason: 'A ":" is only allowed after the drive letter (it would name an NTFS stream, not a file).' };
   }
-  return roots;
+  const opts = { settingsDir: settingsDirOf() };
+  const canon = canonicalOf(resolved);
+  const hit = readAccess.protectedReason(resolved, opts) || (canon && readAccess.protectedReason(canon, opts));
+  return hit ? { ok: false, reason: readAccess.refusalFor(raw, hit), rule: 'protected-path', protectedRule: hit.rule } : { ok: true, resolved };
 }
 
 // Rejects UNC paths (\\host\share or //host/share) before resolution — path.resolve()
@@ -95,13 +131,6 @@ function realVaultRoot() {
   return configured ? path.resolve(configured) : null;
 }
 
-function realpathOrNull(p) {
-  try {
-    return fs.realpathSync(p);
-  } catch {
-    return null;
-  }
-}
 
 // win32 paths are case-insensitive; normalize for the prefix comparison.
 function forCompare(p) {
@@ -191,7 +220,7 @@ function resolveSandboxed(raw) {
           rule: 'outside-vault-root',
         };
       }
-      return { ok: true, resolved: vaultResolved };
+      return guarded(raw, vaultResolved);
     }
 
     const expanded = cleaned.replace(/%USERPROFILE%/gi, os.homedir());
@@ -210,7 +239,9 @@ function resolveSandboxed(raw) {
     // 02:21:27 — the allowlist refusal was explained as a mystery, not a rule).
     const outside = {
       ok: false,
-      reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}.`,
+      reason: `"${raw}" is outside the folders I can access. I'm limited to: ${roots.join('; ')}. `
+        + 'The operator can add a folder with VOICE_ALLOWED_DIRS in mythos/.env or allowed_dirs in boundaries.md.'
+        + (rejectedRoots.length ? ' Ignored as unsafe: ' + rejectedRoots.map((r) => r.entry + ' (' + r.reason + ')').join('; ') + '.' : ''),
       rule: 'outside-allowed-roots',
       allowedRoots: roots,
     };
@@ -221,7 +252,7 @@ function resolveSandboxed(raw) {
     // lexical test. Every caller gets this for free — do NOT drop it in favour
     // of the lexical check alone.
     if (!isInsideAllowedRoots(resolved)) return outside;
-    return { ok: true, resolved };
+    return guarded(raw, resolved);
   } catch (err) {
     return { ok: false, reason: err.message };
   }
@@ -345,7 +376,10 @@ function list_folder({ path: rawPath }) {
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return fail(sandboxed.reason);
   try {
-    const entries = fs.readdirSync(sandboxed.resolved, { withFileTypes: true });
+    // B2d: protected children (credential files, key folders) are left out, and
+    // only their COUNT is reported — never their names.
+    const all = fs.readdirSync(sandboxed.resolved, { withFileTypes: true });
+    const entries = all.filter((e) => !isProtected(path.join(sandboxed.resolved, e.name)));
     const capped = entries.slice(0, MAX_LIST_ENTRIES).map((entry) => {
       const full = path.join(sandboxed.resolved, entry.name);
       let size = null;
@@ -359,7 +393,8 @@ function list_folder({ path: rawPath }) {
       }
       return { name: entry.name, isDirectory: entry.isDirectory(), size, mtime };
     });
-    return { ok: true, result: { path: sandboxed.resolved, entries: capped, truncated: entries.length > MAX_LIST_ENTRIES, totalCount: entries.length }, needs_result: true };
+    return { ok: true, result: { path: sandboxed.resolved, entries: capped, truncated: entries.length > MAX_LIST_ENTRIES, totalCount: entries.length,
+      ...(all.length > entries.length ? { protectedHidden: all.length - entries.length } : {}) }, needs_result: true };
   } catch (err) {
     return fail(err.message);
   }
@@ -376,12 +411,17 @@ function read_file({ path: rawPath }) {
     if (stat.size > MAX_READ_BYTES) {
       return fail(`File is too large to read (${Math.round(stat.size / 1024)}KB, limit 1MB).`);
     }
-    const fd = fs.openSync(sandboxed.resolved, 'r');
-    const buf = Buffer.alloc(Math.min(stat.size, READ_HEAD_BYTES));
-    fs.readSync(fd, buf, 0, buf.length, 0);
-    fs.closeSync(fd);
-    const text = buf.toString('utf8');
-    return { ok: true, result: { path: sandboxed.resolved, text, truncated: stat.size > READ_HEAD_BYTES }, needs_result: true };
+    // B2d: redact the WHOLE file (already capped at 1MB above), THEN cut to the
+    // head the model sees — cutting first could split a key at the boundary into
+    // a prefix no pattern recognises.
+    // The head plus a margin, never the whole file: it can grow after the size
+    // check (B2d review). The margin keeps a key that straddles the cut whole.
+    const red = redactCounted(readHead(sandboxed.resolved, READ_HEAD_BYTES + REDACT_MARGIN_BYTES));
+    const result = { path: sandboxed.resolved, text: red.text.slice(0, READ_HEAD_BYTES), truncated: stat.size > READ_HEAD_BYTES };
+    // Said out loud, so an edit-then-write_file does not save "[REDACTED]" over the
+    // real value without anyone knowing (B2d review).
+    if (red.count) result.redacted = red.count + ' secret-looking value(s) replaced with [REDACTED]; do not write this text back over the original file';
+    return { ok: true, result, needs_result: true };
   } catch (err) {
     return fail(err.message);
   }
@@ -398,16 +438,8 @@ function read_file({ path: rawPath }) {
 // to the NEAREST EXISTING ancestor of the target, not just the immediate
 // parent — a not-yet-created leaf segment can't itself be a symlink, but the
 // immediate parent is often exactly the segment that doesn't exist yet while
-// a symlink sits a few levels further up the chain.
-function nearestExistingAncestor(dir) {
-  let probe = path.resolve(dir);
-  while (!fs.existsSync(probe)) {
-    const parent = path.dirname(probe);
-    if (parent === probe) break; // reached a filesystem root; stop
-    probe = parent;
-  }
-  return probe;
-}
+// a symlink sits a few levels further up the chain. nearestExistingAncestor and
+// realpathOrNull live in file-walk.js (moved by B2d to keep this file in budget).
 
 function isInsideAllowedRoots(dir) {
   const real = realpathOrNull(nearestExistingAncestor(dir));
@@ -420,6 +452,7 @@ function isInsideAllowedRoots(dir) {
 function write_file({ path: rawPath, content }) {
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return fail(sandboxed.reason);
+  if (boundariesRefusal(sandboxed.resolved)) return fail(boundariesRefusal(sandboxed.resolved));
   if (content === undefined || content === null) return fail('Content is required.');
   const dir = path.dirname(sandboxed.resolved);
   // Sandbox check BEFORE any mutation — see isInsideAllowedRoots() above.
@@ -447,6 +480,7 @@ function write_file({ path: rawPath, content }) {
 function create_folder({ path: rawPath }) {
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return fail(sandboxed.reason);
+  if (boundariesRefusal(sandboxed.resolved)) return fail(boundariesRefusal(sandboxed.resolved));
   if (!isInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
     return fail(`"${rawPath}" is outside the folders I can access. I'm limited to: ${allowedRoots().join('; ')}.`);
   }
@@ -465,6 +499,7 @@ function create_folder({ path: rawPath }) {
 function delete_file({ path: rawPath }) {
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return fail(sandboxed.reason);
+  if (boundariesRefusal(sandboxed.resolved)) return fail(boundariesRefusal(sandboxed.resolved));
   try {
     if (!fs.existsSync(sandboxed.resolved)) return fail(`File not found: ${sandboxed.resolved}`);
     const stat = fs.statSync(sandboxed.resolved);
@@ -491,6 +526,7 @@ function delete_file({ path: rawPath }) {
 function sandboxParent(rawPath) {
   const sandboxed = resolveSandboxed(rawPath);
   if (!sandboxed.ok) return sandboxed;
+  if (boundariesRefusal(sandboxed.resolved)) return { ok: false, reason: boundariesRefusal(sandboxed.resolved) };
   if (!isInsideAllowedRoots(path.dirname(sandboxed.resolved))) {
     return { ok: false, reason: `"${rawPath}" is outside the folders I can access. I'm limited to: ${allowedRoots().join('; ')}.` };
   }
@@ -578,6 +614,7 @@ function search_files({ root: rawRoot, pattern }) {
     walked = walkBreadthFirst(sandboxed.resolved, {
       match: (name) => matcher.test(name),
       maxDepth: MAX_SEARCH_DEPTH, maxScan: MAX_SEARCH_SCAN, maxEntries: MAX_LIST_ENTRIES,
+      exclude: isProtected, // B2d: credential paths are neither listed nor walked into
     });
   } catch (err) {
     return fail(err.message);
@@ -680,7 +717,9 @@ function compose_email({ to, subject, body }) {
     // use the default mail app instead once one is configured.
     const mode = process.env.VOICE_EMAIL_MODE === 'mailto' ? 'mailto' : 'gmail';
     const url = mode === 'gmail' ? buildGmailUrl({ to, subject, body }) : buildMailtoUrl({ to, subject, body });
-    spawn('cmd', ['/c', 'start', '', url], { shell: false });
+    // B2c: not cmd /c start — cmd split the link at "&" and expanded %VARS% (open-url.js).
+    const opened = openUrlExternally(url);
+    if (!opened.ok) return fail('Could not open the draft: ' + opened.reason);
     return ok({ mode, url, to: to || null, subject: subject || null });
   } catch (err) {
     return fail(err.message);
@@ -760,106 +799,15 @@ async function think_deeply({ question, context }, ctx) {
 let openPathProvider = null;
 function setOpenPathProvider(fn) { openPathProvider = typeof fn === 'function' ? fn : null; }
 
-// Extensions where the shell EXECUTES rather than displays. Refused by NAME,
-// matching the posture of isUncPath/hasReservedDeviceName above: name the
-// risk shape rather than trusting one layer to have caught it.
-//
-// Q1 — WHAT ELSE MATCHES THIS? This is a denylist, and a denylist over
-// attacker-chosen extensions is not a security boundary; the real boundary is
-// resolveSandboxed(), which runs first and confines every path to the allowed
-// roots. This list exists so that a file the OPERATOR names by voice inside
-// their own sandbox cannot turn "show me that" into "run that" by accident —
-// a different and much narrower job. .lnk is here because a shortcut executes
-// whatever it points at, and .js because Windows hands it to wscript.
-const OPEN_FILE_BLOCKED_EXT = new Set([
-  '.exe', '.bat', '.cmd', '.ps1', '.msi', '.scr', '.com', '.vbs', '.js',
-  '.jar', '.wsf', '.hta', '.lnk', '.reg',
-]);
-
-async function open_file({ path: raw }) {
-  const sandboxed = resolveSandboxed(raw);
-  if (!sandboxed.ok) return fail(sandboxed.reason);
-  const resolved = sandboxed.resolved;
-  let st;
-  try { st = fs.statSync(resolved); }
-  catch { return fail('File not found: ' + resolved); }
-  if (st.isDirectory()) {
-    return fail('That is a folder, not a file — use open_folder for folders: ' + resolved);
-  }
-  const ext = path.extname(resolved).toLowerCase();
-  if (OPEN_FILE_BLOCKED_EXT.has(ext)) {
-    return fail('Refusing to open "' + ext + '" — Windows would EXECUTE it, not display it. ' +
-      'If running it is genuinely what you want, that is run_command, which asks first.');
-  }
-  if (!openPathProvider) {
-    return fail('open_file needs the MYTHOS desktop shell, and it is not running.');
-  }
-  const verdict = await openPathProvider(resolved);
-  if (!verdict || !verdict.opened) {
-    return fail('Could not open ' + resolved + ': ' + ((verdict && verdict.reason) || 'unknown'));
-  }
-  // 2026-08-21, operator ticket, their words: "why can't you confirm? ... Just
-  // tell me in short that I have opened it." The first version of this said
-  // there was no oracle for whether the app rendered anything. That was wrong:
-  // open_folder, forty lines up, has polled findExplorerWindow for exactly this
-  // since it was written. The window that appears here belongs to the
-  // ASSOCIATED app rather than Explorer, so this uses findWindowByTitle — but
-  // it is the same oracle, and not looking for it was a sibling-parity miss.
-  //
-  // The verbosity the operator objected to is downstream of the same defect:
-  // the paragraph about Windows accepting a command is what
-  // evidence.unverified() emits. Confirm the open and those fields disappear on
-  // their own. Shortening the text WITHOUT the oracle would have meant claiming
-  // an open nobody had checked, which is the one thing the contract forbids.
-  //
-  // Bounded poll, four tries 400ms apart, mirroring open_folder: a single
-  // fixed-delay check is a coin flip on a busy machine. from-pc is required
-  // lazily (circular dep); its absence costs the oracle, never the open.
-  const leaf = path.basename(resolved);
-  const base = ok({ opened: resolved, name: leaf });
-  let locate = null;
-  try { locate = require('./from-pc').findWindowByTitle; } catch (_) { /* offline costs only the oracle */ }
-  // BUG-398 row 11: the picker check is inside the poll and ends it — see
-  // open-file-picker.js.
-  let located = null;
-  let picker = null;
-  if (typeof locate === 'function') {
-    for (let attempt = 0; attempt < 4 && !(located && located.window) && !picker; attempt++) {
-      await new Promise((r) => setTimeout(r, 400));
-      try { located = await locate(leaf); } catch (_) { located = null; }
-      if (located && located.window) break;
-      picker = await findAppPicker(() => require('./from-pc').list_windows());
-    }
-  }
-  if (picker && !(located && located.window)) return evidence.unverified(base, appPickerNote(picker, leaf));
-
-  if (located && located.window) {
-    // "and focus it on front" was part of the same request. Advisory: Windows
-    // can refuse the foreground change (BUG-272 T3, ladder documented as
-    // exhausted), and a refused focus must not turn a confirmed open into a
-    // failure — the file IS open either way.
-    try {
-      const pcFocus = require('./from-pc').focus_window;
-      if (typeof pcFocus === 'function') await pcFocus({ pid: located.window.pid });
-    } catch (_) { /* the window is open regardless of whether it came forward */ }
-    return evidence.verifiedOk(base, {
-      oracle: 'window-title',
-      expected: leaf,
-      observed: String(located.window.title) + ' (pid ' + located.window.pid + ')'
-        + (located.matchedBy === 'contains' ? ' [title-match: contains]' : ''),
-    });
-  }
-  if (located && !located.online) {
-    return evidence.unverified(base,
-      'asked Windows to open ' + leaf + ', but pc-child is not running, so I could not verify the window');
-  }
-  return evidence.unverified(base,
-    'asked Windows to open ' + leaf + ', but no window with that name showed up — the app may still ' +
-    'be starting, or it may have opened the file in a window that is titled differently');
-}
+// open_file lives in open-file.js since B2c (2026-09-29 audit): prepare/approvalFor
+// decide on the REAL path, through the same leash path as launch_app.
+const openFile = require('./open-file').createOpenFile({
+  ok, fail, evidence, resolveSandboxed, findAppPicker, appPickerNote, getOpenPathProvider: () => openPathProvider,
+});
+const open_file = openFile.open_file;
 
 const TOOLS = [
-  { name: 'open_file', description: 'Open a FILE in whatever application Windows associates with it — a .txt in Notepad, a .pdf in the PDF viewer, a .png in Photos. Use for "open that file", "open the report on my desktop", "open notes.txt". Takes a full file PATH. For a FOLDER use open_folder; for a build MYTHOS itself produced in the vault use open_artifact. Refuses executables (.exe/.bat/.ps1 and similar) because Windows would run them rather than show them.', params: { path: 'string - the full path of the file to open' }, danger: false, fn: open_file },
+  { name: 'open_file', description: 'Open a FILE in whatever application Windows associates with it — a .txt in Notepad, a .pdf in the PDF viewer, a .png in Photos. Use for "open that file", "open the report on my desktop", "open notes.txt". Takes a full file PATH. For a FOLDER use open_folder; for a build MYTHOS itself produced in the vault use open_artifact. Documents, images, audio and video open directly; a file Windows would RUN (.exe, .bat, .ps1, .cpl, .lnk and similar) is refused; anything else (web pages, macro-enabled Office files, unknown types) opens only after the operator approves that one file.', params: { path: 'string - the full path of the file to open' }, danger: false, fn: open_file, prepare: openFile.prepare, approvalFor: openFile.approvalFor },
   { name: 'open_folder', description: 'Open a folder in Windows Explorer. Use for "open my downloads folder", "show me that directory", "open the vault folder", "open D:\\projects". Takes a folder PATH. Given a FILE path it opens that file\'s folder with the file selected — to open the file itself in its app, call open_file instead (until 2026-08-21 this said open_artifact, which only serves builds out of the vault over HTTP and could not open a file on disk at all). This is the ONLY way to open a folder — never pass a path to launch_app, which takes an app name only and cannot open directories.', params: { path: 'string - a folder path, or a file path to reveal in its folder' }, danger: false, fn: open_folder },
   { name: 'list_folder', description: 'List files/folders inside a directory (max 50 entries).', params: { path: 'string' }, danger: false, fn: list_folder },
   { name: 'read_file', description: 'Read a text file (head 16KB, max 1MB).', params: { path: 'string' }, danger: false, fn: read_file },
@@ -918,6 +866,7 @@ function registerFromComputer(hub, ctx) {
   deepThinkConfig = (ctx && ctx.config) || null;
   deepThinkLogger = (ctx && ctx.logger) || null;
   vaultRootConfig = (ctx && ctx.config) || null;
+  identityRef = (ctx && ctx.identity) || null; // B2d: allowed_dirs from boundaries.md
   for (var i = 0; i < TOOLS.length; i++) {
     hub.register(effectorFromTool(TOOLS[i]));
   }
@@ -926,6 +875,7 @@ function registerFromComputer(hub, ctx) {
 
 module.exports = {
   registerFromComputer,
+  isProtected, // B2d: the ONE protected-path answer, settings folder included (from-code-search.js)
   open_file,
   setOpenPathProvider,
   // BUG-287 test seam: lets the suite assert the schema default and the code
