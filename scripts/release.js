@@ -83,31 +83,49 @@ function publishTarget(pkg) {
 // is testable — it is the part that was wrong, and it is invisible in review
 // because every individual step reads correctly.
 //
-// THE PUSHES COME BEFORE THE BUILD, and that ordering is load-bearing.
+// build (never publishes) -> scan -> re-check origin -> commit, tag -> push ->
+// upload the scanned bytes.
 //
-// package.json's publish config is `releaseType: "release"`, i.e. publish
-// immediately rather than as a draft. GitHub REFUSES to create a published
-// release for a tag it does not have:
+// THE UPLOAD COMES AFTER THE PUSHES, and that ordering is load-bearing.
+// package.json's publish config is `releaseType: "release"`, and GitHub REFUSES
+// to create a published release for a tag it does not have:
 //
 //     422 Unprocessable Entity — "Published releases must have a valid tag"
 //
-// With the build running first that is guaranteed on EVERY release, because the
-// tag is still local when electron-builder posts. Cutting 0.1.10 on 2026-08-26
-// hit it: a full 271MB installer built, the blockmap uploaded, the release POST
-// 422'd, and what was left on GitHub was a PUBLISHED release marked "Latest"
-// holding one 263KB blockmap and no installer.
+// Cutting 0.1.10 on 2026-08-26 hit it when the upload ran before the tag push: a
+// full 271MB installer built, the blockmap uploaded, the release POST 422'd, and
+// what was left on GitHub was a PUBLISHED release marked "Latest" holding one
+// 263KB blockmap and no installer. (v0.1.4 is the same wrong order under a draft
+// releaseType: no 422, just a draft electron-updater can never see.)
+// publish-scanned-release.js passes `gh release create --verify-tag`, so a
+// missing remote tag now fails before anything is posted.
 //
-// It also explains v0.1.4, which has sat as a draft ever since. A DRAFT release
-// does NOT need an existing tag, so the same wrong order fails differently
-// depending on releaseType — a silent draft under one setting, a 422 under this
-// one. Neither delivers anything, and a draft is invisible to electron-updater.
+// THE BUILD AND SCAN COME FIRST, before the commit and the tag (changed
+// 2026-09-29, B1). The old order built last, with `--publish always`, because the
+// only upload route was electron-builder's own and a separate upload meant
+// building twice. That left no gap between building the installer and uploading
+// it — and the 2026-09-23 local build carried four .env backups nothing would
+// have caught. Uploading is now its own step (the scanned bytes, via gh), so the
+// build can move to the front: a build or scan failure leaves nothing but the
+// edited version line in package.json. (Building after the tag, as a first draft
+// of this change did, left a local tag behind a red scan — and a tag that exists
+// makes this script's own preflight refuse the re-run.)
 //
-// WHY NOT build -> push -> publish, which would be strictly safer: that needs two
-// electron-builder invocations (--publish never, then always) and the second
-// rebuilds the whole 271MB installer. The tradeoff taken instead is that a build
-// failure leaves a pushed tag with no artifacts — recoverable by re-running the
-// publish alone, which is what the failure message tells you to do, and visible
-// rather than silent.
+// The build takes minutes and another machine pushes to this repo, so origin/main
+// is checked AGAIN after the scan, immediately before the commit. The preflight's
+// "0 behind" is minutes old by then; a push rejected after the tag exists is the
+// recovery nobody wants.
+//
+// Every step carries the recovery for its own failure, and main() prints it —
+// the operator reads the terminal, not this file.
+//
+// `--publish never` is explicit on every build, never omitted. With no --publish
+// flag electron-builder decides for itself, and one of its triggers is
+// npm_lifecycle_event === "release" — which `npm run release` sets and this
+// script's child inherits — so a build started that way uploaded whatever it
+// had just built, under --no-publish and --ci as well
+// (app-builder-lib/out/publish/PublishManager.js, 26.15.3).
+//
 // electron-builder is invoked as `node <its cli.js>`, NOT as `npx electron-builder`,
 // and that is the difference between a release that works on Windows and one that
 // cannot run at all.
@@ -133,17 +151,39 @@ function publishTarget(pkg) {
 // no shell, cannot be affected by argument escaping, and pins the LOCAL
 // electron-builder rather than whatever npx would resolve.
 const BUILDER_CLI = path.join(REPO_ROOT, 'node_modules', 'electron-builder', 'cli.js');
+const SCANNER = path.join(REPO_ROOT, 'mythos', 'scripts', 'verify-package-contents.js');
+const PUBLISHER = path.join(REPO_ROOT, 'scripts', 'publish-scanned-release.js');
+const DIST_DIR = path.join(REPO_ROOT, 'dist');
+const SCAN_RECEIPT = path.join(DIST_DIR, 'package-scan.json');
 
+// Each step is [command, args, recovery]: the recovery is what main() prints
+// when that step fails, because what is safe to do next differs per step.
 function releaseSteps(tag, opts) {
   const o = opts || {};
-  const uploads = o.publishing && !o.ci ? ['--publish', 'always'] : [];
+  const undoBump = 'Nothing was committed, tagged or pushed. Undo the version bump with `git checkout -- package.json`.';
+  const uploads = o.publishing && !o.ci ? [[process.execPath, [PUBLISHER, tag],
+    `The tag is public. Re-run \`node scripts/publish-scanned-release.js ${tag}\` alone: it re-checks the receipt, `
+    + 'uploads only what is missing, and refuses to replace a file already published. Do NOT re-run this script — '
+    + 'the tag exists, so its own preflight will (correctly) refuse.']] : [];
   return [
-    ['git', ['add', 'package.json']],
-    ['git', ['commit', '-m', `chore(release): ${tag}`]],
-    ['git', ['tag', '-a', tag, '-m', `MYTHOS ${tag}`]],
-    ['git', ['push', 'origin', 'main']],
-    ['git', ['push', 'origin', tag]],
-    [process.execPath, [BUILDER_CLI, '--win', ...uploads]],
+    [process.execPath, [BUILDER_CLI, '--win', '--publish', 'never'],
+      `${undoBump} A manual re-run of the build needs ELECTRON_BUILDER_CACHE exported, or it downloads NSIS outside the repo.`],
+    [process.execPath, [SCANNER, '--dist', DIST_DIR, '--receipt', SCAN_RECEIPT],
+      `${undoBump} The scan lists every forbidden file by name: move them out of the working directory, then cut the release again.`],
+    ['git', ['fetch', 'origin', 'main'], `${undoBump} origin could not be reached to re-check main; retry when it can.`],
+    ['git', ['merge-base', '--is-ancestor', 'origin/main', 'HEAD'],
+      `${undoBump} origin/main moved while the build ran, so that build is of stale code. Pull, then cut the release again.`],
+    ['git', ['add', 'package.json'], undoBump],
+    ['git', ['commit', '-m', `chore(release): ${tag}`],
+      'Nothing was committed or pushed. `git reset -- package.json` then `git checkout -- package.json` undoes the bump.'],
+    ['git', ['tag', '-a', tag, '-m', `MYTHOS ${tag}`],
+      'The version commit exists locally only. `git reset --hard HEAD~1` removes it (the preflight required a clean tree).'],
+    ['git', ['push', 'origin', 'main'],
+      `A local commit and tag only. If origin rejected the push, main moved: \`git tag -d ${tag}\`, \`git reset --hard HEAD~1\`, pull, cut again.`],
+    ['git', ['push', 'origin', tag],
+      `main is pushed with the version commit. Push the tag by hand (\`git push origin ${tag}\`)`
+      + (uploads.length ? `, then run \`node scripts/publish-scanned-release.js ${tag}\`.` : '; that push starts the release workflow.')],
+    ...uploads,
   ];
 }
 
@@ -334,26 +374,20 @@ function main(argv) {
   // `steps` below) — that is the only point at which anything reads it, via
   // app-builder-lib's getReleaseInfo() resolving build/release-notes.md.
   buildReleaseNotes.main([]);
-  for (const [cmd, cmdArgs] of steps) {
+  for (const [cmd, cmdArgs, recovery] of steps) {
     console.log(`+ ${cmd} ${cmdArgs.join(' ')}`);
     const res = run(cmd, cmdArgs, { stdio: 'inherit' });
     if (!res.ok) {
-      // Stop at the first failure and say exactly where, because the recovery
-      // differs per step, and the order changed:
-      //   before the tag is pushed  -> local only: `git tag -d`, `git reset --hard HEAD~1`
-      //   after the pushes, in the build -> the tag is public with no artifacts.
-      //       Re-run `npx electron-builder --win --publish always`; it reuses the
-      //       release the tag already has. Do NOT re-run this script — the tag
-      //       exists, so its own preflight will (correctly) refuse.
-      // Export ELECTRON_BUILDER_CACHE for that manual re-run, or it writes its
-      // NSIS download outside the repo — see the note on BUILDER_CACHE above.
-      // Print the spawn error when there is one. Without it a step that never
-      // started is indistinguishable from one that ran and failed — the exact
-      // ambiguity that made two releases look like mystery kills.
+      // Stop at the first failure, say exactly where, and print that step's own
+      // recovery (see releaseSteps). Print the spawn error when there is one.
+      // Without it a step that never started is indistinguishable from one that
+      // ran and failed — the exact ambiguity that made two releases look like
+      // mystery kills.
       console.error(`release: "${cmd} ${cmdArgs.join(' ')}" failed (exit ${res.status}).`
         + (res.error ? ` The process did not start: ${res.error}` : '')
         + ' Stopped at that step — nothing after it ran.');
       if (res.stderr) console.error(res.stderr.slice(-2000));
+      console.error(`release: recovery — ${recovery}`);
       return 1;
     }
   }

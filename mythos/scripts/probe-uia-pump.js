@@ -179,7 +179,9 @@ async function main() {
   let viaDirect = fail('not run');
 
   try {
-    const launched = await adapter.sendCommand({ cmd: 'launch_app', name: 'notepad' });
+    // B2a: pc-child launches only a resolved record (resolve_app first).
+    const resolvedNotepad = await adapter.sendCommand({ cmd: 'resolve_app', name: 'notepad' });
+    const launched = await adapter.sendCommand({ cmd: 'launch_app', name: 'notepad', target: resolvedNotepad.result });
     if (!launched || launched.ok === false) {
       console.error('could not launch notepad: ' + (launched && launched.error));
       process.exit(1);

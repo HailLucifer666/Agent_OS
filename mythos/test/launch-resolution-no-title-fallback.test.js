@@ -22,6 +22,7 @@
 // fresh-document Ctrl+N off `pid`'s presence, so a title match cannot become the
 // implicit target of a later pid-omitted ui_type/ui_click even by accident.
 
+const { answersResolve } = require('./helpers/launch-resolve'); // B2a: stubs answer resolve_app
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
@@ -53,7 +54,7 @@ function withMockedPcChild(mock, fn) {
 function titleOnlyLaunch(cmds) {
   return {
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       cmds.push(cmdObj);
       if (cmdObj.cmd === 'launch_app') {
         return {
@@ -74,7 +75,7 @@ function titleOnlyLaunch(cmds) {
 function processLaunch(cmds) {
   return {
     getStatus: () => ({ state: 'ONLINE' }),
-    sendCommand: async (cmdObj) => {
+    sendCommand: async (cmdObj) => { const resolvedTarget = answersResolve(cmdObj); if (resolvedTarget) return resolvedTarget;
       cmds.push(cmdObj);
       if (cmdObj.cmd === 'launch_app') {
         return { ok: true, result: { name: cmdObj.name, launched: true, resolved: true, matchedBy: 'process', pid: 14556 } };

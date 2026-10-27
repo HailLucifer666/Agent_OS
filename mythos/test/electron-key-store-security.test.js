@@ -39,32 +39,35 @@ function readSource(...segs) {
 const MAIN = readSource(REPO_ROOT, 'electron', 'main.js');
 
 // ---------------------------------------------------------------------------
-// B2 — the three key-store IPC handlers must gate on isHudContents.
+// B2 — the three key-store IPC handlers must gate on the HUD predicate. Since
+// 2026-09-29 (audit B3a) that is hudTrust.ipc(event): window, frame AND
+// document (electron/hud-trust.js). The window-only isHudContents(event.sender)
+// it replaced also answered a /vault page loaded inside the HUD window.
 // ---------------------------------------------------------------------------
 
-test('B2: mythos:set-key is gated on isHudContents and denies loudly', () => {
+test('B2: mythos:set-key is gated on hudTrust.ipc and denies loudly', () => {
   const idx = MAIN.indexOf("ipcMain.handle('mythos:set-key'");
   assert.ok(idx !== -1, 'the set-key handler must still be registered');
   const handler = MAIN.slice(idx, idx + 900);
-  assert.match(handler, /isHudContents\(event\.sender\)/,
+  assert.match(handler, /hudTrust\.ipc\(event\)\.ok/,
     'set-key must check the sender against the HUD-identity predicate — this is the exact channel B2 abused');
   assert.match(handler, /throw new Error/,
     'a non-HUD sender must be denied loudly (thrown), not with a silent {ok:false} that looks like a working no-op');
 });
 
-test('B2: mythos:get-key-names is gated on isHudContents', () => {
+test('B2: mythos:get-key-names is gated on hudTrust.ipc', () => {
   const idx = MAIN.indexOf("ipcMain.handle('mythos:get-key-names'");
   assert.ok(idx !== -1, 'the get-key-names handler must still be registered');
   const handler = MAIN.slice(idx, idx + 300);
-  assert.match(handler, /isHudContents\(event\.sender\)/);
+  assert.match(handler, /hudTrust\.ipc\(event\)\.ok/);
   assert.match(handler, /throw new Error/);
 });
 
-test('B2: mythos:has-key is gated on isHudContents', () => {
+test('B2: mythos:has-key is gated on hudTrust.ipc', () => {
   const idx = MAIN.indexOf("ipcMain.handle('mythos:has-key'");
   assert.ok(idx !== -1, 'the has-key handler must still be registered');
   const handler = MAIN.slice(idx, idx + 300);
-  assert.match(handler, /isHudContents\(event\.sender\)/);
+  assert.match(handler, /hudTrust\.ipc\(event\)\.ok/);
   assert.match(handler, /throw new Error/);
 });
 
@@ -132,13 +135,17 @@ test('B2: electron/media-preload.js exists and exposes no contextBridge surface 
 // ---------------------------------------------------------------------------
 
 test('H6: the HUD window registers a will-navigate guard that denies off-origin navigation', () => {
-  const idx = MAIN.indexOf("webContents.on('will-navigate'");
-  assert.ok(idx !== -1, 'a will-navigate handler must be registered on the HUD webContents');
+  assert.match(MAIN, /webContents\.on\('will-navigate', denyForeignHudLoad\)/, 'a will-navigate handler must be registered on the HUD webContents');
+  const idx = MAIN.indexOf('const denyForeignHudLoad = (navEvent, url) =>');
+  assert.ok(idx !== -1, 'the handler it names must exist');
   const block = MAIN.slice(idx, idx + 500);
   assert.match(block, /preventDefault\(\)/,
     'off-origin navigation must be prevented, not merely logged');
-  assert.match(block, /startsWith\(hudOrigin\)/,
-    'the guard must compare against the HUD\'s own loopback origin');
+  // A prefix compare admitted 127.0.0.1:44780, user@host tricks and /vault
+  // pages (B3a, 2026-09-29); the guard asks the shared predicate instead.
+  assert.doesNotMatch(MAIN, /startsWith\(hudOrigin\)/, 'no prefix compare may decide what loads in the HUD window');
+  assert.match(block, /hudTrust\.navigation\(url\)\.ok/,
+    'the guard must ask the HUD predicate whether the destination is a HUD document');
 });
 
 test('H6: setWindowOpenHandler is still present alongside the new will-navigate guard', () => {

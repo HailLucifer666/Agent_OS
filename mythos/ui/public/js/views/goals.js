@@ -79,7 +79,9 @@ async function deleteGoal(id) {
 }
 
 function filteredGoals() {
-  if (state.filter === 'active') return state.goals.filter((g) => !g.done);
+  // BUG-470 2026-10-06: Active = status active (what the tile counts); paused /
+  // proposed rows live under All. A row with no status field (older payload) falls back to not-done.
+  if (state.filter === 'active') return state.goals.filter((g) => !g.done && (g.status === undefined || g.status === 'active'));
   if (state.filter === 'done') return state.goals.filter((g) => g.done);
   return state.goals;
 }

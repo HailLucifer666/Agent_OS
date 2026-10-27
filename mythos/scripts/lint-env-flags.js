@@ -79,6 +79,7 @@ const WAIVERS = {
   DSH_TELEMETRY_MODE: 'scrubbed from the dsh child env by dsh-agent',
   DSH_TELEMETRY_OTLP_URL: 'scrubbed from the dsh child env by dsh-agent',
   MYTHOS_PACKAGED: 'injected by electron/main.js into its server child (app.isPackaged), never operator-set',
+  MYTHOS_INPUT_INHIBITED: 'injected by electron/main.js into its server child (settings-confirm.js envFor) while a confirmation dialog is open, never operator-set',
   MYTHOS_SETTINGS_PATH: 'injected by electron/main.js into its server child; a headless run falls back to a file beside the vault',
   MYTHOS_MODELS_DIR: 'injected by electron/main.js into its server child as <userData>/models; headless derives it from the vault',
   MYTHOS_TEST_HATCH: 'test-only hatch (server/test-hatch.js), off unless exactly 1; never a shipped setting',

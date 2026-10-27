@@ -517,7 +517,7 @@ async function main() {
       // is load-bearing: without it think_deeply registers but can only decline.
       // Same wiring gap that left camera_look's brain null for weeks, so
       // test/think-deeply.test.js asserts this call keeps passing it.
-      registerFromComputer(hub, { brain: brain, config: config, logger: logger });
+      registerFromComputer(hub, { brain: brain, config: config, logger: logger, identity: identity }); // B2d: allowed_dirs
       // config + logger are for screen_look's vision call (effectors/vision-call.js):
       // VISION_CALL_TIMEOUT_MS bounds it, and the logger is what emits the
       // `vision.call` provider/model/ms line that did not exist before 2026-08-10.

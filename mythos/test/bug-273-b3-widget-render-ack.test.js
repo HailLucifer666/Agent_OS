@@ -134,10 +134,11 @@ describe('BUG-273 B3 — the wiring the ack depends on', () => {
   });
 
   it('the other ui.open-web producers are deliberately untouched', () => {
-    // from-pc.js and from-widgets.js emit the event directly and have no ack. That is
+    // launch_app (effectors/launch-app.js since B2a, 2026-09-29) and from-widgets.js
+    // emit the event directly and have no ack. That is
     // out of B3's scope, and the client's ackRender is a no-op without a reqId
     // precisely so those paths keep working rather than failing for want of an ack.
-    for (const rel of ['src/core/effectors/from-pc.js', 'src/core/effectors/from-widgets.js']) {
+    for (const rel of ['src/core/effectors/launch-app.js', 'src/core/effectors/from-widgets.js']) {
       assert.match(read(rel), /bus\.emit\('ui\.open-web'/, rel + ' must still use the bus relay');
     }
     assert.match(read('ui/public/js/app.js'), /if \(!msg \|\| !msg\.reqId\) return;/,
