@@ -76,7 +76,7 @@
 const UNCERTAIN_SEND_HOLD_MS = 5 * 60 * 1000;
 
 const entries = new Map(); // key -> attempt (running, or held after an unproven end)
-const notes = new Map();   // key -> sentence for the NEXT attempt (an earlier one sent nothing)
+const notes = new Map();   // key -> { text, since } for the NEXT attempt (an earlier one sent nothing)
 let attemptSeq = 0;
 let clock = Date.now;
 
@@ -96,6 +96,16 @@ function expire() {
   const now = clock();
   for (const [key, a] of entries) {
     if (now - a.since > UNCERTAIN_SEND_HOLD_MS) entries.delete(key);
+  }
+  // BUG-476 review, 2026-10-27: a note used to live forever. Nothing deletes one
+  // except the next send of the SAME message, so a process that times out sends
+  // it never retries grew this Map without bound - and a note from days ago
+  // would still be attached to a send it has nothing to do with. Same window as
+  // the hold: its whole value is "the thing you are about to retry just now
+  // proved it sent nothing", which stops being useful when the operator has long
+  // since looked at the chat.
+  for (const [key, n] of notes) {
+    if (now - n.since > UNCERTAIN_SEND_HOLD_MS) notes.delete(key);
   }
 }
 
@@ -167,8 +177,8 @@ function settle(key, a, result, threw, logger) {
   } else {
     entries.delete(key);
     if (callerGaveUp) {
-      notes.set(key, 'An earlier attempt at this exact message (' + (a.traceId || a.id) + ') stopped before '
-        + 'submitting after its caller timed out, so it sent nothing.');
+      notes.set(key, { since: clock(), text: 'An earlier attempt at this exact message (' + (a.traceId || a.id) + ') stopped before '
+        + 'submitting after its caller timed out, so it sent nothing.' });
     }
   }
   if (logger) {
@@ -193,8 +203,7 @@ async function run({ number, message, label, ctx, logger }, steps) {
     signal: signal, state: 'running', stage: 'before-type', since: clock() };
   entries.set(key, a);
   const note = notes.get(key);
-  notes.delete(key);
-  const fence = {
+  notes.delete(key);  const fence = {
     checkpoint(stage) {
       if (!(signal && signal.aborted)) return null;
       a.stoppedAt = stage;
@@ -212,21 +221,48 @@ async function run({ number, message, label, ctx, logger }, steps) {
   if (threw) throw threw;
   if (note && result && result.ok && result.result && typeof result.result === 'object') {
     return Object.assign({}, result, { result: Object.assign({}, result.result,
-      { note: note + ' ' + String(result.result.note || '') }) });
+      { note: note.text + ' ' + String(result.result.note || '') }) });
   }
   return result;
 }
 
 // from-pc.js send_key: with WhatsApp in the foreground, Enter goes to the same
-// submit ladder whatsapp_send uses. While any WhatsApp send is running or held,
-// that Enter would submit whatever is in the box — including a message a timed-out
+// submit ladder whatsapp_send uses. While a WhatsApp send is running or held,
+// that Enter would submit whatever is in the box - including a message a timed-out
 // send typed and was stopped from submitting. Returns the refusal text, or null.
+//
+// BUG-476 review, 2026-10-27 - SCOPE, stated rather than implied. This guard is
+// deliberately GLOBAL, and it cannot be narrowed: WhatsApp Desktop draws every
+// chat in ONE window with ONE composer, and a raw Enter carries no conversation,
+// so from here there is no way to know whether the box in front is the one a
+// stalled send left text in. Refusing Enter everywhere is the safe direction; the
+// refusal therefore has to name the sends that are blocking it, or the operator
+// is left guessing which chat to go and check.
+//
+// 'landed' is the one state that does NOT block. It means the submit ladder
+// proved the composer emptied, so there is no leftover for Enter to submit - and
+// refusing then would be a pure false refusal (for up to the hold) on a chat that
+// is already fine. The entry is still held against an identical RETRY; that is
+// run()'s job, not this guard's.
+const ENTER_UNSAFE = new Set(['running', 'typed', 'uncertain']);
+
 function refuseRawSubmit(app) {
   if (!/whatsapp/i.test(String(app || ''))) return null;
   expire();
-  if (entries.size === 0) return null;
-  return 'Refusing to press Enter in WhatsApp: a WhatsApp send is still in flight, ended without proof, or was stopped with its text still in the box, '
-    + 'and Enter would submit whatever is in the message box. Nothing was pressed.' + DO_NOT_RETRY;
+  const blocking = [];
+  for (const a of entries.values()) {
+    if (!ENTER_UNSAFE.has(a.state)) continue;
+    const who = a.label || 'a contact';
+    blocking.push(who + ' (' + (a.state === 'running' ? 'still sending'
+      : a.state === 'typed' ? 'stopped after typing, with its text still in the box'
+        : 'ended without proof, so it may already have been sent') + ')');
+  }
+  if (blocking.length === 0) return null;
+  return 'Refusing to press Enter in WhatsApp: ' + blocking.join('; ')
+    + '. Enter submits whatever is in the message box, and a raw keypress cannot say which chat is in '
+    + 'front - WhatsApp Desktop uses one window and one composer for every chat - so this refuses Enter '
+    + 'in every chat until those sends are resolved. Nothing was pressed. Check the chat(s) named above; '
+    + 'sending to a different contact is still possible through whatsapp_send.';
 }
 
 function _resetForTests(opts) {

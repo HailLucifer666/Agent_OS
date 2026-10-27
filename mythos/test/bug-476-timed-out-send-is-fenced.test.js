@@ -412,7 +412,7 @@ describe('BUG-476 — the raw Enter into WhatsApp is fenced while a send is unre
     await inFlight;
   });
 
-  it('10c. DISPOSITION: ui_type is deliberately NOT fenced — it cannot submit, so it cannot duplicate', async () => {
+  it('10c. DISPOSITION: ui_type is deliberately NOT fenced - it cannot submit, so it cannot duplicate', async () => {
     const g = gate();
     const { hub, count } = load({ gates: { readComposeBox: g } });
     const inFlight = hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 ten c' }, {});
@@ -424,6 +424,86 @@ describe('BUG-476 — the raw Enter into WhatsApp is fenced while a send is unre
     assert.equal(calls.filter((c) => c.cmd === 'ui_type').length, 1);
     g.open();
     await inFlight;
+  });
+
+  // BUG-476 review, 2026-10-27. 'landed' is the one held state that must NOT
+  // block Enter: it is set only when the submit ladder reported sent:true, i.e.
+  // it PROVED the composer emptied. There is no leftover to submit, so refusing
+  // there was a pure false refusal - for up to the whole 5-minute hold - on a
+  // chat that is already fine. The entry stays held against an identical RETRY;
+  // that is run()'s refusal, not this guard's.
+  it('10d. ADJACENT: a send that landed after its caller gave up does not block a raw Enter - its composer is empty', async () => {
+    const g = gate();
+    const { hub, count } = load({ gates: { submitMessage: g } });
+    const ac = new AbortController();
+    const first = hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 ten d' }, { signal: ac.signal });
+    await until(() => count('submitMessage') === 1, 'send to start submitting');
+    ac.abort();
+    await first;
+    g.open();
+    await tick(30);
+    const fence = require('../src/core/effectors/send-fence');
+    assert.equal(fence.refuseRawSubmit('WhatsApp'), null,
+      'a landed send proved the composer emptied, so Enter has nothing left to submit');
+    const calls = [];
+    const pc = realPc(calls);
+    // The Wave 2 step C guard (a different one, in from-pc.js) refuses Enter
+    // unless THIS session proved text into the window, so prove it first - the
+    // question here is only whether send-fence refuses.
+    await pc.ui_type({ text: 'hello', pid: 4242 });
+    const res = await pc.send_key({ key: 'enter' });
+    assert.equal(res.ok, true, String(res.result));
+    assert.equal(calls.filter((c) => c.cmd === 'submit_message').length, 1,
+      'the raw Enter should have reached the verified submit ladder');
+  });
+
+  // BUG-476 review, 2026-10-27. The guard cannot be scoped per chat (one window,
+  // one composer, and a raw Enter carries no conversation), so the least it owes
+  // the operator is the name of the send that is blocking it, and an honest
+  // statement that it is refusing everywhere on purpose rather than pretending
+  // to know which box is in front.
+  it('10e. the refusal names the blocking send and admits it cannot tell which chat is in front', async () => {
+    const g = gate();
+    const { hub, count } = load({ gates: { readComposeBox: g } });
+    const inFlight = hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 ten e' }, {});
+    await until(() => count('readComposeBox') === 1, 'send to reach the composer');
+    const text = String(require('../src/core/effectors/send-fence').refuseRawSubmit('WhatsApp'));
+    assert.match(text, /alex/i, 'the operator has to be told which chat to go and check');
+    assert.match(text, /one window and one composer/i,
+      'the refusal must say WHY it is global instead of implying it knows the chat');
+    assert.match(text, /every chat/i);
+    g.open();
+    await inFlight;
+  });
+});
+
+// BUG-476 review, 2026-10-27. A note is one sentence for the NEXT attempt at the
+// same message. It used to live forever: nothing deleted one except a later send
+// of that exact message, so a long-running process grew the Map without bound,
+// and a note from days ago would still be attached to a send it has nothing to do
+// with. The Map is not exported, so the observable proxy is the note itself.
+describe('BUG-476 - a note for the next attempt expires with the hold', { timeout: 10000 }, () => {
+  const fence = () => require('../src/core/effectors/send-fence');
+  beforeEach(() => { resetFence(); delete require.cache[FROM_PC_PATH]; delete require.cache[WHATSAPP_PATH]; });
+  afterEach(() => { resetFence(); delete require.cache[FROM_PC_PATH]; delete require.cache[WHATSAPP_PATH]; });
+
+  it('13. a note older than the hold is not attached to a much later send', async () => {
+    let now = 1000000;
+    fence()._resetForTests({ now: () => now });
+    const g = gate();
+    const { hub, count } = load({ gates: { readComposeBox: g } });
+    const ac = new AbortController();
+    const first = hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 thirteen' }, { signal: ac.signal });
+    await until(() => count('readComposeBox') === 1, 'first send to reach the composer');
+    ac.abort();
+    await first;
+    g.open();
+    await tick(30);
+    now += fence().UNCERTAIN_SEND_HOLD_MS + 1;
+    const later = await hub.invoke('whatsapp_send', { to: 'alex', text: 'bug476 thirteen' }, {});
+    assert.equal(later.ok, true, String(later.result));
+    assert.doesNotMatch(String(later.result.note), /earlier attempt/i,
+      'a note from before the hold expired was attached anyway');
   });
 });
 
