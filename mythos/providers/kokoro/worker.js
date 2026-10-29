@@ -25,7 +25,7 @@
 // THE DEPENDENCY-IDENTITY RULE, which is the whole point of the load sequence.
 // `@huggingface/transformers` must be required from KOKORO-JS'S OWN resolution
 // context, not from this file's. Resolved on this machine:
-//     from providers/  -> mythos/node_modules/@huggingface/transformers          (4.2.0)
+//     from providers/  -> mythos/node_modules/@huggingface/transformers          (4.2.0 at the fix; re-verified 4.3.2, 2026-10-29, same hoisted position)
 //     from kokoro-js/  -> mythos/node_modules/kokoro-js/node_modules/@huggingface/transformers (3.8.1)
 // The old provider set `env.cacheDir` on the first and `from_pretrained` loaded
 // through the second. Configuring the instance that does NOT load the model is

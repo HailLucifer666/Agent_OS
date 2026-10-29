@@ -43,7 +43,10 @@ initialises **libvips 8.17.3** — measured directly, not inferred. The path is
 `kokoro-js` → `@huggingface/transformers` → `sharp`, and
 `transformers.node.cjs` requires sharp at module scope, so there is no lazy branch
 that avoids it. `@huggingface/transformers` is also a direct dependency in its own
-right.
+right, and since the 4.3 bumps it brings a SECOND `sharp` copy under its own tree
+(0.35.5 nested, with its own `@img/*` prebuilt, measured 2026-10-29) — the same
+LGPL-3.0-or-later libvips obligation recorded for kokoro's chain above, so it is
+one obligation held twice, and the licence gate stays green by derivation.
 
 **This qualifies BUG-274 T1.** T1 promoted Kokoro to lead the TTS chain partly to
 move away from edge-tts's LGPLv3. That reasoning holds for edge-tts, which is BYO and

@@ -23,7 +23,7 @@
 // WHY THE CACHE PATH CHANGED, AND WHAT WAS ACTUALLY BROKEN. The previous version
 // did `env.cacheDir = modelDir` on `@huggingface/transformers` resolved from
 // THIS directory, then loaded through `kokoro-js`, which resolves its OWN nested
-// copy (4.2.0 hoisted vs 3.8.1 nested — kokoro-js pins ^3.5.1). It configured a
+// copy (4.2.0 hoisted vs 3.8.1 nested at the fix — kokoro-js pins ^3.5.1; still the same shape at the 4.3.2 refresh, 2026-10-29). It configured a
 // module nothing loads from, so `KOKORO_MODEL_DIR` did nothing at all. Proof on
 // disk: a 92,361,116-byte `model_quantized.onnx` in the nested instance's
 // default cache, while `mythos/models/kokoro` had never been created. The worker

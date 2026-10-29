@@ -9,7 +9,7 @@
 //     providers/kokoro-tts.js did `env.cacheDir = modelDir` on
 //     `@huggingface/transformers` resolved from providers/, then loaded through
 //     kokoro-js, which resolves its OWN nested copy:
-//         from providers/  -> mythos/node_modules/@huggingface/transformers          (4.2.0)
+//         from providers/  -> mythos/node_modules/@huggingface/transformers          (4.2.0 at the fix; re-verified 4.3.2, 2026-10-29, same hoisted position)
 //         from kokoro-js/  -> mythos/node_modules/kokoro-js/node_modules/@huggingface/transformers (3.8.1)
 //     kokoro-js pins ^3.5.1, so npm nested a second copy. KOKORO_MODEL_DIR did
 //     NOTHING. Proof on disk: a 92,361,116-byte model_quantized.onnx in the

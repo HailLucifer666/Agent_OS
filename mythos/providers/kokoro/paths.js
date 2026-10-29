@@ -13,7 +13,7 @@
 //
 // and it configured a module nothing loads from. Resolved on this machine:
 //
-//   from providers/   @huggingface/transformers -> mythos/node_modules/@huggingface/transformers          (4.2.0)
+//   from providers/   @huggingface/transformers -> mythos/node_modules/@huggingface/transformers          (4.2.0 at the fix; re-verified 4.3.2, 2026-10-29, same hoisted position)
 //   from kokoro-js/   @huggingface/transformers -> mythos/node_modules/kokoro-js/node_modules/@huggingface/transformers (3.8.1)
 //
 // kokoro-js pins `^3.5.1`, so npm nested a second copy. The provider set
