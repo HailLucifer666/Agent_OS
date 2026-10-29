@@ -124,7 +124,7 @@ function publishTarget(pkg) {
 // npm_lifecycle_event === "release" — which `npm run release` sets and this
 // script's child inherits — so a build started that way uploaded whatever it
 // had just built, under --no-publish and --ci as well
-// (app-builder-lib/out/publish/PublishManager.js, 26.15.3).
+// (app-builder-lib/out/publish/PublishManager.js, 26.15.3; re-verified 26.18.0).
 //
 // electron-builder is invoked as `node <its cli.js>`, NOT as `npx electron-builder`,
 // and that is the difference between a release that works on Windows and one that

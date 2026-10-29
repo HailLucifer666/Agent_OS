@@ -11,7 +11,7 @@
 //   2. `electron-builder publish --files …` (upload-only) is not a substitute:
 //      its publishPackageWithTasks() catches every upload error, logs it, and
 //      RETURNS NORMALLY, so the process exits 0 on a failed upload
-//      (node_modules/electron-builder/out/publish.js, 26.15.3). It also names
+//      (node_modules/electron-builder/out/publish.js, 26.15.3; re-verified 26.18.0). It also names
 //      each asset after the file on disk, "MYTHOS Setup x.exe" — GitHub stores
 //      that as "MYTHOS.Setup.x.exe", and latest.yml tells the updater to fetch
 //      "MYTHOS-Setup-x.exe", so every update download would 404.

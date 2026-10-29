@@ -425,7 +425,7 @@ describe('releaseSteps — the ORDER, which is the part that was wrong', () => {
 
   // electron-builder publishes on its own when --publish is absent and
   // npm_lifecycle_event is "release" (which `npm run release` sets) or a CI tag
-  // is visible (app-builder-lib/out/publish/PublishManager.js, 26.15.3). So
+  // is visible (app-builder-lib/out/publish/PublishManager.js, 26.15.3; re-verified 26.18.0). So
   // "never" must be explicit in EVERY mode — omitting the flag is not the same as
   // not publishing.
   for (const opts of [
