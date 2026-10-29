@@ -2063,7 +2063,7 @@ if (!gotLock) {
     // hudTrust (module scope, shared with the IPC handlers) decides both: the HUD
     // window's main document only — an iframe inside it is refused (measured).
     session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
-      const allowed = ['media', 'audioCapture', 'microphone'];
+      const allowed = ['media', 'audioCapture', 'microphone', 'display-capture']; // electron 45 split — hudTrust below still gates display-capture per requester
       // Mic capture belongs to the HUD alone. The media window plays audio, which
       // needs no permission at all — only CAPTURE does.
       callback(allowed.includes(permission) && hudTrust.permissionRequest(wc, details).ok);

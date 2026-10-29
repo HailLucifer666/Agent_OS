@@ -225,6 +225,28 @@ test('C1: display-capture is not blanket-granted by the permission-check handler
     'display-capture must be decided per requester — a blanket true lets the media window pre-seed the permission');
 });
 
+test('C1: the permission-REQUEST handler answers display-capture too, still per requester', () => {
+  const src = readSource(REPO_ROOT, 'electron', 'main.js');
+  const idx = src.indexOf('setPermissionRequestHandler');
+  assert.ok(idx !== -1, 'the permission-request handler must still exist');
+  // Bound the window at the CHECK handler: the check handler below also
+  // contains 'display-capture' and 'hudTrust', so a window that reaches it
+  // satisfies these assertions vacuously (fresh-reviewer finding on the first
+  // draft, which sliced idx..idx+1200 — the request allowset could have been
+  // reverted and the suite stayed green).
+  const end = src.indexOf('setPermissionCheckHandler');
+  assert.ok(end !== -1 && end > idx, 'both handlers must still be registered, request first');
+  const block = src.slice(idx, end);
+  // Electron 45 split screen sharing into its own permission NAME at the request
+  // stage: a request allowset without display-capture dies before the (correct)
+  // check handler below is ever asked. Both halves of the split must stay aware
+  // of display-capture, and both must stay per-requester (hudTrust).
+  assert.match(block, /'display-capture'/,
+    'the request allowset must include display-capture (electron 45 split) or the HUD screen share silently dies');
+  assert.match(block, /hudTrust\.permissionRequest\(wc, details\)\.ok/,
+    'display-capture at the request stage must stay per-requester (hudTrust), never blanket');
+});
+
 test('C1: media-window.js still shares the default session, and that is why the handler must scope', () => {
   // Deliberately NOT fixed by giving the media window its own partition: the
   // network-level ad/tracker blocking in main.js is registered on
