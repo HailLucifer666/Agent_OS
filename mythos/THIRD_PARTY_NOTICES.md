@@ -148,8 +148,13 @@ Licensed under the Apache License, Version 2.0
 
 - **Project:** https://github.com/google-ai-edge/mediapipe
 - **License:** Apache License 2.0
-- Vendored via npm, served locally at `/vendor/mediapipe` — never loaded from
-  a CDN. (Predates this file; documented here for completeness.)
+- Vendored via npm, served locally under the version-keyed mount
+  `/vendor/mediapipe@<installed-version>/` — bundle + wasm share the prefix, so
+  a dep bump atomically invalidates every cached URL, and the UI learns the
+  live version from `/vendor-versions` (version-keyed 2026-10-29 per the
+  PR #165 audit: an unversioned 365d-immutable URL would serve stale or mixed
+  cached bytes for up to a year after a bump). Never loaded from a CDN.
+  (Predates this file; documented here for completeness.)
 
 ### gesture_recognizer.task (bundled model weight — licence UNVERIFIED)
 

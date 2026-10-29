@@ -20,7 +20,7 @@ Zero new npm dependencies — same 4 as NOVA (`dotenv`, `express`, `playwright-c
 ---
 
 <!-- SYNC:TEST-COUNT:START -->
-**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-10-29): **8982 tests, 8977 passing, 0 failing, 5 skipped.**
+**Current test-suite state** (auto-synced by `mythos/scripts/sync-test-count.js`, last run 2026-10-29): **8985 tests, 8980 passing, 0 failing, 5 skipped.**
 <!-- SYNC:TEST-COUNT:END -->
 ## Go-live proof plan (F1–F9) — 2026-08-08
 
@@ -1549,6 +1549,15 @@ voice-loop API, zero new approval surface, zero leash bypass. New
 `#camera-indicator` HUD ring (`cam-idle|watching|disabled|error|unsupported`)
 clones the mic ring's look with a distinct accent color so the two never
 read as the same state.
+
+**2026-10-29 amendment (PR #165 audit, operator-selected):** the vendor mount
+described above is now **version-keyed** — `/vendor/mediapipe@<installed-version>/…`,
+bundle + wasm sharing the prefix so a dep bump atomically invalidates every
+cached URL — with camera.js learning the live version from the `/vendor-versions`
+endpoint and the unversioned prefix retired. (The historical text above describes
+the mount as it was at that entry's date.) Test pins in
+`mythos/test/static-asset-perf.test.js`; the twin `/vendor/onnxruntime` mount
+keeps its hazard on record until its own bump.
 
 **Part B — vision Q&A ("what do you see").** `ws.js`'s `visionQuery()` and
 `server/index.js`'s `handleVisionQuery` share the exact same chunked-reply

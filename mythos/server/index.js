@@ -950,7 +950,6 @@ function createServer(deps) {
   // compressed copies in memory.
   const GZIP_ROOTS = [
     { prefix: '/vendor/onnxruntime', dir: path.join(NODE_MODULES_DIR, 'onnxruntime-web', 'dist'), immutable: true },
-    { prefix: '/vendor/mediapipe', dir: path.join(NODE_MODULES_DIR, '@mediapipe', 'tasks-vision'), immutable: true },
     { prefix: '', dir: UI_PUBLIC_DIR, immutable: false },
   ];
   // F7 (go-live proof plan, 2026-08-08): gzipCache is bounded BY CONSTRUCTION
@@ -1084,11 +1083,11 @@ function createServer(deps) {
 
   // MediaPipe tasks-vision runtime assets (gesture recognition runs fully
   // client-side; these are the WASM runtime + ESM bundle served from
-  // node_modules so the app never loads from a CDN). Immutable: the version is
-  // pinned in package.json, so the only way these bytes change is a dep bump.
-  app.use('/vendor/mediapipe', express.static(path.join(__dirname, '..', 'node_modules', '@mediapipe', 'tasks-vision'), {
-    etag: true, lastModified: true, maxAge: IMMUTABLE_MAX_AGE, immutable: true, setHeaders: immutableHeaders,
-  }));
+  // node_modules so the app never loads from a CDN). VERSION-KEYED mount +
+  // /vendor-versions endpoint (PR #165 audit, 2026-10-29) live in the
+  // installer: the version in the path invalidates bundle + wasm atomically
+  // on every dep bump, camera.js is never on an unversioned immutable URL.
+  require('../src/core/server/vendor-mounts.js').installVendorMounts(app, { express, nodeModulesDir: NODE_MODULES_DIR, gzipRoots: GZIP_ROOTS, immutableMaxAge: IMMUTABLE_MAX_AGE, immutableHeaders });
 
   // onnxruntime-web WASM runtime + ESM bundle (wake-word detection runs fully
   // client-side; served from node_modules so the app never loads from a CDN —

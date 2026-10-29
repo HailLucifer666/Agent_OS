@@ -29,6 +29,7 @@ const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const path = require('node:path');
+const fs = require('node:fs');
 
 const { createServer } = require('../server');
 const { createBus } = require('../src/core/bus');
@@ -78,6 +79,12 @@ function get(port, p, headers) {
     req.on('error', reject);
     req.end();
   });
+}
+
+function mpInstalledVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'node_modules', '@mediapipe', 'tasks-vision', 'package.json'), 'utf8')).version || null;
+  } catch { return null; }
 }
 
 describe('static asset delivery — compression + caching policy', () => {
@@ -136,6 +143,34 @@ describe('static asset delivery — compression + caching policy', () => {
     assert.match(String(res.headers['cache-control'] || ''), /immutable/,
       'the heaviest asset the HUD loads must be cacheable across reloads');
     assert.equal(res.headers['content-encoding'], 'gzip', '5.9MB of plain JS must not ship raw');
+  });
+
+  // Version-keyed mediapipe vendor mount (PR #165 audit, 2026-10-29): an
+  // UNVERSIONED 365d-immutable vendor URL would serve stale or MIXED cached
+  // bytes for up to a year after a dep bump (new JS against old wasm). The
+  // version in the URL turns the whole fileset over atomically with the bump.
+  it('version-keyed mediapipe vendor mount serves the bundle immutable', async () => {
+    const installed = mpInstalledVersion();
+    if (!installed) return; // vendor absent: the mount is not built; /vendor-versions answers null
+    const res = await get(port, `/vendor/mediapipe@${installed}/vision_bundle.mjs`, { 'accept-encoding': 'gzip' });
+    if (res.status !== 200) return;
+    assert.match(String(res.headers['cache-control'] || ''), /immutable/,
+      'the gesture fileset must be cacheable across reloads without ever going stale');
+    assert.equal(res.headers['content-encoding'], 'gzip');
+  });
+
+  it('the unversioned /vendor/mediapipe prefix is retired (never vends mjs again)', async () => {
+    const res = await get(port, '/vendor/mediapipe/vision_bundle.mjs', {});
+    if (res.status !== 200) return;
+    assert.doesNotMatch(String(res.headers['content-type'] || ''), /javascript|ecmascript/,
+      'the unversioned vendor URL must not vend the bundle — cached profiles must get the SPA shell, not silently stale bytes');
+  });
+
+  it('vendor-versions answers exactly the version the mount keys on', async () => {
+    const res = await get(port, '/vendor-versions', {});
+    assert.equal(res.status, 200);
+    const body = JSON.parse(res.buf.toString('utf8'));
+    assert.equal(body.mediapipe, mpInstalledVersion());
   });
 
   it('wake-word ONNX models are immutable-cached', async () => {

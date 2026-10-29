@@ -12,10 +12,8 @@
 // lives in gesture-debounce.js, where node:test can reach it; this module owns
 // only the camera, the recogniser and the frame loop.
 
-import { FilesetResolver, GestureRecognizer } from '/vendor/mediapipe/vision_bundle.mjs';
 import { createGestureDebouncer } from './gesture-debounce.js';
 
-const WASM_BASE = '/vendor/mediapipe/wasm';
 const MODEL_URL = '/models/gesture_recognizer.task';
 const DETECT_INTERVAL_MS = 150;     // ~6-7 fps — plenty for hand poses, cheap on CPU
 const GESTURE_HOLD_TICKS = 3;       // ~450ms sustained before firing
@@ -38,7 +36,19 @@ export function createCameraLoop({ onState, onGesture, onCaption, onDebug, previ
 
   async function ensureRecognizer() {
     if (recognizer) return recognizer;
-    const fileset = await FilesetResolver.forVisionTasks(WASM_BASE);
+    // Version-keyed vendor mount (PR-AUDIT vendor-cache finding, 2026-10-29):
+    // every paired URL lives under /vendor/mediapipe@<installed-version>/, so a
+    // dependency bump atomically invalidates bundle + wasm together and no
+    // cached profile can ever mix versions. The version is learned at start
+    // time from the server — the camera only ever builds here, on the explicit
+    // toggle, so nothing needed the version at module-parse time. start()'s
+    // catch surfaces a missing mount (null version) as
+    // "Gesture recognition unavailable".
+    const versions = await (await fetch('/vendor-versions')).json();
+    if (!versions || !versions.mediapipe) throw new Error('mediapipe vendor mount unavailable');
+    const base = `/vendor/mediapipe@${versions.mediapipe}`;
+    const { FilesetResolver, GestureRecognizer } = await import(`${base}/vision_bundle.mjs`);
+    const fileset = await FilesetResolver.forVisionTasks(`${base}/wasm`);
     recognizer = await GestureRecognizer.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
       runningMode: 'VIDEO',
