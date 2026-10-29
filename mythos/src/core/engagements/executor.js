@@ -24,6 +24,7 @@
 //  - All emits use the events.js builders (this file makes events.js live).
 
 const events = require('./events');
+const { createVerifyRepair } = require('./verify-repair');
 
 function createEngagementExecutor(deps) {
   if (!deps) throw new Error('createEngagementExecutor requires deps');
@@ -78,6 +79,13 @@ function createEngagementExecutor(deps) {
   function anomaly(kind, detail) {
     bus.emit('health.anomaly', Object.assign({ kind: kind }, detail || {}));
   }
+
+  // Terminal verification paths live in their own module: executor.js is already
+  // at the 864-line ratchet ceiling, which never rises.
+  const verifyRepair = createVerifyRepair({
+    store: store, engagementStore: engagementStore, events: events, bus: bus
+  });
+  const blockEngagement = verifyRepair.blockEngagement;
 
   // ---- public: fire-and-forget runner ----
   // Never throws to the caller. All errors become health.anomaly.
@@ -532,23 +540,6 @@ function createEngagementExecutor(deps) {
       // If already moved (e.g. test harness), ignore — the re-run still proceeds.
     }
     return true;
-  }
-
-  async function blockEngagement(engagementId, stageId, reason) {
-    try {
-      // REPAIRING → BLOCKED requires repairExhausted. If we're not in REPAIRING,
-      // we can't go straight to BLOCKED via the table; emit the blocked event
-      // and attempt the transition best-effort.
-      var rec = engagementStore.read(engagementId);
-      if (rec && rec.status === 'REPAIRING') {
-        await store.transition(engagementId, 'repairExhausted', { reason: reason, stageId: stageId });
-      }
-    } catch (e) {
-      // Best-effort — ensure the UI still sees a blocked signal.
-    }
-    events.createEngagementBlocked({
-      engagementId: engagementId, reason: reason, stageId: stageId, bus: bus
-    });
   }
 
   // ---- verification sweep (after all stages) ----
