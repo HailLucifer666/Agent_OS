@@ -25,7 +25,7 @@ because it cannot distinguish "closed since" from "still present".
 
 | ID | Slice | Finding | Anchor evidence | Status |
 |---|---|---|---|---|
-| HA-C-1 | 1.2 | A verification sweep that repairs and re-runs a stage re-enters the sweep from `EXECUTING`. `stageComplete` is illegal from `EXECUTING`, so `allVerified` is rejected and `completeEngagement`'s catch swallows it: completion fields are written and the completed event fires, but the persisted status stays `EXECUTING`. `blockEngagement` transitions only from `REPAIRING`, so the failure path also persists nothing from `EXECUTING`. | `mythos/src/core/engagements/executor.js:559-604` (sweep `:559`, `verificationFailed` `:587`, re-run `:594`, recursion `:596`, `noRepairsRemaining` `:604`); `mythos/src/core/engagements/state-machine.js:48-56`; `blockEngagement` `executor.js:537-552` | **OPEN** |
+| HA-C-1 | 1.2 | A verification sweep that repairs and re-runs a stage re-enters the sweep from `EXECUTING`. `stageComplete` is illegal from `EXECUTING`, so `allVerified` is rejected and `completeEngagement`'s catch swallows it: completion fields are written and the completed event fires, but the persisted status stays `EXECUTING`. `blockEngagement` transitions only from `REPAIRING`, so the failure path also persists nothing from `EXECUTING`. | `mythos/src/core/engagements/executor.js:559-604` (sweep `:559`, `verificationFailed` `:587`, re-run `:594`, recursion `:596`, `noRepairsRemaining` `:604`); `mythos/src/core/engagements/state-machine.js:48-56`; `blockEngagement` `executor.js:537-552` | **OPEN** at the anchor; **LANDED** `092f352c` (post-anchor, PR #174) |
 | HA-C-2 | 1.7 | `RUN_COMMAND_ALLOWLIST`'s colon form admits any positional argument. `npm:test` becomes a flag set `{test,--test,-test}`; the matcher rejects only args beginning with `-`. `npm exec <anything>` therefore passes a config written to allow `npm test`. | `mythos/src/core/effectors/from-runner.js:64-95` (`parseAllowlist`), `:204-213` (matcher); the comment at `:204-210` states positionals are allowed on purpose | **OPEN** |
 | HA-H-1 | 1.5 | `getQuotaStatus` reads `stats.byProvider`, which is built from the 200-entry rolling `recent` ring buffer, not from a day bucket. A "daily" quota counts yesterday's calls until 200 newer calls evict them, and saturates at 200 on a heavy day. The same seam mixes clocks: `spend.js` buckets by local day while `quota.js` advertises a UTC reset for `resetsTz: 'UTC'` providers. | `mythos/src/core/quota.js:60` (`stats.byProvider`), `:84` (`nextResetUTC()`); `mythos/src/core/brain/spend.js:6` (`MAX_RECENT = 200`), `:35` (eviction), `:46-49` (`byDay`, local `todayKey()`), `:79` (`today` exposed but unread by quota) | **OPEN** |
 | HA-H-2 | 1.6 | The live-tool adapter subscribes to `voice.live.toolcancel` and discards the unsubscribe function returned by the bus. The adapter is created per connection and deleted on close, so every socket open/close leaks one subscriber. | `mythos/src/core/voice/live-tool-adapter.js:193`; adapter creation `mythos/server/index.js:2884`; close-path delete `mythos/server/index.js:4048`; bus unsubscribe contract `mythos/src/core/bus/index.js:101-104` | **OPEN** |
@@ -33,12 +33,10 @@ because it cannot distinguish "closed since" from "still present".
 | HA-C-3 | 1.1 | A generated build iframe and the Electron HUD authority gate are isolated: the preview sandbox omits `allow-same-origin`, the server sends a matching CSP sandbox, and the Electron trust predicate refuses subframes and frameless senders. | `mythos/ui/public/js/views/forge.js:40`; `mythos/ui/public/js/url.js:56`; `mythos/src/core/server/preview-isolation.js:64`; `electron/hud-trust.js:55`; tests `mythos/test/preview-isolation.test.js`, `mythos/test/electron-hud-trust.test.js` | **LANDED** `832d1be3` (server), `3583dacd` (Electron) |
 | HA-H-3 | 1.3 | The conversation-history route sent Episodic as `readLines().join('\n')`, so every parsed row reached the HUD as `[object Object]` and the client parser skipped it. The route now sends raw JSONL text. | `mythos/server/index.js:1136`; test `mythos/test/bug-466-history-sends-raw-jsonl.test.js` | **LANDED** `f834b302` |
 
-**In flight (not in the anchor tree):** RUN 1's fix for HA-C-1 is on
-`fix/engagement-sweep-machine` — `78c1d83d` (pure move of `blockEngagement`
-into `verify-repair.js`, forced by the 864-line size ratchet) and `a4f4d56f`
-(the fix and its five tests) — awaiting the operator's merge. The row above
-stays `OPEN` until the fix is in `main`; the branch is evidence, not a status
-change.
+**Post-anchor:** HA-C-1 landed after this audit was written — `092f352c`
+(PR #174), with `78c1d83d` as the pure move that made room under the 864-line
+size ratchet. The row's evidence above is still the anchor measurement; the fix
+is not in `abd86c5d`.
 
 ## Known residual
 
