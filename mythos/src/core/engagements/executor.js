@@ -83,7 +83,7 @@ function createEngagementExecutor(deps) {
   // Terminal verification paths live in their own module: executor.js is already
   // at the 864-line ratchet ceiling, which never rises.
   const verifyRepair = createVerifyRepair({
-    store: store, engagementStore: engagementStore, events: events, bus: bus
+    store: store, engagementStore: engagementStore, events: events, bus: bus, anomaly: anomaly
   });
   const blockEngagement = verifyRepair.blockEngagement;
 
@@ -583,6 +583,13 @@ function createEngagementExecutor(deps) {
         var retry = await runStage(rec2, first);
         if (retry.ok) {
           upsertStageResult(engagementId, first.id, retry.verified ? 'verified' : 'success');
+          // runRepair left us in EXECUTING. allVerified is only legal from
+          // VERIFYING, so the re-complete must move back before the recursion;
+          // without it the completion transition is rejected and the on-disk
+          // status stays EXECUTING (the completed event still fires, which is
+          // why the bug looked like success in the UI).
+          await verifyRepair.transitionOrAnomaly(engagementId, 'stageComplete', { stageId: first.id },
+            'engagement-verification-recomplete-failed', first.id);
           // re-sweep now that this stage is fixed
           await runVerificationSweep(engagementId);
           return;
@@ -627,12 +634,12 @@ function createEngagementExecutor(deps) {
       updatedAt: now
     });
     engagementStore.write(updated);
-    try {
-      await store.transition(engagementId, 'allVerified', {});
-    } catch (e) {
-      // If the transition fails (e.g. already completed in a test), still emit
-      // the completion event so the UI sees a terminal signal.
-    }
+    // If the transition is rejected (e.g. already completed in a test), still
+    // emit the completion event so the UI sees a terminal signal. Name the
+    // rejection: a silent catch here is what let the sweep's missing transition
+    // persist EXECUTING while the UI showed a completed engagement.
+    await verifyRepair.transitionOrAnomaly(engagementId, 'allVerified', {},
+      'engagement-completion-transition-failed');
     // Emit the canonical completed event with real completion data.
     events.createEngagementCompleted({
       engagementId: engagementId,
