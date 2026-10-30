@@ -24,6 +24,7 @@
 //  - All emits use the events.js builders (this file makes events.js live).
 
 const events = require('./events');
+const { createVerifyRepair } = require('./verify-repair');
 
 function createEngagementExecutor(deps) {
   if (!deps) throw new Error('createEngagementExecutor requires deps');
@@ -78,6 +79,13 @@ function createEngagementExecutor(deps) {
   function anomaly(kind, detail) {
     bus.emit('health.anomaly', Object.assign({ kind: kind }, detail || {}));
   }
+
+  // Terminal verification paths live in their own module: executor.js is already
+  // at the 864-line ratchet ceiling, which never rises.
+  const verifyRepair = createVerifyRepair({
+    store: store, engagementStore: engagementStore, events: events, bus: bus, anomaly: anomaly
+  });
+  const blockEngagement = verifyRepair.blockEngagement;
 
   // ---- public: fire-and-forget runner ----
   // Never throws to the caller. All errors become health.anomaly.
@@ -534,23 +542,6 @@ function createEngagementExecutor(deps) {
     return true;
   }
 
-  async function blockEngagement(engagementId, stageId, reason) {
-    try {
-      // REPAIRING → BLOCKED requires repairExhausted. If we're not in REPAIRING,
-      // we can't go straight to BLOCKED via the table; emit the blocked event
-      // and attempt the transition best-effort.
-      var rec = engagementStore.read(engagementId);
-      if (rec && rec.status === 'REPAIRING') {
-        await store.transition(engagementId, 'repairExhausted', { reason: reason, stageId: stageId });
-      }
-    } catch (e) {
-      // Best-effort — ensure the UI still sees a blocked signal.
-    }
-    events.createEngagementBlocked({
-      engagementId: engagementId, reason: reason, stageId: stageId, bus: bus
-    });
-  }
-
   // ---- verification sweep (after all stages) ----
   // The engagement is in VERIFYING. Re-run each stage's verification; if all
   // pass → allVerified→COMPLETED (+ completion report). If any fail and budget
@@ -592,6 +583,13 @@ function createEngagementExecutor(deps) {
         var retry = await runStage(rec2, first);
         if (retry.ok) {
           upsertStageResult(engagementId, first.id, retry.verified ? 'verified' : 'success');
+          // runRepair left us in EXECUTING. allVerified is only legal from
+          // VERIFYING, so the re-complete must move back before the recursion;
+          // without it the completion transition is rejected and the on-disk
+          // status stays EXECUTING (the completed event still fires, which is
+          // why the bug looked like success in the UI).
+          await verifyRepair.transitionOrAnomaly(engagementId, 'stageComplete', { stageId: first.id },
+            'engagement-verification-recomplete-failed', first.id);
           // re-sweep now that this stage is fixed
           await runVerificationSweep(engagementId);
           return;
@@ -636,12 +634,12 @@ function createEngagementExecutor(deps) {
       updatedAt: now
     });
     engagementStore.write(updated);
-    try {
-      await store.transition(engagementId, 'allVerified', {});
-    } catch (e) {
-      // If the transition fails (e.g. already completed in a test), still emit
-      // the completion event so the UI sees a terminal signal.
-    }
+    // If the transition is rejected (e.g. already completed in a test), still
+    // emit the completion event so the UI sees a terminal signal. Name the
+    // rejection: a silent catch here is what let the sweep's missing transition
+    // persist EXECUTING while the UI showed a completed engagement.
+    await verifyRepair.transitionOrAnomaly(engagementId, 'allVerified', {},
+      'engagement-completion-transition-failed');
     // Emit the canonical completed event with real completion data.
     events.createEngagementCompleted({
       engagementId: engagementId,
