@@ -943,7 +943,10 @@ async function browser_launch_debug(args) {
   // Adopting costs nothing when nothing is there: connect() against a refused
   // port fails in well under a poll interval (measured under BUG-140, which is
   // why waitForDebugPortReady polls this same call).
-  const adopted = await browserAgent.ensureOnline({ cdpUrl }).catch(() => false);
+  // BUG-477 (2026-10-06): quiet. A refusal here is the EXPECTED answer when nothing
+  // is on the port yet (it is the question this probe asks), so it is counted and
+  // surfaced on the next connect line instead of logged as a failure.
+  const adopted = await browserAgent.ensureOnline({ cdpUrl, quiet: true }).catch(() => false);
   if (adopted) {
     const found = await launchDep('identifyBrowserOnPort', identifyBrowserOnPort)(cdpUrl);
     // attachedBrowser is deliberately NOT set here. Its contract since BUG-106
@@ -994,7 +997,11 @@ async function browser_launch_debug(args) {
   // connected, so the ensureOnline() call below is a no-op (state is
   // already ONLINE); on ceiling timeout, fall through exactly as before and
   // let ensureOnline()'s own timeout/retry report the failure.
-  await waitForDebugPortReady(() => browserAgent.ensureOnline({ cdpUrl }).catch(() => false));
+  // BUG-477: the poll's refusals are quiet too (measured 2026-10-05: four ECONNREFUSED
+  // warns in one second, then success). The FINAL connect below is deliberately NOT
+  // quiet: if the browser never comes up, that is the one loud line, and it names
+  // how many probes were suppressed before it.
+  await waitForDebugPortReady(() => browserAgent.ensureOnline({ cdpUrl, quiet: true }).catch(() => false));
 
   const connected = await browserAgent.ensureOnline({ cdpUrl }).catch(() => false);
   if (!connected) return fail('Browser launched but CDP connect did not come online — it may still be starting; try again in a moment.');
@@ -1023,6 +1030,11 @@ async function browser_launch_debug(args) {
     return fail(`Launched ${chosen}, but the debug port is held by ${observed}, so browser control is attached to ${observed} and not to the window that just opened. `
       + `Close the ${observed} window, then call browser_launch_debug with browser:"${chosen}" again.`);
   }
+  // BUG-477: ok must mean "usable NOW", not "was connected a PowerShell round trip
+  // ago". identifyBrowserOnPort above is async, and the connection can drop while it
+  // runs; before this line a launch could report ok with the adapter OFFLINE.
+  // Attack: attachedBrowser is not recorded for a connection that is already gone.
+  if (browserAgent.getStatus().state !== 'ONLINE') return fail('Browser launched and connected, but the connection dropped before I could confirm it - it may still be starting; try again in a moment.');
   attachedBrowser = observed || chosen;
   const result = buildLaunchResult(attachedBrowser, status, profileDir, extensionDirs, target.source);
   // Honest about the identity's provenance rather than silently assuming it.
@@ -1529,7 +1541,15 @@ function registerFromBrowser(hub, ctx) {
   config = (ctx && ctx.config) || null;
   vaultFs = (ctx && ctx.fs) || null;
   const tools = require('./browser-driver-tools').withBrowserDriver(TOOLS, ctx);
-  for (const tool of tools) hub.register(effectorFromTool(tool));
+  // BUG-477: remember the last tool, so a disconnect line can say what ran just before it.
+  // The note wraps the tool's own fn BEFORE effectorFromTool, so the adapter stays the one
+  // seam every failure passes through (BUG-378). Object.create keeps the tool's live
+  // `params` getter (BUG-462) instead of copying a snapshot of it.
+  const noted = (tool) => (typeof tool.fn !== 'function' ? tool : Object.create(tool, { fn: { value: function (p, c) {
+    try { browserAgent.noteTool(tool.name); } catch (_) { /* evidence only: never let it break a tool */ }
+    return tool.fn.call(this, p, c);
+  } } }));
+  for (const tool of tools) hub.register(effectorFromTool(noted(tool)));
   return tools.length;
 }
 
