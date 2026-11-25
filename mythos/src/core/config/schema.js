@@ -696,6 +696,7 @@ const SCHEMA = {
   LIVE_VOICE_HONESTY_ENABLED: { type: 'bool', default: true },
   VOICE_S2S_ENABLED:           { type: 'bool',   default: false },
   VOICE_ECHO_VERDICT_TO_CLIENT: { type: 'bool', default: true }, // BUG-428 kill switch.
+  LIVE_FRAME_TRACE: { type: 'bool', default: false }, // validated-speech C0: live.frame + voice.text-lane-latency lines, numbers only (live-frame-trace.js)
   // BUG-251: inject Semantic/user-facts.md into the Live session instruction so
   // the spoken path knows what the vault knows. Default ON — the amnesia it
   // fixes was operator-visible. Setting it false restores the pre-fix frame
