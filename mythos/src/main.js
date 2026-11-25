@@ -128,6 +128,8 @@ async function main() {
     process.exit(1);
   }
   const config = configResult.config;
+  // BUG-467 closure: the validated per-job model choices, read by route-policy.js.
+  require('./core/brain/model-choice').install(configResult.modelChoices);
 
   // Boot cinematic (TTY-only cosmetic — no-op on pipes and under tests)
   await require('./core/boot-banner').print({ name: config.MYTHOS_NAME, port: config.MYTHOS_PORT });

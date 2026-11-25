@@ -15,6 +15,7 @@ const zcode = require('../../../providers/zcode');
 
 const { BRAIN_TABLES } = require('./lanes.default');
 const routePolicy = require('./route-policy');
+const modelChoice = require('./model-choice');
 // BUG-419: every probe in this file reads a free catalog endpoint, so none of
 // them can see an account that refuses to bill. This holds what a real
 // completion said.
@@ -266,11 +267,31 @@ function endpointFor(lane) {
   return p && typeof p.getBaseURL === 'function' ? p.getBaseURL() : null;
 }
 
-function routeOf(entry, kind) {
-  return { provider: entry.provider, model: entry.model, endpoint: endpointFor(entry.provider), mode: kind === 'embed' ? 'embed' : 'chat' };
+// The providers a brain lane can call — what a lane job's choice may name
+// (model-choice.js). Derived from the same table endpointFor reads.
+function laneProviders() {
+  return Object.keys(LANE_ENDPOINT_SOURCES);
 }
 
-// Wave 0c (2026-09-24): a route refused by MODEL_BILLING_POLICY is dropped here,
+// mode is the JOB the route is judged for (route-policy.js, 2026-10-06): the
+// lane's own name, so a choice made for 'voice' applies to the voice lane only.
+// An unregistered lane is judged as the text lane it falls back to.
+function routeOf(entry, kind) {
+  return { provider: entry.provider, model: entry.model, endpoint: endpointFor(entry.provider), mode: BRAIN_TABLES[kind] ? kind : 'text' };
+}
+
+// The list a lane walks, in order: the CHAIN_* override if set, else the table,
+// with the operator's chosen model for this job at the head (model-choice.js).
+// chainFor and the model-choice status report both read THIS, so the report
+// cannot describe a different walk from the one chainFor takes.
+function lanePrefs(kind, choices) {
+  const job = BRAIN_TABLES[kind] ? kind : 'text';
+  const table = BRAIN_TABLES[job];
+  const override = parseOverride(process.env[table.env]);
+  return modelChoice.withChoice(job, override.length ? override : table.prefs, choices);
+}
+
+// Wave 0c (2026-09-24): a route refused by route-policy.js is dropped here,
 // AFTER the CHAIN_* override is applied — an override naming a paid model must
 // not be a way around the policy. Dropped audibly, never silently: chain.js's B1
 // rule is that a skipped route must be as visible as a failed one, and a route
@@ -295,14 +316,8 @@ function reportBlockedRoute(decision, bus) {
 // reaches the Health view rather than only stderr.
 async function chainFor(kind, opts) {
   const c = await refresh();
-  let table = BRAIN_TABLES[kind];
-  if (!table) {
-    reportUnknownLane(kind, opts && opts.bus);
-    table = BRAIN_TABLES.text;
-  }
-  const override = parseOverride(process.env[table.env]);
-  const prefs = override.length ? override : table.prefs;
-  return prefs.filter((p) => {
+  if (!BRAIN_TABLES[kind]) reportUnknownLane(kind, opts && opts.bus);
+  return lanePrefs(kind).filter((p) => {
     if (!isProviderAlive(p.provider, p.model, c)) return false;
     const decision = routePolicy.decide(routeOf(p, kind));
     if (!decision.allowed) reportBlockedRoute(decision, opts && opts.bus);
@@ -357,5 +372,7 @@ module.exports = {
   refresh,
   endpointFor,
   routeOf,
+  lanePrefs,
+  laneProviders,
   _internal: { BRAIN_TABLES, parseOverride, isProviderAlive, _resetBlockedRouteReports: () => blockedRoutesReported.clear() },
 };

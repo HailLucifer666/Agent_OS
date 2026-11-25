@@ -58,6 +58,12 @@ const IMAGES_REL = 'builds/images';
 const IMAGE_MODEL = 'gemini-3.1-flash-image';
 const IMAGE_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
+// The one route this tool calls — also what brain/model-choice.js reports and
+// validates an 'image' choice against, so the two cannot disagree.
+function billingRoute() {
+  return { provider: 'google', model: IMAGE_MODEL, endpoint: IMAGE_BASE, mode: 'image' };
+}
+
 function ok(result) { return { ok: true, result }; }
 function fail(reason) { return { ok: false, result: reason }; }
 
@@ -101,10 +107,10 @@ function buildTools(ctx) {
       return fail('Image generation is unavailable (GOOGLE_API_KEY is not configured).');
     }
     // Wave 0c (2026-09-24): IMAGE_MODEL has NO free tier — Google's pricing page
-    // lists it "Not available" there, read that day. With MODEL_BILLING_POLICY=
-    // free-only this tool refuses before any request, and says why; with the
-    // policy unset it behaves exactly as before.
-    const billing = routePolicy.decide({ provider: 'google', model: IMAGE_MODEL, endpoint: IMAGE_BASE, mode: 'image' });
+    // lists it "Not available" there, read that day. Since 2026-10-06 this tool
+    // refuses before any request, and says why, until the operator has chosen
+    // this model for the 'image' job (brain/model-choice.js).
+    const billing = routePolicy.decide(billingRoute());
     if (!billing.allowed) return fail('Image generation is unavailable: ' + billing.reason + '.');
     try {
       const url = IMAGE_BASE + '/' + IMAGE_MODEL +
@@ -163,4 +169,4 @@ function registerFromImageGen(hub, ctx) {
   return tools.length;
 }
 
-module.exports = { registerFromImageGen, buildTools };
+module.exports = { registerFromImageGen, buildTools, billingRoute };

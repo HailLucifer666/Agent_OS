@@ -246,6 +246,8 @@ if (require.main === module) {
       return;
     }
     const config = configResult.config;
+    // BUG-467 closure: same per-job model choices as src/main.js installs.
+    require('../src/core/brain/model-choice').install(configResult.modelChoices);
 
     if (!config.MCP_SERVER_ENABLED) {
       console.error('MCP server disabled — set MCP_SERVER_ENABLED=true to enable this stdio surface.');

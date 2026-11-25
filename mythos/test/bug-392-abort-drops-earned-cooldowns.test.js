@@ -102,8 +102,16 @@ function collectingBus() {
 
 const BREAKER_CONFIG = { CHAIN_BREAKERS_ENABLED: true, BREAKER_FAIL_THRESHOLD: 5, BREAKER_RESET_MS: 40 };
 
-before(() => { saved.chainFor = registry.chainFor; });
+// 2026-10-06 (BUG-467 closure): zcode is an unclassified provider, refused for any
+// job nobody chose it for, so the walk would skip it before it could time out.
+// The fixture chooses zcode:slow-one for the vision job these tests walk.
+const modelChoice = require('../src/core/brain/model-choice');
+before(() => {
+  saved.chainFor = registry.chainFor;
+  modelChoice.install({ file: null, choices: { vision: { provider: 'zcode', model: 'slow-one' } } });
+});
 after(() => {
+  modelChoice.install(null);
   registry.chainFor = saved.chainFor;
   for (const name of Object.keys(saved.lanes)) Object.assign(LANES[name], saved.lanes[name]);
   chain._internal._resetCooldowns();

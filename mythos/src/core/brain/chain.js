@@ -434,7 +434,9 @@ async function complete({ messages, kind, brain, signal, onAttempt, onAttemptEnd
     // this line refuses nothing today; it is what still holds if a caller ever
     // hands this walk a list that did not come through chainFor (tests do exactly
     // that, which is how this line is reached and pinned).
-    const billing = routePolicy.decide({ provider: lane, model, endpoint: registry.endpointFor(lane), mode: 'chat' });
+    // Judged for THIS lane's job (2026-10-06): routeOf names the lane, so a model
+    // chosen for 'voice' is not billable from 'build'. Same route chainFor judged.
+    const billing = routePolicy.decide(registry.routeOf({ provider: lane, model }, effectiveKind));
     if (!billing.allowed) { reportSkip(lane, model, 'billing-policy'); errors.push(`${lane}:${model}: ${billing.reason}`); continue; }
     // B1: the escalating skip. allow() is what advances OPEN -> HALF_OPEN when
     // resetMs has passed, so calling it here is also how a recovered provider

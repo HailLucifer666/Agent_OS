@@ -228,7 +228,8 @@ function buildLane() {
       + 'source of truth for which model builds run on, and it is empty or reshaped. Fix the lane '
       + 'table rather than hardcoding a model here.');
   }
-  return prefs;
+  // 2026-10-06: the operator's chosen build model heads the walk (model-choice.js).
+  return require('../../src/core/brain/model-choice').withChoice('build', prefs);
 }
 
 // Pick the first build-lane entry that is ACTUALLY REACHABLE: pi-ai ships a
@@ -261,8 +262,8 @@ function selectModel(override) {
         + model + '")');
       continue;
     }
-    // Wave 0c: under MODEL_BILLING_POLICY=free-only a paid or unclassified route is
-    // rejected by name like any unreachable one — the explicit override included.
+    // Wave 0c: a paid or unclassified route nobody chose for 'build' is rejected
+    // by name like any unreachable one — the explicit override included.
     var billing = routePolicy.decide({ provider: laneProvider, model: model, endpoint: entryInCatalog.baseUrl, mode: 'build' });
     if (!billing.allowed) { rejected.push(label + ' (' + billing.reason + ')'); continue; }
     return {

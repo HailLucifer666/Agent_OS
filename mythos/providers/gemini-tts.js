@@ -101,15 +101,22 @@ async function getStatus() {
 // Synthesize to a WAV Buffer. Throws on failure — the caller (server/index.js)
 // already treats a throw as "this chunk has no audio" and ships text only, so a
 // billing or quota error degrades to the browser voice instead of silence.
+// The route this sender calls (a caller-passed model wins) — also what
+// brain/model-choice.js reports and validates a 'tts' choice against.
+function billingRoute(model) {
+  return { provider: 'google', model: model || process.env.GEMINI_TTS_MODEL || DEFAULT_MODEL, endpoint: BASE, mode: 'tts' };
+}
+
 async function synthesize({ text, voice, model, signal }) {
   if (!text || !String(text).trim()) throw new Error('text required');
   const key = apiKey();
   if (!key) throw new Error('GOOGLE_API_KEY missing — gemini-tts unavailable');
 
-  const useModel = model || process.env.GEMINI_TTS_MODEL || DEFAULT_MODEL;
+  const route = billingRoute(model);
+  const useModel = route.model;
   const useVoice = voice || process.env.GEMINI_LIVE_VOICE || DEFAULT_VOICE;
   // Wave 0c: the model is caller- and env-settable; judged before the request.
-  routePolicy.assertAllowed({ provider: 'google', model: useModel, endpoint: BASE, mode: 'tts' });
+  routePolicy.assertAllowed(route);
 
   const res = await fetch(`${BASE}/${useModel}:generateContent?key=${key}`, {
     method: 'POST',
@@ -175,6 +182,7 @@ module.exports = {
   isAvailable,
   getStatus,
   synthesize,
+  billingRoute,
   listVoices,
   circuitKey,
   // exported for tests — the WAV header is easy to get subtly wrong

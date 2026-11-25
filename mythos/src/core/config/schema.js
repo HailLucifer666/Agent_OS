@@ -618,13 +618,16 @@ const SCHEMA = {
   MISTRAL_EMBED_MODEL:         { type: 'string', default: 'mistral-embed' },
   GROQ_STT_MODEL:              { type: 'string', default: 'whisper-large-v3-turbo' },
 
-  // Wave 0c (2026-09-24) — which model routes MYTHOS may call, by what they
-  // cost. '' / 'any' = every configured route (BYO premium included, today's
-  // behaviour). 'free-only' = only routes src/core/brain/route-policy.js
-  // classifies as free or local; paid and unclassified routes are refused by
-  // name. An unknown value fails boot here; the policy module also fails CLOSED
-  // on one, so a typo can never quietly re-enable paid routes.
-  MODEL_BILLING_POLICY:        { type: 'string', default: '', enum: ['', 'any', 'free-only'] },
+  // RETIRED 2026-10-06 (BUG-467 closure). Was Wave 0c's switch: '' / 'any' let a
+  // key's presence bill, 'free-only' was opt-in. Now every job uses free models
+  // only until a model is chosen for it in <vault>/Config/model-choice.json
+  // (src/core/brain/model-choice.js), and nothing that routes reads this key.
+  // Kept in the schema only so a .env or config.json that still sets it is
+  // checked rather than dropped as unknown: '' and 'free-only' (now the default)
+  // boot; anything else, 'any' included, fails boot with a migration message
+  // from model-choice.js retiredPolicyError — the single authority, hence no
+  // enum here to disagree with it.
+  MODEL_BILLING_POLICY:        { type: 'string', default: '' },
 
   // Provider URL overrides (default to the official endpoints)
   NIM_API_URL:                { type: 'string', default: 'https://integrate.api.nvidia.com/v1' },
